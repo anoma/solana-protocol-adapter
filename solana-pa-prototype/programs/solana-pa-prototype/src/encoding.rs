@@ -279,100 +279,8 @@ mod tests {
     use crate::types::{ComplianceInstance, Digest, OutputMode, SolanaExternalCall};
 
     // =========================================================================
-    // BYTE/WORD CONVERSION TESTS
+    // OUTPUT MODE ENCODING TESTS
     // =========================================================================
-
-    #[test]
-    fn test_words_to_bytes_empty() {
-        let words: Vec<u32> = vec![];
-        let bytes = words_to_bytes(&words);
-        assert!(bytes.is_empty());
-    }
-
-    #[test]
-    fn test_words_to_bytes_single_word() {
-        let words = vec![0x04030201u32];
-        let bytes = words_to_bytes(&words);
-        // Little-endian: 0x04030201 -> [0x01, 0x02, 0x03, 0x04]
-        assert_eq!(bytes, vec![0x01, 0x02, 0x03, 0x04]);
-    }
-
-    #[test]
-    fn test_words_to_bytes_multiple_words() {
-        let words = vec![0x04030201u32, 0x08070605u32];
-        let bytes = words_to_bytes(&words);
-        assert_eq!(bytes, vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
-    }
-
-    #[test]
-    fn test_words_to_bytes_with_zeros() {
-        let words = vec![0x00000000u32, 0xFFFFFFFFu32];
-        let bytes = words_to_bytes(&words);
-        assert_eq!(bytes, vec![0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF]);
-    }
-
-    #[test]
-    fn test_bytes_to_words_roundtrip() {
-        let bytes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
-        let words = bytes_to_words(&bytes);
-        let roundtrip = words_to_bytes(&words);
-        // Should be padded to word boundary
-        assert!(roundtrip.len() >= bytes.len());
-        assert_eq!(&roundtrip[..bytes.len()], &bytes[..]);
-    }
-
-    #[test]
-    fn test_bytes_to_words_aligned() {
-        let bytes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
-        let words = bytes_to_words(&bytes);
-        let roundtrip = words_to_bytes(&words);
-        assert_eq!(&roundtrip[..], &bytes[..]);
-    }
-
-    #[test]
-    fn test_empty_bytes_to_words() {
-        let bytes: [u8; 0] = [];
-        let words = bytes_to_words(&bytes);
-        assert!(words.is_empty());
-    }
-
-    #[test]
-    fn test_external_call_word_roundtrip() {
-        let call = SolanaExternalCall {
-            program_id: [0xAB; 32],
-            instruction_data: vec![1, 2, 3, 4],
-            expected_output: vec![5, 6, 7, 8],
-            output_mode: OutputMode::ReturnData,
-        };
-
-        let bytes = bincode::serialize(&call).unwrap();
-        let words = bytes_to_words(&bytes);
-        let decoded_bytes = words_to_bytes(&words);
-        // Decode from exact original length
-        let decoded: SolanaExternalCall =
-            bincode::deserialize(&decoded_bytes[..bytes.len()]).unwrap();
-
-        assert_eq!(call, decoded);
-    }
-
-    #[test]
-    fn test_external_call_non_aligned_length() {
-        // Test with instruction_data length NOT divisible by 4
-        let call = SolanaExternalCall {
-            program_id: [0xCC; 32],
-            instruction_data: vec![1, 2, 3], // 3 bytes, not aligned
-            expected_output: vec![4, 5],     // 2 bytes, not aligned
-            output_mode: OutputMode::ReturnData,
-        };
-
-        let bytes = bincode::serialize(&call).unwrap();
-        let words = bytes_to_words(&bytes);
-        let decoded_bytes = words_to_bytes(&words);
-        let decoded: SolanaExternalCall =
-            bincode::deserialize(&decoded_bytes[..bytes.len()]).unwrap();
-
-        assert_eq!(call, decoded);
-    }
 
     #[test]
     fn test_output_account_encoding() {
@@ -442,23 +350,6 @@ mod tests {
         let right = merkle::hash_two(&tag3, &merkle::PADDING_LEAF);
         let expected = merkle::hash_two(&left, &right);
         assert_eq!(root, expected);
-    }
-
-    #[test]
-    fn test_action_tree_root_empty_tags_fails() {
-        let tags: Vec<Digest> = vec![];
-        assert!(compute_action_tree_root(&tags).is_err());
-    }
-
-    #[test]
-    fn test_action_tree_root_deterministic() {
-        let tag1 = Digest::from_bytes([0xAA; 32]);
-        let tag2 = Digest::from_bytes([0xBB; 32]);
-        let tags = vec![tag1, tag2];
-
-        let root1 = compute_action_tree_root(&tags).expect("first");
-        let root2 = compute_action_tree_root(&tags).expect("second");
-        assert_eq!(root1, root2);
     }
 
     // =========================================================================

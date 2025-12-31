@@ -57,3 +57,6 @@ num-traits = "0.2"
 solana-program-test = "1.18.26"
 solana-sdk = "1.18.26"
 tokio = { version = "1", features = ["full"] }
+
+# Property-based testing (fuzzing parity with EVM PA)
+proptest = "1.4"

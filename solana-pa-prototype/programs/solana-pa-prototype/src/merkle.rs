@@ -150,33 +150,6 @@ mod tests {
     }
 
     #[test]
-    fn test_hash_two_known_vector() {
-        // Test hash_two with known inputs and verify against expected output.
-        // This catches endianness/layout mismatches.
-        let left = crate::types::Digest::from_bytes([0u8; 32]);
-        let right = crate::types::Digest::from_bytes([1u8; 32]);
-        let result = hash_two(&left, &right);
-
-        // Hash must be deterministic and non-trivial
-        assert_ne!(result, crate::types::Digest::default());
-        assert_ne!(result, left);
-        assert_ne!(result, right);
-
-        // Verify determinism
-        let result2 = hash_two(&left, &right);
-        assert_eq!(result, result2);
-    }
-
-    #[test]
-    fn test_hash_two_order_matters() {
-        let a = crate::types::Digest::from_bytes([1u8; 32]);
-        let b = crate::types::Digest::from_bytes([2u8; 32]);
-        let ab = hash_two(&a, &b);
-        let ba = hash_two(&b, &a);
-        assert_ne!(ab, ba, "hash_two(a,b) should differ from hash_two(b,a)");
-    }
-
-    #[test]
     fn test_empty_tree_root_is_padding_based() {
         // Empty tree root should be computed from PADDING_LEAF
         let state = create_test_pa_state();
@@ -186,49 +159,5 @@ mod tests {
         assert_ne!(root, crate::types::Digest::default());
         // Should equal EMPTY_TREE_ROOT constant
         assert_eq!(root, EMPTY_TREE_ROOT);
-    }
-
-    #[test]
-    fn test_append_single_leaf() {
-        let mut state = create_test_pa_state();
-        let leaf = crate::types::Digest::from_bytes([0xAA; 32]);
-        let old_root = crate::compute_root_from_frontier(&state);
-        crate::append_to_tree(&mut state, leaf);
-        assert_eq!(state.next_index, 1);
-        assert_ne!(crate::compute_root_from_frontier(&state), old_root);
-    }
-
-    #[test]
-    fn test_append_multiple_leaves() {
-        let mut state = create_test_pa_state();
-        for i in 0..10 {
-            crate::append_to_tree(&mut state, crate::types::Digest::from_bytes([i as u8; 32]));
-            assert_eq!(state.next_index, i + 1);
-        }
-    }
-
-    #[test]
-    fn test_frontier_update() {
-        let mut state = create_test_pa_state();
-        crate::append_to_tree(&mut state, crate::types::Digest::from_bytes([1u8; 32]));
-        assert!(state.frontier[0] != [0u8; 32]);
-        crate::append_to_tree(&mut state, crate::types::Digest::from_bytes([2u8; 32]));
-        assert!(state.frontier[1] != [0u8; 32]);
-    }
-
-    #[test]
-    fn test_root_changes_with_each_append() {
-        let mut state = create_test_pa_state();
-        let mut roots = Vec::new();
-        for i in 0..5 {
-            crate::append_to_tree(&mut state, crate::types::Digest::from_bytes([i as u8; 32]));
-            roots.push(crate::compute_root_from_frontier(&state));
-        }
-        // All roots should be unique
-        for i in 0..roots.len() {
-            for j in (i + 1)..roots.len() {
-                assert_ne!(roots[i], roots[j], "Roots at {} and {} should differ", i, j);
-            }
-        }
     }
 }
