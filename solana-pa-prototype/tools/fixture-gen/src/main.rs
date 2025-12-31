@@ -179,13 +179,21 @@ fn decode_base58_32(s: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 
-fn block_time_forwarder_external_payload_blob() -> Result<ExpirableBlob> {
+fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
     // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
     let program_id = decode_base58_32("FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq")?;
 
     // Use -1 so expected_time < current_time for any reasonable cluster clock.
+    // The forwarder will return RESULT_LT (0x00).
     let input = (-1_i64).to_le_bytes().to_vec();
-    let expected_output = vec![0u8]; // RESULT_LT
+
+    // If output_mismatch is true, set expected_output to RESULT_GT (0x02) which is WRONG.
+    // The forwarder will return 0x00 (LT), but we expect 0x02 (GT), causing ExternalCallOutputMismatch.
+    let expected_output = if output_mismatch {
+        vec![0x02] // RESULT_GT - intentionally wrong
+    } else {
+        vec![0x00] // RESULT_LT - correct
+    };
 
     let call = SolanaExternalCall {
         program_id,
@@ -201,7 +209,7 @@ fn block_time_forwarder_external_payload_blob() -> Result<ExpirableBlob> {
     })
 }
 
-fn generate_test_transaction_with_external_payload(non_aggregated: bool) -> Result<Transaction> {
+fn generate_test_transaction_with_external_payload(non_aggregated: bool, output_mismatch: bool) -> Result<Transaction> {
     // For aggregated mode: Inner proofs must be Succinct for aggregation.
     // For non-aggregated mode: Each proof is individual Groth16.
     let base_proof_type = if non_aggregated {
@@ -226,8 +234,14 @@ fn generate_test_transaction_with_external_payload(non_aggregated: bool) -> Resu
         ..Default::default()
     };
     // Stable-ish nonce so the fixture is deterministic.
-    // Use different nonce for non-aggregated mode so fixtures have different nullifiers.
-    let nonce_byte: u8 = if non_aggregated { 1 } else { 0 };
+    // Use different nonce for each fixture variant so they have different nullifiers.
+    // This prevents DuplicateNullifier errors when running multiple fixtures in a test suite.
+    let nonce_byte: u8 = match (non_aggregated, output_mismatch) {
+        (false, false) => 0, // batch_groth16.json
+        (true, false) => 1,  // individual_groth16.json
+        (false, true) => 2,  // batch_groth16_mismatch.json
+        (true, true) => 3,   // individual_groth16_mismatch.json (if ever needed)
+    };
     consumed_resource.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
     let consumed_nf = consumed_resource
         .nullifier(&nf_key)
@@ -253,7 +267,7 @@ fn generate_test_transaction_with_external_payload(non_aggregated: bool) -> Resu
     let mut consumed_app_data = AppData::default();
     consumed_app_data
         .external_payload
-        .push(block_time_forwarder_external_payload_blob()?);
+        .push(block_time_forwarder_external_payload_blob(output_mismatch)?);
 
     let consumed_instance = LogicInstance {
         tag: consumed_nf,
@@ -317,16 +331,17 @@ fn fmt_duration(d: Duration) -> String {
 
 fn print_usage_and_exit() -> Result<()> {
     eprintln!(
-        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--non-aggregated] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --non-aggregated tests/fixtures/individual_groth16.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--non-aggregated` generates individual Groth16 proofs without aggregation (for testing non-aggregated path).\n"
+        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--non-aggregated] [--output-mismatch] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --non-aggregated tests/fixtures/individual_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--non-aggregated` generates individual Groth16 proofs without aggregation (for testing non-aggregated path).\n  - `--output-mismatch` generates a fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n"
     );
     Ok(())
 }
 
-fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
+fn parse_args() -> Result<(Option<usize>, bool, bool, bool, PathBuf)> {
     let mut args = env::args().skip(1);
     let mut threads: Option<usize> = None;
     let mut debug_assumptions = false;
     let mut non_aggregated = false;
+    let mut output_mismatch = false;
     let mut out_path: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
@@ -352,6 +367,9 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
             }
             "--non-aggregated" => {
                 non_aggregated = true;
+            }
+            "--output-mismatch" => {
+                output_mismatch = true;
             }
             _ if arg.starts_with("--threads=") => {
                 let value = arg
@@ -382,12 +400,12 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
         PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json")
     });
 
-    Ok((threads, debug_assumptions, non_aggregated, out_path))
+    Ok((threads, debug_assumptions, non_aggregated, output_mismatch, out_path))
 }
 
 fn main() -> Result<()> {
     let total_start = Instant::now();
-    let (threads, debug_assumptions, non_aggregated, out_path) = parse_args()?;
+    let (threads, debug_assumptions, non_aggregated, output_mismatch, out_path) = parse_args()?;
 
     // Configure rayon parallelism deterministically (helps avoid pegging/overheating/OOM).
     // Must happen before any proving work starts.
@@ -407,10 +425,13 @@ fn main() -> Result<()> {
     } else {
         eprintln!("mode: aggregated (batch Groth16)");
     }
+    if output_mismatch {
+        eprintln!("mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)");
+    }
 
     eprintln!("phase: generate_test_transaction");
     let start = Instant::now();
-    let mut tx = generate_test_transaction_with_external_payload(non_aggregated)?;
+    let mut tx = generate_test_transaction_with_external_payload(non_aggregated, output_mismatch)?;
     eprintln!("phase done: generate_test_transaction ({})", fmt_duration(start.elapsed()));
 
     if !non_aggregated {
