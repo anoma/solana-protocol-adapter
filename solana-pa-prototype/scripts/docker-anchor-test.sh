@@ -49,7 +49,7 @@ docker compose run --rm dev bash -lc '
   if [[ ! -f "target/deploy/solana_pa_prototype-keypair.json" ]] || \
      [[ ! -f "target/deploy/block_time_forwarder-keypair.json" ]]; then
     echo "    Generating keypairs..."
-    anchor build
+    anchor build 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
     NEEDS_BUILD=false  # Already built
   fi
 
@@ -101,12 +101,12 @@ docker compose run --rm dev bash -lc '
   # Always rebuild PA without features to ensure default build for two-build strategy.
   # Step 4 will rebuild with features.
   echo "    Building PA (default, no features)..."
-  anchor build -p solana-pa-prototype
+  anchor build -p solana-pa-prototype 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
 
   # Build block_time_forwarder if needed
   if [[ "$NEEDS_BUILD" == "true" ]] || [[ ! -f "target/deploy/block_time_forwarder.so" ]]; then
     echo "    Building block_time_forwarder..."
-    anchor build -p block-time-forwarder
+    anchor build -p block-time-forwarder 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
   fi
 
   # Fixture definitions: path|flags
@@ -117,7 +117,7 @@ docker compose run --rm dev bash -lc '
   )
 
   # Build fixture-gen once if needed
-  (cd tools/fixture-gen && cargo build --release)
+  (cd tools/fixture-gen && cargo build --release 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s)
 
   # Check and regenerate each fixture if invalid
   for entry in "${FIXTURES[@]}"; do
@@ -189,7 +189,7 @@ docker compose run --rm dev bash -lc "
 # Step 4: Rebuild with non-aggregated feature
 # =============================================================================
 echo "==> (4/5) Rebuilding PA with non-aggregated-proofs feature"
-docker compose run --rm dev bash -lc "cd /workspace/solana-pa-prototype && anchor build -p solana-pa-prototype -- --features non-aggregated-proofs"
+docker compose run --rm dev bash -lc "cd /workspace/solana-pa-prototype && anchor build -p solana-pa-prototype -- --features non-aggregated-proofs 2>&1 | grep -v '^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report' | cat -s"
 
 # =============================================================================
 # Step 5: Reset validator and run all tests

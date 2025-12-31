@@ -20,7 +20,7 @@ fi
 
 if [[ ! -f "$KEYPAIR_PATH" ]]; then
   echo "==> Building ${PROGRAM_NAME} (generates keypair)"
-  anchor build -p "$PROGRAM_NAME"
+  anchor build -p "$PROGRAM_NAME" 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
 fi
 
 PROGRAM_ID="$(solana-keygen pubkey "$KEYPAIR_PATH")"
@@ -33,7 +33,7 @@ sed -i -E "s/^${PROGRAM_NAME} = \"[^\"]+\"$/${PROGRAM_NAME} = \"${PROGRAM_ID}\"/
   "$VERIFIER_ROOT/Anchor.toml"
 
 echo "==> Building ${PROGRAM_NAME}"
-anchor build -p "$PROGRAM_NAME"
+anchor build -p "$PROGRAM_NAME" 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
 
 if [[ ! -f "$SO_PATH" ]]; then
   echo "missing ${SO_PATH}"
@@ -72,7 +72,7 @@ echo "==> Building ${ROUTER_NAME} with INITIAL_OWNER=${INITIAL_OWNER}"
 
 if [[ ! -f "$ROUTER_KEYPAIR_PATH" ]]; then
   echo "==> Building ${ROUTER_NAME} (generates keypair)"
-  anchor build -p "$ROUTER_NAME"
+  anchor build -p "$ROUTER_NAME" 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
 fi
 
 ROUTER_ID="$(solana-keygen pubkey "$ROUTER_KEYPAIR_PATH")"
@@ -85,7 +85,7 @@ sed -i -E "s/^${ROUTER_NAME} = \"[^\"]+\"$/${ROUTER_NAME} = \"${ROUTER_ID}\"/" \
   "$VERIFIER_ROOT/Anchor.toml"
 
 echo "==> Building ${ROUTER_NAME}"
-anchor build -p "$ROUTER_NAME"
+anchor build -p "$ROUTER_NAME" 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
 
 if [[ ! -f "$ROUTER_SO_PATH" ]]; then
   echo "missing ${ROUTER_SO_PATH}"
