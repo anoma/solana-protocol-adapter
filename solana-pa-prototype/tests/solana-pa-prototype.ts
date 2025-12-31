@@ -385,6 +385,122 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   });
 
   // ==========================================================================
+  // External Call Output Mismatch Test
+  // Mirrors EVM PA: testFuzz_execute_reverts_on_unexpected_forwarder_call_output
+  // ==========================================================================
+
+  it("reverts on unexpected forwarder call output (ExternalCallOutputMismatch)", async () => {
+    // This test uses a fixture where:
+    // - timestamp = -1 (past time, forwarder will return RESULT_LT = 0x00)
+    // - expected_output = 0x02 (RESULT_GT - intentionally WRONG)
+    // The PA should revert with ExternalCallOutputMismatch when actual != expected.
+    const mismatchFixturePath = path.resolve(
+      process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json"
+    );
+
+    let mismatchFixture: Fixture;
+    try {
+      mismatchFixture = readJson<Fixture>(mismatchFixturePath);
+    } catch (e) {
+      // Skip test if fixture doesn't exist yet
+      console.log("Skipping: batch_groth16_mismatch.json not found. Generate with: docker compose run dev cargo run -p fixture-gen -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json");
+      return;
+    }
+
+    const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
+
+    // Derive nullifier PDAs for this fixture
+    const mismatchNullifierPdas = mismatchFixture.consumed_nullifiers_b64.map((nfB64) => {
+      const nf = Buffer.from(nfB64, "base64");
+      return PublicKey.findProgramAddressSync([NULLIFIER_SEED, paState.toBuffer(), nf], program.programId)[0];
+    });
+
+    const mismatchRemainingAccounts = mismatchNullifierPdas.map((pubkey) => ({
+      pubkey,
+      isWritable: true,
+      isSigner: false,
+    }));
+
+    try {
+      // Attempt settlement - should fail with ExternalCallOutputMismatch
+      const authority = Keypair.generate();
+      await airdrop(provider, authority.publicKey, 2);
+
+      const uploadId = new anchor.BN(Date.now());
+      const uploadIdLe = Buffer.alloc(8);
+      uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+
+      const [txData] = PublicKey.findProgramAddressSync(
+        [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+        program.programId
+      );
+
+      const capacity = mismatchTx.length;
+      const slot = await provider.connection.getSlot("confirmed");
+      const expiresSlot = new anchor.BN(slot + 10_000);
+
+      await program.methods
+        .txdataInit(uploadId, capacity, expiresSlot)
+        .accounts({
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([authority])
+        .rpc();
+
+      const chunkSize = 700;
+      for (let offset = 0; offset < mismatchTx.length; offset += chunkSize) {
+        const chunk = mismatchTx.subarray(offset, Math.min(mismatchTx.length, offset + chunkSize));
+        await program.methods
+          .txdataWrite(uploadId, offset, Buffer.from(chunk))
+          .accounts({
+            txData,
+            authority: authority.publicKey,
+          })
+          .signers([authority])
+          .rpc();
+      }
+
+      const allRemainingAccounts = [
+        ...mismatchRemainingAccounts,
+        { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+        { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+      ];
+
+      await program.methods
+        .settleFromTxdata(uploadId)
+        .accounts({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          verifierRouterProgram: verifierRouterId,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: groth16VerifierId,
+        })
+        .remainingAccounts(allRemainingAccounts)
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ])
+        .signers([authority])
+        .rpc();
+
+      assert.fail("expected settle to fail with ExternalCallOutputMismatch");
+    } catch (e: any) {
+      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
+      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+      const haystack = [msg, ...logs].join("\n");
+      assert.match(
+        haystack,
+        /ExternalCallOutputMismatch|external call output mismatch/i,
+        "Should fail with ExternalCallOutputMismatch error"
+      );
+    }
+  });
+
+  // ==========================================================================
   // Issue #4: Historical Root Validation Tests
   // ==========================================================================
 

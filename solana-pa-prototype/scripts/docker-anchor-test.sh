@@ -44,7 +44,6 @@ docker compose run --rm dev bash -lc '
   cd /workspace/solana-pa-prototype
 
   NEEDS_BUILD=false
-  NEEDS_FIXTURE_REGEN=false
 
   # Build to generate keypairs if they don'\''t exist
   if [[ ! -f "target/deploy/solana_pa_prototype-keypair.json" ]] || \
@@ -95,43 +94,8 @@ docker compose run --rm dev bash -lc '
       tests/solana-pa-prototype.ts
 
     NEEDS_BUILD=true
-    NEEDS_FIXTURE_REGEN=true
   else
     echo "    block_time_forwarder program ID already synced: $BTF_ID"
-
-    # Check if fixture contains current program ID bytes AND required fields
-    FIXTURE_FILE="tests/fixtures/batch_groth16.json"
-    if [[ -f "$FIXTURE_FILE" ]]; then
-      # Use node to check:
-      # 1. fixture tx_b64 contains the program ID bytes
-      # 2. fixture has the selector field (added in recent fixture-gen versions)
-      if ! node -e "
-        const bs58Module = require(\"bs58\");
-        const bs58 = bs58Module.default || bs58Module;
-        const fs = require(\"fs\");
-        const fixture = JSON.parse(fs.readFileSync(\"$FIXTURE_FILE\"));
-
-        // Check for required selector field
-        if (!fixture.selector || typeof fixture.selector !== \"string\") {
-          console.error(\"    Fixture missing selector field\");
-          process.exit(1);
-        }
-
-        // Check for program ID bytes in tx
-        const txBytes = Buffer.from(fixture.tx_b64, \"base64\");
-        const programIdBytes = Buffer.from(bs58.decode(\"$BTF_ID\"));
-        const found = txBytes.includes(programIdBytes);
-        if (!found) {
-          console.error(\"    Fixture does not contain current block_time_forwarder ID bytes\");
-        }
-        process.exit(found ? 0 : 1);
-      "; then
-        NEEDS_FIXTURE_REGEN=true
-      fi
-    else
-      echo "    Fixture file missing"
-      NEEDS_FIXTURE_REGEN=true
-    fi
   fi
 
   # Always rebuild PA without features to ensure default build for two-build strategy.
@@ -145,24 +109,32 @@ docker compose run --rm dev bash -lc '
     anchor build -p block-time-forwarder
   fi
 
-  # Regenerate fixtures if block_time_forwarder ID changed
-  # WARNING: This takes ~2 hours per fixture (~4 hours total)
-  if [[ "$NEEDS_FIXTURE_REGEN" == "true" ]]; then
-    echo "    Fixtures are stale - deleting and regenerating..."
-    echo "    WARNING: This takes ~2 hours per fixture (~4 hours total)"
+  # Fixture definitions: path|flags
+  FIXTURES=(
+    "tests/fixtures/batch_groth16.json|"
+    "tests/fixtures/individual_groth16.json|--non-aggregated"
+    "tests/fixtures/batch_groth16_mismatch.json|--output-mismatch"
+  )
 
-    # Delete stale fixtures immediately
-    rm -f tests/fixtures/batch_groth16.json
-    rm -f tests/fixtures/individual_groth16.json
+  # Build fixture-gen once if needed
+  (cd tools/fixture-gen && cargo build --release)
 
-    # Build fixture-gen from its directory (not part of workspace)
-    (cd tools/fixture-gen && cargo build --release)
-
-    ./tools/fixture-gen/target/release/fixture-gen --threads 6 tests/fixtures/batch_groth16.json
-    ./tools/fixture-gen/target/release/fixture-gen --threads 6 --non-aggregated tests/fixtures/individual_groth16.json
-
-    echo "    Fixtures regenerated with program ID: $BTF_ID"
-  fi
+  # Check and regenerate each fixture if invalid
+  for entry in "${FIXTURES[@]}"; do
+    IFS="|" read -r path flags <<< "$entry"
+    if [[ ! -f "$path" ]] || ! node -e "
+      const bs58 = require(\"bs58\").default || require(\"bs58\");
+      const fs = require(\"fs\");
+      const fixture = JSON.parse(fs.readFileSync(\"$path\"));
+      if (!fixture.selector) process.exit(1);
+      const txBytes = Buffer.from(fixture.tx_b64, \"base64\");
+      const programIdBytes = Buffer.from(bs58.decode(\"$BTF_ID\"));
+      process.exit(txBytes.includes(programIdBytes) ? 0 : 1);
+    " 2>/dev/null; then
+      echo "    Generating $path (~30 min)..."
+      ./tools/fixture-gen/target/release/fixture-gen --threads 6 $flags "$path"
+    fi
+  done
 '
 
 # =============================================================================
