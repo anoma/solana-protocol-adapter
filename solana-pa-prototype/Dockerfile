@@ -1,0 +1,77 @@
+# Solana Protocol Adapter Development Environment
+# Includes: Solana CLI, Anchor, Rust with sbpf target, Node.js
+
+FROM ubuntu:22.04
+
+# Avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    docker.io \
+    git \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    libudev-dev \
+    llvm \
+    clang \
+    cmake \
+    ca-certificates \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Node.js 20.x
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g yarn
+
+# Create non-root user with UID matching host user for volume permissions
+ARG UID=1001
+ARG GID=1001
+ARG DOCKER_GID=30001
+RUN groupadd -g ${GID} developer \
+    && useradd -m -s /bin/bash -u ${UID} -g ${GID} developer \
+    && (getent group ${DOCKER_GID} || groupadd -g ${DOCKER_GID} dockersock) \
+    && usermod -aG dockersock developer
+USER developer
+WORKDIR /home/developer
+
+# Install Rust via rustup (with proxy shims)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/home/developer/.cargo/bin:${PATH}"
+
+# Install nightly toolchain (needed for sbpf target features)
+RUN rustup install nightly \
+    && rustup component add rustfmt clippy
+
+# Install RISC Zero toolchain (needed by risc0-build / embed_methods for zkVM guests)
+RUN cargo install rzup --locked \
+    && rzup install rust \
+    && rzup install cargo-risczero
+
+# Install Solana CLI (v2.3.9 to match risc0-solana requirements)
+RUN sh -c "$(curl -sSfL https://release.anza.xyz/v2.3.9/install)"
+ENV PATH="/home/developer/.local/share/solana/install/active_release/bin:${PATH}"
+
+# Install Anchor CLI 0.31.1 (matches risc0-solana requirements)
+RUN cargo install --git https://github.com/coral-xyz/anchor --tag v0.31.1 anchor-cli --locked
+
+# Generate default Solana keypair
+RUN solana-keygen new --no-bip39-passphrase -o /home/developer/.config/solana/id.json
+
+# Set Solana to use localhost by default
+RUN solana config set --url localhost
+
+# Pre-create paths that are later backed by named volumes so empty volumes
+# get initialized with the correct ownership (Docker copies existing dir
+# contents/metadata into a fresh volume on first mount).
+RUN mkdir -p /home/developer/validator-ledger \
+    && mkdir -p /home/developer/.cache/solana
+
+# Set working directory for the project
+WORKDIR /workspace
+
+# Default command
+CMD ["/bin/bash"]

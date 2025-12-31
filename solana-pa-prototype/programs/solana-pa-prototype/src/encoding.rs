@@ -1,0 +1,531 @@
+//! Encoding utilities for word<->byte conversion.
+//!
+//! Must match arm-risc0's bytes_to_words and words_to_bytes.
+
+use alloc::vec::Vec;
+
+use crate::error::PAError;
+use crate::merkle::{hash_two, PADDING_LEAF};
+use crate::risc0_serde;
+use crate::types::{AppData, Digest, LogicVerifierInputs, Transaction};
+use serde::Serialize;
+
+/// Convert bytes to words (matching arm-risc0).
+/// Pads with zeros to word boundary. Uses little-endian byte order.
+pub fn bytes_to_words(bytes: &[u8]) -> Vec<u32> {
+    let padded_len = (bytes.len() + 3) / 4 * 4;
+    let mut padded = bytes.to_vec();
+    padded.resize(padded_len, 0);
+    padded
+        .chunks_exact(4)
+        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+/// Convert words to bytes using little-endian byte order.
+pub fn words_to_bytes(words: &[u32]) -> Vec<u8> {
+    words.iter().flat_map(|w| w.to_le_bytes()).collect()
+}
+
+/// Image ID for the compliance circuit (from `arm-risc0/arm/src/constants.rs`).
+pub const COMPLIANCE_VK_BYTES: [u8; 32] =
+    hex_literal::hex!("3003123ba707922b5a7124dccb3765cfb8a590852d4f25e29c9002f6efcfaa35");
+
+#[derive(Clone, Debug)]
+struct U32Array56([u32; 56]);
+
+impl serde::Serialize for U32Array56 {
+    fn serialize<S>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeTuple;
+
+        let mut tuple = serializer.serialize_tuple(56)?;
+        for word in self.0.iter() {
+            tuple.serialize_element(word)?;
+        }
+        tuple.end()
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+struct ComplianceInstanceWords {
+    pub u32_words: U32Array56,
+}
+
+/// Parse a bincode-serialized ComplianceInstance.
+pub fn parse_compliance_instance(instance_bytes: &[u8]) -> Result<crate::types::ComplianceInstance, PAError> {
+    bincode::deserialize(instance_bytes).map_err(|_| PAError::InvalidTransactionData)
+}
+
+fn next_power_of_two(n: usize) -> Result<usize, PAError> {
+    n.checked_next_power_of_two().ok_or(PAError::InvalidTransactionData)
+}
+
+/// Compute the action tree root from a list of tags.
+/// Uses a power-of-2 balanced merkle tree with PADDING_LEAF for missing nodes.
+///
+/// NOTE: Not feature-gated because it's used in both paths:
+/// - Aggregated: for journal digest computation in `compute_batch_aggregation_journal_digest`
+/// - Non-aggregated: for LogicInstance.root field
+pub fn compute_action_tree_root(tags: &[Digest]) -> Result<Digest, PAError> {
+    if tags.is_empty() {
+        return Err(PAError::InvalidTransactionData);
+    }
+
+    let len = next_power_of_two(tags.len())?;
+    let mut layer: Vec<Digest> = tags.to_vec();
+    layer.resize(len, PADDING_LEAF);
+
+    while layer.len() > 1 {
+        let mut next = Vec::with_capacity(layer.len() / 2);
+        for pair in layer.chunks_exact(2) {
+            next.push(hash_two(&pair[0], &pair[1]));
+        }
+        layer = next;
+    }
+
+    Ok(layer[0])
+}
+
+/// Compute the action tree root directly from an Action.
+/// Extracts tags from compliance instances and computes the merkle root.
+///
+/// Feature-gated: only used in non-aggregated path (convenience wrapper
+/// that combines `extract_tags_and_logic_refs` + `compute_action_tree_root`).
+#[cfg(feature = "non-aggregated-proofs")]
+pub fn compute_action_tree_root_from_action(action: &crate::types::Action) -> Result<Digest, PAError> {
+    let (tags, _) = extract_tags_and_logic_refs(action)?;
+    compute_action_tree_root(&tags)
+}
+
+/// Extract tags (nullifiers/commitments) and their expected logic refs from an action.
+/// Returns (tags, logic_refs) where:
+/// - tags[2i] = consumed_nullifier, tags[2i+1] = created_commitment
+/// - logic_refs[2i] = consumed_logic_ref, logic_refs[2i+1] = created_logic_ref
+pub fn extract_tags_and_logic_refs(action: &crate::types::Action) -> Result<(Vec<Digest>, Vec<Digest>), PAError> {
+    let mut tags = Vec::new();
+    let mut logic_refs = Vec::new();
+
+    for cu in &action.compliance_units {
+        let instance = parse_compliance_instance(&cu.instance)?;
+        tags.push(instance.consumed_nullifier);
+        tags.push(instance.created_commitment);
+        logic_refs.push(instance.consumed_logic_ref);
+        logic_refs.push(instance.created_logic_ref);
+    }
+
+    Ok((tags, logic_refs))
+}
+
+/// Find a LogicVerifierInputs entry by its tag.
+///
+/// NOTE: Not feature-gated because it's used in both paths:
+/// - Aggregated: for journal digest computation in `compute_batch_aggregation_journal_digest`
+/// - Non-aggregated: for individual logic proof verification
+pub fn find_logic_input<'a>(
+    inputs: &'a [LogicVerifierInputs],
+    tag: &Digest,
+) -> Result<&'a LogicVerifierInputs, PAError> {
+    inputs
+        .iter()
+        .find(|lvi| &lvi.tag == tag)
+        .ok_or(PAError::TagNotFound)
+}
+
+/// Compute the journal digest for verifying a *batch aggregation* proof.
+///
+/// This matches `arm-risc0/arm/src/aggregation/batch.rs::verify_transaction_aggregation`.
+pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Digest, PAError> {
+    use anchor_lang::solana_program::hash::Hasher;
+    use serde::ser::Serializer as _;
+
+    #[derive(Clone, Debug, serde::Serialize)]
+    struct LogicInstanceRef<'a> {
+        pub tag: Digest,
+        pub is_consumed: bool,
+        pub root: Digest,
+        pub app_data: &'a AppData,
+    }
+
+    struct HasherWordWriter<'a> {
+        hasher: &'a mut Hasher,
+    }
+
+    impl<'a> risc0_serde::WordWrite for HasherWordWriter<'a> {
+        fn write_words(&mut self, words: &[u32]) -> risc0_serde::Result<()> {
+            for word in words {
+                self.hasher.hash(&word.to_le_bytes());
+            }
+            Ok(())
+        }
+
+        fn write_padded_bytes(&mut self, bytes: &[u8]) -> risc0_serde::Result<()> {
+            let mut offset = 0usize;
+            while offset + 4 <= bytes.len() {
+                self.hasher.hash(&bytes[offset..offset + 4]);
+                offset += 4;
+            }
+            if offset < bytes.len() {
+                let mut last = [0u8; 4];
+                last[..bytes.len() - offset].copy_from_slice(&bytes[offset..]);
+                self.hasher.hash(&last);
+            }
+            Ok(())
+        }
+    }
+
+    let compliance_count: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
+    let logic_count = compliance_count
+        .checked_mul(2)
+        .ok_or(PAError::InvalidTransactionData)?;
+
+    let mut hasher = Hasher::default();
+    let mut writer = HasherWordWriter { hasher: &mut hasher };
+    let mut serializer = risc0_serde::Serializer::new(&mut writer);
+
+    // 1) Vec<ComplianceInstanceWords>
+    serializer
+        .serialize_u32(compliance_count as u32)
+        .map_err(|_| PAError::InvalidTransactionData)?;
+    for action in &tx.actions {
+        for cu in &action.compliance_units {
+            let words = bytes_to_words(&cu.instance);
+            let fixed: [u32; 56] = words.try_into().map_err(|_| PAError::InvalidTransactionData)?;
+            let element = ComplianceInstanceWords {
+                u32_words: U32Array56(fixed),
+            };
+            element
+                .serialize(&mut serializer)
+                .map_err(|_| PAError::InvalidTransactionData)?;
+        }
+    }
+
+    // 2) compliance_vk Digest
+    let compliance_vk = Digest::from_bytes(COMPLIANCE_VK_BYTES);
+    compliance_vk
+        .serialize(&mut serializer)
+        .map_err(|_| PAError::InvalidTransactionData)?;
+
+    // 3) Vec<Vec<u32>> logic_instances (each inner Vec is the LogicInstance word stream)
+    serializer
+        .serialize_u32(logic_count as u32)
+        .map_err(|_| PAError::InvalidTransactionData)?;
+
+    let mut logic_keys: Vec<Digest> = Vec::with_capacity(logic_count);
+    for action in &tx.actions {
+        let mut tags: Vec<Digest> = Vec::new();
+        let mut logics: Vec<Digest> = Vec::new();
+
+        for cu in &action.compliance_units {
+            let instance = parse_compliance_instance(&cu.instance)?;
+            tags.push(instance.consumed_nullifier);
+            tags.push(instance.created_commitment);
+            logics.push(instance.consumed_logic_ref);
+            logics.push(instance.created_logic_ref);
+        }
+
+        let action_tree_root = compute_action_tree_root(&tags)?;
+
+        if tags.len() != action.logic_verifier_inputs.len() {
+            return Err(PAError::InvalidTransactionData);
+        }
+
+        for (index, (tag, expected_vk)) in tags.iter().zip(logics.iter()).enumerate() {
+            let input = find_logic_input(&action.logic_verifier_inputs, tag)?;
+            if input.verifying_key != *expected_vk {
+                return Err(PAError::InvalidTransactionData);
+            }
+
+            let instance = LogicInstanceRef {
+                tag: input.tag,
+                is_consumed: index % 2 == 0,
+                root: action_tree_root,
+                app_data: &input.app_data,
+            };
+
+            let word_len = risc0_serde::count_words(&instance)
+                .map_err(|_| PAError::InvalidTransactionData)?;
+
+            serializer
+                .serialize_u32(word_len as u32)
+                .map_err(|_| PAError::InvalidTransactionData)?;
+            instance
+                .serialize(&mut serializer)
+                .map_err(|_| PAError::InvalidTransactionData)?;
+
+            logic_keys.push(input.verifying_key);
+        }
+    }
+
+    // 4) Vec<Digest> logic_keys
+    serializer
+        .serialize_u32(logic_keys.len() as u32)
+        .map_err(|_| PAError::InvalidTransactionData)?;
+    for vk in logic_keys {
+        vk.serialize(&mut serializer)
+            .map_err(|_| PAError::InvalidTransactionData)?;
+    }
+
+    Ok(Digest::from_bytes(hasher.result().to_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::merkle;
+    use crate::test_utils::create_minimal_transaction;
+    use crate::types::{ComplianceInstance, Digest, OutputMode, SolanaExternalCall};
+
+    // =========================================================================
+    // BYTE/WORD CONVERSION TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_words_to_bytes_empty() {
+        let words: Vec<u32> = vec![];
+        let bytes = words_to_bytes(&words);
+        assert!(bytes.is_empty());
+    }
+
+    #[test]
+    fn test_words_to_bytes_single_word() {
+        let words = vec![0x04030201u32];
+        let bytes = words_to_bytes(&words);
+        // Little-endian: 0x04030201 -> [0x01, 0x02, 0x03, 0x04]
+        assert_eq!(bytes, vec![0x01, 0x02, 0x03, 0x04]);
+    }
+
+    #[test]
+    fn test_words_to_bytes_multiple_words() {
+        let words = vec![0x04030201u32, 0x08070605u32];
+        let bytes = words_to_bytes(&words);
+        assert_eq!(bytes, vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]);
+    }
+
+    #[test]
+    fn test_words_to_bytes_with_zeros() {
+        let words = vec![0x00000000u32, 0xFFFFFFFFu32];
+        let bytes = words_to_bytes(&words);
+        assert_eq!(bytes, vec![0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF]);
+    }
+
+    #[test]
+    fn test_bytes_to_words_roundtrip() {
+        let bytes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07];
+        let words = bytes_to_words(&bytes);
+        let roundtrip = words_to_bytes(&words);
+        // Should be padded to word boundary
+        assert!(roundtrip.len() >= bytes.len());
+        assert_eq!(&roundtrip[..bytes.len()], &bytes[..]);
+    }
+
+    #[test]
+    fn test_bytes_to_words_aligned() {
+        let bytes = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08];
+        let words = bytes_to_words(&bytes);
+        let roundtrip = words_to_bytes(&words);
+        assert_eq!(&roundtrip[..], &bytes[..]);
+    }
+
+    #[test]
+    fn test_empty_bytes_to_words() {
+        let bytes: [u8; 0] = [];
+        let words = bytes_to_words(&bytes);
+        assert!(words.is_empty());
+    }
+
+    #[test]
+    fn test_external_call_word_roundtrip() {
+        let call = SolanaExternalCall {
+            program_id: [0xAB; 32],
+            instruction_data: vec![1, 2, 3, 4],
+            expected_output: vec![5, 6, 7, 8],
+            output_mode: OutputMode::ReturnData,
+        };
+
+        let bytes = bincode::serialize(&call).unwrap();
+        let words = bytes_to_words(&bytes);
+        let decoded_bytes = words_to_bytes(&words);
+        // Decode from exact original length
+        let decoded: SolanaExternalCall =
+            bincode::deserialize(&decoded_bytes[..bytes.len()]).unwrap();
+
+        assert_eq!(call, decoded);
+    }
+
+    #[test]
+    fn test_external_call_non_aligned_length() {
+        // Test with instruction_data length NOT divisible by 4
+        let call = SolanaExternalCall {
+            program_id: [0xCC; 32],
+            instruction_data: vec![1, 2, 3], // 3 bytes, not aligned
+            expected_output: vec![4, 5],     // 2 bytes, not aligned
+            output_mode: OutputMode::ReturnData,
+        };
+
+        let bytes = bincode::serialize(&call).unwrap();
+        let words = bytes_to_words(&bytes);
+        let decoded_bytes = words_to_bytes(&words);
+        let decoded: SolanaExternalCall =
+            bincode::deserialize(&decoded_bytes[..bytes.len()]).unwrap();
+
+        assert_eq!(call, decoded);
+    }
+
+    #[test]
+    fn test_output_account_encoding() {
+        let call = SolanaExternalCall {
+            program_id: [0; 32],
+            instruction_data: vec![],
+            expected_output: vec![0u8; 2048],
+            output_mode: OutputMode::OutputAccount {
+                index: 5,
+                offset: 100,
+                len: 2048,
+            },
+        };
+
+        let bytes = bincode::serialize(&call).unwrap();
+        let decoded: SolanaExternalCall = bincode::deserialize(&bytes).unwrap();
+
+        match decoded.output_mode {
+            OutputMode::OutputAccount { index, offset, len } => {
+                assert_eq!(index, 5);
+                assert_eq!(offset, 100);
+                assert_eq!(len, 2048);
+            }
+            _ => panic!("Expected OutputAccount"),
+        }
+    }
+
+    // =========================================================================
+    // ACTION TREE ROOT TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_action_tree_root_single_cu() {
+        let tag1 = Digest::from_bytes([0x11; 32]);
+        let tag2 = Digest::from_bytes([0x22; 32]);
+        let tags = vec![tag1, tag2];
+
+        let root = compute_action_tree_root(&tags).expect("should compute root");
+        let expected = merkle::hash_two(&tag1, &tag2);
+        assert_eq!(root, expected);
+    }
+
+    #[test]
+    fn test_action_tree_root_two_cus() {
+        let tag1 = Digest::from_bytes([0x11; 32]);
+        let tag2 = Digest::from_bytes([0x22; 32]);
+        let tag3 = Digest::from_bytes([0x33; 32]);
+        let tag4 = Digest::from_bytes([0x44; 32]);
+        let tags = vec![tag1, tag2, tag3, tag4];
+
+        let root = compute_action_tree_root(&tags).expect("should compute root");
+        let left = merkle::hash_two(&tag1, &tag2);
+        let right = merkle::hash_two(&tag3, &tag4);
+        let expected = merkle::hash_two(&left, &right);
+        assert_eq!(root, expected);
+    }
+
+    #[test]
+    fn test_action_tree_root_three_tags_padded() {
+        let tag1 = Digest::from_bytes([0x11; 32]);
+        let tag2 = Digest::from_bytes([0x22; 32]);
+        let tag3 = Digest::from_bytes([0x33; 32]);
+        let tags = vec![tag1, tag2, tag3];
+
+        let root = compute_action_tree_root(&tags).expect("should compute root");
+        let left = merkle::hash_two(&tag1, &tag2);
+        let right = merkle::hash_two(&tag3, &merkle::PADDING_LEAF);
+        let expected = merkle::hash_two(&left, &right);
+        assert_eq!(root, expected);
+    }
+
+    #[test]
+    fn test_action_tree_root_empty_tags_fails() {
+        let tags: Vec<Digest> = vec![];
+        assert!(compute_action_tree_root(&tags).is_err());
+    }
+
+    #[test]
+    fn test_action_tree_root_deterministic() {
+        let tag1 = Digest::from_bytes([0xAA; 32]);
+        let tag2 = Digest::from_bytes([0xBB; 32]);
+        let tags = vec![tag1, tag2];
+
+        let root1 = compute_action_tree_root(&tags).expect("first");
+        let root2 = compute_action_tree_root(&tags).expect("second");
+        assert_eq!(root1, root2);
+    }
+
+    // =========================================================================
+    // TAG EXTRACTION AND LOGIC INPUT TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_find_logic_input_by_tag() {
+        let tx = create_minimal_transaction();
+        let action = &tx.actions[0];
+
+        let cu = &action.compliance_units[0];
+        let instance: ComplianceInstance = bincode::deserialize(&cu.instance).unwrap();
+        let consumed_tag = instance.consumed_nullifier;
+
+        let found = find_logic_input(&action.logic_verifier_inputs, &consumed_tag);
+        assert!(found.is_ok());
+        assert_eq!(found.unwrap().tag, consumed_tag);
+    }
+
+    #[test]
+    fn test_find_logic_input_not_found() {
+        let tx = create_minimal_transaction();
+        let action = &tx.actions[0];
+
+        let missing_tag = Digest::from_bytes([0xFF; 32]);
+        assert!(find_logic_input(&action.logic_verifier_inputs, &missing_tag).is_err());
+    }
+
+    #[test]
+    fn test_tag_count_invariant() {
+        let tx = create_minimal_transaction();
+        let action = &tx.actions[0];
+
+        let expected = action.compliance_units.len() * 2;
+        let actual = action.logic_verifier_inputs.len();
+        assert_eq!(actual, expected);
+    }
+
+    #[cfg(feature = "non-aggregated-proofs")]
+    #[test]
+    fn test_extract_tags_and_logic_refs() {
+        let tx = create_minimal_transaction();
+        let action = &tx.actions[0];
+
+        let (tags, logic_refs) = extract_tags_and_logic_refs(action).expect("should extract");
+        assert_eq!(tags.len(), 2);
+        assert_eq!(logic_refs.len(), 2);
+
+        let cu = &action.compliance_units[0];
+        let instance: ComplianceInstance = bincode::deserialize(&cu.instance).unwrap();
+        assert_eq!(tags[0], instance.consumed_nullifier);
+        assert_eq!(tags[1], instance.created_commitment);
+        assert_eq!(logic_refs[0], instance.consumed_logic_ref);
+        assert_eq!(logic_refs[1], instance.created_logic_ref);
+    }
+
+    #[cfg(feature = "non-aggregated-proofs")]
+    #[test]
+    fn test_action_tree_root_from_action_matches_manual() {
+        let tx = create_minimal_transaction();
+        let action = &tx.actions[0];
+
+        let root_from_action = compute_action_tree_root_from_action(action).expect("from action");
+        let (tags, _) = extract_tags_and_logic_refs(action).expect("extract");
+        let root_manual = compute_action_tree_root(&tags).expect("manual");
+
+        assert_eq!(root_from_action, root_manual);
+    }
+}

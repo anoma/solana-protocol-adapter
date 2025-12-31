@@ -1,0 +1,76 @@
+services:
+  # Development environment with all tooling
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        UID: ${UID:-1001}
+        GID: ${GID:-1001}
+        DOCKER_GID: ${DOCKER_GID:-30001}
+    container_name: solana-pa-dev
+    volumes:
+      # Mount entire parent repo to preserve submodule git references
+      - ..:/workspace
+      # Allow tooling (e.g. risc0 Groth16 prover) to run Docker via the host daemon.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Required for risc0-groth16: it bind-mounts a temp dir; with docker.sock it must be a host-visible path.
+      - /tmp:/tmp
+      # Persist cargo cache
+      - cargo-cache:/home/developer/.cargo/registry
+      - cargo-git:/home/developer/.cargo/git
+      # Persist Solana platform-tools (downloaded by cargo build-sbf)
+      - solana-cache:/home/developer/.cache/solana
+      # Persist Solana config
+      - solana-config:/home/developer/.config/solana
+    ports:
+      # Solana validator RPC
+      - "8899:8899"
+      # Solana validator websocket
+      - "8900:8900"
+      # Solana validator faucet
+      - "9900:9900"
+    environment:
+      - RUST_BACKTRACE=1
+      - RUST_LOG=solana_runtime::system_instruction_processor=trace,solana_runtime::message_processor=trace
+    stdin_open: true
+    tty: true
+    working_dir: /workspace/solana-pa-prototype
+    command: /bin/bash
+
+  # Solana test validator as a separate service (optional)
+  validator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        UID: ${UID:-1001}
+        GID: ${GID:-1001}
+        DOCKER_GID: ${DOCKER_GID:-30001}
+    container_name: solana-validator
+    volumes:
+      - validator-ledger:/home/developer/validator-ledger
+      - solana-config:/home/developer/.config/solana
+    ports:
+      - "8899:8899"
+      - "8900:8900"
+      - "9900:9900"
+    environment:
+      - RUST_BACKTRACE=1
+    command: >
+      solana-test-validator
+      --reset
+      --ledger /home/developer/validator-ledger
+      --rpc-port 8899
+      --faucet-port 9900
+      --bind-address 0.0.0.0
+      --log
+    profiles:
+      - validator
+
+volumes:
+  cargo-cache:
+  cargo-git:
+  solana-cache:
+  solana-config:
+  validator-ledger:
