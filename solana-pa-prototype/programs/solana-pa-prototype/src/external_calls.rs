@@ -214,54 +214,6 @@ mod tests {
     }
 
     // =========================================================================
-    // ENCODING/DECODING TESTS
-    // =========================================================================
-
-    #[test]
-    fn test_decode_external_call_from_blob() {
-        let call = SolanaExternalCall {
-            program_id: [0x11; 32],
-            instruction_data: vec![1, 2, 3],
-            expected_output: vec![4, 5, 6],
-            output_mode: OutputMode::ReturnData,
-        };
-        let blob = encode_external_call(&call);
-        let decoded = decode_external_call(&blob).unwrap();
-        assert_eq!(call, decoded);
-    }
-
-    #[test]
-    fn test_decode_invalid_blob_fails() {
-        let invalid_blob = ExpirableBlob {
-            blob: vec![0xDEADBEEF], // Invalid data
-            deletion_criterion: 0,
-        };
-        let result = decode_external_call(&invalid_blob);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_verify_output_return_data() {
-        let expected = vec![1, 2, 3, 4];
-        let actual = vec![1, 2, 3, 4];
-        assert!(verify_output(&expected, &actual, &OutputMode::ReturnData).is_ok());
-    }
-
-    #[test]
-    fn test_verify_output_mismatch() {
-        let expected = vec![1, 2, 3, 4];
-        let actual = vec![5, 6, 7, 8];
-        assert!(verify_output(&expected, &actual, &OutputMode::ReturnData).is_err());
-    }
-
-    #[test]
-    fn test_verify_output_length_mismatch() {
-        let expected = vec![1, 2, 3, 4];
-        let actual = vec![1, 2, 3];
-        assert!(verify_output(&expected, &actual, &OutputMode::ReturnData).is_err());
-    }
-
-    // =========================================================================
     // EXTRACTION TESTS
     // =========================================================================
 
@@ -370,57 +322,6 @@ mod tests {
     // =========================================================================
     // EXECUTION TESTS
     // =========================================================================
-
-    #[test]
-    fn test_build_forwarder_instruction_data() {
-        let logic_ref = [0xAA; 32];
-        let input = vec![1, 2, 3, 4, 5, 6, 7, 8]; // 8 bytes timestamp
-
-        let ix_data = build_forwarder_instruction_data(&logic_ref, &input);
-
-        // Total: 8 + 32 + 4 + 8 = 52 bytes
-        assert_eq!(ix_data.len(), 52, "Instruction data should be 52 bytes");
-
-        // Check discriminator is present (first 8 bytes)
-        let discriminator = &ix_data[0..8];
-        assert_eq!(
-            discriminator, FORWARD_CALL_DISCRIMINATOR,
-            "Discriminator should match"
-        );
-
-        // Check logic_ref (bytes 8-40)
-        let ix_logic_ref = &ix_data[8..40];
-        assert_eq!(ix_logic_ref, &logic_ref, "logic_ref should match");
-
-        // Check input length (bytes 40-44, little-endian u32)
-        let input_len_bytes: [u8; 4] = ix_data[40..44].try_into().unwrap();
-        let input_len = u32::from_le_bytes(input_len_bytes);
-        assert_eq!(input_len, 8, "Input length should be 8");
-
-        // Check input data (bytes 44-52)
-        let ix_input = &ix_data[44..52];
-        assert_eq!(ix_input, &input[..], "Input data should match");
-    }
-
-    #[test]
-    fn test_build_forwarder_instruction_data_empty_input() {
-        let logic_ref = [0xBB; 32];
-        let input: Vec<u8> = vec![];
-
-        let ix_data = build_forwarder_instruction_data(&logic_ref, &input);
-
-        // Total: 8 + 32 + 4 + 0 = 44 bytes
-        assert_eq!(
-            ix_data.len(),
-            44,
-            "Instruction data with empty input should be 44 bytes"
-        );
-
-        // Check input length is 0
-        let input_len_bytes: [u8; 4] = ix_data[40..44].try_into().unwrap();
-        let input_len = u32::from_le_bytes(input_len_bytes);
-        assert_eq!(input_len, 0, "Input length should be 0");
-    }
 
     #[test]
     fn test_execute_external_calls_no_calls() {

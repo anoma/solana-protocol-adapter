@@ -26,6 +26,8 @@ pub mod risc0_serde;
 pub mod delta;
 #[cfg(test)]
 pub mod test_utils;
+#[cfg(test)]
+pub mod proptests;
 
 use state::*;
 pub use error::PAError;

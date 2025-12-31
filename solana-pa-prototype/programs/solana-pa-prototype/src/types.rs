@@ -132,38 +132,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_digest_bytes_roundtrip() {
-        let bytes: [u8; 32] = core::array::from_fn(|i| i as u8);
-        let digest = Digest::from_bytes(bytes);
-        assert_eq!(bytes, digest.to_bytes());
-    }
-
-    #[test]
-    fn test_digest_from_hex() {
-        let hex_str = "cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06";
-        let digest = Digest::from_hex(hex_str);
-        let bytes = digest.to_bytes();
-        assert_eq!(hex::encode(bytes), hex_str);
-    }
-
-    #[test]
-    fn test_compliance_instance_serialization() {
-        let instance = ComplianceInstance {
-            consumed_nullifier: Digest::from_bytes([1u8; 32]),
-            consumed_logic_ref: Digest::from_bytes([2u8; 32]),
-            consumed_commitment_tree_root: Digest::from_bytes([3u8; 32]),
-            created_commitment: Digest::from_bytes([4u8; 32]),
-            created_logic_ref: Digest::from_bytes([5u8; 32]),
-            delta_x: [6u32; 8],
-            delta_y: [7u32; 8],
-        };
-
-        let serialized = bincode::serialize(&instance).unwrap();
-        let deserialized: ComplianceInstance = bincode::deserialize(&serialized).unwrap();
-        assert_eq!(instance, deserialized);
-    }
-
-    #[test]
     fn test_expirable_blob_serialization() {
         let blob = ExpirableBlob {
             blob: vec![0x01020304, 0x05060708],
