@@ -30,6 +30,16 @@ pub enum PAError {
     TxDataExpired,
     #[msg("TxData write exceeds payload capacity")]
     TxDataBoundsExceeded,
+    #[msg("TxData expires_slot is below minimum (too soon)")]
+    TxDataExpiryTooSoon,
+    #[msg("TxData expires_slot exceeds maximum (too far in future)")]
+    TxDataExpiryTooLate,
+    #[msg("TxData extension must increase expires_slot")]
+    TxDataExtendMustIncrease,
+    #[msg("TxData has not expired yet (permissionless close requires expiration)")]
+    TxDataNotExpired,
+    #[msg("Invalid expiry configuration (min must be < max, within reasonable bounds)")]
+    InvalidExpiryConfig,
 
     // =========================================================================
     // Data parsing errors
