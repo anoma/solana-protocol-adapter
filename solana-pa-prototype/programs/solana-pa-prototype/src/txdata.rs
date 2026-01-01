@@ -118,6 +118,35 @@ mod tests {
     }
 
     #[test]
+    fn test_txdata_expiry_boundary_exact() {
+        let txdata = TxData::new(100, 500);
+        // At exactly expiry_slot, not yet expired (check is current > expiry)
+        assert!(!txdata.is_expired(500));
+        // One slot after, expired
+        assert!(txdata.is_expired(501));
+    }
+
+    #[test]
+    fn test_txdata_validate_not_expired_passes() {
+        let txdata = TxData::new(100, 1000);
+        // Should pass when not expired
+        assert!(txdata.validate_not_expired(999).is_ok());
+        // Should pass at exact boundary
+        assert!(txdata.validate_not_expired(1000).is_ok());
+    }
+
+    #[test]
+    fn test_txdata_validate_not_expired_fails() {
+        let txdata = TxData::new(100, 1000);
+        let result = txdata.validate_not_expired(1001);
+        assert!(result.is_err());
+        match result {
+            Err(PAError::TxDataExpired) => {}
+            _ => panic!("Expected TxDataExpired error"),
+        }
+    }
+
+    #[test]
     fn test_txdata_bounds_exceeded() {
         let mut txdata = TxData::new(4, 1000);
 

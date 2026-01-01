@@ -29,12 +29,21 @@ pub struct PAStateAccount {
     /// Commitment tree frontier (filled subtree hashes at each level).
     /// Length = TREE_DEPTH (32). Each element is a 32-byte digest.
     pub frontier: [[u8; 32]; TREE_DEPTH],
+
+    /// Minimum slots in the future for TxData expiration.
+    /// Default: MIN_EXPIRY_SLOTS (100). Zero means use compile-time constant.
+    pub min_expiry_slots: u64,
+
+    /// Maximum slots in the future for TxData expiration.
+    /// Default: MAX_EXPIRY_SLOTS (216_000). Zero means use compile-time constant.
+    pub max_expiry_slots: u64,
 }
 
 impl PAStateAccount {
     /// Calculate space required for this account.
-    /// discriminator (8) + bump (1) + authority (32) + paused (1) + root (32) + next_index (8) + frontier (32 * 32)
-    pub const SPACE: usize = 8 + 1 + 32 + 1 + 32 + 8 + (32 * TREE_DEPTH);
+    /// discriminator (8) + bump (1) + authority (32) + paused (1) + root (32) + next_index (8)
+    /// + frontier (32 * 32) + min_expiry_slots (8) + max_expiry_slots (8)
+    pub const SPACE: usize = 8 + 1 + 32 + 1 + 32 + 8 + (32 * TREE_DEPTH) + 8 + 8;
 
     /// Get the current root as a Digest.
     pub fn get_root(&self) -> Digest {
@@ -54,6 +63,24 @@ impl PAStateAccount {
     /// Set root.
     pub fn set_root(&mut self, digest: Digest) {
         self.root = digest.to_bytes();
+    }
+
+    /// Get min_expiry_slots with fallback for migration (0 = use compile-time constant).
+    pub fn get_min_expiry_slots(&self) -> u64 {
+        if self.min_expiry_slots == 0 {
+            MIN_EXPIRY_SLOTS
+        } else {
+            self.min_expiry_slots
+        }
+    }
+
+    /// Get max_expiry_slots with fallback for migration (0 = use compile-time constant).
+    pub fn get_max_expiry_slots(&self) -> u64 {
+        if self.max_expiry_slots == 0 {
+            MAX_EXPIRY_SLOTS
+        } else {
+            self.max_expiry_slots
+        }
     }
 }
 
@@ -95,3 +122,9 @@ impl TxDataAccount {
 
 /// Seeds for TxData PDA derivation.
 pub const TX_DATA_SEED: &[u8] = b"tx_data";
+
+/// Minimum slots in the future for TxData expiration (~40 seconds at 400ms/slot).
+pub const MIN_EXPIRY_SLOTS: u64 = 100;
+
+/// Maximum slots in the future for TxData expiration (~24 hours at 400ms/slot).
+pub const MAX_EXPIRY_SLOTS: u64 = 216_000;

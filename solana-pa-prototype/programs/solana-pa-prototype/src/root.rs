@@ -145,6 +145,7 @@ pub fn is_root_valid(
 mod tests {
     use super::*;
     use crate::merkle::TREE_DEPTH;
+    use crate::state::{MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
 
     // =========================================================================
     // ROOT VALIDATION TESTS
@@ -159,6 +160,8 @@ mod tests {
             root: [0xAA; 32],
             next_index: 0,
             frontier: [[0; 32]; TREE_DEPTH],
+            min_expiry_slots: MIN_EXPIRY_SLOTS,
+            max_expiry_slots: MAX_EXPIRY_SLOTS,
         };
         let pa_state_key = Pubkey::new_unique();
         let root = Digest::from_bytes([0xAA; 32]);
@@ -175,6 +178,8 @@ mod tests {
             root: [0xBB; 32],
             next_index: 0,
             frontier: [[0; 32]; TREE_DEPTH],
+            min_expiry_slots: MIN_EXPIRY_SLOTS,
+            max_expiry_slots: MAX_EXPIRY_SLOTS,
         };
         let pa_state_key = Pubkey::new_unique();
 
@@ -190,6 +195,8 @@ mod tests {
             root: [0xAA; 32],
             next_index: 0,
             frontier: [[0; 32]; TREE_DEPTH],
+            min_expiry_slots: MIN_EXPIRY_SLOTS,
+            max_expiry_slots: MAX_EXPIRY_SLOTS,
         };
         let pa_state_key = Pubkey::new_unique();
         let old_root = Digest::from_bytes([0xBB; 32]);

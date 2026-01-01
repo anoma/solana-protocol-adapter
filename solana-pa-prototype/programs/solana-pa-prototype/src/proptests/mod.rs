@@ -12,3 +12,4 @@ pub mod delta_props;
 pub mod external_calls_props;
 pub mod settle_props;
 pub mod groth16_props;
+pub mod txdata_props;

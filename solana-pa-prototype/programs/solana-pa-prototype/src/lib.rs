@@ -76,6 +76,10 @@ pub mod solana_pa_prototype {
         state.root = EMPTY_TREE_ROOT.to_bytes();
         state.next_index = 0;
 
+        // Initialize expiry config with compile-time defaults
+        state.min_expiry_slots = MIN_EXPIRY_SLOTS;
+        state.max_expiry_slots = MAX_EXPIRY_SLOTS;
+
         // Create root marker for genesis root (so historical root check works from start)
         let genesis_root = state.root;
         root::create_root_marker(
@@ -139,6 +143,15 @@ pub mod solana_pa_prototype {
         capacity: u32,
         expires_slot: u64,
     ) -> Result<()> {
+        // Validate expiry bounds using configurable values from PAState
+        let clock = Clock::get()?;
+        let pa_state = &ctx.accounts.pa_state;
+        let min_expires = clock.slot.saturating_add(pa_state.get_min_expiry_slots());
+        let max_expires = clock.slot.saturating_add(pa_state.get_max_expiry_slots());
+
+        require!(expires_slot >= min_expires, PAError::TxDataExpiryTooSoon);
+        require!(expires_slot <= max_expires, PAError::TxDataExpiryTooLate);
+
         let txdata = &mut ctx.accounts.tx_data;
         txdata.bump = ctx.bumps.tx_data;
         txdata.authority = ctx.accounts.authority.key();
@@ -147,7 +160,7 @@ pub mod solana_pa_prototype {
         txdata.expires_slot = expires_slot;
         txdata.payload = vec![0u8; capacity as usize];
 
-        msg!("TxData initialized: upload_id={}, capacity={}", upload_id, capacity);
+        msg!("TxData initialized: upload_id={}, capacity={}, expires_slot={}", upload_id, capacity, expires_slot);
         Ok(())
     }
 
@@ -161,6 +174,12 @@ pub mod solana_pa_prototype {
     ) -> Result<()> {
         let txdata = &mut ctx.accounts.tx_data;
 
+        // Check expiry before allowing write
+        let clock = Clock::get()?;
+        if clock.slot > txdata.expires_slot {
+            return Err(error!(PAError::TxDataExpired));
+        }
+
         let end = offset as usize + data.len();
         require!(end <= txdata.payload.len(), PAError::TxDataBoundsExceeded);
 
@@ -168,6 +187,103 @@ pub mod solana_pa_prototype {
         txdata.written_len = std::cmp::max(txdata.written_len, end as u32);
 
         msg!("TxData write: {} bytes at offset {}", data.len(), offset);
+        Ok(())
+    }
+
+    /// Close a TxData account and reclaim rent.
+    /// Authority can close at any time (not just after expiration).
+    #[allow(unused_variables)]
+    pub fn txdata_close(
+        ctx: Context<TxDataClose>,
+        upload_id: u64,
+    ) -> Result<()> {
+        // Account closure is handled by Anchor's close constraint
+        msg!("TxData closed: upload_id={}", upload_id);
+        Ok(())
+    }
+
+    /// Extend the expiration deadline of a TxData account.
+    ///
+    /// Allows the authority to extend expiration even after the original deadline passed.
+    /// New expiry must be within [current_slot + min, current_slot + max] bounds.
+    #[allow(unused_variables)]
+    pub fn txdata_extend(
+        ctx: Context<TxDataExtend>,
+        upload_id: u64,
+        new_expires_slot: u64,
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        let pa_state = &ctx.accounts.pa_state;
+        let txdata = &mut ctx.accounts.tx_data;
+
+        // Validate new expiry is within bounds from current slot
+        let min_expires = clock.slot.saturating_add(pa_state.get_min_expiry_slots());
+        let max_expires = clock.slot.saturating_add(pa_state.get_max_expiry_slots());
+
+        require!(new_expires_slot >= min_expires, PAError::TxDataExpiryTooSoon);
+        require!(new_expires_slot <= max_expires, PAError::TxDataExpiryTooLate);
+
+        // New expiry must be strictly greater than current (prevent no-op or shortening)
+        require!(new_expires_slot > txdata.expires_slot, PAError::TxDataExtendMustIncrease);
+
+        let old_expires = txdata.expires_slot;
+        txdata.expires_slot = new_expires_slot;
+
+        msg!("TxData extended: upload_id={}, old_expires={}, new_expires={}",
+             upload_id, old_expires, new_expires_slot);
+        Ok(())
+    }
+
+    /// Close an EXPIRED TxData account and reclaim rent.
+    ///
+    /// Anyone can call this for garbage collection of stale accounts.
+    /// Rent goes to the `refund` address stored in the account.
+    /// Only works if current_slot > expires_slot.
+    #[allow(unused_variables)]
+    pub fn txdata_close_expired(
+        ctx: Context<TxDataCloseExpired>,
+        upload_id: u64,
+        authority: Pubkey,
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        let txdata = &ctx.accounts.tx_data;
+
+        // CRITICAL: Only allow close if expired
+        require!(clock.slot > txdata.expires_slot, PAError::TxDataNotExpired);
+
+        // Account closure is handled by Anchor's close constraint
+        msg!("Expired TxData closed: upload_id={}, expires_slot={}, current_slot={}",
+             upload_id, txdata.expires_slot, clock.slot);
+        Ok(())
+    }
+
+    /// Update TxData expiry configuration.
+    ///
+    /// Only the protocol authority can call this.
+    pub fn update_expiry_config(
+        ctx: Context<UpdateExpiryConfig>,
+        new_min_expiry_slots: u64,
+        new_max_expiry_slots: u64,
+    ) -> Result<()> {
+        // Validate: min < max
+        require!(new_min_expiry_slots < new_max_expiry_slots, PAError::InvalidExpiryConfig);
+
+        // Validate: reasonable minimum (at least 10 slots ~4 seconds)
+        require!(new_min_expiry_slots >= 10, PAError::InvalidExpiryConfig);
+
+        // Validate: reasonable maximum (no more than ~7 days)
+        const SEVEN_DAYS_SLOTS: u64 = 7 * 24 * 60 * 60 * 1000 / 400; // ~1.5M slots
+        require!(new_max_expiry_slots <= SEVEN_DAYS_SLOTS, PAError::InvalidExpiryConfig);
+
+        let state = &mut ctx.accounts.pa_state;
+        let old_min = state.min_expiry_slots;
+        let old_max = state.max_expiry_slots;
+
+        state.min_expiry_slots = new_min_expiry_slots;
+        state.max_expiry_slots = new_max_expiry_slots;
+
+        msg!("Expiry config updated: min {} -> {}, max {} -> {}",
+             old_min, new_min_expiry_slots, old_max, new_max_expiry_slots);
         Ok(())
     }
 
@@ -702,6 +818,10 @@ pub struct SettleFromTxData<'info> {
 #[derive(Accounts)]
 #[instruction(upload_id: u64, capacity: u32)]
 pub struct TxDataInit<'info> {
+    /// PAState for reading configurable expiry bounds.
+    #[account(seeds = [PA_STATE_SEED], bump = pa_state.bump)]
+    pub pa_state: Account<'info, PAStateAccount>,
+
     #[account(
         init,
         payer = authority,
@@ -727,6 +847,75 @@ pub struct TxDataWrite<'info> {
         has_one = authority
     )]
     pub tx_data: Account<'info, TxDataAccount>,
+
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(upload_id: u64)]
+pub struct TxDataClose<'info> {
+    #[account(
+        mut,
+        seeds = [TX_DATA_SEED, authority.key().as_ref(), &upload_id.to_le_bytes()],
+        bump = tx_data.bump,
+        has_one = authority,
+        close = refund
+    )]
+    pub tx_data: Account<'info, TxDataAccount>,
+
+    pub authority: Signer<'info>,
+
+    /// CHECK: Receives the rent refund. Must match tx_data.refund.
+    #[account(mut, address = tx_data.refund)]
+    pub refund: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(upload_id: u64)]
+pub struct TxDataExtend<'info> {
+    /// PAState for reading configurable expiry bounds.
+    #[account(seeds = [PA_STATE_SEED], bump = pa_state.bump)]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    #[account(
+        mut,
+        seeds = [TX_DATA_SEED, authority.key().as_ref(), &upload_id.to_le_bytes()],
+        bump = tx_data.bump,
+        has_one = authority
+    )]
+    pub tx_data: Account<'info, TxDataAccount>,
+
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+#[instruction(upload_id: u64, authority: Pubkey)]
+pub struct TxDataCloseExpired<'info> {
+    #[account(
+        mut,
+        seeds = [TX_DATA_SEED, authority.as_ref(), &upload_id.to_le_bytes()],
+        bump = tx_data.bump,
+        close = refund
+    )]
+    pub tx_data: Account<'info, TxDataAccount>,
+
+    /// Anyone can call, pays tx fee.
+    pub payer: Signer<'info>,
+
+    /// CHECK: Receives the rent refund. Must match tx_data.refund.
+    #[account(mut, address = tx_data.refund)]
+    pub refund: UncheckedAccount<'info>,
+}
+
+#[derive(Accounts)]
+pub struct UpdateExpiryConfig<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        has_one = authority @ PAError::Unauthorized
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
 
     pub authority: Signer<'info>,
 }
@@ -1009,16 +1198,19 @@ mod tests {
                 root: EMPTY_TREE_ROOT.to_bytes(),
                 next_index: 0,
                 frontier: [[0u8; 32]; TREE_DEPTH],
+                min_expiry_slots: MIN_EXPIRY_SLOTS,
+                max_expiry_slots: MAX_EXPIRY_SLOTS,
             }
         }
 
         #[test]
         fn test_pa_state_account_space_includes_new_fields() {
-            // Verify SPACE calculation includes authority (32) and paused (1)
-            // discriminator (8) + bump (1) + authority (32) + paused (1) + root (32) + next_index (8) + frontier (32 * 32)
-            let expected_space = 8 + 1 + 32 + 1 + 32 + 8 + (32 * TREE_DEPTH);
+            // Verify SPACE calculation includes all fields including expiry config
+            // discriminator (8) + bump (1) + authority (32) + paused (1) + root (32) + next_index (8)
+            // + frontier (32 * 32) + min_expiry_slots (8) + max_expiry_slots (8)
+            let expected_space = 8 + 1 + 32 + 1 + 32 + 8 + (32 * TREE_DEPTH) + 8 + 8;
             assert_eq!(PAStateAccount::SPACE, expected_space);
-            assert_eq!(PAStateAccount::SPACE, 1106);
+            assert_eq!(PAStateAccount::SPACE, 1122);
         }
 
         #[test]
@@ -1211,6 +1403,47 @@ mod tests {
 
             // Should emit 2 payloads: resource[0] and discovery[0]
             assert_eq!(would_emit, 2);
+        }
+    }
+
+    // =========================================================================
+    // TXDATA EXPIRY BOUNDS TESTS
+    // =========================================================================
+
+    mod txdata_expiry_bounds_tests {
+        use super::*;
+
+        #[test]
+        fn test_expiry_bounds_constants() {
+            // MIN: 100 slots * 400ms = ~40 seconds
+            assert_eq!(MIN_EXPIRY_SLOTS, 100);
+            // MAX: 216,000 slots * 400ms = ~24 hours
+            assert_eq!(MAX_EXPIRY_SLOTS, 216_000);
+            // MAX should be greater than MIN
+            assert!(MAX_EXPIRY_SLOTS > MIN_EXPIRY_SLOTS);
+        }
+
+        #[test]
+        fn test_expiry_bounds_calculations() {
+            let current_slot: u64 = 1_000_000;
+
+            let min_expires = current_slot.saturating_add(MIN_EXPIRY_SLOTS);
+            let max_expires = current_slot.saturating_add(MAX_EXPIRY_SLOTS);
+
+            assert_eq!(min_expires, 1_000_100);
+            assert_eq!(max_expires, 1_216_000);
+        }
+
+        #[test]
+        fn test_expiry_bounds_no_overflow() {
+            let current_slot: u64 = u64::MAX - 50;
+
+            // saturating_add should not overflow
+            let min_expires = current_slot.saturating_add(MIN_EXPIRY_SLOTS);
+            let max_expires = current_slot.saturating_add(MAX_EXPIRY_SLOTS);
+
+            assert_eq!(min_expires, u64::MAX);
+            assert_eq!(max_expires, u64::MAX);
         }
     }
 }

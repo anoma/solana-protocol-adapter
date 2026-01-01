@@ -6,7 +6,7 @@ use anchor_lang::prelude::Pubkey;
 
 use crate::groth16::Selector;
 use crate::merkle::{EMPTY_TREE_ROOT, TREE_DEPTH, ZEROS};
-use crate::state::PAStateAccount;
+use crate::state::{PAStateAccount, MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
 use crate::types::*;
 
 /// Arbitrary selector for unit tests. Used by `fake_aggregation_proof_bytes` to test
@@ -223,6 +223,8 @@ pub fn create_test_pa_state() -> PAStateAccount {
         root: ZEROS[TREE_DEPTH - 1].to_bytes(),
         next_index: 0,
         frontier: [[0u8; 32]; TREE_DEPTH],
+        min_expiry_slots: MIN_EXPIRY_SLOTS,
+        max_expiry_slots: MAX_EXPIRY_SLOTS,
     }
 }
 
@@ -235,5 +237,7 @@ pub fn create_mock_pa_state(authority: Pubkey, paused: bool) -> PAStateAccount {
         root: EMPTY_TREE_ROOT.to_bytes(),
         next_index: 0,
         frontier: [[0u8; 32]; TREE_DEPTH],
+        min_expiry_slots: MIN_EXPIRY_SLOTS,
+        max_expiry_slots: MAX_EXPIRY_SLOTS,
     }
 }

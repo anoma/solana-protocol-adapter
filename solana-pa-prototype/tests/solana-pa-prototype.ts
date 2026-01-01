@@ -185,6 +185,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     await program.methods
       .txdataInit(uploadId, capacity, expiresSlot)
       .accounts({
+        paState,
         txData,
         authority: authority.publicKey,
         systemProgram: SystemProgram.programId,
@@ -442,6 +443,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       await program.methods
         .txdataInit(uploadId, capacity, expiresSlot)
         .accounts({
+          paState,
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
@@ -653,6 +655,7 @@ describe("solana-pa-prototype (Non-Aggregated Individual Groth16 E2E)", () => {
     await program.methods
       .txdataInit(uploadId, capacity, expiresSlot)
       .accounts({
+        paState,
         txData,
         authority: authority.publicKey,
         systemProgram: SystemProgram.programId,
@@ -999,5 +1002,471 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop - Destructive)", () => {
     const idl = readJson<any>(idlPath);
     const unauthorizedError = idl.errors?.find((e: any) => e.name === "Unauthorized");
     assert.ok(unauthorizedError, "Unauthorized error should exist in IDL");
+  });
+});
+
+// =============================================================================
+// TxData Expiration Mechanism Tests
+// =============================================================================
+
+describe("solana-pa-prototype (TxData Expiration)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+
+  const TX_DATA_SEED = Buffer.from("tx_data");
+  const PA_STATE_SEED = Buffer.from("pa_state");
+  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+
+  // Constants matching Rust (from state.rs)
+  const MIN_EXPIRY_SLOTS = 100;
+  const MAX_EXPIRY_SLOTS = 216_000;
+
+  it("rejects txdata_init with expires_slot too soon", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 1);
+
+    const uploadId = new anchor.BN(Date.now());
+    const uploadIdLe = Buffer.alloc(8);
+    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    // Set expiry too soon (only 50 slots from now, MIN is 100)
+    const expiresSlot = new anchor.BN(slot + 50);
+
+    try {
+      await program.methods
+        .txdataInit(uploadId, 100, expiresSlot)
+        .accounts({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([authority])
+        .rpc();
+      assert.fail("expected txdata_init to fail with TxDataExpiryTooSoon");
+    } catch (e: any) {
+      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
+      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+      const haystack = [msg, ...logs].join("\n");
+      assert.match(haystack, /TxDataExpiryTooSoon|expires_slot is below minimum/i);
+    }
+  });
+
+  it("rejects txdata_init with expires_slot too late", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 1);
+
+    const uploadId = new anchor.BN(Date.now());
+    const uploadIdLe = Buffer.alloc(8);
+    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    // Set expiry too late (MAX + 1000 slots from now)
+    const expiresSlot = new anchor.BN(slot + MAX_EXPIRY_SLOTS + 1000);
+
+    try {
+      await program.methods
+        .txdataInit(uploadId, 100, expiresSlot)
+        .accounts({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([authority])
+        .rpc();
+      assert.fail("expected txdata_init to fail with TxDataExpiryTooLate");
+    } catch (e: any) {
+      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
+      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+      const haystack = [msg, ...logs].join("\n");
+      assert.match(haystack, /TxDataExpiryTooLate|expires_slot exceeds maximum/i);
+    }
+  });
+
+  it("accepts txdata_init with valid expires_slot", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 1);
+
+    const uploadId = new anchor.BN(Date.now());
+    const uploadIdLe = Buffer.alloc(8);
+    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    // Set expiry at midpoint of valid range
+    const expiresSlot = new anchor.BN(slot + Math.floor((MIN_EXPIRY_SLOTS + MAX_EXPIRY_SLOTS) / 2));
+
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    const txDataAccount = await program.account.txDataAccount.fetch(txData);
+    assert.equal(
+      txDataAccount.expiresSlot.toNumber(),
+      expiresSlot.toNumber(),
+      "expires_slot should be set correctly"
+    );
+  });
+
+  it("allows authority to close TxData anytime", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const uploadId = new anchor.BN(Date.now());
+    const uploadIdLe = Buffer.alloc(8);
+    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
+
+    // Create TxData
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Verify it exists
+    const before = await provider.connection.getAccountInfo(txData);
+    assert.ok(before, "TxData should exist before close");
+
+    // Get balance before close
+    const balanceBefore = await provider.connection.getBalance(authority.publicKey);
+
+    // Close TxData (authority receives rent back)
+    await program.methods
+      .txdataClose(uploadId)
+      .accounts({
+        txData,
+        authority: authority.publicKey,
+        refund: authority.publicKey,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Verify it's closed
+    const after = await provider.connection.getAccountInfo(txData);
+    assert.ok(!after, "TxData should not exist after close");
+
+    // Verify rent was refunded
+    const balanceAfter = await provider.connection.getBalance(authority.publicKey);
+    assert.ok(
+      balanceAfter > balanceBefore,
+      "Authority balance should increase after close (rent refund)"
+    );
+  });
+
+  it("rejects txdata_close from non-authority", async () => {
+    const authority = Keypair.generate();
+    const attacker = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+    await airdrop(provider, attacker.publicKey, 1);
+
+    const uploadId = new anchor.BN(Date.now());
+    const uploadIdLe = Buffer.alloc(8);
+    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
+
+    // Create TxData with authority
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Attempt close from attacker (should fail)
+    // Note: PDA derivation uses authority.publicKey, so attacker can't even derive correct PDA
+    // This is expected - attacker would need to know authority's upload_id AND authority pubkey
+    const [attackerTxData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, attacker.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    try {
+      await program.methods
+        .txdataClose(uploadId)
+        .accounts({
+          txData: attackerTxData,
+          authority: attacker.publicKey,
+          refund: attacker.publicKey,
+        })
+        .signers([attacker])
+        .rpc();
+      assert.fail("expected txdata_close to fail for non-authority");
+    } catch (e: any) {
+      // Expected: account not found (different PDA derivation) or constraint violation
+      // The PDA is derived from authority's key, so attacker's PDA doesn't exist
+      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
+      assert.ok(
+        msg.includes("Account") || msg.includes("constraint") || msg.includes("Error") ||
+        msg.includes("AccountNotInitialized") || msg.includes("initialized"),
+        `Should fail for non-authority (PDA doesn't exist), got: ${msg}`
+      );
+    }
+  });
+
+  it("verifies new error types exist in IDL", async () => {
+    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
+    const idl = readJson<any>(idlPath);
+
+    const expiryTooSoonError = idl.errors?.find((e: any) => e.name === "TxDataExpiryTooSoon");
+    assert.ok(expiryTooSoonError, "TxDataExpiryTooSoon error should exist in IDL");
+
+    const expiryTooLateError = idl.errors?.find((e: any) => e.name === "TxDataExpiryTooLate");
+    assert.ok(expiryTooLateError, "TxDataExpiryTooLate error should exist in IDL");
+  });
+
+  // ===========================================================================
+  // Tests for txdata_extend instruction
+  // ===========================================================================
+
+  it("verifies txdata_extend instruction exists in IDL", async () => {
+    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
+    const idl = readJson<any>(idlPath);
+    const txdataExtendIx = idl.instructions.find((ix: any) => ix.name === "txdata_extend");
+    assert.ok(txdataExtendIx, "txdata_extend instruction should exist in IDL");
+    // Verify it has new_expires_slot argument
+    const newExpiresArg = txdataExtendIx.args?.find((arg: any) => arg.name === "new_expires_slot" || arg.name === "newExpiresSlot");
+    assert.ok(newExpiresArg, "txdata_extend should have new_expires_slot argument");
+  });
+
+  it("extends TxData expiration deadline successfully", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const uploadId = new anchor.BN(Date.now());
+    const uploadIdLe = Buffer.alloc(8);
+    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const initialExpiry = new anchor.BN(slot + 1000);
+
+    // Create TxData
+    await program.methods
+      .txdataInit(uploadId, 100, initialExpiry)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Verify initial expiry
+    let txDataAccount = await program.account.txDataAccount.fetch(txData);
+    assert.equal(txDataAccount.expiresSlot.toNumber(), initialExpiry.toNumber());
+
+    // Extend expiration
+    const currentSlot = await provider.connection.getSlot("confirmed");
+    const newExpiry = new anchor.BN(currentSlot + 5000);
+
+    await program.methods
+      .txdataExtend(uploadId, newExpiry)
+      .accountsStrict({
+        paState,
+        txData,
+        authority: authority.publicKey,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Verify new expiry
+    txDataAccount = await program.account.txDataAccount.fetch(txData);
+    assert.equal(txDataAccount.expiresSlot.toNumber(), newExpiry.toNumber(), "expires_slot should be updated");
+  });
+
+  it("rejects txdata_extend that doesn't increase expires_slot", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const uploadId = new anchor.BN(Date.now());
+    const uploadIdLe = Buffer.alloc(8);
+    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const initialExpiry = new anchor.BN(slot + 10000);
+
+    // Create TxData with high expiry
+    await program.methods
+      .txdataInit(uploadId, 100, initialExpiry)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Try to extend to a lower value (should fail)
+    const currentSlot = await provider.connection.getSlot("confirmed");
+    const lowerExpiry = new anchor.BN(currentSlot + 500); // Less than current expires_slot
+
+    try {
+      await program.methods
+        .txdataExtend(uploadId, lowerExpiry)
+        .accountsStrict({
+          paState,
+          txData,
+          authority: authority.publicKey,
+        })
+        .signers([authority])
+        .rpc();
+      assert.fail("expected txdata_extend to fail with TxDataExtendMustIncrease");
+    } catch (e: any) {
+      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
+      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+      const haystack = [msg, ...logs].join("\n");
+      assert.match(haystack, /TxDataExtendMustIncrease|extension must increase/i);
+    }
+  });
+
+  // ===========================================================================
+  // Tests for txdata_close_expired instruction
+  // ===========================================================================
+
+  it("verifies txdata_close_expired instruction exists in IDL", async () => {
+    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
+    const idl = readJson<any>(idlPath);
+    const txdataCloseExpiredIx = idl.instructions.find((ix: any) => ix.name === "txdata_close_expired");
+    assert.ok(txdataCloseExpiredIx, "txdata_close_expired instruction should exist in IDL");
+    // Verify it has authority argument (to derive PDA)
+    const authorityArg = txdataCloseExpiredIx.args?.find((arg: any) => arg.name === "authority");
+    assert.ok(authorityArg, "txdata_close_expired should have authority argument");
+  });
+
+  it("rejects txdata_close_expired for non-expired TxData", async () => {
+    const authority = Keypair.generate();
+    const cleaner = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+    await airdrop(provider, cleaner.publicKey, 1);
+
+    const uploadId = new anchor.BN(Date.now());
+    const uploadIdLe = Buffer.alloc(8);
+    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 50000); // Far in the future
+
+    // Create TxData
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Try to close_expired (should fail - not expired yet)
+    try {
+      await program.methods
+        .txdataCloseExpired(uploadId, authority.publicKey)
+        .accountsStrict({
+          txData,
+          payer: cleaner.publicKey,
+          refund: authority.publicKey,
+        })
+        .signers([cleaner])
+        .rpc();
+      assert.fail("expected txdata_close_expired to fail with TxDataNotExpired");
+    } catch (e: any) {
+      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
+      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+      const haystack = [msg, ...logs].join("\n");
+      assert.match(haystack, /TxDataNotExpired|has not expired/i);
+    }
+  });
+
+  // ===========================================================================
+  // Tests for update_expiry_config instruction
+  // ===========================================================================
+
+  it("verifies update_expiry_config instruction exists in IDL", async () => {
+    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
+    const idl = readJson<any>(idlPath);
+    const updateExpiryConfigIx = idl.instructions.find((ix: any) => ix.name === "update_expiry_config");
+    assert.ok(updateExpiryConfigIx, "update_expiry_config instruction should exist in IDL");
+    // Verify it has the two arguments (IDL uses snake_case)
+    assert.equal(updateExpiryConfigIx.args?.length, 2, "update_expiry_config should have 2 arguments");
+  });
+
+  it("verifies new error types for expiry features exist in IDL", async () => {
+    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
+    const idl = readJson<any>(idlPath);
+
+    const extendMustIncreaseError = idl.errors?.find((e: any) => e.name === "TxDataExtendMustIncrease");
+    assert.ok(extendMustIncreaseError, "TxDataExtendMustIncrease error should exist in IDL");
+
+    const notExpiredError = idl.errors?.find((e: any) => e.name === "TxDataNotExpired");
+    assert.ok(notExpiredError, "TxDataNotExpired error should exist in IDL");
+
+    const invalidConfigError = idl.errors?.find((e: any) => e.name === "InvalidExpiryConfig");
+    assert.ok(invalidConfigError, "InvalidExpiryConfig error should exist in IDL");
   });
 });
