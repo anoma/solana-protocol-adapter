@@ -59,33 +59,179 @@ pub fn build_forwarder_instruction_data(logic_ref: &[u8; 32], input: &[u8]) -> V
     data
 }
 
-/// Execute external calls from a transaction via CPI.
+// =============================================================================
+// Segment Finding
+// =============================================================================
+
+#[cfg(not(test))]
+use anchor_lang::prelude::Pubkey;
+
+/// Find the account segment for a forwarder in remaining_accounts.
 ///
-/// For each external call in the transaction's LogicVerifierInputs:
-/// 1. Build the forwarder instruction data
-/// 2. Find the forwarder program in remaining_accounts
-/// 3. Invoke the forwarder via CPI
-/// 4. Read return data
-/// 5. Verify output matches expected
+/// Segments start with the forwarder program account, followed by any CPI accounts
+/// the forwarder needs. Segments appear in the same order as external calls.
 ///
-/// # Arguments
-/// * `tx` - The transaction containing external calls in LogicVerifierInputs.app_data.external_payload
-/// * `remaining_accounts` - Accounts passed to the instruction, must include forwarder programs
+/// Returns (seg_start, seg_end) indices into external_accounts.
+#[cfg(not(test))]
+fn find_forwarder_segment(
+    external_accounts: &[anchor_lang::prelude::AccountInfo],
+    cursor: usize,
+    program_id: &Pubkey,
+    call_programs: &[Pubkey],
+) -> Result<(usize, usize), PAError> {
+    let seg_start_rel = external_accounts[cursor..]
+        .iter()
+        .position(|a| a.key == program_id)
+        .ok_or(PAError::UnregisteredForwarder)?;
+    let seg_start = cursor + seg_start_rel;
+
+    let mut seg_end = external_accounts.len();
+    for i in (seg_start + 1)..external_accounts.len() {
+        if call_programs.iter().any(|p| external_accounts[i].key == p) {
+            seg_end = i;
+            break;
+        }
+    }
+
+    Ok((seg_start, seg_end))
+}
+
+// =============================================================================
+// Forwarder Invocation
+// =============================================================================
+
+/// Invoke a forwarder program via CPI.
+#[cfg(not(test))]
+fn invoke_forwarder<'info>(
+    program_id: Pubkey,
+    logic_ref: &[u8; 32],
+    instruction_data: &[u8],
+    forwarder_program_info: &anchor_lang::prelude::AccountInfo<'info>,
+    cpi_accounts: &[anchor_lang::prelude::AccountInfo<'info>],
+) -> Result<(), PAError> {
+    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+    use anchor_lang::solana_program::program::invoke;
+
+    let ix_data = build_forwarder_instruction_data(logic_ref, instruction_data);
+
+    let ix_accounts: Vec<AccountMeta> = cpi_accounts
+        .iter()
+        .map(|ai| AccountMeta {
+            pubkey: *ai.key,
+            is_signer: ai.is_signer,
+            is_writable: ai.is_writable,
+        })
+        .collect();
+
+    let ix = Instruction {
+        program_id,
+        accounts: ix_accounts,
+        data: ix_data,
+    };
+
+    let mut invoke_infos: Vec<anchor_lang::prelude::AccountInfo<'info>> =
+        Vec::with_capacity(1 + cpi_accounts.len());
+    invoke_infos.push(forwarder_program_info.clone());
+    invoke_infos.extend_from_slice(cpi_accounts);
+
+    invoke(&ix, &invoke_infos)?;
+    Ok(())
+}
+
+// =============================================================================
+// Output Reading
+// =============================================================================
+
+/// Read forwarder output based on the output mode.
+#[cfg(not(test))]
+fn read_forwarder_output<'info>(
+    output_mode: &OutputMode,
+    program_id: &Pubkey,
+    remaining_accounts: &[anchor_lang::prelude::AccountInfo<'info>],
+) -> Result<Vec<u8>, PAError> {
+    use anchor_lang::solana_program::program::get_return_data;
+
+    match output_mode {
+        OutputMode::ReturnData => {
+            let (returned_program_id, return_data) =
+                get_return_data().ok_or(PAError::ExternalCallOutputMismatch)?;
+            if returned_program_id != *program_id {
+                return Err(PAError::ExternalCallOutputMismatch);
+            }
+            Ok(return_data)
+        }
+        OutputMode::OutputAccount { index, offset, len } => {
+            let idx = *index as usize;
+            if idx >= remaining_accounts.len() {
+                return Err(PAError::ExternalCallOutputMismatch);
+            }
+            let data = remaining_accounts[idx].data.borrow();
+            let start = *offset as usize;
+            let end = start
+                .checked_add(*len as usize)
+                .ok_or(PAError::ExternalCallOutputMismatch)?;
+            if end > data.len() {
+                return Err(PAError::ExternalCallOutputMismatch);
+            }
+            Ok(data[start..end].to_vec())
+        }
+    }
+}
+
+// =============================================================================
+// Single Call Execution (analog to EVM's _executeForwarderCall)
+// =============================================================================
+
+/// Execute a single external call via CPI.
 ///
-/// # Returns
-/// * `Ok(())` if all external calls succeed and outputs match
-/// * `Err(PAError)` if any call fails or output mismatches
+/// This is the Solana analog to EVM's `_executeForwarderCall`:
+/// 1. Invoke forwarder via CPI
+/// 2. Read and verify output
+/// 3. Emit event
+///
+/// The caller is responsible for finding the segment and slicing accounts.
+#[cfg(not(test))]
+fn execute_forwarder_call<'info>(
+    logic_ref: &crate::types::Digest,
+    call: &SolanaExternalCall,
+    forwarder_program_info: &anchor_lang::prelude::AccountInfo<'info>,
+    cpi_accounts: &[anchor_lang::prelude::AccountInfo<'info>],
+    remaining_accounts: &[anchor_lang::prelude::AccountInfo<'info>],
+) -> Result<(), PAError> {
+    let program_id = *forwarder_program_info.key;
+
+    invoke_forwarder(
+        program_id,
+        &logic_ref.to_bytes(),
+        &call.instruction_data,
+        forwarder_program_info,
+        cpi_accounts,
+    )?;
+
+    let actual_output = read_forwarder_output(&call.output_mode, &program_id, remaining_accounts)?;
+
+    verify_output(&call.expected_output, &actual_output, &call.output_mode)?;
+
+    anchor_lang::prelude::emit!(crate::ForwarderCallExecutedEvent {
+        forwarder: program_id,
+        input: call.instruction_data.clone(),
+        output: actual_output,
+    });
+
+    Ok(())
+}
+
+// =============================================================================
+// Main Execution
+// =============================================================================
+
+/// Execute all external calls from a transaction via CPI.
 #[cfg(not(test))]
 pub fn execute_external_calls<'info>(
     tx: &crate::types::Transaction,
     remaining_accounts: &[anchor_lang::prelude::AccountInfo<'info>],
     nullifier_count: usize,
-) -> std::result::Result<(), PAError> {
-    use anchor_lang::prelude::Pubkey;
-    use anchor_lang::solana_program::instruction::AccountMeta;
-    use anchor_lang::solana_program::instruction::Instruction;
-    use anchor_lang::solana_program::program::{get_return_data, invoke};
-
+) -> Result<(), PAError> {
     use crate::settle::extract_external_calls;
 
     let calls = extract_external_calls(tx)?;
@@ -103,90 +249,19 @@ pub fn execute_external_calls<'info>(
     let mut cursor = 0usize;
     for (logic_ref, call) in calls {
         let program_id = Pubkey::new_from_array(call.program_id);
-        let logic_ref_bytes = logic_ref.to_bytes();
-
-        // Build instruction data
-        let ix_data = build_forwarder_instruction_data(&logic_ref_bytes, &call.instruction_data);
-
-        // remaining_accounts convention (after nullifier PDAs):
-        // - For each external call, there must be a "segment" starting with the forwarder *program account*
-        //   (whose key equals call.program_id), followed by any CPI accounts needed by the forwarder.
-        // - Segments must appear in the same order as external calls extracted from the Transaction.
-        let seg_start_rel = external_accounts[cursor..]
-            .iter()
-            .position(|a| a.key == &program_id)
-            .ok_or(PAError::UnregisteredForwarder)?;
-        let seg_start = cursor + seg_start_rel;
-
-        let mut seg_end = external_accounts.len();
-        for i in (seg_start + 1)..external_accounts.len() {
-            if call_programs.iter().any(|p| external_accounts[i].key == p) {
-                seg_end = i;
-                break;
-            }
-        }
+        let (seg_start, seg_end) =
+            find_forwarder_segment(external_accounts, cursor, &program_id, &call_programs)?;
 
         let forwarder_program_info = &external_accounts[seg_start];
         let cpi_accounts = &external_accounts[(seg_start + 1)..seg_end];
 
-        // Create instruction with CPI accounts metas.
-        let ix_accounts: Vec<AccountMeta> = cpi_accounts
-            .iter()
-            .map(|ai| AccountMeta {
-                pubkey: *ai.key,
-                is_signer: ai.is_signer,
-                is_writable: ai.is_writable,
-            })
-            .collect();
-
-        let ix = Instruction {
-            program_id,
-            accounts: ix_accounts,
-            data: ix_data,
-        };
-
-        // Invoke forwarder: pass program account + all CPI accounts.
-        let mut invoke_infos: Vec<anchor_lang::prelude::AccountInfo<'info>> =
-            Vec::with_capacity(1 + cpi_accounts.len());
-        invoke_infos.push(forwarder_program_info.clone());
-        invoke_infos.extend_from_slice(cpi_accounts);
-        invoke(&ix, &invoke_infos)?;
-
-        let actual_output = match &call.output_mode {
-            OutputMode::ReturnData => {
-                let (returned_program_id, return_data) =
-                    get_return_data().ok_or(PAError::ExternalCallOutputMismatch)?;
-                if returned_program_id != program_id {
-                    return Err(PAError::ExternalCallOutputMismatch);
-                }
-                return_data
-            }
-            OutputMode::OutputAccount { index, offset, len } => {
-                let idx = *index as usize;
-                if idx >= remaining_accounts.len() {
-                    return Err(PAError::ExternalCallOutputMismatch);
-                }
-                let data = remaining_accounts[idx].data.borrow();
-                let start = *offset as usize;
-                let end = start
-                    .checked_add(*len as usize)
-                    .ok_or(PAError::ExternalCallOutputMismatch)?;
-                if end > data.len() {
-                    return Err(PAError::ExternalCallOutputMismatch);
-                }
-                data[start..end].to_vec()
-            }
-        };
-
-        // Verify output matches expected
-        verify_output(&call.expected_output, &actual_output, &call.output_mode)?;
-
-        // Emit ForwarderCallExecuted event (EVM parity)
-        anchor_lang::prelude::emit!(crate::ForwarderCallExecutedEvent {
-            forwarder: program_id,
-            input: call.instruction_data.clone(),
-            output: actual_output,
-        });
+        execute_forwarder_call(
+            &logic_ref,
+            &call,
+            forwarder_program_info,
+            cpi_accounts,
+            remaining_accounts,
+        )?;
 
         cursor = seg_end;
     }
