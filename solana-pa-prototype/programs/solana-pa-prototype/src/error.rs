@@ -106,6 +106,12 @@ pub enum PAError {
     Unauthorized,
     #[msg("Already paused")]
     AlreadyPaused,
+
+    // =========================================================================
+    // Merkle tree errors
+    // =========================================================================
+    #[msg("Tree has reached maximum depth (32 levels)")]
+    TreeMaxDepthReached,
 }
 
 impl From<anchor_lang::solana_program::program_error::ProgramError> for PAError {

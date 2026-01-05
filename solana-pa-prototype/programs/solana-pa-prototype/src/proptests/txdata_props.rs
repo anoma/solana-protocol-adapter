@@ -3,7 +3,7 @@
 use proptest::prelude::*;
 use anchor_lang::prelude::Pubkey;
 use crate::state::{PAStateAccount, MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
-use crate::merkle::TREE_DEPTH;
+use crate::merkle::INITIAL_TREE_DEPTH;
 use crate::txdata::TxData;
 use crate::error::PAError;
 
@@ -15,9 +15,10 @@ proptest! {
     fn prop_txdata_not_expired_when_slot_lte_expiry(
         capacity in 0usize..10000,
         expiry_slot in 0u64..u64::MAX,
-        current_slot in 0u64..=u64::MAX,
+        slot_offset in 0u64..1_000_000u64,
     ) {
-        prop_assume!(current_slot <= expiry_slot);
+        // Generate current_slot <= expiry_slot by construction (no rejection sampling)
+        let current_slot = expiry_slot.saturating_sub(slot_offset);
         let txdata = TxData::new(capacity, expiry_slot);
         prop_assert!(!txdata.is_expired(current_slot));
     }
@@ -40,9 +41,10 @@ proptest! {
     fn prop_validate_not_expired_ok(
         capacity in 0usize..10000,
         expiry_slot in 0u64..u64::MAX,
-        current_slot in 0u64..=u64::MAX,
+        slot_offset in 0u64..1_000_000u64,
     ) {
-        prop_assume!(current_slot <= expiry_slot);
+        // Generate current_slot <= expiry_slot by construction (no rejection sampling)
+        let current_slot = expiry_slot.saturating_sub(slot_offset);
         let txdata = TxData::new(capacity, expiry_slot);
         prop_assert!(txdata.validate_not_expired(current_slot).is_ok());
     }
@@ -116,7 +118,8 @@ proptest! {
             paused: false,
             root: [0u8; 32],
             next_index: 0,
-            frontier: [[0u8; 32]; TREE_DEPTH],
+            current_depth: INITIAL_TREE_DEPTH as u8,
+            frontier: vec![[0u8; 32]],
             min_expiry_slots: 0,  // Zero triggers fallback
             max_expiry_slots: MAX_EXPIRY_SLOTS,
         };
@@ -135,7 +138,8 @@ proptest! {
             paused: false,
             root: [0u8; 32],
             next_index: 0,
-            frontier: [[0u8; 32]; TREE_DEPTH],
+            current_depth: INITIAL_TREE_DEPTH as u8,
+            frontier: vec![[0u8; 32]],
             min_expiry_slots: MIN_EXPIRY_SLOTS,
             max_expiry_slots: 0,  // Zero triggers fallback
         };
@@ -155,7 +159,8 @@ proptest! {
             paused: false,
             root: [0u8; 32],
             next_index: 0,
-            frontier: [[0u8; 32]; TREE_DEPTH],
+            current_depth: INITIAL_TREE_DEPTH as u8,
+            frontier: vec![[0u8; 32]],
             min_expiry_slots: min_expiry,
             max_expiry_slots: max_expiry,
         };

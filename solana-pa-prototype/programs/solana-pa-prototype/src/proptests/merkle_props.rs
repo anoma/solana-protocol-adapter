@@ -1,10 +1,11 @@
 //! Property tests for Merkle tree operations.
 
 use proptest::prelude::*;
-use crate::merkle::hash_two;
+use crate::merkle::{hash_two, INITIAL_TREE_DEPTH};
 use crate::proptests::strategies::arb_digest;
+use crate::state::PAStateAccount;
 use crate::test_utils::create_test_pa_state;
-use crate::{append_to_tree, compute_root_from_frontier};
+use crate::{append_to_tree, compute_root_from_frontier, required_depth_for_leaves};
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
@@ -43,8 +44,8 @@ proptest! {
         prop_assume!(leaf1 != leaf2);
         let mut state1 = create_test_pa_state();
         let mut state2 = create_test_pa_state();
-        append_to_tree(&mut state1, leaf1);
-        append_to_tree(&mut state2, leaf2);
+        append_to_tree(&mut state1, leaf1).unwrap();
+        append_to_tree(&mut state2, leaf2).unwrap();
         prop_assert_ne!(
             compute_root_from_frontier(&state1),
             compute_root_from_frontier(&state2),
@@ -58,8 +59,60 @@ proptest! {
         let mut state = create_test_pa_state();
         for (i, leaf) in leaves.iter().enumerate() {
             prop_assert_eq!(state.next_index, i as u64, "next_index should match append count");
-            append_to_tree(&mut state, *leaf);
+            append_to_tree(&mut state, *leaf).unwrap();
         }
         prop_assert_eq!(state.next_index, leaves.len() as u64, "final next_index should equal leaf count");
+    }
+
+    // =========================================================================
+    // REQUIRED DEPTH CALCULATION TESTS
+    // =========================================================================
+
+    /// Property: required_depth returns sufficient capacity for any leaf count.
+    #[test]
+    fn prop_required_depth_sufficient_capacity(
+        final_next_index in 0u64..1_000_000,
+    ) {
+        let depth = required_depth_for_leaves(final_next_index);
+        let capacity = 1u64 << depth;
+        prop_assert!(capacity >= final_next_index,
+            "depth {} (capacity {}) should hold {} leaves", depth, capacity, final_next_index);
+    }
+
+    /// Property: required_depth is minimal (depth-1 would be insufficient).
+    #[test]
+    fn prop_required_depth_minimal(
+        final_next_index in 2u64..1_000_000,
+    ) {
+        let depth = required_depth_for_leaves(final_next_index);
+        if depth > INITIAL_TREE_DEPTH {
+            let smaller_capacity = 1u64 << (depth - 1);
+            prop_assert!(smaller_capacity < final_next_index,
+                "depth-1 capacity {} should be insufficient for {} leaves", smaller_capacity, final_next_index);
+        }
+    }
+
+    /// Property: Account size matches space_for_depth(current_depth).
+    #[test]
+    fn prop_account_size_matches_depth(
+        current_depth in 1usize..=32usize,
+    ) {
+        let expected_size = PAStateAccount::space_for_depth(current_depth);
+        let frontier_bytes = 32 * current_depth;
+        prop_assert_eq!(
+            expected_size,
+            PAStateAccount::BASE_SPACE + PAStateAccount::VEC_OVERHEAD + frontier_bytes,
+            "space_for_depth should equal BASE_SPACE + VEC_OVERHEAD + frontier_bytes"
+        );
+    }
+
+    /// Property: required_depth always returns at least INITIAL_TREE_DEPTH.
+    #[test]
+    fn prop_required_depth_at_least_initial(
+        final_next_index in 0u64..100,
+    ) {
+        let depth = required_depth_for_leaves(final_next_index);
+        prop_assert!(depth >= INITIAL_TREE_DEPTH,
+            "depth {} should be at least INITIAL_TREE_DEPTH ({})", depth, INITIAL_TREE_DEPTH);
     }
 }

@@ -31,7 +31,7 @@ pub mod proptests;
 
 use state::*;
 pub use error::PAError;
-use merkle::{EMPTY_TREE_ROOT, PADDING_LEAF, TREE_DEPTH, ZEROS, hash_two};
+use merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, MAX_TREE_DEPTH, PADDING_LEAF, ZEROS, hash_two};
 use types::{Digest, Transaction};
 use groth16::prepare_proof_for_verification;
 
@@ -66,14 +66,13 @@ pub mod solana_pa_prototype {
         state.authority = ctx.accounts.payer.key();
         state.paused = false;
 
-        // Initialize frontier with PADDING_LEAF
-        for i in 0..TREE_DEPTH {
-            state.frontier[i] = PADDING_LEAF.to_bytes();
-        }
+        // Initialize variable-depth tree at depth 1 (capacity = 2 leaves)
+        state.current_depth = INITIAL_TREE_DEPTH as u8;
+        state.frontier = vec![PADDING_LEAF.to_bytes()]; // Single entry for depth 1
 
-        // Initialize commitment tree with empty state
-        // Use precomputed EMPTY_TREE_ROOT to avoid 200k+ CU cost of computing 32 hashes
-        state.root = EMPTY_TREE_ROOT.to_bytes();
+        // Initialize commitment tree with empty state at depth 1
+        // Empty root at depth 1 = ZEROS[0] = PADDING_LEAF
+        state.root = EMPTY_TREE_ROOT_INITIAL.to_bytes();
         state.next_index = 0;
 
         // Initialize expiry config with compile-time defaults
@@ -112,10 +111,12 @@ pub mod solana_pa_prototype {
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
 
         let pa_state_key = ctx.accounts.pa_state.key();
+        let pa_state_info = ctx.accounts.pa_state.to_account_info();
         let payer = ctx.accounts.authority.to_account_info();
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
+            &pa_state_info,
             &tx,
             ctx.remaining_accounts,
             &payer,
@@ -307,10 +308,12 @@ pub mod solana_pa_prototype {
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
 
         let pa_state_key = ctx.accounts.pa_state.key();
+        let pa_state_info = ctx.accounts.pa_state.to_account_info();
         let payer = ctx.accounts.authority.to_account_info();
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
+            &pa_state_info,
             &tx,
             ctx.remaining_accounts,
             &payer,
@@ -356,16 +359,28 @@ pub mod solana_pa_prototype {
 // =============================================================================
 
 /// Append a single commitment to the tree using frontier-based append.
-fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) {
+/// Grows the tree when capacity is reached.
+fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
+    // Check if we need to grow the tree before this append
+    if state.needs_growth() {
+        if !state.can_grow() {
+            return Err(error!(PAError::TreeMaxDepthReached));
+        }
+        let current_root = compute_root_from_frontier(state);
+        let new_level = state.grow();
+        state.set_frontier(new_level, current_root);
+    }
+
     let mut current = leaf;
     let mut index = state.next_index;
+    let depth = state.depth();
 
-    for level in 0..TREE_DEPTH {
+    for level in 0..depth {
         if index & 1 == 0 {
             // Left child - store in frontier and return
             state.set_frontier(level, current);
             state.next_index += 1;
-            return;
+            return Ok(());
         }
         // Right child - hash with frontier and continue up
         let left = state.get_frontier(level);
@@ -374,19 +389,24 @@ fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) {
     }
 
     state.next_index += 1;
+    Ok(())
 }
 
 /// Compute the current root from the frontier.
 /// Uses precomputed ZEROS array to avoid expensive on-chain hash computation.
-fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
+/// Operates over the current tree depth (variable, 1-32).
+pub fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
+    let depth = state.depth();
+
     if state.next_index == 0 {
-        return ZEROS[TREE_DEPTH - 1];
+        // Empty tree root at current depth = ZEROS[depth - 1]
+        return ZEROS[depth - 1];
     }
 
     let mut current = ZEROS[0];
     let mut index = state.next_index;
 
-    for level in 0..TREE_DEPTH {
+    for level in 0..depth {
         if index & 1 == 1 {
             current = hash_two(&state.get_frontier(level), &current);
         } else {
@@ -395,6 +415,63 @@ fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
         index >>= 1;
     }
     current
+}
+
+/// Calculate minimum tree depth required for final_next_index leaves.
+/// Returns depth such that 2^depth >= final_next_index.
+pub fn required_depth_for_leaves(final_next_index: u64) -> usize {
+    if final_next_index == 0 {
+        return INITIAL_TREE_DEPTH;
+    }
+    // ceil(log2(final_next_index))
+    let bits = 64 - (final_next_index - 1).leading_zeros();
+    (bits as usize).max(INITIAL_TREE_DEPTH)
+}
+
+/// Conditionally reallocate PAState if tree growth is needed.
+/// Only transfers lamports and resizes when required_depth > current_depth.
+fn maybe_grow_account<'info>(
+    pa_state_info: &AccountInfo<'info>,
+    state: &PAStateAccount,
+    num_commitments: usize,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+) -> Result<()> {
+    let final_next_index = state.next_index.saturating_add(num_commitments as u64);
+    let required_depth = required_depth_for_leaves(final_next_index);
+
+    // Cap at MAX_TREE_DEPTH (append_to_tree will error if exceeded)
+    let target_depth = required_depth.min(MAX_TREE_DEPTH);
+
+    if target_depth <= state.depth() {
+        return Ok(()); // No growth needed
+    }
+
+    let new_size = PAStateAccount::space_for_depth(target_depth);
+    let rent = Rent::get()?;
+    let new_minimum_balance = rent.minimum_balance(new_size);
+    let current_balance = pa_state_info.lamports();
+
+    // Transfer additional lamports if needed (before realloc)
+    if new_minimum_balance > current_balance {
+        let lamports_needed = new_minimum_balance - current_balance;
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                system_program.clone(),
+                anchor_lang::system_program::Transfer {
+                    from: payer.clone(),
+                    to: pa_state_info.clone(),
+                },
+            ),
+            lamports_needed,
+        )?;
+    }
+
+    // Resize the account data
+    pa_state_info.resize(new_size)?;
+
+    msg!("Reallocated PAState: depth {} -> {}", state.depth(), target_depth);
+    Ok(())
 }
 
 /// Call verifier_router::verify via typed CPI.
@@ -422,6 +499,7 @@ fn call_verifier_router<'info>(
 /// Shared settlement logic for both settle and settle_from_txdata.
 fn execute_settlement<'info>(
     state: &mut PAStateAccount,
+    pa_state_info: &AccountInfo<'info>,
     tx: &Transaction,
     remaining_accounts: &[AccountInfo<'info>],
     payer: &AccountInfo<'info>,
@@ -674,8 +752,9 @@ fn execute_settlement<'info>(
     // Append commitments
     let commitments = settle::extract_commitments(tx)
         .map_err(|_| error!(PAError::InvalidTransactionData))?;
+    maybe_grow_account(pa_state_info, state, commitments.len(), payer, system_program)?;
     for commitment in commitments {
-        append_to_tree(state, commitment);
+        append_to_tree(state, commitment)?;
     }
 
     // Update root
@@ -714,7 +793,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = payer,
-        space = PAStateAccount::SPACE,
+        space = PAStateAccount::INITIAL_SPACE, // Variable-depth tree starts at depth 1
         seeds = [PA_STATE_SEED],
         bump
     )]
@@ -757,7 +836,7 @@ pub struct Settle<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
-        bump = pa_state.bump
+        bump = pa_state.bump,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -785,7 +864,7 @@ pub struct SettleFromTxData<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
-        bump = pa_state.bump
+        bump = pa_state.bump,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -1195,22 +1274,26 @@ mod tests {
                 bump: 255,
                 authority,
                 paused,
-                root: EMPTY_TREE_ROOT.to_bytes(),
+                root: EMPTY_TREE_ROOT_INITIAL.to_bytes(),
                 next_index: 0,
-                frontier: [[0u8; 32]; TREE_DEPTH],
+                current_depth: INITIAL_TREE_DEPTH as u8,
+                frontier: vec![ZEROS[0].to_bytes()],
                 min_expiry_slots: MIN_EXPIRY_SLOTS,
                 max_expiry_slots: MAX_EXPIRY_SLOTS,
             }
         }
 
         #[test]
-        fn test_pa_state_account_space_includes_new_fields() {
-            // Verify SPACE calculation includes all fields including expiry config
-            // discriminator (8) + bump (1) + authority (32) + paused (1) + root (32) + next_index (8)
-            // + frontier (32 * 32) + min_expiry_slots (8) + max_expiry_slots (8)
-            let expected_space = 8 + 1 + 32 + 1 + 32 + 8 + (32 * TREE_DEPTH) + 8 + 8;
-            assert_eq!(PAStateAccount::SPACE, expected_space);
-            assert_eq!(PAStateAccount::SPACE, 1122);
+        fn test_pa_state_account_space_calculation() {
+            // Verify space calculation for variable-depth tree
+            // Initial space (depth 1): BASE_SPACE + VEC_OVERHEAD + 32
+            assert_eq!(PAStateAccount::INITIAL_SPACE, 135);
+            // Max space (depth 32): BASE_SPACE + VEC_OVERHEAD + (32 * 32)
+            assert_eq!(PAStateAccount::MAX_SPACE, 1127);
+            // space_for_depth function
+            assert_eq!(PAStateAccount::space_for_depth(1), 135);
+            assert_eq!(PAStateAccount::space_for_depth(2), 167);
+            assert_eq!(PAStateAccount::space_for_depth(32), 1127);
         }
 
         #[test]

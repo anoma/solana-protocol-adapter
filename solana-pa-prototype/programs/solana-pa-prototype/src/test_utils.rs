@@ -5,7 +5,7 @@
 use anchor_lang::prelude::Pubkey;
 
 use crate::groth16::Selector;
-use crate::merkle::{EMPTY_TREE_ROOT, TREE_DEPTH, ZEROS};
+use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
 use crate::state::{PAStateAccount, MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
 use crate::types::*;
 
@@ -43,7 +43,7 @@ pub fn fake_aggregation_proof_bytes(strategy_discriminant: u32, seal_len: usize)
 /// Contains one action with one compliance unit and two LogicVerifierInputs
 /// (consumed and created resources).
 pub fn create_minimal_transaction() -> Transaction {
-    let empty_tree_root = EMPTY_TREE_ROOT;
+    let empty_tree_root = EMPTY_TREE_ROOT_INITIAL;
     let consumed_nullifier = Digest::from_bytes([1u8; 32]);
     let created_commitment = Digest::from_bytes([2u8; 32]);
     let consumed_logic_ref = Digest::from_bytes([3u8; 32]);
@@ -87,7 +87,7 @@ pub fn create_minimal_transaction() -> Transaction {
 
 /// Create a compliance instance with specified nullifier and commitment.
 pub fn create_compliance_instance(nullifier: Digest, commitment: Digest) -> ComplianceInstance {
-    let empty_tree_root = EMPTY_TREE_ROOT;
+    let empty_tree_root = EMPTY_TREE_ROOT_INITIAL;
     ComplianceInstance {
         consumed_nullifier: nullifier,
         consumed_logic_ref: Digest::default(),
@@ -173,7 +173,7 @@ pub fn create_transaction_with_external_payload_and_logic_ref(
 pub fn create_transaction_with_multiple_lvi_external_payloads(
     payloads_per_lvi: Vec<Vec<ExpirableBlob>>,
 ) -> Transaction {
-    let empty_tree_root = EMPTY_TREE_ROOT;
+    let empty_tree_root = EMPTY_TREE_ROOT_INITIAL;
     let instance = ComplianceInstance {
         consumed_nullifier: Digest::default(),
         consumed_logic_ref: Digest::default(),
@@ -215,14 +215,31 @@ pub fn create_transaction_with_multiple_lvi_external_payloads(
 }
 
 /// Create a fresh PAStateAccount for testing merkle operations.
+/// Uses variable-depth tree starting at depth 1 (capacity = 2 leaves).
 pub fn create_test_pa_state() -> PAStateAccount {
     PAStateAccount {
         bump: 0,
         authority: Pubkey::default(),
         paused: false,
-        root: ZEROS[TREE_DEPTH - 1].to_bytes(),
+        root: ZEROS[INITIAL_TREE_DEPTH - 1].to_bytes(), // ZEROS[0] = PADDING_LEAF for depth 1
         next_index: 0,
-        frontier: [[0u8; 32]; TREE_DEPTH],
+        current_depth: INITIAL_TREE_DEPTH as u8,
+        frontier: vec![ZEROS[0].to_bytes()], // Single entry for depth 1
+        min_expiry_slots: MIN_EXPIRY_SLOTS,
+        max_expiry_slots: MAX_EXPIRY_SLOTS,
+    }
+}
+
+/// Create a PAStateAccount at a specific depth for testing.
+pub fn create_test_pa_state_at_depth(depth: u8) -> PAStateAccount {
+    PAStateAccount {
+        bump: 0,
+        authority: Pubkey::default(),
+        paused: false,
+        root: ZEROS[depth as usize - 1].to_bytes(),
+        next_index: 0,
+        current_depth: depth,
+        frontier: vec![[0u8; 32]; depth as usize],
         min_expiry_slots: MIN_EXPIRY_SLOTS,
         max_expiry_slots: MAX_EXPIRY_SLOTS,
     }
@@ -234,9 +251,10 @@ pub fn create_mock_pa_state(authority: Pubkey, paused: bool) -> PAStateAccount {
         bump: 255,
         authority,
         paused,
-        root: EMPTY_TREE_ROOT.to_bytes(),
+        root: EMPTY_TREE_ROOT_INITIAL.to_bytes(),
         next_index: 0,
-        frontier: [[0u8; 32]; TREE_DEPTH],
+        current_depth: INITIAL_TREE_DEPTH as u8,
+        frontier: vec![ZEROS[0].to_bytes()],
         min_expiry_slots: MIN_EXPIRY_SLOTS,
         max_expiry_slots: MAX_EXPIRY_SLOTS,
     }
