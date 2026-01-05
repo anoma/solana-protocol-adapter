@@ -31,7 +31,7 @@ pub mod proptests;
 
 use state::*;
 pub use error::PAError;
-use merkle::{EMPTY_TREE_ROOT, PADDING_LEAF, TREE_DEPTH, ZEROS, hash_two};
+use merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, MAX_TREE_DEPTH, PADDING_LEAF, ZEROS, hash_two};
 use types::{Digest, Transaction};
 use groth16::prepare_proof_for_verification;
 
@@ -66,14 +66,14 @@ pub mod solana_pa_prototype {
         state.authority = ctx.accounts.payer.key();
         state.paused = false;
 
-        // Initialize frontier with PADDING_LEAF
-        for i in 0..TREE_DEPTH {
-            state.frontier[i] = PADDING_LEAF.to_bytes();
-        }
+        // Initialize variable-depth tree at depth 1 (capacity = 2 leaves)
+        // This matches the EVM reference implementation's starting state
+        state.current_depth = INITIAL_TREE_DEPTH as u8;
+        state.frontier = vec![PADDING_LEAF.to_bytes()]; // Single entry for depth 1
 
-        // Initialize commitment tree with empty state
-        // Use precomputed EMPTY_TREE_ROOT to avoid 200k+ CU cost of computing 32 hashes
-        state.root = EMPTY_TREE_ROOT.to_bytes();
+        // Initialize commitment tree with empty state at depth 1
+        // Empty root at depth 1 = ZEROS[0] = PADDING_LEAF
+        state.root = EMPTY_TREE_ROOT_INITIAL.to_bytes();
         state.next_index = 0;
 
         // Initialize expiry config with compile-time defaults
@@ -356,11 +356,21 @@ pub mod solana_pa_prototype {
 // =============================================================================
 
 /// Append a single commitment to the tree using frontier-based append.
+/// Grows the tree when capacity is reached (variable-depth like EVM reference).
 fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) {
+    // Check if we need to grow the tree before this append
+    if state.needs_growth() {
+        // Compute current root and push it as the new level's frontier entry
+        let current_root = compute_root_from_frontier(state);
+        let new_level = state.grow();
+        state.set_frontier(new_level, current_root);
+    }
+
     let mut current = leaf;
     let mut index = state.next_index;
+    let depth = state.depth();
 
-    for level in 0..TREE_DEPTH {
+    for level in 0..depth {
         if index & 1 == 0 {
             // Left child - store in frontier and return
             state.set_frontier(level, current);
@@ -378,15 +388,19 @@ fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) {
 
 /// Compute the current root from the frontier.
 /// Uses precomputed ZEROS array to avoid expensive on-chain hash computation.
-fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
+/// Operates over the current tree depth (variable, 1-32).
+pub fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
+    let depth = state.depth();
+
     if state.next_index == 0 {
-        return ZEROS[TREE_DEPTH - 1];
+        // Empty tree root at current depth = ZEROS[depth - 1]
+        return ZEROS[depth - 1];
     }
 
     let mut current = ZEROS[0];
     let mut index = state.next_index;
 
-    for level in 0..TREE_DEPTH {
+    for level in 0..depth {
         if index & 1 == 1 {
             current = hash_two(&state.get_frontier(level), &current);
         } else {
@@ -714,7 +728,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = payer,
-        space = PAStateAccount::SPACE,
+        space = PAStateAccount::INITIAL_SPACE, // Variable-depth tree starts at depth 1
         seeds = [PA_STATE_SEED],
         bump
     )]
@@ -757,7 +771,14 @@ pub struct Settle<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
-        bump = pa_state.bump
+        bump = pa_state.bump,
+        // Realloc to allow tree growth by one level if needed.
+        // Conservatively allocates space for current_depth + 1 (up to MAX_TREE_DEPTH).
+        realloc = PAStateAccount::space_for_depth(
+            std::cmp::min(pa_state.current_depth as usize + 1, MAX_TREE_DEPTH)
+        ),
+        realloc::payer = authority,
+        realloc::zero = false,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -785,7 +806,14 @@ pub struct SettleFromTxData<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
-        bump = pa_state.bump
+        bump = pa_state.bump,
+        // Realloc to allow tree growth by one level if needed.
+        // Conservatively allocates space for current_depth + 1 (up to MAX_TREE_DEPTH).
+        realloc = PAStateAccount::space_for_depth(
+            std::cmp::min(pa_state.current_depth as usize + 1, MAX_TREE_DEPTH)
+        ),
+        realloc::payer = authority,
+        realloc::zero = false,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -1195,22 +1223,26 @@ mod tests {
                 bump: 255,
                 authority,
                 paused,
-                root: EMPTY_TREE_ROOT.to_bytes(),
+                root: EMPTY_TREE_ROOT_INITIAL.to_bytes(),
                 next_index: 0,
-                frontier: [[0u8; 32]; TREE_DEPTH],
+                current_depth: INITIAL_TREE_DEPTH as u8,
+                frontier: vec![ZEROS[0].to_bytes()],
                 min_expiry_slots: MIN_EXPIRY_SLOTS,
                 max_expiry_slots: MAX_EXPIRY_SLOTS,
             }
         }
 
         #[test]
-        fn test_pa_state_account_space_includes_new_fields() {
-            // Verify SPACE calculation includes all fields including expiry config
-            // discriminator (8) + bump (1) + authority (32) + paused (1) + root (32) + next_index (8)
-            // + frontier (32 * 32) + min_expiry_slots (8) + max_expiry_slots (8)
-            let expected_space = 8 + 1 + 32 + 1 + 32 + 8 + (32 * TREE_DEPTH) + 8 + 8;
-            assert_eq!(PAStateAccount::SPACE, expected_space);
-            assert_eq!(PAStateAccount::SPACE, 1122);
+        fn test_pa_state_account_space_calculation() {
+            // Verify space calculation for variable-depth tree
+            // Initial space (depth 1): BASE_SPACE + VEC_OVERHEAD + 32
+            assert_eq!(PAStateAccount::INITIAL_SPACE, 135);
+            // Max space (depth 32): BASE_SPACE + VEC_OVERHEAD + (32 * 32)
+            assert_eq!(PAStateAccount::MAX_SPACE, 1127);
+            // space_for_depth function
+            assert_eq!(PAStateAccount::space_for_depth(1), 135);
+            assert_eq!(PAStateAccount::space_for_depth(2), 167);
+            assert_eq!(PAStateAccount::space_for_depth(32), 1127);
         }
 
         #[test]

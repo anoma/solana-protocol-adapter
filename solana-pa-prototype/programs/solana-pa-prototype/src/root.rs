@@ -144,7 +144,7 @@ pub fn is_root_valid(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::merkle::TREE_DEPTH;
+    use crate::merkle::INITIAL_TREE_DEPTH;
     use crate::state::{MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
 
     // =========================================================================
@@ -159,7 +159,8 @@ mod tests {
             paused: false,
             root: [0xAA; 32],
             next_index: 0,
-            frontier: [[0; 32]; TREE_DEPTH],
+            current_depth: INITIAL_TREE_DEPTH as u8,
+            frontier: vec![[0; 32]],
             min_expiry_slots: MIN_EXPIRY_SLOTS,
             max_expiry_slots: MAX_EXPIRY_SLOTS,
         };
@@ -177,7 +178,8 @@ mod tests {
             paused: false,
             root: [0xBB; 32],
             next_index: 0,
-            frontier: [[0; 32]; TREE_DEPTH],
+            current_depth: INITIAL_TREE_DEPTH as u8,
+            frontier: vec![[0; 32]],
             min_expiry_slots: MIN_EXPIRY_SLOTS,
             max_expiry_slots: MAX_EXPIRY_SLOTS,
         };
@@ -194,7 +196,8 @@ mod tests {
             paused: false,
             root: [0xAA; 32],
             next_index: 0,
-            frontier: [[0; 32]; TREE_DEPTH],
+            current_depth: INITIAL_TREE_DEPTH as u8,
+            frontier: vec![[0; 32]],
             min_expiry_slots: MIN_EXPIRY_SLOTS,
             max_expiry_slots: MAX_EXPIRY_SLOTS,
         };

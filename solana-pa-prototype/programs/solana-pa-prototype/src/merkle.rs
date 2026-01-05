@@ -6,8 +6,13 @@ use crate::types::Digest;
 use anchor_lang::solana_program::hash::hashv;
 
 
-/// Tree depth for the commitment tree.
-pub const TREE_DEPTH: usize = 32;
+/// Initial tree depth for new commitment trees (capacity = 2 leaves).
+/// Matches EVM reference implementation which starts at depth 1 and grows.
+pub const INITIAL_TREE_DEPTH: usize = 1;
+
+/// Maximum tree depth for the commitment tree.
+/// Supports up to 2^32 = 4,294,967,296 leaves.
+pub const MAX_TREE_DEPTH: usize = 32;
 
 /// Padding leaf used for empty tree slots (from arm-risc0 merkle_path.rs).
 /// Hex: cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06
@@ -19,7 +24,8 @@ pub const PADDING_LEAF: Digest = Digest([
 /// Precomputed zero hashes at each level of the tree.
 /// zeros[0] = PADDING_LEAF, zeros[i] = hash(zeros[i-1], zeros[i-1]).
 /// Precomputed to avoid ~200k CU cost of on-chain hash computation.
-pub const ZEROS: [Digest; TREE_DEPTH] = [
+/// All 32 levels are needed even for variable-depth trees (for root computation).
+pub const ZEROS: [Digest; MAX_TREE_DEPTH] = [
     // Level 0: cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06
     Digest([0x832f1dcc, 0x7adb4584, 0xf91d43ec, 0x1f878aee, 0x5eaae740, 0x56c04f06, 0xc6f83e63, 0x067bab0f]),
     // Level 1: 9052a1e9c2367d7248294f9ebc9495a73e2ff0c1b5e1dd09531e0a08ac1edc13
@@ -86,8 +92,12 @@ pub const ZEROS: [Digest; TREE_DEPTH] = [
     Digest([0x2f104f25, 0xdbb5a0d2, 0x4a702639, 0xa759f5c4, 0x5408f667, 0x2d7b15fc, 0x3d85d5e5, 0x6a97b8a9]),
 ];
 
-/// Precomputed empty tree root = ZEROS[TREE_DEPTH - 1].
-pub const EMPTY_TREE_ROOT: Digest = ZEROS[TREE_DEPTH - 1];
+/// Precomputed empty tree root at maximum depth = ZEROS[MAX_TREE_DEPTH - 1].
+/// For variable-depth trees, empty root at depth d = ZEROS[d - 1].
+pub const EMPTY_TREE_ROOT_MAX: Digest = ZEROS[MAX_TREE_DEPTH - 1];
+
+/// Empty tree root at initial depth (depth 1) = ZEROS[0] = PADDING_LEAF.
+pub const EMPTY_TREE_ROOT_INITIAL: Digest = ZEROS[INITIAL_TREE_DEPTH - 1];
 
 /// Hash two digests together (SHA-256).
 /// Must match arm-risc0's hash_two implementation.
@@ -151,13 +161,15 @@ mod tests {
 
     #[test]
     fn test_empty_tree_root_is_padding_based() {
-        // Empty tree root should be computed from PADDING_LEAF
+        // Empty tree root at depth 1 should be PADDING_LEAF (= ZEROS[0])
         let state = create_test_pa_state();
         assert_eq!(state.next_index, 0);
+        assert_eq!(state.current_depth, 1, "test state should start at depth 1");
         let root = crate::compute_root_from_frontier(&state);
         // The empty root should NOT be all zeros - it's computed from padding
         assert_ne!(root, crate::types::Digest::default());
-        // Should equal EMPTY_TREE_ROOT constant
-        assert_eq!(root, EMPTY_TREE_ROOT);
+        // Should equal ZEROS[depth - 1] = ZEROS[0] = PADDING_LEAF for depth 1
+        assert_eq!(root, EMPTY_TREE_ROOT_INITIAL);
+        assert_eq!(root, PADDING_LEAF);
     }
 }

@@ -2,12 +2,15 @@
 //! Named "state" to avoid conflict with Anchor's internal "accounts" module.
 
 use anchor_lang::prelude::*;
-use crate::merkle::TREE_DEPTH;
+use crate::merkle::{INITIAL_TREE_DEPTH, MAX_TREE_DEPTH};
 use crate::types::Digest;
 
 /// On-chain Protocol Adapter state.
 /// Stores the commitment tree frontier only.
 /// Nullifiers are stored as separate PDA marker accounts (see nullifier.rs).
+///
+/// The tree uses variable depth (1-32), starting at depth 1 (capacity 2)
+/// and growing dynamically as needed. This matches the EVM reference implementation.
 #[account]
 pub struct PAStateAccount {
     /// Bump seed for PDA derivation.
@@ -26,9 +29,13 @@ pub struct PAStateAccount {
     /// Next leaf index in the commitment tree.
     pub next_index: u64,
 
+    /// Current tree depth (1-32). Tree capacity = 2^current_depth.
+    pub current_depth: u8,
+
     /// Commitment tree frontier (filled subtree hashes at each level).
-    /// Length = TREE_DEPTH (32). Each element is a 32-byte digest.
-    pub frontier: [[u8; 32]; TREE_DEPTH],
+    /// Length = current_depth. Each element is a 32-byte digest.
+    /// Grows dynamically via realloc when tree expands.
+    pub frontier: Vec<[u8; 32]>,
 
     /// Minimum slots in the future for TxData expiration.
     /// Default: MIN_EXPIRY_SLOTS (100). Zero means use compile-time constant.
@@ -40,10 +47,54 @@ pub struct PAStateAccount {
 }
 
 impl PAStateAccount {
-    /// Calculate space required for this account.
-    /// discriminator (8) + bump (1) + authority (32) + paused (1) + root (32) + next_index (8)
-    /// + frontier (32 * 32) + min_expiry_slots (8) + max_expiry_slots (8)
-    pub const SPACE: usize = 8 + 1 + 32 + 1 + 32 + 8 + (32 * TREE_DEPTH) + 8 + 8;
+    /// Base space (excluding frontier Vec data).
+    /// discriminator (8) + bump (1) + authority (32) + paused (1) + root (32)
+    /// + next_index (8) + current_depth (1) + min_expiry_slots (8) + max_expiry_slots (8) = 99 bytes
+    pub const BASE_SPACE: usize = 8 + 1 + 32 + 1 + 32 + 8 + 1 + 8 + 8;
+
+    /// Vec overhead (4 bytes for length prefix).
+    pub const VEC_OVERHEAD: usize = 4;
+
+    /// Calculate space required for a given tree depth.
+    pub fn space_for_depth(depth: usize) -> usize {
+        Self::BASE_SPACE + Self::VEC_OVERHEAD + (32 * depth)
+    }
+
+    /// Initial space for depth 1 tree (135 bytes).
+    pub const INITIAL_SPACE: usize = 99 + 4 + 32;
+
+    /// Maximum space for depth 32 tree (1127 bytes).
+    pub const MAX_SPACE: usize = 99 + 4 + (32 * MAX_TREE_DEPTH);
+
+    /// Get current tree depth.
+    pub fn depth(&self) -> usize {
+        self.current_depth as usize
+    }
+
+    /// Get tree capacity (2^current_depth).
+    pub fn capacity(&self) -> u64 {
+        1u64 << self.current_depth
+    }
+
+    /// Check if tree needs to grow before next append.
+    pub fn needs_growth(&self) -> bool {
+        self.next_index >= self.capacity()
+    }
+
+    /// Check if tree can grow (hasn't reached max depth).
+    pub fn can_grow(&self) -> bool {
+        (self.current_depth as usize) < MAX_TREE_DEPTH
+    }
+
+    /// Grow the tree by one level.
+    /// Returns the new level index. Panics if at max depth.
+    pub fn grow(&mut self) -> usize {
+        assert!(self.can_grow(), "tree at maximum depth");
+        let new_level = self.current_depth as usize;
+        self.frontier.push([0u8; 32]); // Will be filled by caller
+        self.current_depth += 1;
+        new_level
+    }
 
     /// Get the current root as a Digest.
     pub fn get_root(&self) -> Digest {
