@@ -112,10 +112,12 @@ pub mod solana_pa_prototype {
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
 
         let pa_state_key = ctx.accounts.pa_state.key();
+        let pa_state_info = ctx.accounts.pa_state.to_account_info();
         let payer = ctx.accounts.authority.to_account_info();
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
+            &pa_state_info,
             &tx,
             ctx.remaining_accounts,
             &payer,
@@ -307,10 +309,12 @@ pub mod solana_pa_prototype {
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
 
         let pa_state_key = ctx.accounts.pa_state.key();
+        let pa_state_info = ctx.accounts.pa_state.to_account_info();
         let payer = ctx.accounts.authority.to_account_info();
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
+            &pa_state_info,
             &tx,
             ctx.remaining_accounts,
             &payer,
@@ -356,11 +360,13 @@ pub mod solana_pa_prototype {
 // =============================================================================
 
 /// Append a single commitment to the tree using frontier-based append.
-/// Grows the tree when capacity is reached (variable-depth like EVM reference).
-fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) {
+/// Grows the tree when capacity is reached.
+fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
     // Check if we need to grow the tree before this append
     if state.needs_growth() {
-        // Compute current root and push it as the new level's frontier entry
+        if !state.can_grow() {
+            return Err(error!(PAError::TreeMaxDepthReached));
+        }
         let current_root = compute_root_from_frontier(state);
         let new_level = state.grow();
         state.set_frontier(new_level, current_root);
@@ -375,7 +381,7 @@ fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) {
             // Left child - store in frontier and return
             state.set_frontier(level, current);
             state.next_index += 1;
-            return;
+            return Ok(());
         }
         // Right child - hash with frontier and continue up
         let left = state.get_frontier(level);
@@ -384,6 +390,7 @@ fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) {
     }
 
     state.next_index += 1;
+    Ok(())
 }
 
 /// Compute the current root from the frontier.
@@ -411,6 +418,63 @@ pub fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
     current
 }
 
+/// Calculate minimum tree depth required for final_next_index leaves.
+/// Returns depth such that 2^depth >= final_next_index.
+pub fn required_depth_for_leaves(final_next_index: u64) -> usize {
+    if final_next_index == 0 {
+        return INITIAL_TREE_DEPTH;
+    }
+    // ceil(log2(final_next_index))
+    let bits = 64 - (final_next_index - 1).leading_zeros();
+    (bits as usize).max(INITIAL_TREE_DEPTH)
+}
+
+/// Conditionally reallocate PAState if tree growth is needed.
+/// Only transfers lamports and resizes when required_depth > current_depth.
+fn maybe_grow_account<'info>(
+    pa_state_info: &AccountInfo<'info>,
+    state: &PAStateAccount,
+    num_commitments: usize,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+) -> Result<()> {
+    let final_next_index = state.next_index.saturating_add(num_commitments as u64);
+    let required_depth = required_depth_for_leaves(final_next_index);
+
+    // Cap at MAX_TREE_DEPTH (append_to_tree will error if exceeded)
+    let target_depth = required_depth.min(MAX_TREE_DEPTH);
+
+    if target_depth <= state.depth() {
+        return Ok(()); // No growth needed
+    }
+
+    let new_size = PAStateAccount::space_for_depth(target_depth);
+    let rent = Rent::get()?;
+    let new_minimum_balance = rent.minimum_balance(new_size);
+    let current_balance = pa_state_info.lamports();
+
+    // Transfer additional lamports if needed (before realloc)
+    if new_minimum_balance > current_balance {
+        let lamports_needed = new_minimum_balance - current_balance;
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                system_program.clone(),
+                anchor_lang::system_program::Transfer {
+                    from: payer.clone(),
+                    to: pa_state_info.clone(),
+                },
+            ),
+            lamports_needed,
+        )?;
+    }
+
+    // Resize the account data
+    pa_state_info.resize(new_size)?;
+
+    msg!("Reallocated PAState: depth {} -> {}", state.depth(), target_depth);
+    Ok(())
+}
+
 /// Call verifier_router::verify via typed CPI.
 /// Uses Anchor's generated CPI interface for type safety.
 fn call_verifier_router<'info>(
@@ -436,6 +500,7 @@ fn call_verifier_router<'info>(
 /// Shared settlement logic for both settle and settle_from_txdata.
 fn execute_settlement<'info>(
     state: &mut PAStateAccount,
+    pa_state_info: &AccountInfo<'info>,
     tx: &Transaction,
     remaining_accounts: &[AccountInfo<'info>],
     payer: &AccountInfo<'info>,
@@ -688,8 +753,9 @@ fn execute_settlement<'info>(
     // Append commitments
     let commitments = settle::extract_commitments(tx)
         .map_err(|_| error!(PAError::InvalidTransactionData))?;
+    maybe_grow_account(pa_state_info, state, commitments.len(), payer, system_program)?;
     for commitment in commitments {
-        append_to_tree(state, commitment);
+        append_to_tree(state, commitment)?;
     }
 
     // Update root
@@ -772,13 +838,6 @@ pub struct Settle<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
-        // Realloc to allow tree growth by one level if needed.
-        // Conservatively allocates space for current_depth + 1 (up to MAX_TREE_DEPTH).
-        realloc = PAStateAccount::space_for_depth(
-            std::cmp::min(pa_state.current_depth as usize + 1, MAX_TREE_DEPTH)
-        ),
-        realloc::payer = authority,
-        realloc::zero = false,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -807,13 +866,6 @@ pub struct SettleFromTxData<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
-        // Realloc to allow tree growth by one level if needed.
-        // Conservatively allocates space for current_depth + 1 (up to MAX_TREE_DEPTH).
-        realloc = PAStateAccount::space_for_depth(
-            std::cmp::min(pa_state.current_depth as usize + 1, MAX_TREE_DEPTH)
-        ),
-        realloc::payer = authority,
-        realloc::zero = false,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 

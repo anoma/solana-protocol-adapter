@@ -87,9 +87,9 @@ impl PAStateAccount {
     }
 
     /// Grow the tree by one level.
-    /// Returns the new level index. Panics if at max depth.
+    /// Returns the new level index. Caller must check can_grow() first.
     pub fn grow(&mut self) -> usize {
-        assert!(self.can_grow(), "tree at maximum depth");
+        debug_assert!(self.can_grow(), "caller must check can_grow()");
         let new_level = self.current_depth as usize;
         self.frontier.push([0u8; 32]); // Will be filled by caller
         self.current_depth += 1;

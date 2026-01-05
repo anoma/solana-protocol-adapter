@@ -329,6 +329,25 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     );
   });
 
+  it("account size matches expected size for current depth (no over-allocation)", async () => {
+    // Space formula: BASE_SPACE (99) + VEC_OVERHEAD (4) + 32 * depth
+    const BASE_SPACE = 99;
+    const VEC_OVERHEAD = 4;
+    const spaceForDepth = (depth: number) => BASE_SPACE + VEC_OVERHEAD + 32 * depth;
+
+    const state = await program.account.paStateAccount.fetch(paState);
+    const accountInfo = await provider.connection.getAccountInfo(paState);
+
+    assert.ok(accountInfo, "PAState account should exist");
+
+    const expectedSize = spaceForDepth(state.currentDepth);
+    assert.equal(
+      accountInfo!.data.length,
+      expectedSize,
+      `Account size (${accountInfo!.data.length}) should match expected size for depth ${state.currentDepth} (${expectedSize})`
+    );
+  });
+
   it("rejects Delta::Witness (balance conservation bypass attempt)", async () => {
     // Clone the valid tx bytes and patch Delta::Proof to Delta::Witness
     const txWitness = Buffer.from(tx);
