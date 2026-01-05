@@ -45,12 +45,17 @@ async function airdrop(provider: anchor.AnchorProvider, to: PublicKey, sol: numb
   await provider.connection.confirmTransaction(sig, "confirmed");
 }
 
-// PADDING_LEAF constant - matches merkle.rs
-const PADDING_LEAF = Buffer.alloc(32, 0);
+// PADDING_LEAF = ZEROS[0] from merkle.rs
+const PADDING_LEAF = Buffer.from(
+  "cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06",
+  "hex"
+);
 
-// Empty tree root - precomputed from ZEROS[31] in merkle.rs
-// Hex: 254f102fd2a0b5db3926704ac4f559a767f60854fc157b2de5d5853da9b8976a
-const EMPTY_TREE_ROOT = Buffer.from(
+// Empty tree root for depth-1 tree = ZEROS[0] = PADDING_LEAF
+const EMPTY_TREE_ROOT_INITIAL = PADDING_LEAF;
+
+// Empty tree root for depth-32 tree = ZEROS[31]
+const EMPTY_TREE_ROOT_MAX = Buffer.from(
   "254f102fd2a0b5db3926704ac4f559a767f60854fc157b2de5d5853da9b8976a",
   "hex"
 );
@@ -135,11 +140,8 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     )[0];
   }
 
-  // Compute genesis root (empty tree = ZEROS[31] from merkle.rs)
   function computeGenesisRoot(): Buffer {
-    // Empty tree root is precomputed in merkle.rs as ZEROS[TREE_DEPTH - 1]
-    // NOT all zeros - it's the result of hashing PADDING_LEAF up 32 levels
-    return EMPTY_TREE_ROOT;
+    return EMPTY_TREE_ROOT_INITIAL;
   }
 
   const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
@@ -299,6 +301,32 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     );
     // Root markers are 0-byte accounts (existence = membership)
     assert.equal(info!.data.length, 0, "Root marker should be 0 bytes (existence-only)");
+  });
+
+  // ==========================================================================
+  // Variable-Depth Merkle Tree Tests
+  // ==========================================================================
+
+  it("initializes with depth 1 (variable-depth tree)", async () => {
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.equal(
+      state.currentDepth,
+      1,
+      "Initial tree depth should be 1 (capacity = 2 leaves)"
+    );
+    // Frontier is a Vec with length = currentDepth
+    assert.equal(
+      state.frontier.length,
+      1,
+      "Initial frontier should have 1 element (depth 1)"
+    );
+    // Initial root should be ZEROS[0] = PADDING_LEAF
+    const rootBytes = Buffer.from(state.root as number[]);
+    assert.deepEqual(
+      rootBytes,
+      EMPTY_TREE_ROOT_INITIAL,
+      "Initial root should be ZEROS[0] for depth-1 tree"
+    );
   });
 
   it("rejects Delta::Witness (balance conservation bypass attempt)", async () => {
