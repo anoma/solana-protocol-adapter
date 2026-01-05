@@ -67,7 +67,6 @@ pub mod solana_pa_prototype {
         state.paused = false;
 
         // Initialize variable-depth tree at depth 1 (capacity = 2 leaves)
-        // This matches the EVM reference implementation's starting state
         state.current_depth = INITIAL_TREE_DEPTH as u8;
         state.frontier = vec![PADDING_LEAF.to_bytes()]; // Single entry for depth 1
 
