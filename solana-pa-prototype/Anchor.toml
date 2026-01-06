@@ -11,6 +11,7 @@ test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
 block_time_forwarder = "J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6"
 solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
 test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
+spl_token_forwarder = "6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1"
 
 [provider]
 cluster = "localnet"
