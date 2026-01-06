@@ -120,7 +120,7 @@ pub mod spl_token_forwarder {
         }
     }
 
-    /// Set the emergency caller (one-time, by emergency committee).
+    /// Set the emergency caller (one-time, by emergency committee when stopped).
     pub fn set_emergency_caller(
         ctx: Context<SetEmergencyCaller>,
         new_emergency_caller: Pubkey,
@@ -143,6 +143,21 @@ pub mod spl_token_forwarder {
 
         config.emergency_caller = new_emergency_caller;
         msg!("Emergency caller set successfully");
+
+        Ok(())
+    }
+
+    /// Emergency stop - sets is_stopped to true (by emergency committee).
+    pub fn emergency_stop(ctx: Context<EmergencyStop>) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+
+        msg!("EmergencyStop:");
+        msg!("  committee: {}", ctx.accounts.committee.key());
+
+        require!(!config.is_stopped, ErrorCode::AlreadyStopped);
+
+        config.is_stopped = true;
+        msg!("Forwarder emergency stopped");
 
         Ok(())
     }
@@ -462,6 +477,13 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct ForwardCall<'info> {
+    /// The caller must be the Protocol Adapter
+    /// CHECK: Verified via constraint against config.protocol_adapter
+    #[account(
+        constraint = caller.key() == config.protocol_adapter @ ErrorCode::UnauthorizedCaller
+    )]
+    pub caller: AccountInfo<'info>,
+
     #[account(
         seeds = [b"config"],
         bump = config.bump
@@ -485,6 +507,7 @@ pub struct ForwardEmergencyCall<'info> {
     #[account(
         seeds = [b"config"],
         bump = config.bump,
+        constraint = config.is_stopped @ ErrorCode::ProtocolAdapterNotStopped,
         constraint = config.emergency_caller == caller.key() @ ErrorCode::UnauthorizedCaller
     )]
     pub config: Account<'info, Config>,
@@ -492,6 +515,20 @@ pub struct ForwardEmergencyCall<'info> {
 
 #[derive(Accounts)]
 pub struct SetEmergencyCaller<'info> {
+    pub committee: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        constraint = config.is_stopped @ ErrorCode::ProtocolAdapterNotStopped,
+        constraint = config.emergency_committee == committee.key() @ ErrorCode::UnauthorizedCaller
+    )]
+    pub config: Account<'info, Config>,
+}
+
+#[derive(Accounts)]
+pub struct EmergencyStop<'info> {
     pub committee: Signer<'info>,
 
     #[account(

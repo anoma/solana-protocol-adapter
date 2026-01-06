@@ -304,9 +304,11 @@ describe("spl-token-forwarder", () => {
       tx.add(ed25519Ix);
 
       // Add forward_call instruction
-      // All accounts auto-derived: config (PDA), ixSysvar (fixed), clock (fixed)
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
+        .accounts({
+          caller: protocolAdapter.publicKey, // Must match config.protocol_adapter
+        })
         .remainingAccounts([
           { pubkey: userAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -370,6 +372,9 @@ describe("spl-token-forwarder", () => {
 
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
+        .accounts({
+          caller: protocolAdapter.publicKey,
+        })
         .remainingAccounts([
           { pubkey: userAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -429,6 +434,9 @@ describe("spl-token-forwarder", () => {
 
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
+        .accounts({
+          caller: protocolAdapter.publicKey,
+        })
         .remainingAccounts([
           { pubkey: userAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -468,6 +476,9 @@ describe("spl-token-forwarder", () => {
       // Call forward_call with unwrap
       await program.methods
         .forwardCall(Array.from(logicRef), unwrapInput)
+        .accounts({
+          caller: protocolAdapter.publicKey,
+        })
         .remainingAccounts([
           { pubkey: escrowAta, isSigner: false, isWritable: true },
           { pubkey: recipientAta, isSigner: false, isWritable: true },
@@ -493,14 +504,34 @@ describe("spl-token-forwarder", () => {
   });
 
   describe("emergency operations", () => {
-    it("allows emergency committee to set emergency caller", async () => {
+    it("allows emergency committee to stop forwarder", async () => {
+      if (!program) return;
+
+      // First verify not stopped
+      let config = await program.account.config.fetch(configPda);
+      assert.equal(config.isStopped, false);
+
+      // Emergency stop
+      await program.methods
+        .emergencyStop()
+        .accounts({
+          committee: emergencyCommittee.publicKey,
+        })
+        .signers([emergencyCommittee])
+        .rpc();
+
+      // Verify stopped
+      config = await program.account.config.fetch(configPda);
+      assert.equal(config.isStopped, true);
+    });
+
+    it("allows emergency committee to set emergency caller (when stopped)", async () => {
       if (!program) return;
 
       await program.methods
         .setEmergencyCaller(emergencyCaller.publicKey)
         .accounts({
           committee: emergencyCommittee.publicKey,
-          // config: auto-derived from PDA seeds
         })
         .signers([emergencyCommittee])
         .rpc();
@@ -585,6 +616,9 @@ describe("spl-token-forwarder", () => {
       try {
         await program.methods
           .forwardCall(Array.from(wrongLogicRef), unwrapInput)
+          .accounts({
+            caller: protocolAdapter.publicKey,
+          })
           .remainingAccounts([
             { pubkey: escrowAta, isSigner: false, isWritable: true },
             { pubkey: recipientAta, isSigner: false, isWritable: true },

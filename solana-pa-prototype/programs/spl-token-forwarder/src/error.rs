@@ -52,6 +52,9 @@ pub enum ErrorCode {
     #[msg("Protocol Adapter not stopped - cannot perform emergency operations")]
     ProtocolAdapterNotStopped,
 
+    #[msg("Forwarder is already stopped")]
+    AlreadyStopped,
+
     #[msg("Zero address not allowed")]
     ZeroAddressNotAllowed,
 
