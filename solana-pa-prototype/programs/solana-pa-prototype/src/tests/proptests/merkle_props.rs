@@ -2,9 +2,9 @@
 
 use proptest::prelude::*;
 use crate::merkle::{hash_two, INITIAL_TREE_DEPTH};
-use crate::proptests::strategies::arb_digest;
+use super::strategies::arb_digest;
 use crate::state::PAStateAccount;
-use crate::test_utils::create_test_pa_state;
+use crate::tests::utils::create_test_pa_state;
 use crate::{append_to_tree, compute_root_from_frontier, required_depth_for_leaves};
 
 proptest! {

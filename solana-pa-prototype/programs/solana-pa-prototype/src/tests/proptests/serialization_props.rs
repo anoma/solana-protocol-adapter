@@ -4,7 +4,7 @@
 
 use proptest::prelude::*;
 
-use crate::proptests::strategies::{
+use super::strategies::{
     arb_compliance_instance, arb_digest, arb_expirable_blob, arb_solana_external_call,
 };
 use crate::types::{ComplianceInstance, Digest, ExpirableBlob, SolanaExternalCall};
