@@ -202,22 +202,3 @@ pub fn verify_delta_proof(tx: &Transaction) -> Result<(), PAError> {
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_words_to_bytes() {
-        // Test conversion matches arm-risc0's bytemuck-based words_to_bytes
-        // Word 0x04030201 stored in little-endian memory = bytes [0x01, 0x02, 0x03, 0x04]
-        let words: [u32; 8] = [0x04030201, 0x08070605, 0x0c0b0a09, 0x100f0e0d,
-                               0x14131211, 0x18171615, 0x1c1b1a19, 0x201f1e1d];
-        let bytes = words_to_bytes(&words);
-
-        // bytemuck casts directly, so word 0 (0x04030201) becomes first 4 bytes
-        // in little-endian order: [0x01, 0x02, 0x03, 0x04]
-        assert_eq!(bytes[0..4], [0x01, 0x02, 0x03, 0x04]);
-        assert_eq!(bytes[4..8], [0x05, 0x06, 0x07, 0x08]);
-    }
-}

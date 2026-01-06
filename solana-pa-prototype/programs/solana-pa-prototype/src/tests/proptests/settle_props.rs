@@ -2,7 +2,7 @@
 
 use proptest::prelude::*;
 use crate::settle::{extract_nullifiers, extract_commitments};
-use crate::proptests::strategies::{arb_compliance_instance, build_tx_from_instances};
+use super::strategies::{arb_compliance_instance, build_tx_from_instances};
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]

@@ -2,7 +2,7 @@
 
 use proptest::prelude::*;
 use crate::encoding::{bytes_to_words, words_to_bytes, compute_action_tree_root};
-use crate::proptests::strategies::{arb_aligned_bytes, arb_words, arb_digest};
+use super::strategies::{arb_aligned_bytes, arb_words, arb_digest};
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]

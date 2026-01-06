@@ -5,7 +5,7 @@ use crate::external_calls::{
     build_forwarder_instruction_data, decode_external_call, encode_external_call, verify_output,
     FORWARD_CALL_DISCRIMINATOR,
 };
-use crate::proptests::strategies::{arb_byte_vec, arb_output_mode, arb_solana_external_call};
+use super::strategies::{arb_byte_vec, arb_output_mode, arb_solana_external_call};
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
