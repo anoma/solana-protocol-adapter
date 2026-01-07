@@ -70,6 +70,9 @@ pub enum ErrorCode {
     #[msg("Invalid nonce PDA")]
     InvalidNoncePda,
 
-    #[msg("Token transfer failed")]
+    #[msg("Token transfer failed - ensure user has approved escrow PDA as delegate with sufficient amount")]
     TokenTransferFailed,
+
+    #[msg("Insufficient delegate approval - user must approve escrow PDA as delegate before wrap")]
+    InsufficientDelegateApproval,
 }

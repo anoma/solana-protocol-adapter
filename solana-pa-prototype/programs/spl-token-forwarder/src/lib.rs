@@ -25,9 +25,8 @@ declare_id!("6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1");
 pub const OP_WRAP: u8 = 0;
 pub const OP_UNWRAP: u8 = 1;
 
-/// Return values
+/// Return value for successful forward_call
 pub const RESULT_SUCCESS: u8 = 1;
-pub const RESULT_FAILURE: u8 = 0;
 
 /// SPL Token program ID
 const SPL_TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
@@ -211,10 +210,17 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let token_program = &remaining[4];
     let system_program = &remaining[5];
     let payer = &remaining[6];
-    let _token_mint = &remaining[7];
+    let token_mint_account = &remaining[7];
 
     // Verify token program
     require!(token_program.key() == SPL_TOKEN_PROGRAM_ID, ErrorCode::InvalidInput);
+
+    // Verify token mint account matches input
+    require!(
+        token_mint_account.key() == wrap_input.token_mint,
+        ErrorCode::InvalidInput
+    );
+    msg!("  token mint verified: {}", wrap_input.token_mint);
 
     // Verify escrow PDA derivation
     let (expected_escrow_pda, escrow_bump) = Pubkey::find_program_address(
@@ -238,6 +244,39 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         return Err(ErrorCode::NonceAlreadyUsed.into());
     }
     msg!("  nonce not used");
+
+    // Validate delegate approval before attempting transfer
+    // SPL Token account layout: mint(32) + owner(32) + amount(8) + delegate_option(4) + delegate(32) + state(1) + is_native_option(4) + is_native(8) + delegated_amount(8)
+    let user_ata_data = user_ata.try_borrow_data()?;
+    if user_ata_data.len() < 129 {
+        msg!("Invalid token account data length");
+        return Err(ErrorCode::InvalidInput.into());
+    }
+
+    // Check delegate option (offset 72): 1 = Some, 0 = None
+    let delegate_option = u32::from_le_bytes(user_ata_data[72..76].try_into().unwrap());
+    if delegate_option != 1 {
+        msg!("No delegate set on user token account - user must approve escrow PDA first");
+        return Err(ErrorCode::InsufficientDelegateApproval.into());
+    }
+
+    // Check delegate pubkey (offset 76-108)
+    let delegate_bytes: [u8; 32] = user_ata_data[76..108].try_into().unwrap();
+    let delegate_pubkey = Pubkey::new_from_array(delegate_bytes);
+    if delegate_pubkey != escrow_pda.key() {
+        msg!("Delegate mismatch: expected escrow PDA {}, got {}", escrow_pda.key(), delegate_pubkey);
+        return Err(ErrorCode::InsufficientDelegateApproval.into());
+    }
+
+    // Check delegated amount (offset 121-129)
+    let delegated_amount = u64::from_le_bytes(user_ata_data[121..129].try_into().unwrap());
+    if delegated_amount < wrap_input.amount {
+        msg!("Insufficient delegated amount: have {}, need {}", delegated_amount, wrap_input.amount);
+        return Err(ErrorCode::InsufficientDelegateApproval.into());
+    }
+    msg!("  delegate approval verified: {} >= {}", delegated_amount, wrap_input.amount);
+
+    drop(user_ata_data); // Release borrow before CPI
 
     // Transfer tokens from user to escrow using delegate authority
     let mut transfer_data = vec![3u8]; // Transfer opcode
@@ -330,9 +369,16 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let recipient_ata = &remaining[1];
     let escrow_pda = &remaining[2];
     let token_program = &remaining[3];
-    let _token_mint = &remaining[4];
+    let token_mint_account = &remaining[4];
 
     require!(token_program.key() == SPL_TOKEN_PROGRAM_ID, ErrorCode::InvalidInput);
+
+    // Verify token mint account matches input
+    require!(
+        token_mint_account.key() == unwrap_input.token_mint,
+        ErrorCode::InvalidInput
+    );
+    msg!("  token mint verified: {}", unwrap_input.token_mint);
 
     // Verify escrow PDA
     let (expected_escrow_pda, escrow_bump) = Pubkey::find_program_address(
@@ -557,7 +603,6 @@ mod tests {
     #[test]
     fn test_result_constants() {
         assert_eq!(RESULT_SUCCESS, 1);
-        assert_eq!(RESULT_FAILURE, 0);
     }
 
     #[test]
