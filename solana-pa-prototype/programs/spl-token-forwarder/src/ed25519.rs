@@ -32,6 +32,188 @@ use crate::ErrorCode;
 /// - Then the actual data (signature, pubkey, message) at the specified offsets
 pub const SIGNATURE_OFFSETS_SERIALIZED_SIZE: usize = 14; // 7 x u16
 
+/// Minimum size for a valid Ed25519 instruction: 2-byte header + one signature's offsets
+pub const ED25519_MIN_INSTRUCTION_SIZE: usize = 2 + SIGNATURE_OFFSETS_SERIALIZED_SIZE;
+
+/// The instruction index value meaning "data is in current instruction"
+pub const CURRENT_INSTRUCTION_INDEX: u16 = 0xFFFF;
+
+/// Parsed offsets from an Ed25519 instruction.
+/// All offsets are relative to the instruction data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ed25519Offsets {
+    pub num_signatures: u8,
+    pub signature_offset: usize,
+    pub signature_ix_index: u16,
+    pub pubkey_offset: usize,
+    pub pubkey_ix_index: u16,
+    pub message_offset: usize,
+    pub message_size: usize,
+    pub message_ix_index: u16,
+}
+
+/// Error types for Ed25519 parsing (for unit tests that don't have access to ErrorCode)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ed25519ParseError {
+    /// Instruction data is too short
+    InstructionTooShort,
+    /// No signatures in instruction
+    NoSignatures,
+    /// Data references external instruction (not 0xFFFF)
+    ExternalDataReference,
+    /// Pubkey data is out of bounds
+    PubkeyOutOfBounds,
+    /// Message data is out of bounds
+    MessageOutOfBounds,
+    /// Message size is not 32 bytes (SHA-256 hash)
+    InvalidMessageSize,
+    /// Pubkey doesn't match expected
+    PubkeyMismatch,
+    /// Message doesn't match expected
+    MessageMismatch,
+}
+
+impl From<Ed25519ParseError> for ErrorCode {
+    fn from(e: Ed25519ParseError) -> Self {
+        match e {
+            Ed25519ParseError::InstructionTooShort => ErrorCode::InvalidEd25519Instruction,
+            Ed25519ParseError::NoSignatures => ErrorCode::InvalidEd25519Instruction,
+            Ed25519ParseError::ExternalDataReference => ErrorCode::InvalidEd25519Instruction,
+            Ed25519ParseError::PubkeyOutOfBounds => ErrorCode::InvalidEd25519Instruction,
+            Ed25519ParseError::MessageOutOfBounds => ErrorCode::InvalidEd25519Instruction,
+            Ed25519ParseError::InvalidMessageSize => ErrorCode::Ed25519MessageMismatch,
+            Ed25519ParseError::PubkeyMismatch => ErrorCode::Ed25519PubkeyMismatch,
+            Ed25519ParseError::MessageMismatch => ErrorCode::Ed25519MessageMismatch,
+        }
+    }
+}
+
+/// Parse Ed25519 instruction data into structured offsets.
+///
+/// This is a pure function that can be unit tested without mocking sysvars.
+///
+/// # Arguments
+/// * `ix_data` - Raw instruction data bytes
+///
+/// # Returns
+/// Parsed offsets or an error if the data is malformed.
+pub fn parse_ed25519_offsets(ix_data: &[u8]) -> core::result::Result<Ed25519Offsets, Ed25519ParseError> {
+    // Minimum size: 2 bytes header + 14 bytes per signature
+    if ix_data.len() < ED25519_MIN_INSTRUCTION_SIZE {
+        return Err(Ed25519ParseError::InstructionTooShort);
+    }
+
+    let num_signatures = ix_data[0];
+    if num_signatures == 0 {
+        return Err(Ed25519ParseError::NoSignatures);
+    }
+
+    // Parse offsets for first signature (starting at byte 2)
+    let offsets_start = 2;
+    let signature_offset = u16::from_le_bytes([
+        ix_data[offsets_start],
+        ix_data[offsets_start + 1],
+    ]) as usize;
+    let signature_ix_index = u16::from_le_bytes([
+        ix_data[offsets_start + 2],
+        ix_data[offsets_start + 3],
+    ]);
+    let pubkey_offset = u16::from_le_bytes([
+        ix_data[offsets_start + 4],
+        ix_data[offsets_start + 5],
+    ]) as usize;
+    let pubkey_ix_index = u16::from_le_bytes([
+        ix_data[offsets_start + 6],
+        ix_data[offsets_start + 7],
+    ]);
+    let message_offset = u16::from_le_bytes([
+        ix_data[offsets_start + 8],
+        ix_data[offsets_start + 9],
+    ]) as usize;
+    let message_size = u16::from_le_bytes([
+        ix_data[offsets_start + 10],
+        ix_data[offsets_start + 11],
+    ]) as usize;
+    let message_ix_index = u16::from_le_bytes([
+        ix_data[offsets_start + 12],
+        ix_data[offsets_start + 13],
+    ]);
+
+    // Validate instruction indices: 0xFFFF means data is in the current instruction.
+    // We require all data to be in the Ed25519 instruction itself, not elsewhere.
+    if signature_ix_index != CURRENT_INSTRUCTION_INDEX
+        || pubkey_ix_index != CURRENT_INSTRUCTION_INDEX
+        || message_ix_index != CURRENT_INSTRUCTION_INDEX
+    {
+        return Err(Ed25519ParseError::ExternalDataReference);
+    }
+
+    Ok(Ed25519Offsets {
+        num_signatures,
+        signature_offset,
+        signature_ix_index,
+        pubkey_offset,
+        pubkey_ix_index,
+        message_offset,
+        message_size,
+        message_ix_index,
+    })
+}
+
+/// Validate that pubkey and message in instruction data match expected values.
+///
+/// This is a pure function that can be unit tested without mocking sysvars.
+///
+/// # Arguments
+/// * `ix_data` - Raw instruction data bytes
+/// * `offsets` - Parsed offsets from parse_ed25519_offsets
+/// * `expected_pubkey` - The Ed25519 public key we expect (32 bytes)
+/// * `expected_message` - The message we expect to be signed (32 bytes SHA-256 hash)
+///
+/// # Returns
+/// Ok(()) if validation passes, error otherwise.
+pub fn validate_ed25519_data(
+    ix_data: &[u8],
+    offsets: &Ed25519Offsets,
+    expected_pubkey: &[u8; 32],
+    expected_message: &[u8; 32],
+) -> core::result::Result<(), Ed25519ParseError> {
+    // Validate pubkey bounds
+    if offsets.pubkey_offset + 32 > ix_data.len() {
+        return Err(Ed25519ParseError::PubkeyOutOfBounds);
+    }
+
+    // Extract and verify public key
+    let pubkey_in_ix: &[u8; 32] = ix_data[offsets.pubkey_offset..offsets.pubkey_offset + 32]
+        .try_into()
+        .map_err(|_| Ed25519ParseError::PubkeyOutOfBounds)?;
+
+    if pubkey_in_ix != expected_pubkey {
+        return Err(Ed25519ParseError::PubkeyMismatch);
+    }
+
+    // Validate message bounds
+    if offsets.message_offset + offsets.message_size > ix_data.len() {
+        return Err(Ed25519ParseError::MessageOutOfBounds);
+    }
+
+    // The expected message is 32 bytes (SHA-256 hash)
+    if offsets.message_size != 32 {
+        return Err(Ed25519ParseError::InvalidMessageSize);
+    }
+
+    // Extract and verify message
+    let message_in_ix: &[u8; 32] = ix_data[offsets.message_offset..offsets.message_offset + 32]
+        .try_into()
+        .map_err(|_| Ed25519ParseError::MessageOutOfBounds)?;
+
+    if message_in_ix != expected_message {
+        return Err(Ed25519ParseError::MessageMismatch);
+    }
+
+    Ok(())
+}
+
 /// Verify that an Ed25519 signature verification instruction exists at the specified index
 /// and that it verifies the expected pubkey and message.
 ///
@@ -65,102 +247,36 @@ pub fn verify_ed25519_instruction(
 
     // Parse the Ed25519 instruction data
     let ix_data = &ix.data;
-
-    // Minimum size: 2 bytes header + 14 bytes per signature
-    if ix_data.len() < 2 + SIGNATURE_OFFSETS_SERIALIZED_SIZE {
-        return Err(ErrorCode::InvalidEd25519Instruction.into());
-    }
-
-    let num_signatures = ix_data[0];
-    if num_signatures == 0 {
-        return Err(ErrorCode::InvalidEd25519Instruction.into());
-    }
-
-    // Parse offsets for first signature (starting at byte 2)
-    // We verify only the first signature; if multiple are needed, this could be extended.
-    let offsets_start = 2;
-    let signature_offset = u16::from_le_bytes([
-        ix_data[offsets_start],
-        ix_data[offsets_start + 1],
-    ]) as usize;
-    let signature_ix_index = u16::from_le_bytes([
-        ix_data[offsets_start + 2],
-        ix_data[offsets_start + 3],
-    ]);
-    let pubkey_offset = u16::from_le_bytes([
-        ix_data[offsets_start + 4],
-        ix_data[offsets_start + 5],
-    ]) as usize;
-    let pubkey_ix_index = u16::from_le_bytes([
-        ix_data[offsets_start + 6],
-        ix_data[offsets_start + 7],
-    ]);
-    let message_offset = u16::from_le_bytes([
-        ix_data[offsets_start + 8],
-        ix_data[offsets_start + 9],
-    ]) as usize;
-    let message_size = u16::from_le_bytes([
-        ix_data[offsets_start + 10],
-        ix_data[offsets_start + 11],
-    ]) as usize;
-    let message_ix_index = u16::from_le_bytes([
-        ix_data[offsets_start + 12],
-        ix_data[offsets_start + 13],
-    ]);
-
-    // Validate instruction indices: 0xFFFF means data is in the current instruction.
-    // We require all data to be in the Ed25519 instruction itself, not elsewhere.
-    const CURRENT_INSTRUCTION: u16 = 0xFFFF;
-    if signature_ix_index != CURRENT_INSTRUCTION
-        || pubkey_ix_index != CURRENT_INSTRUCTION
-        || message_ix_index != CURRENT_INSTRUCTION
-    {
-        msg!("Ed25519 data must be in the same instruction (expected 0xFFFF indices)");
-        return Err(ErrorCode::InvalidEd25519Instruction.into());
-    }
+    let offsets = parse_ed25519_offsets(ix_data)
+        .map_err(|e| -> ErrorCode { e.into() })?;
 
     msg!("Ed25519 instruction parsed:");
-    msg!("  signature_offset: {}", signature_offset);
-    msg!("  pubkey_offset: {}", pubkey_offset);
-    msg!("  message_offset: {}, size: {}", message_offset, message_size);
+    msg!("  signature_offset: {}", offsets.signature_offset);
+    msg!("  pubkey_offset: {}", offsets.pubkey_offset);
+    msg!("  message_offset: {}, size: {}", offsets.message_offset, offsets.message_size);
 
-    // Extract and verify public key
-    if pubkey_offset + 32 > ix_data.len() {
-        return Err(ErrorCode::InvalidEd25519Instruction.into());
-    }
-    let pubkey_in_ix: &[u8; 32] = ix_data[pubkey_offset..pubkey_offset + 32]
-        .try_into()
-        .map_err(|_| ErrorCode::InvalidEd25519Instruction)?;
+    // Validate pubkey and message
+    validate_ed25519_data(ix_data, &offsets, expected_pubkey, expected_message)
+        .map_err(|e| {
+            match e {
+                Ed25519ParseError::PubkeyMismatch => {
+                    msg!("Pubkey mismatch!");
+                    msg!("  expected: {:?}", &expected_pubkey[..8]);
+                }
+                Ed25519ParseError::MessageMismatch => {
+                    msg!("Message mismatch!");
+                    msg!("  expected: {:?}", &expected_message[..8]);
+                }
+                Ed25519ParseError::InvalidMessageSize => {
+                    msg!("Message size mismatch: expected 32, got {}", offsets.message_size);
+                }
+                _ => {}
+            }
+            let code: ErrorCode = e.into();
+            code
+        })?;
 
-    if pubkey_in_ix != expected_pubkey {
-        msg!("Pubkey mismatch!");
-        msg!("  expected: {:?}", &expected_pubkey[..8]);
-        msg!("  got: {:?}", &pubkey_in_ix[..8]);
-        return Err(ErrorCode::Ed25519PubkeyMismatch.into());
-    }
     msg!("  pubkey verified");
-
-    // Extract and verify message
-    if message_offset + message_size > ix_data.len() {
-        return Err(ErrorCode::InvalidEd25519Instruction.into());
-    }
-
-    // The expected message is 32 bytes (SHA-256 hash)
-    if message_size != 32 {
-        msg!("Message size mismatch: expected 32, got {}", message_size);
-        return Err(ErrorCode::Ed25519MessageMismatch.into());
-    }
-
-    let message_in_ix: &[u8; 32] = ix_data[message_offset..message_offset + 32]
-        .try_into()
-        .map_err(|_| ErrorCode::InvalidEd25519Instruction)?;
-
-    if message_in_ix != expected_message {
-        msg!("Message mismatch!");
-        msg!("  expected: {:?}", &expected_message[..8]);
-        msg!("  got: {:?}", &message_in_ix[..8]);
-        return Err(ErrorCode::Ed25519MessageMismatch.into());
-    }
     msg!("  message verified");
 
     // If we got here, the Ed25519 instruction exists and contains:
