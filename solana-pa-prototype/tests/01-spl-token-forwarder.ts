@@ -20,6 +20,8 @@ import {
 import { assert } from "chai";
 import { createHash } from "crypto";
 import * as nacl from "tweetnacl";
+import { readFileSync, existsSync } from "fs";
+import path from "path";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 
@@ -232,8 +234,20 @@ describe("spl-token-forwarder", () => {
     }
 
     // Set logic_ref for standalone tests - must match fixture-gen's value
-    // fixture-gen uses: SHA256("spl_token_forwarder_test_logic_ref")
-    logicRef = createHash("sha256").update("spl_token_forwarder_test_logic_ref").digest();
+    // fixture-gen uses PASSTHROUGH_LOGIC_GUEST_ID (RISC0 image ID)
+    // Read from fixture to ensure consistency across all test files
+    const wrapFixturePath = path.resolve(process.cwd(), "tests", "fixtures", "spl_token_wrap.json");
+    if (existsSync(wrapFixturePath)) {
+      const fixture = JSON.parse(readFileSync(wrapFixturePath, "utf8"));
+      const logicRefB64 = fixture.spl_token_wrap?.logic_ref_b64;
+      if (logicRefB64) {
+        logicRef = Buffer.from(logicRefB64, "base64");
+      } else {
+        throw new Error("No logic_ref_b64 found in wrap fixture metadata");
+      }
+    } else {
+      throw new Error("Wrap fixture not found - run fixture-gen first");
+    }
 
     // Create token mint
     tokenMint = await createMint(
@@ -272,6 +286,65 @@ describe("spl-token-forwarder", () => {
   });
 
   describe("initialize", () => {
+    // Mirrors: test_constructor_reverts_if_the_protocol_adapter_address_is_zero
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/ForwarderBase.t.sol
+    it("rejects zero protocol adapter address", async () => {
+      if (!program) return;
+
+      try {
+        await program.methods
+          .initialize(PublicKey.default, Array.from(logicRef), emergencyCommittee.publicKey)
+          .accounts({
+            authority: authority.publicKey,
+          })
+          .signers([authority])
+          .rpc();
+        assert.fail("Expected transaction to fail");
+      } catch (e: any) {
+        assert.include(e.toString(), "ZeroAddressNotAllowed");
+      }
+    });
+
+    // Mirrors: test_constructor_reverts_if_the_logic_ref_is_zero
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/ForwarderBase.t.sol
+    it("rejects zero logic_ref", async () => {
+      if (!program) return;
+
+      const zeroLogicRef = Array(32).fill(0);
+
+      try {
+        await program.methods
+          .initialize(paProgram.programId, zeroLogicRef, emergencyCommittee.publicKey)
+          .accounts({
+            authority: authority.publicKey,
+          })
+          .signers([authority])
+          .rpc();
+        assert.fail("Expected transaction to fail");
+      } catch (e: any) {
+        assert.include(e.toString(), "ZeroAddressNotAllowed");
+      }
+    });
+
+    // Mirrors: test_constructor_reverts_if_the_emergency_committe_address_is_zero
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/EmergencyMigratableForwarderBase.t.sol
+    it("rejects zero emergency committee address", async () => {
+      if (!program) return;
+
+      try {
+        await program.methods
+          .initialize(paProgram.programId, Array.from(logicRef), PublicKey.default)
+          .accounts({
+            authority: authority.publicKey,
+          })
+          .signers([authority])
+          .rpc();
+        assert.fail("Expected transaction to fail");
+      } catch (e: any) {
+        assert.include(e.toString(), "ZeroAddressNotAllowed");
+      }
+    });
+
     it("initializes the forwarder config", async () => {
       if (!program) return;
 

@@ -47,6 +47,7 @@ import {
 type SplTokenWrapMetadata = {
   user_secret_key_b64: string;
   user_pubkey_b64: string;
+  mint_seed_b64: string;
   token_mint_b58: string;
   amount: number;
   nonce: number;
@@ -57,8 +58,10 @@ type SplTokenWrapMetadata = {
 };
 
 type SplTokenUnwrapMetadata = {
+  mint_seed_b64: string;
   token_mint_b58: string;
   amount: number;
+  recipient_seed_b64: string;
   recipient_b58: string;
   logic_ref_b64: string;
 };
@@ -118,7 +121,8 @@ const TX_DATA_SEED = Buffer.from("tx_data");
 const ROOT_MARKER_SEED = Buffer.from("root");
 const CONFIG_SEED = Buffer.from("config");
 const ESCROW_SEED = Buffer.from("escrow");
-const NONCE_SEED = Buffer.from("nonce");
+const NONCE_BITMAP_SEED = Buffer.from("nonce_bitmap");
+const NONCES_PER_WORD = 256n;
 
 // Genesis root for depth-1 tree
 const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
@@ -185,11 +189,14 @@ describe("SPL Token Forwarder PA Integration", function () {
     );
   }
 
-  function deriveNoncePda(user: PublicKey, nonce: bigint): [PublicKey, number] {
-    const nonceBuffer = Buffer.alloc(8);
-    nonceBuffer.writeBigUInt64LE(nonce);
+  function deriveNonceBitmapPda(user: PublicKey, nonce: bigint): [PublicKey, number] {
+    // Permit2-style bitmap pattern: each PDA stores 256 nonces
+    // Word index = nonce / 256
+    const wordIndex = nonce / NONCES_PER_WORD;
+    const wordIndexBuffer = Buffer.alloc(8);
+    wordIndexBuffer.writeBigUInt64LE(wordIndex);
     return PublicKey.findProgramAddressSync(
-      [NONCE_SEED, user.toBuffer(), nonceBuffer],
+      [NONCE_BITMAP_SEED, user.toBuffer(), wordIndexBuffer],
       forwarderProgram.programId
     );
   }
@@ -347,9 +354,11 @@ describe("SPL Token Forwarder PA Integration", function () {
       });
     }
 
+    // IMPORTANT: Ed25519 instruction must be at index 0 to match fixture's ed25519_ix_index
+    // ComputeBudget comes after to avoid shifting instruction indices
     const allPreInstructions = [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
       ...(preInstructions || []),
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
     ];
 
     return paProgram.methods
@@ -383,6 +392,8 @@ describe("SPL Token Forwarder PA Integration", function () {
       }
     });
 
+    // Mirrors: test_wrap_pulls_funds_from_user (via PA settlement)
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
     it("settles wrap through PA with Ed25519 signature verification", async function () {
       if (!wrapFixtureExists) this.skip();
 
@@ -392,55 +403,68 @@ describe("SPL Token Forwarder PA Integration", function () {
       // Decode test data from fixture
       const userSecretKey = Buffer.from(metadata.user_secret_key_b64, "base64");
       const userPubkey = new PublicKey(Buffer.from(metadata.user_pubkey_b64, "base64"));
-      const tokenMint = new PublicKey(bs58.decode(metadata.token_mint_b58));
+      const mintSeed = Buffer.from(metadata.mint_seed_b64, "base64");
       const amount = BigInt(metadata.amount);
       const nonce = BigInt(metadata.nonce);
       const deadline = BigInt(metadata.deadline);
       const actionTreeRoot = Buffer.from(metadata.action_tree_root_b64, "base64");
       const signature = Buffer.from(metadata.signature_b64, "base64");
 
-      // Create user keypair from secret
+      // Create deterministic keypairs from fixture seeds
       const userKeypair = Keypair.fromSeed(userSecretKey);
+      const mintKeypair = Keypair.fromSeed(mintSeed);
       assert.ok(
         userKeypair.publicKey.equals(userPubkey),
         "Derived user pubkey should match fixture"
       );
+      // Verify mint pubkey matches fixture (sanity check)
+      const expectedMint = new PublicKey(bs58.decode(metadata.token_mint_b58));
+      assert.ok(
+        mintKeypair.publicKey.equals(expectedMint),
+        "Derived mint pubkey should match fixture"
+      );
 
-      // Set up token infrastructure
-      // Note: In real test, we'd create the mint with the deterministic address
-      // For now, we use a fresh mint and adjust test expectations
-      const mintAuthority = Keypair.generate();
-      await airdrop(provider, mintAuthority.publicKey, 2);
+      // Airdrop for fees
       await airdrop(provider, userPubkey, 2);
 
-      // Create mint (in practice, the fixture would use a deterministic mint)
+      // Create deterministic mint using the keypair from fixture
+      // The 6th argument to createMint is the mint keypair
       const mint = await createMint(
         provider.connection,
-        mintAuthority,
-        mintAuthority.publicKey,
-        null,
-        6
+        userKeypair, // payer
+        userKeypair.publicKey, // mint authority
+        null, // freeze authority
+        6, // decimals
+        mintKeypair // deterministic mint keypair
       );
+      assert.ok(mint.equals(expectedMint), "Created mint should match fixture");
 
       // Create user ATA and mint tokens
       const userAta = await getOrCreateAssociatedTokenAccount(
         provider.connection,
-        mintAuthority,
+        userKeypair,
         mint,
         userPubkey
       );
       await mintTo(
         provider.connection,
-        mintAuthority,
+        userKeypair,
         mint,
         userAta.address,
-        mintAuthority,
+        userKeypair, // mint authority
         Number(amount) * 2
       );
 
-      // Create escrow ATA
+      // Create escrow ATA (must exist before wrap)
       const [escrowPda] = deriveEscrowPda(mint);
-      const escrowAta = getAssociatedTokenAddressSync(mint, escrowPda, true);
+      const escrowAtaAccount = await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        userKeypair,
+        mint,
+        escrowPda,
+        true // allowOwnerOffCurve - required for PDA owners
+      );
+      const escrowAta = escrowAtaAccount.address;
 
       // Approve forwarder's escrow as delegate
       await approve(
@@ -452,47 +476,67 @@ describe("SPL Token Forwarder PA Integration", function () {
         Number(amount)
       );
 
-      // Nonce PDA
-      const [noncePda] = deriveNoncePda(userPubkey, nonce);
+      // Nonce bitmap PDA (Permit2-style: each PDA stores 256 nonces)
+      const [nonceBitmapPda] = deriveNonceBitmapPda(userPubkey, nonce);
 
-      // Create Ed25519 verify instruction
-      const messageHash = createWrapMessageHash(mint, amount, nonce, deadline, actionTreeRoot);
+      // Create Ed25519 verify instruction with the fixture's signature
+      // The signature was computed over: SHA256(forwarder_id || mint || amount || nonce || deadline || action_tree_root)
+      const messageHash = createWrapMessageHash(
+        forwarderProgram.programId,
+        mint,
+        amount,
+        nonce,
+        deadline,
+        actionTreeRoot
+      );
       const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
         publicKey: userPubkey.toBytes(),
         message: messageHash,
         signature: signature,
       });
 
+      // Authority that will upload TxData and pay for nonce bitmap creation
+      const authority = Keypair.generate();
+
       // Forwarder accounts for CPI
+      // Order: forwarder_program (segment marker) | caller | config | ix_sysvar | clock | ...remaining
+      // The PA strips the forwarder_program and passes the rest to the forwarder's instruction
+      // Remaining accounts order: user_ata, escrow_ata, escrow_pda, nonce_bitmap, token_program, system_program, payer, mint
       const forwarderAccounts = [
         { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
+        { pubkey: paProgram.programId, isWritable: false, isSigner: false }, // caller (must match config.protocol_adapter)
         { pubkey: forwarderConfigPda, isWritable: false, isSigner: false },
         { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
         { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
         { pubkey: userAta.address, isWritable: true, isSigner: false },
         { pubkey: escrowAta, isWritable: true, isSigner: false },
         { pubkey: escrowPda, isWritable: false, isSigner: false },
-        { pubkey: noncePda, isWritable: true, isSigner: false },
+        { pubkey: nonceBitmapPda, isWritable: true, isSigner: false },
         { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
-        { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
         { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
+        { pubkey: authority.publicKey, isWritable: true, isSigner: false }, // payer for nonce bitmap
         { pubkey: mint, isWritable: false, isSigner: false },
       ];
 
-      const authority = Keypair.generate();
+      // Record balances before
+      const userBalanceBefore = (await getAccount(provider.connection, userAta.address)).amount;
 
-      try {
-        await settleViaTxData(authority, fixture, forwarderAccounts, [ed25519Ix]);
-        console.log("    ✓ Wrap settlement succeeded through PA");
-      } catch (err: any) {
-        // Expected to fail because fixture's token_mint doesn't match our created mint
-        // This validates the PA flow attempts to call the forwarder
-        console.log("    ⚠ Wrap settlement failed (expected - mint mismatch):", err.message?.slice(0, 100));
-        assert.ok(
-          err.message?.includes("custom program error") || err.message?.includes("Error"),
-          "Should fail with program error (validates PA→forwarder CPI attempted)"
-        );
-      }
+      await settleViaTxData(authority, fixture, forwarderAccounts, [ed25519Ix]);
+
+      // Verify tokens were transferred to escrow
+      const userBalanceAfter = (await getAccount(provider.connection, userAta.address)).amount;
+      const escrowBalance = (await getAccount(provider.connection, escrowAta)).amount;
+
+      assert.equal(
+        userBalanceAfter.toString(),
+        (userBalanceBefore - amount).toString(),
+        "User balance should decrease by wrap amount"
+      );
+      assert.equal(
+        escrowBalance.toString(),
+        amount.toString(),
+        "Escrow should hold wrapped tokens"
+      );
     });
   });
 
@@ -508,6 +552,8 @@ describe("SPL Token Forwarder PA Integration", function () {
       }
     });
 
+    // Mirrors: test_unwrap_sends_funds_to_the_user (via PA settlement)
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
     it("settles unwrap through PA (escrow release)", async function () {
       if (!unwrapFixtureExists) this.skip();
 
@@ -515,53 +561,92 @@ describe("SPL Token Forwarder PA Integration", function () {
       const metadata = fixture.spl_token_unwrap!;
 
       // Decode test data from fixture
-      const tokenMint = new PublicKey(bs58.decode(metadata.token_mint_b58));
+      const mintSeed = Buffer.from(metadata.mint_seed_b64, "base64");
+      const recipientSeed = Buffer.from(metadata.recipient_seed_b64, "base64");
       const amount = BigInt(metadata.amount);
-      const recipient = new PublicKey(bs58.decode(metadata.recipient_b58));
 
-      // Set up token infrastructure
-      const mintAuthority = Keypair.generate();
-      await airdrop(provider, mintAuthority.publicKey, 2);
+      // Create deterministic keypairs from fixture seeds
+      const mintKeypair = Keypair.fromSeed(mintSeed);
+      const recipientKeypair = Keypair.fromSeed(recipientSeed);
 
-      // Create mint
-      const mint = await createMint(
-        provider.connection,
-        mintAuthority,
-        mintAuthority.publicKey,
-        null,
-        6
+      // Verify derived pubkeys match fixture (sanity check)
+      const expectedMint = new PublicKey(bs58.decode(metadata.token_mint_b58));
+      const expectedRecipient = new PublicKey(bs58.decode(metadata.recipient_b58));
+      assert.ok(
+        mintKeypair.publicKey.equals(expectedMint),
+        "Derived mint pubkey should match fixture"
+      );
+      assert.ok(
+        recipientKeypair.publicKey.equals(expectedRecipient),
+        "Derived recipient pubkey should match fixture"
       );
 
-      // Create escrow ATA and fund it
+      // Airdrop for fees
+      await airdrop(provider, recipientKeypair.publicKey, 2);
+
+      // Create deterministic mint using the keypair from fixture
+      // Check if mint already exists (may have been created by wrap test running first)
+      let mint: PublicKey;
+      const mintInfo = await provider.connection.getAccountInfo(expectedMint);
+      if (mintInfo) {
+        // Mint already exists (created by wrap test)
+        mint = expectedMint;
+      } else {
+        // Create the mint
+        mint = await createMint(
+          provider.connection,
+          recipientKeypair, // payer
+          recipientKeypair.publicKey, // mint authority
+          null, // freeze authority
+          6, // decimals
+          mintKeypair // deterministic mint keypair
+        );
+        assert.ok(mint.equals(expectedMint), "Created mint should match fixture");
+      }
+
+      // Create escrow ATA and fund it (simulating prior wraps)
       const [escrowPda] = deriveEscrowPda(mint);
       const escrowAta = await getOrCreateAssociatedTokenAccount(
         provider.connection,
-        mintAuthority,
+        recipientKeypair,
         mint,
         escrowPda,
         true
       );
-      await mintTo(
-        provider.connection,
-        mintAuthority,
-        mint,
-        escrowAta.address,
-        mintAuthority,
-        Number(amount) * 2
-      );
+
+      // Only mint to escrow if it doesn't have enough tokens
+      // (If wrap test ran first, escrow already has tokens and we're not the mint authority)
+      if (escrowAta.amount < amount) {
+        if (!mintInfo) {
+          // We created the mint, so we're the authority - mint tokens
+          await mintTo(
+            provider.connection,
+            recipientKeypair,
+            mint,
+            escrowAta.address,
+            recipientKeypair, // mint authority
+            Number(amount) * 2
+          );
+        } else {
+          // Mint was created by wrap test - skip minting and use existing escrow balance
+          // The wrap test should have deposited tokens to escrow
+          assert.fail("Escrow doesn't have enough tokens and we can't mint (wrap test didn't run or failed)");
+        }
+      }
 
       // Create recipient ATA
-      await airdrop(provider, recipient, 1);
       const recipientAta = await getOrCreateAssociatedTokenAccount(
         provider.connection,
-        mintAuthority,
+        recipientKeypair,
         mint,
-        recipient
+        recipientKeypair.publicKey
       );
 
       // Forwarder accounts for CPI
+      // Order: forwarder_program (segment marker) | caller | config | ix_sysvar | clock | ...remaining
       const forwarderAccounts = [
         { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
+        { pubkey: paProgram.programId, isWritable: false, isSigner: false }, // caller (must match config.protocol_adapter)
         { pubkey: forwarderConfigPda, isWritable: false, isSigner: false },
         { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
         { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
@@ -572,25 +657,35 @@ describe("SPL Token Forwarder PA Integration", function () {
         { pubkey: mint, isWritable: false, isSigner: false },
       ];
 
-      const authority = Keypair.generate();
+      // Record balances before
+      const escrowBalanceBefore = (await getAccount(provider.connection, escrowAta.address)).amount;
+      const recipientBalanceBefore = (await getAccount(provider.connection, recipientAta.address)).amount;
 
-      try {
-        await settleViaTxData(authority, fixture, forwarderAccounts);
-        console.log("    ✓ Unwrap settlement succeeded through PA");
-      } catch (err: any) {
-        // Expected to fail because fixture's token_mint doesn't match our created mint
-        console.log("    ⚠ Unwrap settlement failed (expected - mint mismatch):", err.message?.slice(0, 100));
-        assert.ok(
-          err.message?.includes("custom program error") || err.message?.includes("Error"),
-          "Should fail with program error (validates PA→forwarder CPI attempted)"
-        );
-      }
+      const authority = Keypair.generate();
+      await settleViaTxData(authority, fixture, forwarderAccounts);
+
+      // Verify tokens were transferred from escrow to recipient
+      const escrowBalanceAfter = (await getAccount(provider.connection, escrowAta.address)).amount;
+      const recipientBalanceAfter = (await getAccount(provider.connection, recipientAta.address)).amount;
+
+      assert.equal(
+        escrowBalanceAfter.toString(),
+        (escrowBalanceBefore - amount).toString(),
+        "Escrow balance should decrease by unwrap amount"
+      );
+      assert.equal(
+        recipientBalanceAfter.toString(),
+        (recipientBalanceBefore + amount).toString(),
+        "Recipient should receive unwrapped tokens"
+      );
     });
   });
 });
 
-// Helper to create wrap message hash (matches fixture-gen)
+// Helper to create wrap message hash (matches WrapMessage in state.rs)
+// Layout: forwarder_id(32) + token_mint(32) + amount(8) + nonce(8) + deadline(8) + action_tree_root(32) = 120 bytes
 function createWrapMessageHash(
+  forwarderId: PublicKey,
   tokenMint: PublicKey,
   amount: bigint,
   nonce: bigint,
@@ -598,11 +693,12 @@ function createWrapMessageHash(
   actionTreeRoot: Buffer
 ): Buffer {
   const { createHash } = require("crypto");
-  const message = Buffer.alloc(88);
-  tokenMint.toBuffer().copy(message, 0);
-  message.writeBigUInt64LE(amount, 32);
-  message.writeBigUInt64LE(nonce, 40);
-  message.writeBigInt64LE(deadline, 48);
-  actionTreeRoot.copy(message, 56);
+  const message = Buffer.alloc(120);
+  forwarderId.toBuffer().copy(message, 0);   // forwarder_id for domain separation
+  tokenMint.toBuffer().copy(message, 32);
+  message.writeBigUInt64LE(amount, 64);
+  message.writeBigUInt64LE(nonce, 72);
+  message.writeBigInt64LE(deadline, 80);
+  actionTreeRoot.copy(message, 88);
   return createHash("sha256").update(message).digest();
 }

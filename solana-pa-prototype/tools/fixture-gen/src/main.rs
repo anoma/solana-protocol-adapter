@@ -49,6 +49,7 @@ use test_forwarder::{MODE_FAIL, MODE_SILENT, MODE_WRITE_ACCOUNT};
 struct SplTokenWrapMetadata {
     user_secret_key_b64: String,
     user_pubkey_b64: String,
+    mint_seed_b64: String,
     token_mint_b58: String,
     amount: u64,
     nonce: u64,
@@ -60,8 +61,10 @@ struct SplTokenWrapMetadata {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct SplTokenUnwrapMetadata {
+    mint_seed_b64: String,
     token_mint_b58: String,
     amount: u64,
+    recipient_seed_b64: String,
     recipient_b58: String,
     logic_ref_b64: String,
 }
@@ -289,15 +292,20 @@ fn spl_token_forwarder_wrap_external_payload(
     let signing_key = SigningKey::from_bytes(&seed);
     let user_pubkey = signing_key.verifying_key().to_bytes();
 
-    let token_mint = sha256_hash(b"spl_token_forwarder_test_mint");
+    // Deterministic token mint keypair — test recreates via Keypair.fromSeed(mint_seed)
+    let mint_seed = sha256_hash(b"spl_token_forwarder_test_mint");
+    let mint_signing_key = SigningKey::from_bytes(&mint_seed);
+    let token_mint: [u8; 32] = mint_signing_key.verifying_key().to_bytes();
 
     let amount: u64 = 100_000_000; // 100 tokens (6 decimals)
     let nonce: u64 = 1;
     let deadline: i64 = 4_102_444_800; // year 2100
     let action_tree_root_bytes = action_tree_root.as_bytes();
 
-    // Wrap message: SHA256(token_mint || amount || nonce || deadline || action_tree_root)
-    let mut message = Vec::with_capacity(88);
+    // SHA256(forwarder_id || token_mint || amount || nonce || deadline || action_tree_root)
+    // forwarder_id provides domain separation (like EIP-712 verifyingContract)
+    let mut message = Vec::with_capacity(120);
+    message.extend_from_slice(&program_id);
     message.extend_from_slice(&token_mint);
     message.extend_from_slice(&amount.to_le_bytes());
     message.extend_from_slice(&nonce.to_le_bytes());
@@ -308,7 +316,11 @@ fn spl_token_forwarder_wrap_external_payload(
     let signature = signing_key.sign(&message_hash);
     let signature_bytes = signature.to_bytes();
 
-    let logic_ref = sha256_hash(b"spl_token_forwarder_test_logic_ref");
+    // Logic ref must match what's in the transaction (PASSTHROUGH_LOGIC_GUEST_ID)
+    let logic_ref: [u8; 32] = {
+        let digest: risc0_zkvm::sha::Digest = PASSTHROUGH_LOGIC_GUEST_ID.into();
+        digest.as_bytes().try_into().unwrap()
+    };
 
     // Wrap input: op(1) + token_mint(32) + amount(8) + user(32) + nonce(8) + deadline(8) + action_tree_root(32) + signature(64) + ed25519_ix_index(1) = 186 bytes
     let mut input = Vec::with_capacity(186);
@@ -338,6 +350,7 @@ fn spl_token_forwarder_wrap_external_payload(
     let metadata = SplTokenWrapMetadata {
         user_secret_key_b64: BASE64.encode(seed),
         user_pubkey_b64: BASE64.encode(user_pubkey),
+        mint_seed_b64: BASE64.encode(mint_seed),
         token_mint_b58: encode_base58(&token_mint),
         amount,
         nonce,
@@ -355,9 +368,19 @@ fn spl_token_forwarder_unwrap_external_payload(
 ) -> Result<(ExpirableBlob, SplTokenUnwrapMetadata)> {
     let program_id = decode_base58_32(SPL_TOKEN_FORWARDER_PROGRAM_ID)?;
 
-    let token_mint = sha256_hash(b"spl_token_forwarder_test_mint");
-    let recipient = sha256_hash(b"spl_token_forwarder_test_recipient");
-    let logic_ref = sha256_hash(b"spl_token_forwarder_test_logic_ref");
+    let mint_seed = sha256_hash(b"spl_token_forwarder_test_mint");
+    let mint_signing_key = SigningKey::from_bytes(&mint_seed);
+    let token_mint: [u8; 32] = mint_signing_key.verifying_key().to_bytes();
+
+    let recipient_seed = sha256_hash(b"spl_token_forwarder_test_recipient");
+    let recipient_signing_key = SigningKey::from_bytes(&recipient_seed);
+    let recipient: [u8; 32] = recipient_signing_key.verifying_key().to_bytes();
+
+    let logic_ref: [u8; 32] = {
+        let digest: risc0_zkvm::sha::Digest = PASSTHROUGH_LOGIC_GUEST_ID.into();
+        digest.as_bytes().try_into().unwrap()
+    };
+
     let amount: u64 = 50_000_000; // 50 tokens
 
     // Unwrap input: op(1) + token_mint(32) + amount(8) + recipient(32) = 73 bytes
@@ -381,8 +404,10 @@ fn spl_token_forwarder_unwrap_external_payload(
     });
 
     let metadata = SplTokenUnwrapMetadata {
+        mint_seed_b64: BASE64.encode(mint_seed),
         token_mint_b58: encode_base58(&token_mint),
         amount,
+        recipient_seed_b64: BASE64.encode(recipient_seed),
         recipient_b58: encode_base58(&recipient),
         logic_ref_b64: BASE64.encode(logic_ref),
     };
