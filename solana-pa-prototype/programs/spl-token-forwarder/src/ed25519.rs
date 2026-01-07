@@ -30,7 +30,7 @@ use crate::ErrorCode;
 ///   - message_data_size: u16
 ///   - message_instruction_index: u16
 /// - Then the actual data (signature, pubkey, message) at the specified offsets
-const SIGNATURE_OFFSETS_SERIALIZED_SIZE: usize = 14; // 7 x u16
+pub const SIGNATURE_OFFSETS_SERIALIZED_SIZE: usize = 14; // 7 x u16
 
 /// Verify that an Ed25519 signature verification instruction exists at the specified index
 /// and that it verifies the expected pubkey and message.
@@ -173,20 +173,4 @@ pub fn verify_ed25519_instruction(
 
     msg!("Ed25519 signature verification passed");
     Ok(())
-}
-
-// =============================================================================
-// Tests
-// =============================================================================
-
-#[cfg(test)]
-mod tests {
-    // Ed25519 instruction introspection is difficult to unit test
-    // without mocking the sysvar. Integration tests will cover this.
-
-    #[test]
-    fn test_offset_size() {
-        // Verify our constant matches the expected size
-        assert_eq!(super::SIGNATURE_OFFSETS_SERIALIZED_SIZE, 14);
-    }
 }
