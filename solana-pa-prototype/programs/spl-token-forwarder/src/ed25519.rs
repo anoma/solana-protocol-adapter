@@ -61,6 +61,8 @@ pub enum Ed25519ParseError {
     NoSignatures,
     /// Data references external instruction (not 0xFFFF)
     ExternalDataReference,
+    /// Signature data is out of bounds
+    SignatureOutOfBounds,
     /// Pubkey data is out of bounds
     PubkeyOutOfBounds,
     /// Message data is out of bounds
@@ -79,6 +81,7 @@ impl From<Ed25519ParseError> for ErrorCode {
             Ed25519ParseError::InstructionTooShort => ErrorCode::InvalidEd25519Instruction,
             Ed25519ParseError::NoSignatures => ErrorCode::InvalidEd25519Instruction,
             Ed25519ParseError::ExternalDataReference => ErrorCode::InvalidEd25519Instruction,
+            Ed25519ParseError::SignatureOutOfBounds => ErrorCode::InvalidEd25519Instruction,
             Ed25519ParseError::PubkeyOutOfBounds => ErrorCode::InvalidEd25519Instruction,
             Ed25519ParseError::MessageOutOfBounds => ErrorCode::InvalidEd25519Instruction,
             Ed25519ParseError::InvalidMessageSize => ErrorCode::Ed25519MessageMismatch,
@@ -178,7 +181,12 @@ pub fn validate_ed25519_data(
     expected_pubkey: &[u8; 32],
     expected_message: &[u8; 32],
 ) -> core::result::Result<(), Ed25519ParseError> {
-    // Validate pubkey bounds
+    // Validate signature bounds (64 bytes)
+    if offsets.signature_offset + 64 > ix_data.len() {
+        return Err(Ed25519ParseError::SignatureOutOfBounds);
+    }
+
+    // Validate pubkey bounds (32 bytes)
     if offsets.pubkey_offset + 32 > ix_data.len() {
         return Err(Ed25519ParseError::PubkeyOutOfBounds);
     }

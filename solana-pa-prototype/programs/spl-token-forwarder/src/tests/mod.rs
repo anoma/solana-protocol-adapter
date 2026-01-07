@@ -6,3 +6,4 @@
 mod lib_tests;
 mod ed25519_tests;
 mod state_tests;
+mod forwarder_tests;

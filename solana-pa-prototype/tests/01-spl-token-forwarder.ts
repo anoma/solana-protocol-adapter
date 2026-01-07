@@ -21,6 +21,7 @@ import { assert } from "chai";
 import { createHash } from "crypto";
 import * as nacl from "tweetnacl";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
+import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 
 // Constants
 const SPL_TOKEN_FORWARDER_PROGRAM_ID = new PublicKey("6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1");
@@ -39,30 +40,50 @@ function deriveEscrowPda(programId: PublicKey, tokenMint: PublicKey): [PublicKey
   );
 }
 
-function deriveNoncePda(programId: PublicKey, user: PublicKey, nonce: bigint): [PublicKey, number] {
-  const nonceBuffer = Buffer.alloc(8);
-  nonceBuffer.writeBigUInt64LE(nonce);
+// Derive nonce bitmap PDA (Permit2-style bitmap pattern)
+// Each PDA covers 256 nonces (one u256 word)
+function deriveNonceBitmapPda(programId: PublicKey, user: PublicKey, nonce: bigint): [PublicKey, number] {
+  // Calculate word index (each word covers 256 nonces)
+  const NONCES_PER_WORD = 256n;
+  const wordIndex = nonce / NONCES_PER_WORD;
+  const wordIndexBuffer = Buffer.alloc(8);
+  wordIndexBuffer.writeBigUInt64LE(wordIndex);
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("nonce"), user.toBuffer(), nonceBuffer],
+    [Buffer.from("nonce_bitmap"), user.toBuffer(), wordIndexBuffer],
     programId
   );
 }
 
+function derivePaStatePda(paProgram: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([Buffer.from("pa_state")], paProgram);
+}
+
 // Helper to create wrap message hash
+// Must match Rust WrapMessage::to_bytes() for Ed25519 signature verification
 function createWrapMessageHash(
+  forwarderId: PublicKey, // Forwarder program ID for domain separation
   tokenMint: PublicKey,
   amount: bigint,
   nonce: bigint,
   deadline: bigint,
   actionTreeRoot: Buffer
 ): Buffer {
-  // Layout: token_mint(32) + amount(8) + nonce(8) + deadline(8) + action_tree_root(32) = 88 bytes
-  const message = Buffer.alloc(88);
-  tokenMint.toBuffer().copy(message, 0);
-  message.writeBigUInt64LE(amount, 32);
-  message.writeBigUInt64LE(nonce, 40);
-  message.writeBigInt64LE(deadline, 48);
-  actionTreeRoot.copy(message, 56);
+  // Layout (120 bytes - matches Rust WrapMessage):
+  // | Offset | Size | Field            |
+  // |--------|------|------------------|
+  // | 0      | 32   | forwarder_id     |
+  // | 32     | 32   | token_mint       |
+  // | 64     | 8    | amount (u64 LE)  |
+  // | 72     | 8    | nonce (u64 LE)   |
+  // | 80     | 8    | deadline (i64 LE)|
+  // | 88     | 32   | action_tree_root |
+  const message = Buffer.alloc(120);
+  forwarderId.toBuffer().copy(message, 0);
+  tokenMint.toBuffer().copy(message, 32);
+  message.writeBigUInt64LE(amount, 64);
+  message.writeBigUInt64LE(nonce, 72);
+  message.writeBigInt64LE(deadline, 80);
+  actionTreeRoot.copy(message, 88);
 
   // SHA-256 hash
   return createHash("sha256").update(message).digest();
@@ -137,16 +158,17 @@ async function airdrop(provider: anchor.AnchorProvider, to: PublicKey, sol: numb
   await provider.connection.confirmTransaction(sig, "confirmed");
 }
 
+
 describe("spl-token-forwarder", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  // We'll use the program from the workspace
+  // We'll use the programs from the workspace
   let program: Program<SplTokenForwarder>;
+  let paProgram: Program<SolanaPaPrototype>;
 
   // Test accounts
   let authority: Keypair;
-  let protocolAdapter: Keypair;
   let emergencyCommittee: Keypair;
   let emergencyCaller: Keypair;
   let user: Keypair;
@@ -163,24 +185,29 @@ describe("spl-token-forwarder", () => {
   let configBump: number;
   let escrowPda: PublicKey;
   let escrowBump: number;
+  let paStatePda: PublicKey;
 
   // Logic ref for this forwarder
   let logicRef: Buffer;
 
+  // Track if PA is initialized (verified by 00-setup.ts)
+  let paInitialized = false;
+
   before(async () => {
-    // Load program
+    // Load programs
     try {
       program = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
+      paProgram = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
     } catch (e) {
-      console.log("SPL Token Forwarder program not found in workspace, skipping tests");
+      console.log("Programs not found in workspace, skipping tests");
       return;
     }
 
     // Generate keypairs
+    // Use deterministic keypairs for emergency committee/caller so they match across test files
     authority = Keypair.generate();
-    protocolAdapter = Keypair.generate();
-    emergencyCommittee = Keypair.generate();
-    emergencyCaller = Keypair.generate();
+    emergencyCommittee = Keypair.fromSeed(createHash("sha256").update("emergency_committee_seed").digest());
+    emergencyCaller = Keypair.fromSeed(createHash("sha256").update("emergency_caller_seed").digest());
     user = Keypair.generate();
     recipient = Keypair.generate();
 
@@ -193,6 +220,16 @@ describe("spl-token-forwarder", () => {
 
     // Derive PDAs
     [configPda, configBump] = deriveConfigPda(program.programId);
+    // Use real PA program ID for PA state derivation
+    [paStatePda] = derivePaStatePda(paProgram.programId);
+
+    // Verify PA is initialized (done by 00-setup.ts)
+    try {
+      await paProgram.account.paStateAccount.fetch(paStatePda);
+      paInitialized = true;
+    } catch {
+      throw new Error("PA not initialized - 00-setup.ts should have initialized it");
+    }
 
     // Set logic_ref for standalone tests - must match fixture-gen's value
     // fixture-gen uses: SHA256("spl_token_forwarder_test_logic_ref")
@@ -239,7 +276,7 @@ describe("spl-token-forwarder", () => {
       if (!program) return;
 
       await program.methods
-        .initialize(protocolAdapter.publicKey, Array.from(logicRef), emergencyCommittee.publicKey)
+        .initialize(paProgram.programId, Array.from(logicRef), emergencyCommittee.publicKey)
         .accounts({
           authority: authority.publicKey,
           // config: auto-derived from PDA seeds
@@ -250,15 +287,45 @@ describe("spl-token-forwarder", () => {
 
       // Fetch and verify config
       const config = await program.account.config.fetch(configPda);
-      assert.ok(config.protocolAdapter.equals(protocolAdapter.publicKey));
+      assert.ok(config.protocolAdapter.equals(paProgram.programId));
       assert.deepEqual(config.logicRef, Array.from(logicRef));
       assert.ok(config.emergencyCommittee.equals(emergencyCommittee.publicKey));
       assert.ok(config.emergencyCaller.equals(PublicKey.default));
-      assert.equal(config.isStopped, false);
+      // Note: Forwarder doesn't have its own is_stopped field (mirrors EVM)
+      // Emergency stopped state is read from PA via is_pa_emergency_stopped()
+    });
+
+    // Mirrors: test_getProtocolAdapter_returns_the_protocol_adapter_address
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/ForwarderBase.t.sol
+    it("stores correct protocol adapter address", async () => {
+      if (!program) return;
+
+      const config = await program.account.config.fetch(configPda);
+      assert.ok(config.protocolAdapter.equals(paProgram.programId));
+    });
+
+    // Mirrors: test_getLogicRef_returns_the_logic_ref
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/ForwarderBase.t.sol
+    it("stores correct logic ref", async () => {
+      if (!program) return;
+
+      const config = await program.account.config.fetch(configPda);
+      assert.deepEqual(config.logicRef, Array.from(logicRef));
+    });
+
+    // Mirrors: test_emergencyCaller_returns_zero_if_the_emergency_caller_has_not_been_set
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/EmergencyMigratableForwarderBase.t.sol
+    it("initializes emergency caller to zero address", async () => {
+      if (!program) return;
+
+      const config = await program.account.config.fetch(configPda);
+      assert.ok(config.emergencyCaller.equals(PublicKey.default));
     });
   });
 
   describe("wrap", () => {
+    // Mirrors: test_wrap_pulls_funds_from_user
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
     it("wraps tokens with valid Ed25519 signature", async () => {
       if (!program) return;
 
@@ -268,8 +335,8 @@ describe("spl-token-forwarder", () => {
       const actionTreeRoot = Buffer.alloc(32);
       actionTreeRoot.fill(0xaa);
 
-      // Create message hash
-      const messageHash = createWrapMessageHash(tokenMint, amount, nonce, deadline, actionTreeRoot);
+      // Create message hash (includes forwarder program ID for domain separation)
+      const messageHash = createWrapMessageHash(program.programId, tokenMint, amount, nonce, deadline, actionTreeRoot);
 
       // Sign with user's Ed25519 keypair
       const signature = nacl.sign.detached(messageHash, user.secretKey);
@@ -278,7 +345,7 @@ describe("spl-token-forwarder", () => {
       await approve(provider.connection, user, userAta, escrowPda, user, Number(amount));
 
       // Derive nonce PDA
-      const [noncePda] = deriveNoncePda(program.programId, user.publicKey, nonce);
+      const [nonceBitmapPda] = deriveNonceBitmapPda(program.programId, user.publicKey, nonce);
 
       // Create Ed25519 verify instruction (must be first in transaction)
       const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
@@ -307,13 +374,13 @@ describe("spl-token-forwarder", () => {
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
         .accounts({
-          caller: protocolAdapter.publicKey, // Must match config.protocol_adapter
+          caller: paProgram.programId, // Must match config.protocol_adapter
         })
         .remainingAccounts([
           { pubkey: userAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
           { pubkey: escrowPda, isSigner: false, isWritable: false },
-          { pubkey: noncePda, isSigner: false, isWritable: true },
+          { pubkey: nonceBitmapPda, isSigner: false, isWritable: true },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           { pubkey: user.publicKey, isSigner: true, isWritable: true }, // payer for nonce PDA
@@ -335,6 +402,8 @@ describe("spl-token-forwarder", () => {
       assert.equal(userAccount.amount.toString(), (1000_000_000n - amount).toString());
     });
 
+    // Mirrors: test_wrap_reverts_if_the_signature_expired
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
     it("rejects wrap with expired deadline", async () => {
       if (!program) return;
 
@@ -343,12 +412,12 @@ describe("spl-token-forwarder", () => {
       const deadline = BigInt(Math.floor(Date.now() / 1000) - 3600); // 1 hour ago (expired)
       const actionTreeRoot = Buffer.alloc(32);
 
-      const messageHash = createWrapMessageHash(tokenMint, amount, nonce, deadline, actionTreeRoot);
+      const messageHash = createWrapMessageHash(program.programId, tokenMint, amount, nonce, deadline, actionTreeRoot);
       const signature = nacl.sign.detached(messageHash, user.secretKey);
 
       await approve(provider.connection, user, userAta, escrowPda, user, Number(amount));
 
-      const [noncePda] = deriveNoncePda(program.programId, user.publicKey, nonce);
+      const [nonceBitmapPda] = deriveNonceBitmapPda(program.programId, user.publicKey, nonce);
 
       const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
         publicKey: user.publicKey.toBytes(),
@@ -373,13 +442,13 @@ describe("spl-token-forwarder", () => {
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
         .accounts({
-          caller: protocolAdapter.publicKey,
+          caller: paProgram.programId,
         })
         .remainingAccounts([
           { pubkey: userAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
           { pubkey: escrowPda, isSigner: false, isWritable: false },
-          { pubkey: noncePda, isSigner: false, isWritable: true },
+          { pubkey: nonceBitmapPda, isSigner: false, isWritable: true },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           { pubkey: user.publicKey, isSigner: true, isWritable: true },
@@ -397,6 +466,8 @@ describe("spl-token-forwarder", () => {
       }
     });
 
+    // Mirrors: test_wrap_reverts_if_the_signature_was_already_used
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
     it("rejects wrap with already used nonce", async () => {
       if (!program) return;
 
@@ -405,12 +476,12 @@ describe("spl-token-forwarder", () => {
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
       const actionTreeRoot = Buffer.alloc(32);
 
-      const messageHash = createWrapMessageHash(tokenMint, amount, nonce, deadline, actionTreeRoot);
+      const messageHash = createWrapMessageHash(program.programId, tokenMint, amount, nonce, deadline, actionTreeRoot);
       const signature = nacl.sign.detached(messageHash, user.secretKey);
 
       await approve(provider.connection, user, userAta, escrowPda, user, Number(amount));
 
-      const [noncePda] = deriveNoncePda(program.programId, user.publicKey, nonce);
+      const [nonceBitmapPda] = deriveNonceBitmapPda(program.programId, user.publicKey, nonce);
 
       const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
         publicKey: user.publicKey.toBytes(),
@@ -435,13 +506,13 @@ describe("spl-token-forwarder", () => {
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
         .accounts({
-          caller: protocolAdapter.publicKey,
+          caller: paProgram.programId,
         })
         .remainingAccounts([
           { pubkey: userAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
           { pubkey: escrowPda, isSigner: false, isWritable: false },
-          { pubkey: noncePda, isSigner: false, isWritable: true },
+          { pubkey: nonceBitmapPda, isSigner: false, isWritable: true },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           { pubkey: user.publicKey, isSigner: true, isWritable: true },
@@ -458,9 +529,118 @@ describe("spl-token-forwarder", () => {
         assert.include(e.toString(), "NonceAlreadyUsed");
       }
     });
+
+    // Mirrors: test_wrap_does_not_revert_if_the_amount_is_zero
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
+    it("wrap succeeds with zero amount", async () => {
+      if (!program) return;
+
+      const amount = BigInt(0); // Zero amount
+      const nonce = BigInt(100); // Fresh nonce
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+      const actionTreeRoot = Buffer.alloc(32);
+
+      const messageHash = createWrapMessageHash(program.programId, tokenMint, amount, nonce, deadline, actionTreeRoot);
+      const signature = nacl.sign.detached(messageHash, user.secretKey);
+
+      // Approve escrow PDA as delegate (even though amount is 0)
+      await approve(provider.connection, user, userAta, escrowPda, user, 0);
+
+      const [nonceBitmapPda] = deriveNonceBitmapPda(program.programId, user.publicKey, nonce);
+
+      const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+        publicKey: user.publicKey.toBytes(),
+        message: messageHash,
+        signature: Buffer.from(signature),
+      });
+
+      const wrapInput = encodeWrapInput(
+        tokenMint,
+        amount,
+        user.publicKey,
+        nonce,
+        deadline,
+        actionTreeRoot,
+        Buffer.from(signature),
+        0
+      );
+
+      const userBalanceBefore = (await getAccount(provider.connection, userAta)).amount;
+      const escrowBalanceBefore = (await getAccount(provider.connection, escrowAta)).amount;
+
+      const tx = new Transaction();
+      tx.add(ed25519Ix);
+
+      const forwardCallIx = await program.methods
+        .forwardCall(Array.from(logicRef), wrapInput)
+        .accounts({
+          caller: paProgram.programId,
+        })
+        .remainingAccounts([
+          { pubkey: userAta, isSigner: false, isWritable: true },
+          { pubkey: escrowAta, isSigner: false, isWritable: true },
+          { pubkey: escrowPda, isSigner: false, isWritable: false },
+          { pubkey: nonceBitmapPda, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: user.publicKey, isSigner: true, isWritable: true },
+          { pubkey: tokenMint, isSigner: false, isWritable: false },
+        ])
+        .instruction();
+
+      tx.add(forwardCallIx);
+
+      // Should succeed even with zero amount
+      await provider.sendAndConfirm(tx, [user]);
+
+      // Balances should be unchanged
+      const userBalanceAfter = (await getAccount(provider.connection, userAta)).amount;
+      const escrowBalanceAfter = (await getAccount(provider.connection, escrowAta)).amount;
+
+      assert.equal(userBalanceBefore.toString(), userBalanceAfter.toString());
+      assert.equal(escrowBalanceBefore.toString(), escrowBalanceAfter.toString());
+    });
+
+    // Mirrors: test_wrap_reverts_if_the_input_length_is_wrong
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
+    it("rejects wrap with wrong input length", async () => {
+      if (!program) return;
+
+      // Create input that's too short (missing fields)
+      const shortInput = Buffer.alloc(50);
+      shortInput.writeUInt8(OP_WRAP, 0);
+
+      try {
+        await program.methods
+          .forwardCall(Array.from(logicRef), shortInput)
+          .accounts({
+            caller: paProgram.programId,
+          })
+          .remainingAccounts([
+            { pubkey: userAta, isSigner: false, isWritable: true },
+            { pubkey: escrowAta, isSigner: false, isWritable: true },
+            { pubkey: escrowPda, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: tokenMint, isSigner: false, isWritable: false },
+          ])
+          .rpc();
+        assert.fail("Expected transaction to fail");
+      } catch (e: any) {
+        // The program returns InvalidWrapInputLength or InvalidUnwrapInputLength (specific errors)
+        const errStr = e.toString();
+        assert.ok(
+          errStr.includes("InvalidWrapInputLength") ||
+          errStr.includes("InvalidUnwrapInputLength") ||
+          errStr.includes("InvalidInputLength"),
+          `Expected input length error, got: ${errStr.substring(0, 100)}`
+        );
+      }
+    });
   });
 
   describe("unwrap", () => {
+    // Mirrors: test_unwrap_sends_funds_to_the_user
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
     it("unwraps tokens to recipient", async () => {
       if (!program) return;
 
@@ -477,7 +657,7 @@ describe("spl-token-forwarder", () => {
       await program.methods
         .forwardCall(Array.from(logicRef), unwrapInput)
         .accounts({
-          caller: protocolAdapter.publicKey,
+          caller: paProgram.programId,
         })
         .remainingAccounts([
           { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -501,110 +681,85 @@ describe("spl-token-forwarder", () => {
         (BigInt(recipientBefore.amount.toString()) + amount).toString()
       );
     });
-  });
 
-  describe("emergency operations", () => {
-    it("allows emergency committee to stop forwarder", async () => {
+    // Mirrors: test_unwrap_does_not_revert_if_the_amount_is_zero
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
+    it("unwrap succeeds with zero amount", async () => {
       if (!program) return;
 
-      // First verify not stopped
-      let config = await program.account.config.fetch(configPda);
-      assert.equal(config.isStopped, false);
+      const amount = BigInt(0); // Zero amount
 
-      // Emergency stop
-      await program.methods
-        .emergencyStop()
-        .accounts({
-          committee: emergencyCommittee.publicKey,
-        })
-        .signers([emergencyCommittee])
-        .rpc();
-
-      // Verify stopped
-      config = await program.account.config.fetch(configPda);
-      assert.equal(config.isStopped, true);
-    });
-
-    it("allows emergency committee to set emergency caller (when stopped)", async () => {
-      if (!program) return;
-
-      await program.methods
-        .setEmergencyCaller(emergencyCaller.publicKey)
-        .accounts({
-          committee: emergencyCommittee.publicKey,
-        })
-        .signers([emergencyCommittee])
-        .rpc();
-
-      const config = await program.account.config.fetch(configPda);
-      assert.ok(config.emergencyCaller.equals(emergencyCaller.publicKey));
-    });
-
-    it("rejects setting emergency caller twice", async () => {
-      if (!program) return;
-
-      const anotherCaller = Keypair.generate();
-
-      try {
-        await program.methods
-          .setEmergencyCaller(anotherCaller.publicKey)
-          .accounts({
-            committee: emergencyCommittee.publicKey,
-            // config: auto-derived from PDA seeds
-          })
-          .signers([emergencyCommittee])
-          .rpc();
-        assert.fail("Expected transaction to fail");
-      } catch (e: any) {
-        assert.include(e.toString(), "EmergencyCallerAlreadySet");
-      }
-    });
-
-    it("allows emergency caller to withdraw", async () => {
-      if (!program) return;
-
-      const amount = BigInt(25_000_000); // 25 tokens
-
-      // Encode emergency withdraw: op(1) + token_mint(32) + amount(8) + recipient(32) = 73 bytes
-      const input = Buffer.alloc(73);
-      input.writeUInt8(0, 0); // OP_EMERGENCY_WITHDRAW
-      tokenMint.toBuffer().copy(input, 1);
-      input.writeBigUInt64LE(amount, 33);
-      recipient.publicKey.toBuffer().copy(input, 41);
+      const unwrapInput = encodeUnwrapInput(tokenMint, amount, recipient.publicKey);
 
       const escrowBefore = await getAccount(provider.connection, escrowAta);
       const recipientBefore = await getAccount(provider.connection, recipientAta);
 
+      // Should succeed even with zero amount
       await program.methods
-        .forwardEmergencyCall(input)
+        .forwardCall(Array.from(logicRef), unwrapInput)
         .accounts({
-          caller: emergencyCaller.publicKey,
-          // config: auto-derived from PDA seeds
+          caller: paProgram.programId,
         })
         .remainingAccounts([
           { pubkey: escrowAta, isSigner: false, isWritable: true },
           { pubkey: recipientAta, isSigner: false, isWritable: true },
           { pubkey: escrowPda, isSigner: false, isWritable: false },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: tokenMint, isSigner: false, isWritable: false },
         ])
-        .signers([emergencyCaller])
         .rpc();
 
+      // Balances should be unchanged
       const escrowAfter = await getAccount(provider.connection, escrowAta);
       const recipientAfter = await getAccount(provider.connection, recipientAta);
 
-      assert.equal(
-        escrowAfter.amount.toString(),
-        (BigInt(escrowBefore.amount.toString()) - amount).toString()
-      );
-      assert.equal(
-        recipientAfter.amount.toString(),
-        (BigInt(recipientBefore.amount.toString()) + amount).toString()
-      );
+      assert.equal(escrowBefore.amount.toString(), escrowAfter.amount.toString());
+      assert.equal(recipientBefore.amount.toString(), recipientAfter.amount.toString());
+    });
+
+    // Mirrors: test_unwrap_reverts_if_the_input_length_is_wrong
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
+    it("rejects unwrap with wrong input length", async () => {
+      if (!program) return;
+
+      // Create input that's too short (missing recipient field)
+      const shortInput = Buffer.alloc(45);
+      shortInput.writeUInt8(OP_UNWRAP, 0);
+      tokenMint.toBuffer().copy(shortInput, 1);
+      shortInput.writeBigUInt64LE(BigInt(1000), 33);
+      // Missing recipient field
+
+      try {
+        await program.methods
+          .forwardCall(Array.from(logicRef), shortInput)
+          .accounts({
+            caller: paProgram.programId,
+          })
+          .remainingAccounts([
+            { pubkey: escrowAta, isSigner: false, isWritable: true },
+            { pubkey: recipientAta, isSigner: false, isWritable: true },
+            { pubkey: escrowPda, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: tokenMint, isSigner: false, isWritable: false },
+          ])
+          .rpc();
+        assert.fail("Expected transaction to fail");
+      } catch (e: any) {
+        // The program returns InvalidWrapInputLength or InvalidUnwrapInputLength (specific errors)
+        const errStr = e.toString();
+        assert.ok(
+          errStr.includes("InvalidWrapInputLength") ||
+          errStr.includes("InvalidUnwrapInputLength") ||
+          errStr.includes("InvalidInputLength"),
+          `Expected input length error, got: ${errStr.substring(0, 100)}`
+        );
+      }
     });
   });
 
   describe("error conditions", () => {
+    // Mirrors: test_forwardCall_reverts_if_the_logic_ref_mismatches
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/ForwarderBase.t.sol
     it("rejects forward_call with wrong logic_ref", async () => {
       if (!program) return;
 
@@ -617,7 +772,7 @@ describe("spl-token-forwarder", () => {
         await program.methods
           .forwardCall(Array.from(wrongLogicRef), unwrapInput)
           .accounts({
-            caller: protocolAdapter.publicKey,
+            caller: paProgram.programId,
           })
           .remainingAccounts([
             { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -630,6 +785,170 @@ describe("spl-token-forwarder", () => {
         assert.fail("Expected transaction to fail");
       } catch (e: any) {
         assert.include(e.toString(), "UnauthorizedLogicRef");
+      }
+    });
+
+    // Mirrors: test_forwardCall_reverts_if_the_pa_is_not_the_caller
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/ForwarderBase.t.sol
+    it("rejects forward_call from non-PA caller", async () => {
+      if (!program) return;
+
+      const unauthorizedCaller = Keypair.generate();
+      await airdrop(provider, unauthorizedCaller.publicKey, 1);
+
+      const unwrapInput = encodeUnwrapInput(tokenMint, BigInt(1000), recipient.publicKey);
+
+      try {
+        await program.methods
+          .forwardCall(Array.from(logicRef), unwrapInput)
+          .accounts({
+            caller: unauthorizedCaller.publicKey, // Wrong caller - not the PA
+          })
+          .remainingAccounts([
+            { pubkey: escrowAta, isSigner: false, isWritable: true },
+            { pubkey: recipientAta, isSigner: false, isWritable: true },
+            { pubkey: escrowPda, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: tokenMint, isSigner: false, isWritable: false },
+          ])
+          .rpc();
+        assert.fail("Expected transaction to fail");
+      } catch (e: any) {
+        assert.include(e.toString(), "UnauthorizedCaller");
+      }
+    });
+
+    // Mirrors: test_forwardCall_reverts_on_invalid_calltype
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
+    it("rejects forward_call with invalid op code", async () => {
+      if (!program) return;
+
+      // Create input with invalid op code (not 0 or 1)
+      const invalidInput = Buffer.alloc(73);
+      invalidInput.writeUInt8(99, 0); // Invalid op code
+      tokenMint.toBuffer().copy(invalidInput, 1);
+      invalidInput.writeBigUInt64LE(BigInt(1000), 33);
+      recipient.publicKey.toBuffer().copy(invalidInput, 41);
+
+      try {
+        await program.methods
+          .forwardCall(Array.from(logicRef), invalidInput)
+          .accounts({
+            caller: paProgram.programId,
+          })
+          .remainingAccounts([
+            { pubkey: escrowAta, isSigner: false, isWritable: true },
+            { pubkey: recipientAta, isSigner: false, isWritable: true },
+            { pubkey: escrowPda, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: tokenMint, isSigner: false, isWritable: false },
+          ])
+          .rpc();
+        assert.fail("Expected transaction to fail");
+      } catch (e: any) {
+        assert.include(e.toString(), "UnknownOperation");
+      }
+    });
+
+    // Mirrors: test_wrap_reverts_if_user_did_not_approve_permit2
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
+    it("rejects wrap without delegate approval", async () => {
+      if (!program) return;
+
+      // Create a new user without any delegate approval
+      const newUser = Keypair.generate();
+      await airdrop(provider, newUser.publicKey, 2);
+
+      // Create token account and mint tokens
+      const newUserAta = await createAccount(
+        provider.connection,
+        newUser,
+        tokenMint,
+        newUser.publicKey
+      );
+      await mintTo(provider.connection, authority, tokenMint, newUserAta, authority, 100_000_000);
+
+      const amount = BigInt(50_000_000);
+      const nonce = BigInt(999); // Fresh nonce
+      const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+      const actionTreeRoot = Buffer.alloc(32);
+
+      const messageHash = createWrapMessageHash(program.programId, tokenMint, amount, nonce, deadline, actionTreeRoot);
+      const signature = nacl.sign.detached(messageHash, newUser.secretKey);
+
+      // Note: NOT approving escrow PDA as delegate
+
+      const [nonceBitmapPda] = deriveNonceBitmapPda(program.programId, newUser.publicKey, nonce);
+
+      const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
+        publicKey: newUser.publicKey.toBytes(),
+        message: messageHash,
+        signature: Buffer.from(signature),
+      });
+
+      const wrapInput = encodeWrapInput(
+        tokenMint,
+        amount,
+        newUser.publicKey,
+        nonce,
+        deadline,
+        actionTreeRoot,
+        Buffer.from(signature),
+        0
+      );
+
+      const tx = new Transaction();
+      tx.add(ed25519Ix);
+
+      const forwardCallIx = await program.methods
+        .forwardCall(Array.from(logicRef), wrapInput)
+        .accounts({
+          caller: paProgram.programId,
+        })
+        .remainingAccounts([
+          { pubkey: newUserAta, isSigner: false, isWritable: true },
+          { pubkey: escrowAta, isSigner: false, isWritable: true },
+          { pubkey: escrowPda, isSigner: false, isWritable: false },
+          { pubkey: nonceBitmapPda, isSigner: false, isWritable: true },
+          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          { pubkey: newUser.publicKey, isSigner: true, isWritable: true },
+          { pubkey: tokenMint, isSigner: false, isWritable: false },
+        ])
+        .instruction();
+
+      tx.add(forwardCallIx);
+
+      try {
+        await provider.sendAndConfirm(tx, [newUser]);
+        assert.fail("Expected transaction to fail");
+      } catch (e: any) {
+        assert.include(e.toString(), "InsufficientDelegateApproval");
+      }
+    });
+
+    // Mirrors: test_setEmergencyCaller_reverts_if_the_caller_is_not_the_emergency_committee
+    // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/EmergencyMigratableForwarderBase.t.sol
+    it("rejects set_emergency_caller from non-committee", async () => {
+      if (!program) return;
+
+      const unauthorizedCommittee = Keypair.generate();
+      await airdrop(provider, unauthorizedCommittee.publicKey, 1);
+
+      const newCaller = Keypair.generate();
+
+      try {
+        await program.methods
+          .setEmergencyCaller(newCaller.publicKey)
+          .accounts({
+            committee: unauthorizedCommittee.publicKey, // Wrong committee
+            paState: paStatePda,
+          })
+          .signers([unauthorizedCommittee])
+          .rpc();
+        assert.fail("Expected transaction to fail");
+      } catch (e: any) {
+        assert.include(e.toString(), "UnauthorizedCaller");
       }
     });
   });

@@ -256,11 +256,13 @@ fn test_validate_data_pubkey_out_of_bounds() {
     let pubkey = [0xAA; 32];
     let message = [0xBB; 32];
 
-    // Create minimal data but with pubkey_offset pointing beyond the end
-    let mut data = vec![0u8; 50]; // Too small to contain pubkey at offset 80
+    // Create data large enough for signature (at 0, needs 64 bytes) but with pubkey out of bounds
+    // Signature at 0, needs 64 bytes → data must be >= 64
+    // Pubkey at 80, needs 112 bytes → out of bounds in 80-byte buffer
+    let mut data = vec![0u8; 80];
     data[0] = 1;
     data[4..6].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
-    data[6..8].copy_from_slice(&80u16.to_le_bytes()); // pubkey at 80, but data only 50 bytes
+    data[6..8].copy_from_slice(&80u16.to_le_bytes()); // pubkey at 80 - out of bounds!
     data[8..10].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
     data[10..12].copy_from_slice(&16u16.to_le_bytes()); // message at 16
     data[12..14].copy_from_slice(&32u16.to_le_bytes()); // message size
@@ -269,7 +271,7 @@ fn test_validate_data_pubkey_out_of_bounds() {
 
     let offsets = Ed25519Offsets {
         num_signatures: 1,
-        signature_offset: 16,
+        signature_offset: 0, // Signature at start (fits in 80 bytes)
         signature_ix_index: CURRENT_INSTRUCTION_INDEX,
         pubkey_offset: 80, // Out of bounds!
         pubkey_ix_index: CURRENT_INSTRUCTION_INDEX,
@@ -453,28 +455,62 @@ fn test_overlapping_pubkey_and_message() {
     let message = [0xBB; 32];
 
     // Both at same offset - should fail because data won't match both
-    let mut data = vec![0u8; 64];
+    // Signature at 0 fits in 64 bytes, pubkey and message at 64 overlap
+    let mut data = vec![0u8; 96]; // Large enough for signature (64) + pubkey/message area
     data[0] = 1;
     data[4..6].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
-    data[6..8].copy_from_slice(&16u16.to_le_bytes()); // pubkey at 16
+    data[6..8].copy_from_slice(&64u16.to_le_bytes()); // pubkey at 64
     data[8..10].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
-    data[10..12].copy_from_slice(&16u16.to_le_bytes()); // message also at 16!
+    data[10..12].copy_from_slice(&64u16.to_le_bytes()); // message also at 64!
     data[12..14].copy_from_slice(&32u16.to_le_bytes());
     data[14..16].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
-    data[16..48].copy_from_slice(&pubkey); // Put pubkey data there
+    data[64..96].copy_from_slice(&pubkey); // Put pubkey data there
 
     let offsets = Ed25519Offsets {
         num_signatures: 1,
-        signature_offset: 16,
+        signature_offset: 0, // Signature at start (fits in 64 bytes)
         signature_ix_index: CURRENT_INSTRUCTION_INDEX,
-        pubkey_offset: 16,
+        pubkey_offset: 64,
         pubkey_ix_index: CURRENT_INSTRUCTION_INDEX,
-        message_offset: 16, // Same as pubkey!
+        message_offset: 64, // Same as pubkey!
         message_size: 32,
         message_ix_index: CURRENT_INSTRUCTION_INDEX,
     };
 
-    // Should fail because the data at offset 16 can't match both pubkey and message
+    // Should fail because the data at offset 64 can't match both pubkey and message
     let result = validate_ed25519_data(&data, &offsets, &pubkey, &message);
     assert_eq!(result, Err(Ed25519ParseError::MessageMismatch));
+}
+
+#[test]
+fn test_validate_data_signature_out_of_bounds() {
+    let pubkey = [0xAA; 32];
+    let message = [0xBB; 32];
+
+    // Create data with signature offset pointing beyond end
+    let mut data = vec![0u8; 80]; // Too small for signature at offset 100
+    data[0] = 1;
+    data[2..4].copy_from_slice(&100u16.to_le_bytes()); // signature at 100 - out of bounds
+    data[4..6].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
+    data[6..8].copy_from_slice(&16u16.to_le_bytes()); // pubkey at 16
+    data[8..10].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
+    data[10..12].copy_from_slice(&48u16.to_le_bytes()); // message at 48
+    data[12..14].copy_from_slice(&32u16.to_le_bytes());
+    data[14..16].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
+    data[16..48].copy_from_slice(&pubkey);
+    data[48..80].copy_from_slice(&message);
+
+    let offsets = Ed25519Offsets {
+        num_signatures: 1,
+        signature_offset: 100, // Out of bounds!
+        signature_ix_index: CURRENT_INSTRUCTION_INDEX,
+        pubkey_offset: 16,
+        pubkey_ix_index: CURRENT_INSTRUCTION_INDEX,
+        message_offset: 48,
+        message_size: 32,
+        message_ix_index: CURRENT_INSTRUCTION_INDEX,
+    };
+
+    let result = validate_ed25519_data(&data, &offsets, &pubkey, &message);
+    assert_eq!(result, Err(Ed25519ParseError::SignatureOutOfBounds));
 }
