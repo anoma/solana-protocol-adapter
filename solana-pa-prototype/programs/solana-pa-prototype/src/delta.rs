@@ -11,8 +11,8 @@
 //! 4. Verify ECDSA signature using Solana secp256k1_recover syscall
 
 use crate::error::PAError;
-use crate::types::{Delta, Transaction};
 use crate::journal::parse_compliance_instance;
+use crate::types::{Delta, Transaction};
 
 use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::solana_program::secp256k1_recover::secp256k1_recover;

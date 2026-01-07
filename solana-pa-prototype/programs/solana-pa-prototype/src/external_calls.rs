@@ -268,4 +268,3 @@ pub fn execute_external_calls<'info>(
 
     Ok(())
 }
-

@@ -10,28 +10,30 @@ declare_id!("AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt");
 // Modules
 // =============================================================================
 
-pub mod types;
-pub mod merkle;
+pub mod delta;
 pub mod encoding;
-pub mod nullifier;
-pub mod root;
-pub mod txdata;
+pub mod error;
+pub mod external_calls;
 pub mod groth16;
 pub mod journal;
-pub mod external_calls;
-pub mod settle;
-pub mod error;
-pub mod state;
+pub mod merkle;
+pub mod nullifier;
 pub mod risc0_serde;
-pub mod delta;
+pub mod root;
+pub mod settle;
+pub mod state;
 #[cfg(test)]
 mod tests;
+pub mod txdata;
+pub mod types;
 
-use state::*;
 pub use error::PAError;
-use merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, MAX_TREE_DEPTH, PADDING_LEAF, ZEROS, hash_two};
-use types::{Digest, Transaction};
 use groth16::prepare_proof_for_verification;
+use merkle::{
+    hash_two, EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, MAX_TREE_DEPTH, PADDING_LEAF, ZEROS,
+};
+use state::*;
+use types::{Digest, Transaction};
 
 // =============================================================================
 // Program Instructions
@@ -159,7 +161,12 @@ pub mod solana_pa_prototype {
         txdata.expires_slot = expires_slot;
         txdata.payload = vec![0u8; capacity as usize];
 
-        msg!("TxData initialized: upload_id={}, capacity={}, expires_slot={}", upload_id, capacity, expires_slot);
+        msg!(
+            "TxData initialized: upload_id={}, capacity={}, expires_slot={}",
+            upload_id,
+            capacity,
+            expires_slot
+        );
         Ok(())
     }
 
@@ -192,10 +199,7 @@ pub mod solana_pa_prototype {
     /// Close a TxData account and reclaim rent.
     /// Authority can close at any time (not just after expiration).
     #[allow(unused_variables)]
-    pub fn txdata_close(
-        ctx: Context<TxDataClose>,
-        upload_id: u64,
-    ) -> Result<()> {
+    pub fn txdata_close(ctx: Context<TxDataClose>, upload_id: u64) -> Result<()> {
         // Account closure is handled by Anchor's close constraint
         msg!("TxData closed: upload_id={}", upload_id);
         Ok(())
@@ -219,17 +223,30 @@ pub mod solana_pa_prototype {
         let min_expires = clock.slot.saturating_add(pa_state.get_min_expiry_slots());
         let max_expires = clock.slot.saturating_add(pa_state.get_max_expiry_slots());
 
-        require!(new_expires_slot >= min_expires, PAError::TxDataExpiryTooSoon);
-        require!(new_expires_slot <= max_expires, PAError::TxDataExpiryTooLate);
+        require!(
+            new_expires_slot >= min_expires,
+            PAError::TxDataExpiryTooSoon
+        );
+        require!(
+            new_expires_slot <= max_expires,
+            PAError::TxDataExpiryTooLate
+        );
 
         // New expiry must be strictly greater than current (prevent no-op or shortening)
-        require!(new_expires_slot > txdata.expires_slot, PAError::TxDataExtendMustIncrease);
+        require!(
+            new_expires_slot > txdata.expires_slot,
+            PAError::TxDataExtendMustIncrease
+        );
 
         let old_expires = txdata.expires_slot;
         txdata.expires_slot = new_expires_slot;
 
-        msg!("TxData extended: upload_id={}, old_expires={}, new_expires={}",
-             upload_id, old_expires, new_expires_slot);
+        msg!(
+            "TxData extended: upload_id={}, old_expires={}, new_expires={}",
+            upload_id,
+            old_expires,
+            new_expires_slot
+        );
         Ok(())
     }
 
@@ -251,8 +268,12 @@ pub mod solana_pa_prototype {
         require!(clock.slot > txdata.expires_slot, PAError::TxDataNotExpired);
 
         // Account closure is handled by Anchor's close constraint
-        msg!("Expired TxData closed: upload_id={}, expires_slot={}, current_slot={}",
-             upload_id, txdata.expires_slot, clock.slot);
+        msg!(
+            "Expired TxData closed: upload_id={}, expires_slot={}, current_slot={}",
+            upload_id,
+            txdata.expires_slot,
+            clock.slot
+        );
         Ok(())
     }
 
@@ -265,14 +286,20 @@ pub mod solana_pa_prototype {
         new_max_expiry_slots: u64,
     ) -> Result<()> {
         // Validate: min < max
-        require!(new_min_expiry_slots < new_max_expiry_slots, PAError::InvalidExpiryConfig);
+        require!(
+            new_min_expiry_slots < new_max_expiry_slots,
+            PAError::InvalidExpiryConfig
+        );
 
         // Validate: reasonable minimum (at least 10 slots ~4 seconds)
         require!(new_min_expiry_slots >= 10, PAError::InvalidExpiryConfig);
 
         // Validate: reasonable maximum (no more than ~7 days)
         const SEVEN_DAYS_SLOTS: u64 = 7 * 24 * 60 * 60 * 1000 / 400; // ~1.5M slots
-        require!(new_max_expiry_slots <= SEVEN_DAYS_SLOTS, PAError::InvalidExpiryConfig);
+        require!(
+            new_max_expiry_slots <= SEVEN_DAYS_SLOTS,
+            PAError::InvalidExpiryConfig
+        );
 
         let state = &mut ctx.accounts.pa_state;
         let old_min = state.min_expiry_slots;
@@ -281,8 +308,13 @@ pub mod solana_pa_prototype {
         state.min_expiry_slots = new_min_expiry_slots;
         state.max_expiry_slots = new_max_expiry_slots;
 
-        msg!("Expiry config updated: min {} -> {}, max {} -> {}",
-             old_min, new_min_expiry_slots, old_max, new_max_expiry_slots);
+        msg!(
+            "Expiry config updated: min {} -> {}, max {} -> {}",
+            old_min,
+            new_min_expiry_slots,
+            old_max,
+            new_max_expiry_slots
+        );
         Ok(())
     }
 
@@ -335,7 +367,10 @@ pub mod solana_pa_prototype {
         let state = &mut ctx.accounts.pa_state;
         require!(!state.paused, PAError::AlreadyPaused);
         state.paused = true;
-        msg!("Emergency stop activated by {}", ctx.accounts.authority.key());
+        msg!(
+            "Emergency stop activated by {}",
+            ctx.accounts.authority.key()
+        );
         Ok(())
     }
 
@@ -343,11 +378,18 @@ pub mod solana_pa_prototype {
     ///
     /// This is equivalent to EVM Protocol Adapter's `transferOwnership()`.
     /// Single-step transfer (no pending/accept pattern) for EVM parity.
-    pub fn transfer_authority(ctx: Context<TransferAuthority>, new_authority: Pubkey) -> Result<()> {
+    pub fn transfer_authority(
+        ctx: Context<TransferAuthority>,
+        new_authority: Pubkey,
+    ) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         let old_authority = state.authority;
         state.authority = new_authority;
-        msg!("Authority transferred from {} to {}", old_authority, new_authority);
+        msg!(
+            "Authority transferred from {} to {}",
+            old_authority,
+            new_authority
+        );
         Ok(())
     }
 }
@@ -468,7 +510,11 @@ fn maybe_grow_account<'info>(
     // Resize the account data
     pa_state_info.resize(new_size)?;
 
-    msg!("Reallocated PAState: depth {} -> {}", state.depth(), target_depth);
+    msg!(
+        "Reallocated PAState: depth {} -> {}",
+        state.depth(),
+        target_depth
+    );
     Ok(())
 }
 
@@ -508,17 +554,26 @@ fn execute_settlement<'info>(
     verifier_entry: &AccountInfo<'info>,
     verifier_program: &AccountInfo<'info>,
 ) -> Result<()> {
-    use crate::encoding::{extract_tags_and_logic_refs, compute_action_tree_root};
+    use crate::encoding::{compute_action_tree_root, extract_tags_and_logic_refs};
     use crate::journal::parse_compliance_instance;
 
     // 1) State anchor check (supports historical roots)
     for (action_idx, action) in tx.actions.iter().enumerate() {
         for (cu_idx, cu) in action.compliance_units.iter().enumerate() {
-            msg!("Parsing compliance instance: action={}, cu={}", action_idx, cu_idx);
+            msg!(
+                "Parsing compliance instance: action={}, cu={}",
+                action_idx,
+                cu_idx
+            );
             let instance = parse_compliance_instance(&cu.instance)
                 .map_err(|_| error!(PAError::InvalidTransactionData))?;
             // Check if root is valid (current, PADDING_LEAF, or historical marker exists)
-            if !root::is_root_valid(state, pa_state_key, &instance.consumed_commitment_tree_root, remaining_accounts) {
+            if !root::is_root_valid(
+                state,
+                pa_state_key,
+                &instance.consumed_commitment_tree_root,
+                remaining_accounts,
+            ) {
                 return Err(error!(PAError::NonExistingRoot));
             }
         }
@@ -548,9 +603,13 @@ fn execute_settlement<'info>(
         msg!("Computing action data: action={}", action_idx);
         let (tags, logic_refs) = extract_tags_and_logic_refs(action)
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
-        let action_tree_root = compute_action_tree_root(&tags)
-            .map_err(|_| error!(PAError::InvalidTransactionData))?;
-        action_data.push(ActionData { tags, logic_refs, action_tree_root });
+        let action_tree_root =
+            compute_action_tree_root(&tags).map_err(|_| error!(PAError::InvalidTransactionData))?;
+        action_data.push(ActionData {
+            tags,
+            logic_refs,
+            action_tree_root,
+        });
     }
 
     // 3) Verify proofs (aggregated or individual)
@@ -559,8 +618,8 @@ fn execute_settlement<'info>(
     if is_aggregated {
         // Aggregated path: batch aggregation proof
         msg!("Preparing aggregated proof for verification");
-        let prepared = prepare_proof_for_verification(tx)
-            .map_err(|_| error!(PAError::InvalidProof))?;
+        let prepared =
+            prepare_proof_for_verification(tx).map_err(|_| error!(PAError::InvalidProof))?;
 
         msg!("Verifying aggregated proof via verifier_router");
         call_verifier_router(
@@ -579,14 +638,22 @@ fn execute_settlement<'info>(
         #[cfg(feature = "non-aggregated-proofs")]
         {
             // Non-aggregated path: verify individual proofs
-            use crate::encoding::{COMPLIANCE_VK_BYTES, find_logic_input};
-            use crate::groth16::{prepare_individual_proof, extract_groth16_seal_from_inner_receipt};
-            use crate::journal::{compute_compliance_journal_digest, compute_logic_journal_digest, LogicInstance};
+            use crate::encoding::{find_logic_input, COMPLIANCE_VK_BYTES};
+            use crate::groth16::{
+                extract_groth16_seal_from_inner_receipt, prepare_individual_proof,
+            };
+            use crate::journal::{
+                compute_compliance_journal_digest, compute_logic_journal_digest, LogicInstance,
+            };
 
-            for (action_idx, (action, data)) in tx.actions.iter().zip(action_data.iter()).enumerate() {
+            for (action_idx, (action, data)) in
+                tx.actions.iter().zip(action_data.iter()).enumerate()
+            {
                 msg!("Non-aggregated verification: action={}", action_idx);
                 // Tag-count invariant: logic_verifier_inputs.len() == 2 * compliance_units.len()
-                let expected_logic_count = action.compliance_units.len()
+                let expected_logic_count = action
+                    .compliance_units
+                    .len()
                     .checked_mul(2)
                     .ok_or_else(|| error!(PAError::InvalidTransactionData))?;
                 require!(
@@ -601,8 +668,14 @@ fn execute_settlement<'info>(
 
                 // Verify compliance proofs
                 for (cu_idx, cu) in action.compliance_units.iter().enumerate() {
-                    msg!("Verifying compliance proof: action={}, cu={}", action_idx, cu_idx);
-                    let proof_bytes = cu.proof.as_ref()
+                    msg!(
+                        "Verifying compliance proof: action={}, cu={}",
+                        action_idx,
+                        cu_idx
+                    );
+                    let proof_bytes = cu
+                        .proof
+                        .as_ref()
                         .ok_or_else(|| error!(PAError::InvalidProof))?;
                     // Extract seal and selector from InnerReceipt
                     let (selector, seal) = extract_groth16_seal_from_inner_receipt(proof_bytes)
@@ -611,8 +684,13 @@ fn execute_settlement<'info>(
                     let journal_digest = compute_compliance_journal_digest(&cu.instance)
                         .map_err(|_| error!(PAError::InvalidTransactionData))?;
 
-                    let prepared = prepare_individual_proof(&seal, selector, COMPLIANCE_VK_BYTES, journal_digest)
-                        .map_err(|_| error!(PAError::InvalidProof))?;
+                    let prepared = prepare_individual_proof(
+                        &seal,
+                        selector,
+                        COMPLIANCE_VK_BYTES,
+                        journal_digest,
+                    )
+                    .map_err(|_| error!(PAError::InvalidProof))?;
 
                     call_verifier_router(
                         verifier_router_program,
@@ -628,8 +706,14 @@ fn execute_settlement<'info>(
                 }
 
                 // Verify logic proofs (tag-based lookup with logic-ref check)
-                for (logic_idx, (tag, expected_logic_ref)) in tags.iter().zip(logic_refs.iter()).enumerate() {
-                    msg!("Verifying logic proof: action={}, logic={}", action_idx, logic_idx);
+                for (logic_idx, (tag, expected_logic_ref)) in
+                    tags.iter().zip(logic_refs.iter()).enumerate()
+                {
+                    msg!(
+                        "Verifying logic proof: action={}, logic={}",
+                        action_idx,
+                        logic_idx
+                    );
                     let input = find_logic_input(&action.logic_verifier_inputs, tag)
                         .map_err(|_| error!(PAError::TagNotFound))?;
 
@@ -649,14 +733,21 @@ fn execute_settlement<'info>(
                     let journal_digest = compute_logic_journal_digest(&logic_instance)
                         .map_err(|_| error!(PAError::InvalidTransactionData))?;
 
-                    let proof_bytes = input.proof.as_ref()
+                    let proof_bytes = input
+                        .proof
+                        .as_ref()
                         .ok_or_else(|| error!(PAError::InvalidProof))?;
                     // Extract seal and selector from InnerReceipt
                     let (selector, seal) = extract_groth16_seal_from_inner_receipt(proof_bytes)
                         .map_err(|_| error!(PAError::InvalidProof))?;
 
-                    let prepared = prepare_individual_proof(&seal, selector, input.verifying_key.to_bytes(), journal_digest)
-                        .map_err(|_| error!(PAError::InvalidProof))?;
+                    let prepared = prepare_individual_proof(
+                        &seal,
+                        selector,
+                        input.verifying_key.to_bytes(),
+                        journal_digest,
+                    )
+                    .map_err(|_| error!(PAError::InvalidProof))?;
 
                     call_verifier_router(
                         verifier_router_program,
@@ -709,14 +800,15 @@ fn execute_settlement<'info>(
     // This ensures external call failures don't leave state partially updated
     #[cfg(not(test))]
     {
-        external_calls::execute_external_calls(tx, remaining_accounts, nullifiers.len())
-            .map_err(|e| match e {
+        external_calls::execute_external_calls(tx, remaining_accounts, nullifiers.len()).map_err(
+            |e| match e {
                 PAError::ExternalCallOutputMismatch => error!(PAError::ExternalCallOutputMismatch),
                 PAError::UnregisteredForwarder => error!(PAError::UnregisteredForwarder),
                 PAError::ExternalCallCpiFailed => error!(PAError::ExternalCallCpiFailed),
                 PAError::InvalidExternalCallBlob => error!(PAError::InvalidExternalCallBlob),
                 _ => error!(PAError::ExternalCallCpiFailed),
-            })?;
+            },
+        )?;
     }
 
     // Emit TransactionExecuted event (EVM parity)
@@ -748,9 +840,15 @@ fn execute_settlement<'info>(
     }
 
     // Append commitments
-    let commitments = settle::extract_commitments(tx)
-        .map_err(|_| error!(PAError::InvalidTransactionData))?;
-    maybe_grow_account(pa_state_info, state, commitments.len(), payer, system_program)?;
+    let commitments =
+        settle::extract_commitments(tx).map_err(|_| error!(PAError::InvalidTransactionData))?;
+    maybe_grow_account(
+        pa_state_info,
+        state,
+        commitments.len(),
+        payer,
+        system_program,
+    )?;
     for commitment in commitments {
         append_to_tree(state, commitment)?;
     }
@@ -1115,4 +1213,3 @@ fn emit_app_data_events(tag: &types::Digest, app_data: &types::AppData) {
         }
     }
 }
-

@@ -1,11 +1,11 @@
 //! Property tests for Merkle tree operations.
 
-use proptest::prelude::*;
-use crate::merkle::{hash_two, INITIAL_TREE_DEPTH};
 use super::strategies::arb_digest;
+use crate::merkle::{hash_two, INITIAL_TREE_DEPTH};
 use crate::state::PAStateAccount;
 use crate::tests::utils::create_test_pa_state;
 use crate::{append_to_tree, compute_root_from_frontier, required_depth_for_leaves};
+use proptest::prelude::*;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]

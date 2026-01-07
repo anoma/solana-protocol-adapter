@@ -1,10 +1,10 @@
 //! Unit tests for root module.
 
-use anchor_lang::prelude::Pubkey;
 use crate::merkle::{INITIAL_TREE_DEPTH, PADDING_LEAF};
 use crate::root::{derive_root_marker_pda, is_root_valid, ROOT_MARKER_SEED};
-use crate::state::{PAStateAccount, MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
+use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::types::Digest;
+use anchor_lang::prelude::Pubkey;
 
 // =========================================================================
 // ROOT VALIDATION TESTS
@@ -106,7 +106,10 @@ fn test_derive_root_marker_pda_different_pa_states_different_pdas() {
     let (pda1, _) = derive_root_marker_pda(&program_id, &pa_state1, &root);
     let (pda2, _) = derive_root_marker_pda(&program_id, &pa_state2, &root);
 
-    assert_ne!(pda1, pda2, "Same root under different PA states should have different PDAs");
+    assert_ne!(
+        pda1, pda2,
+        "Same root under different PA states should have different PDAs"
+    );
 }
 
 #[test]

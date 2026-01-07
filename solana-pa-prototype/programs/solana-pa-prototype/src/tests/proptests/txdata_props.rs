@@ -1,11 +1,11 @@
 //! Property tests for TxData expiration logic.
 
-use proptest::prelude::*;
-use anchor_lang::prelude::Pubkey;
-use crate::state::{PAStateAccount, MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
-use crate::merkle::INITIAL_TREE_DEPTH;
-use crate::txdata::TxData;
 use crate::error::PAError;
+use crate::merkle::INITIAL_TREE_DEPTH;
+use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
+use crate::txdata::TxData;
+use anchor_lang::prelude::Pubkey;
+use proptest::prelude::*;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]

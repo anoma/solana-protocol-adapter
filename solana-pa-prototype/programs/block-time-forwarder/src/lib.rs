@@ -50,9 +50,8 @@ pub mod block_time_forwarder {
             return Err(ErrorCode::InvalidInput.into());
         }
 
-        let expected_time = i64::from_le_bytes(
-            input.try_into().map_err(|_| ErrorCode::InvalidInput)?
-        );
+        let expected_time =
+            i64::from_le_bytes(input.try_into().map_err(|_| ErrorCode::InvalidInput)?);
         msg!("  expected_time: {}", expected_time);
 
         // Get current time from Solana clock sysvar

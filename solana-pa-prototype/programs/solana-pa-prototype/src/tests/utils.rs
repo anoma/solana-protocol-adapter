@@ -6,7 +6,7 @@ use anchor_lang::prelude::Pubkey;
 
 use crate::groth16::Selector;
 use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
-use crate::state::{PAStateAccount, MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
+use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::types::*;
 
 /// Arbitrary selector for unit tests. Used by `fake_aggregation_proof_bytes` to test
@@ -31,7 +31,7 @@ pub fn fake_aggregation_proof_bytes(strategy_discriminant: u32, seal_len: usize)
     bytes.resize(bytes.len() + seal_len, 0u8); // seal bytes
     bytes.extend_from_slice(&1u32.to_le_bytes()); // MaybePruned::Pruned = 1
     bytes.resize(bytes.len() + 32, 0u8); // claim digest (32 bytes)
-    // verifier_parameters is a 32-byte Digest; selector is the first 4 bytes
+                                         // verifier_parameters is a 32-byte Digest; selector is the first 4 bytes
     let mut vp = [0u8; 32];
     vp[..4].copy_from_slice(&FAKE_SELECTOR);
     bytes.extend_from_slice(&vp);

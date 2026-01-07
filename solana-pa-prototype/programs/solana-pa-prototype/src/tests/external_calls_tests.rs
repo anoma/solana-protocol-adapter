@@ -131,7 +131,10 @@ fn test_extract_external_calls_logic_ref_association() {
 fn test_execute_external_calls_no_calls() {
     let tx = create_minimal_transaction();
     let result = execute_external_calls_dry_run(&tx);
-    assert!(result.is_ok(), "Transaction with no external calls should succeed");
+    assert!(
+        result.is_ok(),
+        "Transaction with no external calls should succeed"
+    );
     assert_eq!(result.unwrap(), 0, "Should return 0 calls executed");
 }
 

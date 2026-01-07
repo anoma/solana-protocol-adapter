@@ -1,8 +1,8 @@
 //! Property tests for encoding functions.
 
+use super::strategies::{arb_aligned_bytes, arb_digest, arb_words};
+use crate::encoding::{bytes_to_words, compute_action_tree_root, words_to_bytes};
 use proptest::prelude::*;
-use crate::encoding::{bytes_to_words, words_to_bytes, compute_action_tree_root};
-use super::strategies::{arb_aligned_bytes, arb_words, arb_digest};
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]

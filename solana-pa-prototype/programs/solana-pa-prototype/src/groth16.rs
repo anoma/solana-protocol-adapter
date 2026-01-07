@@ -194,10 +194,7 @@ impl PreparedProof {
 /// Prepare proof data for verification.
 /// Extracts seal and selector, negates pi_a, computes journal digest, and selects image ID.
 pub fn prepare_proof_for_verification(tx: &Transaction) -> Result<PreparedProof, PAError> {
-    let proof_bytes = tx
-        .aggregation_proof
-        .as_ref()
-        .ok_or(PAError::InvalidProof)?;
+    let proof_bytes = tx.aggregation_proof.as_ref().ok_or(PAError::InvalidProof)?;
 
     let (selector, seal_bytes) = extract_groth16_seal_from_aggregation_proof(proof_bytes)?;
     let seal = extract_seal(&seal_bytes)?;
@@ -261,4 +258,3 @@ pub fn prepare_individual_proof(
         journal_digest,
     })
 }
-

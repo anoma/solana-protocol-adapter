@@ -120,10 +120,5 @@ pub struct SolanaExternalCall {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum OutputMode {
     ReturnData,
-    OutputAccount {
-        index: u8,
-        offset: u32,
-        len: u32,
-    },
+    OutputAccount { index: u8, offset: u32, len: u32 },
 }
-

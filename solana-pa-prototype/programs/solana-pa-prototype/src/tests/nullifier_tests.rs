@@ -1,7 +1,7 @@
 //! Unit tests for nullifier module.
 
-use anchor_lang::prelude::Pubkey;
 use crate::nullifier::{derive_nullifier_pda, NULLIFIER_SEED};
+use anchor_lang::prelude::Pubkey;
 
 // -------------------------------------------------------------------------
 // derive_nullifier_pda tests
@@ -31,7 +31,10 @@ fn test_derive_nullifier_pda_different_nullifiers_different_pdas() {
     let (pda1, _) = derive_nullifier_pda(&program_id, &pa_state, &nullifier1);
     let (pda2, _) = derive_nullifier_pda(&program_id, &pa_state, &nullifier2);
 
-    assert_ne!(pda1, pda2, "Different nullifiers should have different PDAs");
+    assert_ne!(
+        pda1, pda2,
+        "Different nullifiers should have different PDAs"
+    );
 }
 
 #[test]
@@ -46,7 +49,10 @@ fn test_derive_nullifier_pda_different_pa_states_different_pdas() {
     let (pda1, _) = derive_nullifier_pda(&program_id, &pa_state1, &nullifier);
     let (pda2, _) = derive_nullifier_pda(&program_id, &pa_state2, &nullifier);
 
-    assert_ne!(pda1, pda2, "Same nullifier under different PA states should have different PDAs");
+    assert_ne!(
+        pda1, pda2,
+        "Same nullifier under different PA states should have different PDAs"
+    );
 }
 
 #[test]
@@ -59,7 +65,10 @@ fn test_derive_nullifier_pda_different_programs_different_pdas() {
     let (pda1, _) = derive_nullifier_pda(&program_id1, &pa_state, &nullifier);
     let (pda2, _) = derive_nullifier_pda(&program_id2, &pa_state, &nullifier);
 
-    assert_ne!(pda1, pda2, "Same nullifier under different programs should have different PDAs");
+    assert_ne!(
+        pda1, pda2,
+        "Same nullifier under different programs should have different PDAs"
+    );
 }
 
 #[test]
@@ -94,7 +103,10 @@ fn test_derive_nullifier_pda_all_zeros_nullifier() {
         &[NULLIFIER_SEED, pa_state.as_ref(), &nullifier, &[bump]],
         &program_id,
     );
-    assert!(recreated.is_ok(), "All-zeros nullifier should produce valid PDA");
+    assert!(
+        recreated.is_ok(),
+        "All-zeros nullifier should produce valid PDA"
+    );
     assert_eq!(pda, recreated.unwrap());
 }
 
@@ -112,7 +124,10 @@ fn test_derive_nullifier_pda_all_ones_nullifier() {
         &[NULLIFIER_SEED, pa_state.as_ref(), &nullifier, &[bump]],
         &program_id,
     );
-    assert!(recreated.is_ok(), "All-ones nullifier should produce valid PDA");
+    assert!(
+        recreated.is_ok(),
+        "All-ones nullifier should produce valid PDA"
+    );
     assert_eq!(pda, recreated.unwrap());
 }
 
