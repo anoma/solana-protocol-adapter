@@ -12,9 +12,11 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::{invoke_signed, set_return_data};
 
-mod ed25519;
+pub mod ed25519;
 mod error;
-mod state;
+pub mod state;
+#[cfg(test)]
+mod tests;
 
 pub use error::ErrorCode;
 pub use state::*;
@@ -586,29 +588,3 @@ pub struct EmergencyStop<'info> {
     pub config: Account<'info, Config>,
 }
 
-// =============================================================================
-// Tests
-// =============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_operation_constants() {
-        assert_eq!(OP_WRAP, 0);
-        assert_eq!(OP_UNWRAP, 1);
-    }
-
-    #[test]
-    fn test_result_constants() {
-        assert_eq!(RESULT_SUCCESS, 1);
-    }
-
-    #[test]
-    fn test_spl_token_program_id() {
-        use std::str::FromStr;
-        let expected = Pubkey::from_str("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA").unwrap();
-        assert_eq!(SPL_TOKEN_PROGRAM_ID, expected);
-    }
-}
