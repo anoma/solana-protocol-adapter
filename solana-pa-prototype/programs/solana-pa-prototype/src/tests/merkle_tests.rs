@@ -1,8 +1,8 @@
 //! Unit tests for merkle module.
 
-use crate::merkle::{ZEROS, PADDING_LEAF, EMPTY_TREE_ROOT_INITIAL};
-use crate::tests::utils::create_test_pa_state;
 use crate::compute_root_from_frontier;
+use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, PADDING_LEAF, ZEROS};
+use crate::tests::utils::create_test_pa_state;
 use crate::types::Digest;
 use anchor_lang::solana_program::hash::hashv;
 use sha2::{Digest as Sha2Digest, Sha256};
@@ -44,8 +44,7 @@ fn test_padding_leaf_matches_arm_risc0() {
     // Verify PADDING_LEAF constant matches arm-risc0's value
     // Hex: cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06
     let expected_bytes =
-        hex::decode("cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06")
-            .unwrap();
+        hex::decode("cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06").unwrap();
     let expected = Digest::from_bytes(expected_bytes.try_into().unwrap());
     assert_eq!(PADDING_LEAF, expected, "PADDING_LEAF must match arm-risc0");
 }

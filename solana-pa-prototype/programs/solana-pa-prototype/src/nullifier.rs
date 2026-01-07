@@ -5,9 +5,9 @@
 //!
 //! PDA derivation: `[b"nullifier", pa_state.key(), nullifier_bytes]`
 
+use crate::error::PAError;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
-use crate::error::PAError;
 
 /// Seeds prefix for nullifier PDA derivation.
 pub const NULLIFIER_SEED: &[u8] = b"nullifier";
@@ -74,10 +74,7 @@ pub fn check_and_create_nullifier_marker<'info>(
     let lamports = Rent::get()?.minimum_balance(0).max(1);
 
     let ix = system_instruction::create_account(
-        payer.key,
-        marker.key,
-        lamports,
-        0, // 0 bytes - existence alone indicates spent
+        payer.key, marker.key, lamports, 0, // 0 bytes - existence alone indicates spent
         program_id,
     );
 
@@ -108,4 +105,3 @@ pub fn check_and_create_nullifier_marker<'info>(
 pub fn is_nullifier_spent(program_id: &Pubkey, marker: &AccountInfo) -> bool {
     marker.owner == program_id
 }
-

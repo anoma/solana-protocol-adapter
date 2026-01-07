@@ -1,9 +1,9 @@
 //! Settlement extraction helpers for processing RM transactions.
 
 use crate::error::PAError;
-use crate::types::{Digest, SolanaExternalCall, Transaction};
 use crate::external_calls::decode_external_call;
 use crate::journal::parse_compliance_instance;
+use crate::types::{Digest, SolanaExternalCall, Transaction};
 
 /// Extract nullifiers from a transaction by parsing each ComplianceUnit.instance.
 /// This matches arm-risc0's nf_duplication_check behavior:
@@ -39,7 +39,9 @@ pub fn extract_commitments(tx: &Transaction) -> Result<Vec<Digest>, PAError> {
 ///
 /// Returns a vec of (logic_ref, call) tuples where logic_ref is the verifying_key
 /// from the LogicVerifierInputs containing the call.
-pub fn extract_external_calls(tx: &Transaction) -> Result<Vec<(Digest, SolanaExternalCall)>, PAError> {
+pub fn extract_external_calls(
+    tx: &Transaction,
+) -> Result<Vec<(Digest, SolanaExternalCall)>, PAError> {
     let mut calls = Vec::new();
     for action in &tx.actions {
         for lvi in &action.logic_verifier_inputs {
@@ -52,4 +54,3 @@ pub fn extract_external_calls(tx: &Transaction) -> Result<Vec<(Digest, SolanaExt
     }
     Ok(calls)
 }
-

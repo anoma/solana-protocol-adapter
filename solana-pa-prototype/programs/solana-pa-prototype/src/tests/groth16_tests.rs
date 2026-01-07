@@ -1,7 +1,9 @@
 //! Unit tests for groth16 module.
 
 use crate::groth16::{prepare_proof_for_verification, BATCH_AGGREGATION_IMAGE_ID};
-use crate::tests::utils::{create_minimal_transaction, fake_aggregation_proof_bytes, FAKE_SELECTOR};
+use crate::tests::utils::{
+    create_minimal_transaction, fake_aggregation_proof_bytes, FAKE_SELECTOR,
+};
 
 #[test]
 fn test_image_id_constants_match_arm_risc0() {

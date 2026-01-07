@@ -1,14 +1,16 @@
 //! Unit tests for lib module (main program tests).
 
+use crate::external_calls::{
+    build_forwarder_instruction_data, encode_external_call, FORWARD_CALL_DISCRIMINATOR,
+};
+use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
+use crate::settle;
+use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::tests::utils::*;
 use crate::types::*;
-use crate::external_calls::{encode_external_call, build_forwarder_instruction_data, FORWARD_CALL_DISCRIMINATOR};
-use crate::settle;
-use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
-use crate::state::{PAStateAccount, MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
 use crate::{
-    ResourcePayloadEvent, DiscoveryPayloadEvent, ExternalPayloadEvent,
-    ApplicationPayloadEvent, DELETION_CRITERION_NEVER,
+    ApplicationPayloadEvent, DiscoveryPayloadEvent, ExternalPayloadEvent, ResourcePayloadEvent,
+    DELETION_CRITERION_NEVER,
 };
 use anchor_lang::prelude::Pubkey;
 
@@ -47,10 +49,9 @@ mod fixture_tests {
     fn test_digest_bincode_layout() {
         // Verify Digest serializes as 8 u32s
         let digest = Digest::from_bytes([
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-            0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
-            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-            0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+            0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+            0x1d, 0x1e, 0x1f, 0x20,
         ]);
         let serialized = bincode::serialize(&digest).unwrap();
 
@@ -122,12 +123,16 @@ mod integration_tests {
 
         let (logic_ref, extracted_call) = &extracted[0];
         assert_eq!(extracted_call.program_id, forwarder_program_id);
-        assert_eq!(extracted_call.instruction_data, expected_time.to_le_bytes().to_vec());
+        assert_eq!(
+            extracted_call.instruction_data,
+            expected_time.to_le_bytes().to_vec()
+        );
         assert_eq!(extracted_call.expected_output, vec![RESULT_LT]);
 
         // Verify instruction data building
         let logic_ref_bytes = logic_ref.to_bytes();
-        let ix_data = build_forwarder_instruction_data(&logic_ref_bytes, &extracted_call.instruction_data);
+        let ix_data =
+            build_forwarder_instruction_data(&logic_ref_bytes, &extracted_call.instruction_data);
 
         // Verify format: discriminator (8) + logic_ref (32) + len (4) + data (8) = 52 bytes
         assert_eq!(ix_data.len(), 52);
@@ -316,7 +321,10 @@ mod event_tests {
         };
 
         assert_eq!(never_blob.deletion_criterion, DELETION_CRITERION_NEVER);
-        assert_ne!(immediately_blob.deletion_criterion, DELETION_CRITERION_NEVER);
+        assert_ne!(
+            immediately_blob.deletion_criterion,
+            DELETION_CRITERION_NEVER
+        );
     }
 
     #[test]
@@ -324,31 +332,49 @@ mod event_tests {
         // Verify app_data structure with mixed payloads
         let app_data = AppData {
             resource_payload: vec![
-                ExpirableBlob { blob: vec![1], deletion_criterion: DELETION_CRITERION_NEVER },
-                ExpirableBlob { blob: vec![2], deletion_criterion: 0 }, // Immediately
+                ExpirableBlob {
+                    blob: vec![1],
+                    deletion_criterion: DELETION_CRITERION_NEVER,
+                },
+                ExpirableBlob {
+                    blob: vec![2],
+                    deletion_criterion: 0,
+                }, // Immediately
             ],
-            discovery_payload: vec![
-                ExpirableBlob { blob: vec![3], deletion_criterion: DELETION_CRITERION_NEVER },
-            ],
+            discovery_payload: vec![ExpirableBlob {
+                blob: vec![3],
+                deletion_criterion: DELETION_CRITERION_NEVER,
+            }],
             external_payload: vec![],
             application_payload: vec![
-                ExpirableBlob { blob: vec![4], deletion_criterion: 0 }, // Immediately
+                ExpirableBlob {
+                    blob: vec![4],
+                    deletion_criterion: 0,
+                }, // Immediately
             ],
         };
 
         // Count payloads that would be emitted (deletion_criterion == NEVER)
         let mut would_emit = 0;
         for p in &app_data.resource_payload {
-            if p.deletion_criterion == DELETION_CRITERION_NEVER { would_emit += 1; }
+            if p.deletion_criterion == DELETION_CRITERION_NEVER {
+                would_emit += 1;
+            }
         }
         for p in &app_data.discovery_payload {
-            if p.deletion_criterion == DELETION_CRITERION_NEVER { would_emit += 1; }
+            if p.deletion_criterion == DELETION_CRITERION_NEVER {
+                would_emit += 1;
+            }
         }
         for p in &app_data.external_payload {
-            if p.deletion_criterion == DELETION_CRITERION_NEVER { would_emit += 1; }
+            if p.deletion_criterion == DELETION_CRITERION_NEVER {
+                would_emit += 1;
+            }
         }
         for p in &app_data.application_payload {
-            if p.deletion_criterion == DELETION_CRITERION_NEVER { would_emit += 1; }
+            if p.deletion_criterion == DELETION_CRITERION_NEVER {
+                would_emit += 1;
+            }
         }
 
         // Should emit 2 payloads: resource[0] and discovery[0]

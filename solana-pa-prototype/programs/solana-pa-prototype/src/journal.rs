@@ -26,8 +26,8 @@ pub struct LogicInstance<'a> {
 /// verified individually.
 #[cfg(feature = "non-aggregated-proofs")]
 pub fn compute_logic_journal_digest(instance: &LogicInstance) -> Result<[u8; 32], PAError> {
-    use anchor_lang::solana_program::hash::Hasher;
     use crate::risc0_serde;
+    use anchor_lang::solana_program::hash::Hasher;
     use serde::Serialize;
 
     struct HasherWordWriter<'a> {
@@ -58,7 +58,9 @@ pub fn compute_logic_journal_digest(instance: &LogicInstance) -> Result<[u8; 32]
     }
 
     let mut hasher = Hasher::default();
-    let mut writer = HasherWordWriter { hasher: &mut hasher };
+    let mut writer = HasherWordWriter {
+        hasher: &mut hasher,
+    };
     let mut serializer = risc0_serde::Serializer::new(&mut writer);
 
     instance
@@ -77,9 +79,9 @@ pub fn compute_logic_journal_digest(instance: &LogicInstance) -> Result<[u8; 32]
 /// This avoids any serialization format differences between bincode and risc0_zkvm::serde.
 #[cfg(feature = "non-aggregated-proofs")]
 pub fn compute_compliance_journal_digest(instance_bytes: &[u8]) -> Result<[u8; 32], PAError> {
-    use anchor_lang::solana_program::hash::Hasher;
-    use crate::risc0_serde::WordWrite;
     use crate::encoding::bytes_to_words;
+    use crate::risc0_serde::WordWrite;
+    use anchor_lang::solana_program::hash::Hasher;
 
     struct HasherWordWriter<'a> {
         hasher: &'a mut Hasher,
@@ -112,10 +114,14 @@ pub fn compute_compliance_journal_digest(instance_bytes: &[u8]) -> Result<[u8; 3
     let words = bytes_to_words(instance_bytes);
 
     let mut hasher = Hasher::default();
-    let mut writer = HasherWordWriter { hasher: &mut hasher };
+    let mut writer = HasherWordWriter {
+        hasher: &mut hasher,
+    };
 
     // Write words directly as in aggregated path
-    writer.write_words(&words).map_err(|_| PAError::InvalidTransactionData)?;
+    writer
+        .write_words(&words)
+        .map_err(|_| PAError::InvalidTransactionData)?;
 
     Ok(hasher.result().to_bytes())
 }

@@ -3,8 +3,8 @@
 //! These strategies generate random inputs for property-based testing,
 //! mirroring the `bound()` approach used in the EVM Protocol Adapter's Foundry tests.
 
-use proptest::prelude::*;
 use crate::types::*;
+use proptest::prelude::*;
 
 /// Strategy for generating arbitrary 32-byte Digests.
 pub fn arb_digest() -> impl Strategy<Value = Digest> {
@@ -23,9 +23,7 @@ pub fn arb_byte_vec(max_len: usize) -> impl Strategy<Value = Vec<u8>> {
 
 /// Strategy for word-aligned byte arrays (len % 4 == 0).
 pub fn arb_aligned_bytes(max_words: usize) -> impl Strategy<Value = Vec<u8>> {
-    (0..=max_words).prop_flat_map(|word_count| {
-        prop::collection::vec(any::<u8>(), word_count * 4)
-    })
+    (0..=max_words).prop_flat_map(|word_count| prop::collection::vec(any::<u8>(), word_count * 4))
 }
 
 /// Strategy for u32 word arrays.
@@ -103,12 +101,13 @@ pub fn arb_app_data(max_blobs: usize, max_words: usize) -> impl Strategy<Value =
 pub fn arb_output_mode() -> impl Strategy<Value = OutputMode> {
     prop_oneof![
         Just(OutputMode::ReturnData),
-        (any::<u8>(), any::<u32>(), 1u32..=4096u32)
-            .prop_map(|(idx, off, len)| OutputMode::OutputAccount {
+        (any::<u8>(), any::<u32>(), 1u32..=4096u32).prop_map(|(idx, off, len)| {
+            OutputMode::OutputAccount {
                 index: idx,
                 offset: off,
-                len
-            })
+                len,
+            }
+        })
     ]
 }
 

@@ -30,7 +30,9 @@ impl TxData {
 
     /// Write data at the given offset. Last-write-wins semantics.
     pub fn write(&mut self, offset: usize, data: &[u8]) -> Result<(), PAError> {
-        let end = offset.checked_add(data.len()).ok_or(PAError::TxDataBoundsExceeded)?;
+        let end = offset
+            .checked_add(data.len())
+            .ok_or(PAError::TxDataBoundsExceeded)?;
         if end > self.capacity {
             return Err(PAError::TxDataBoundsExceeded);
         }
@@ -56,4 +58,3 @@ impl TxData {
         Ok(())
     }
 }
-

@@ -55,12 +55,15 @@ struct ComplianceInstanceWords {
 }
 
 /// Parse a bincode-serialized ComplianceInstance.
-pub fn parse_compliance_instance(instance_bytes: &[u8]) -> Result<crate::types::ComplianceInstance, PAError> {
+pub fn parse_compliance_instance(
+    instance_bytes: &[u8],
+) -> Result<crate::types::ComplianceInstance, PAError> {
     bincode::deserialize(instance_bytes).map_err(|_| PAError::InvalidTransactionData)
 }
 
 fn next_power_of_two(n: usize) -> Result<usize, PAError> {
-    n.checked_next_power_of_two().ok_or(PAError::InvalidTransactionData)
+    n.checked_next_power_of_two()
+        .ok_or(PAError::InvalidTransactionData)
 }
 
 /// Compute the action tree root from a list of tags.
@@ -95,7 +98,9 @@ pub fn compute_action_tree_root(tags: &[Digest]) -> Result<Digest, PAError> {
 /// Feature-gated: only used in non-aggregated path (convenience wrapper
 /// that combines `extract_tags_and_logic_refs` + `compute_action_tree_root`).
 #[cfg(feature = "non-aggregated-proofs")]
-pub fn compute_action_tree_root_from_action(action: &crate::types::Action) -> Result<Digest, PAError> {
+pub fn compute_action_tree_root_from_action(
+    action: &crate::types::Action,
+) -> Result<Digest, PAError> {
     let (tags, _) = extract_tags_and_logic_refs(action)?;
     compute_action_tree_root(&tags)
 }
@@ -104,7 +109,9 @@ pub fn compute_action_tree_root_from_action(action: &crate::types::Action) -> Re
 /// Returns (tags, logic_refs) where:
 /// - tags[2i] = consumed_nullifier, tags[2i+1] = created_commitment
 /// - logic_refs[2i] = consumed_logic_ref, logic_refs[2i+1] = created_logic_ref
-pub fn extract_tags_and_logic_refs(action: &crate::types::Action) -> Result<(Vec<Digest>, Vec<Digest>), PAError> {
+pub fn extract_tags_and_logic_refs(
+    action: &crate::types::Action,
+) -> Result<(Vec<Digest>, Vec<Digest>), PAError> {
     let mut tags = Vec::new();
     let mut logic_refs = Vec::new();
 
@@ -182,7 +189,9 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
         .ok_or(PAError::InvalidTransactionData)?;
 
     let mut hasher = Hasher::default();
-    let mut writer = HasherWordWriter { hasher: &mut hasher };
+    let mut writer = HasherWordWriter {
+        hasher: &mut hasher,
+    };
     let mut serializer = risc0_serde::Serializer::new(&mut writer);
 
     // 1) Vec<ComplianceInstanceWords>
@@ -192,7 +201,9 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
     for action in &tx.actions {
         for cu in &action.compliance_units {
             let words = bytes_to_words(&cu.instance);
-            let fixed: [u32; 56] = words.try_into().map_err(|_| PAError::InvalidTransactionData)?;
+            let fixed: [u32; 56] = words
+                .try_into()
+                .map_err(|_| PAError::InvalidTransactionData)?;
             let element = ComplianceInstanceWords {
                 u32_words: U32Array56(fixed),
             };
@@ -245,8 +256,8 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
                 app_data: &input.app_data,
             };
 
-            let word_len = risc0_serde::count_words(&instance)
-                .map_err(|_| PAError::InvalidTransactionData)?;
+            let word_len =
+                risc0_serde::count_words(&instance).map_err(|_| PAError::InvalidTransactionData)?;
 
             serializer
                 .serialize_u32(word_len as u32)
@@ -270,4 +281,3 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
 
     Ok(Digest::from_bytes(hasher.result().to_bytes()))
 }
-

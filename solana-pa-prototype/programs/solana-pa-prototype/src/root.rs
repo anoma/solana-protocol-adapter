@@ -8,12 +8,12 @@
 //! This enables parallel transaction construction: transactions can be built
 //! against any historical root, not just the current one.
 
-use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
-use crate::types::Digest;
+use crate::error::PAError;
 use crate::merkle::PADDING_LEAF;
 use crate::state::PAStateAccount;
-use crate::error::PAError;
+use crate::types::Digest;
+use anchor_lang::prelude::*;
+use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
 
 /// Seeds prefix for root marker PDA derivation.
 pub const ROOT_MARKER_SEED: &[u8] = b"root";
@@ -72,10 +72,7 @@ pub fn create_root_marker<'info>(
     let lamports = Rent::get()?.minimum_balance(0).max(1);
 
     let ix = system_instruction::create_account(
-        payer.key,
-        marker.key,
-        lamports,
-        0, // 0 bytes - existence alone indicates valid
+        payer.key, marker.key, lamports, 0, // 0 bytes - existence alone indicates valid
         program_id,
     );
 
@@ -132,8 +129,7 @@ pub fn is_root_valid(
         &crate::ID,
     );
 
-    remaining_accounts.iter().any(|acc| {
-        acc.key == &expected_pda && acc.owner == &crate::ID
-    })
+    remaining_accounts
+        .iter()
+        .any(|acc| acc.key == &expected_pda && acc.owner == &crate::ID)
 }
-

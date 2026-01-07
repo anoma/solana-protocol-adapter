@@ -1,9 +1,11 @@
 //! Property tests for delta accumulation and verification.
 
-use proptest::prelude::*;
-use crate::delta::{collect_tags, compute_verifying_key, accumulate_deltas, verify_delta_proof};
+use super::strategies::{
+    arb_compliance_instance, arb_compliance_instance_zero_delta, build_tx_from_instances,
+};
+use crate::delta::{accumulate_deltas, collect_tags, compute_verifying_key, verify_delta_proof};
 use crate::types::Delta;
-use super::strategies::{arb_compliance_instance, arb_compliance_instance_zero_delta, build_tx_from_instances};
+use proptest::prelude::*;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]

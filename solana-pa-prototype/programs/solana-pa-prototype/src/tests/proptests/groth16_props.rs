@@ -1,7 +1,7 @@
 //! Property tests for Groth16 proof processing.
 
+use crate::groth16::{extract_seal, negate_pi_a};
 use proptest::prelude::*;
-use crate::groth16::{negate_pi_a, extract_seal};
 
 /// BN254 base field modulus (big-endian bytes) - copied for test verification.
 const BN254_FIELD_MODULUS: [u8; 32] =
