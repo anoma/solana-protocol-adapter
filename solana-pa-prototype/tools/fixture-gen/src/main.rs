@@ -43,6 +43,30 @@ use solana_pa::external_calls::encode_external_call;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
 use test_forwarder::{MODE_FAIL, MODE_SILENT, MODE_WRITE_ACCOUNT};
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SplTokenWrapMetadata {
+    user_secret_key_b64: String,
+    user_pubkey_b64: String,
+    mint_seed_b64: String,
+    token_mint_b58: String,
+    amount: u64,
+    nonce: u64,
+    deadline: i64,
+    action_tree_root_b64: String,
+    signature_b64: String,
+    logic_ref_b64: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct SplTokenUnwrapMetadata {
+    mint_seed_b64: String,
+    token_mint_b58: String,
+    amount: u64,
+    recipient_seed_b64: String,
+    recipient_b58: String,
+    logic_ref_b64: String,
+}
+
 #[derive(Serialize)]
 struct Fixture {
     format: &'static str,
@@ -199,6 +223,193 @@ fn test_forwarder_output_account_payload_blob(
             len: expected_bytes.len() as u32,
         },
     }))
+}
+
+const BASE58_ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+
+fn encode_base58(input: &[u8]) -> String {
+    let mut bytes = input.to_vec();
+    let leading_zeros = bytes.iter().take_while(|&&b| b == 0).count();
+
+    let mut result = Vec::new();
+    while !bytes.is_empty() && bytes.iter().any(|&b| b != 0) {
+        let mut carry = 0u32;
+        for byte in bytes.iter_mut() {
+            let acc = (carry << 8) | (*byte as u32);
+            *byte = (acc / 58) as u8;
+            carry = acc % 58;
+        }
+        result.push(BASE58_ALPHABET[carry as usize]);
+        while bytes.first() == Some(&0) && bytes.len() > 1 {
+            bytes.remove(0);
+        }
+    }
+
+    result.reverse();
+    let mut output = String::new();
+    for _ in 0..leading_zeros {
+        output.push('1');
+    }
+    for b in result {
+        output.push(b as char);
+    }
+    if output.is_empty() {
+        output.push('1');
+    }
+    output
+}
+
+const SPL_TOKEN_FORWARDER_PROGRAM_ID: &str = "6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1";
+const OP_WRAP: u8 = 0;
+const OP_UNWRAP: u8 = 1;
+const SPL_RESULT_SUCCESS: u8 = 1;
+
+fn sha256_hash(data: &[u8]) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    Sha256Digest::update(&mut hasher, data);
+    let result = hasher.finalize();
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&result);
+    arr
+}
+
+fn spl_token_forwarder_wrap_external_payload(
+    action_tree_root: &Digest,
+    output_mismatch: bool,
+) -> Result<(ExpirableBlob, SplTokenWrapMetadata)> {
+    let program_id = decode_base58_32(SPL_TOKEN_FORWARDER_PROGRAM_ID)?;
+
+    let seed = sha256_hash(b"spl_token_forwarder_test_user");
+    let signing_key = SigningKey::from_bytes(&seed);
+    let user_pubkey = signing_key.verifying_key().to_bytes();
+
+    // Deterministic token mint keypair — test recreates via Keypair.fromSeed(mint_seed)
+    let mint_seed = sha256_hash(b"spl_token_forwarder_test_mint");
+    let mint_signing_key = SigningKey::from_bytes(&mint_seed);
+    let token_mint: [u8; 32] = mint_signing_key.verifying_key().to_bytes();
+
+    let amount: u64 = 100_000_000; // 100 tokens (6 decimals)
+    let nonce: u64 = 1;
+    let deadline: i64 = 4_102_444_800; // year 2100
+    let action_tree_root_bytes = action_tree_root.as_bytes();
+
+    // SHA256(forwarder_id || token_mint || amount || nonce || deadline || action_tree_root)
+    // forwarder_id provides domain separation (like EIP-712 verifyingContract)
+    let mut message = Vec::with_capacity(120);
+    message.extend_from_slice(&program_id);
+    message.extend_from_slice(&token_mint);
+    message.extend_from_slice(&amount.to_le_bytes());
+    message.extend_from_slice(&nonce.to_le_bytes());
+    message.extend_from_slice(&deadline.to_le_bytes());
+    message.extend_from_slice(action_tree_root_bytes);
+
+    let message_hash = sha256_hash(&message);
+    let signature = signing_key.sign(&message_hash);
+    let signature_bytes = signature.to_bytes();
+
+    // Logic ref must match what's in the transaction (PASSTHROUGH_LOGIC_GUEST_ID)
+    let logic_ref: [u8; 32] = {
+        let digest: risc0_zkvm::sha::Digest = PASSTHROUGH_LOGIC_GUEST_ID.into();
+        digest.as_bytes().try_into().unwrap()
+    };
+
+    // Wrap input: op(1) + token_mint(32) + amount(8) + user(32) + nonce(8) + deadline(8) + action_tree_root(32) + signature(64) + ed25519_ix_index(1) = 186 bytes
+    let mut input = Vec::with_capacity(186);
+    input.push(OP_WRAP);
+    input.extend_from_slice(&token_mint);
+    input.extend_from_slice(&amount.to_le_bytes());
+    input.extend_from_slice(&user_pubkey);
+    input.extend_from_slice(&nonce.to_le_bytes());
+    input.extend_from_slice(&deadline.to_le_bytes());
+    input.extend_from_slice(action_tree_root_bytes);
+    input.extend_from_slice(&signature_bytes);
+    input.push(0); // ed25519_ix_index = 0
+
+    let expected_output = if output_mismatch {
+        vec![0x00]
+    } else {
+        vec![SPL_RESULT_SUCCESS]
+    };
+
+    let blob = encode_external_call(&SolanaExternalCall {
+        program_id,
+        instruction_data: input,
+        expected_output,
+        output_mode: OutputMode::ReturnData,
+    });
+
+    let metadata = SplTokenWrapMetadata {
+        user_secret_key_b64: BASE64.encode(seed),
+        user_pubkey_b64: BASE64.encode(user_pubkey),
+        mint_seed_b64: BASE64.encode(mint_seed),
+        token_mint_b58: encode_base58(&token_mint),
+        amount,
+        nonce,
+        deadline,
+        action_tree_root_b64: BASE64.encode(action_tree_root_bytes),
+        signature_b64: BASE64.encode(signature_bytes),
+        logic_ref_b64: BASE64.encode(logic_ref),
+    };
+
+    Ok((blob, metadata))
+}
+
+fn spl_token_forwarder_unwrap_external_payload(
+    output_mismatch: bool,
+) -> Result<(ExpirableBlob, SplTokenUnwrapMetadata)> {
+    let program_id = decode_base58_32(SPL_TOKEN_FORWARDER_PROGRAM_ID)?;
+
+    let mint_seed = sha256_hash(b"spl_token_forwarder_test_mint");
+    let mint_signing_key = SigningKey::from_bytes(&mint_seed);
+    let token_mint: [u8; 32] = mint_signing_key.verifying_key().to_bytes();
+
+    let recipient_seed = sha256_hash(b"spl_token_forwarder_test_recipient");
+    let recipient_signing_key = SigningKey::from_bytes(&recipient_seed);
+    let recipient: [u8; 32] = recipient_signing_key.verifying_key().to_bytes();
+
+    let logic_ref: [u8; 32] = {
+        let digest: risc0_zkvm::sha::Digest = PASSTHROUGH_LOGIC_GUEST_ID.into();
+        digest.as_bytes().try_into().unwrap()
+    };
+
+    let amount: u64 = 50_000_000; // 50 tokens
+
+    // Unwrap input: op(1) + token_mint(32) + amount(8) + recipient(32) = 73 bytes
+    let mut input = Vec::with_capacity(73);
+    input.push(OP_UNWRAP);
+    input.extend_from_slice(&token_mint);
+    input.extend_from_slice(&amount.to_le_bytes());
+    input.extend_from_slice(&recipient);
+
+    let expected_output = if output_mismatch {
+        vec![0x00]
+    } else {
+        vec![SPL_RESULT_SUCCESS]
+    };
+
+    let blob = encode_external_call(&SolanaExternalCall {
+        program_id,
+        instruction_data: input,
+        expected_output,
+        output_mode: OutputMode::ReturnData,
+    });
+
+    let metadata = SplTokenUnwrapMetadata {
+        mint_seed_b64: BASE64.encode(mint_seed),
+        token_mint_b58: encode_base58(&token_mint),
+        amount,
+        recipient_seed_b64: BASE64.encode(recipient_seed),
+        recipient_b58: encode_base58(&recipient),
+        logic_ref_b64: BASE64.encode(logic_ref),
+    };
+
+    Ok((blob, metadata))
+}
+
+struct TransactionGenerationResult {
+    tx: Transaction,
+    spl_token_wrap_metadata: Option<SplTokenWrapMetadata>,
+    spl_token_unwrap_metadata: Option<SplTokenUnwrapMetadata>,
 }
 
 fn generate_test_transaction_with_external_payload(

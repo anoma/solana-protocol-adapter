@@ -126,12 +126,35 @@ pub mod spl_token_forwarder {
     use super::*;
 
     /// Initialize the forwarder config with emergency committee.
+    ///
+    /// Mirrors EVM constructor validation:
+    /// - protocol_adapter must not be zero
+    /// - logic_ref must not be all zeros
+    /// - emergency_committee must not be zero
     pub fn initialize(
         ctx: Context<Initialize>,
         protocol_adapter: Pubkey,
         logic_ref: [u8; 32],
         emergency_committee: Pubkey,
     ) -> Result<()> {
+        // Mirrors: test_constructor_reverts_if_the_protocol_adapter_address_is_zero
+        require!(
+            protocol_adapter != Pubkey::default(),
+            ErrorCode::ZeroAddressNotAllowed
+        );
+
+        // Mirrors: test_constructor_reverts_if_the_logic_ref_is_zero
+        require!(
+            logic_ref != [0u8; 32],
+            ErrorCode::ZeroAddressNotAllowed
+        );
+
+        // Mirrors: test_constructor_reverts_if_the_emergency_committe_address_is_zero
+        require!(
+            emergency_committee != Pubkey::default(),
+            ErrorCode::ZeroAddressNotAllowed
+        );
+
         let config = &mut ctx.accounts.config;
         config.protocol_adapter = protocol_adapter;
         config.logic_ref = logic_ref;

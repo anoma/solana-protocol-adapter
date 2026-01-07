@@ -265,6 +265,22 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
     assert.ok(config.emergencyCaller.equals(emergencyCaller.publicKey));
   });
 
+  // Mirrors: test_emergencyCaller_returns_the_emergency_caller_after_it_has_been_set
+  // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/EmergencyMigratableForwarderBase.t.sol
+  it("emergency_caller returns the caller after it has been set", async function() {
+    if (!paEmergencyStopped) throw new Error("PA not stopped - previous test failed");
+
+    const config = await program.account.config.fetch(configPda);
+    assert.ok(
+      config.emergencyCaller.equals(emergencyCaller.publicKey),
+      "Emergency caller should return the set address"
+    );
+    assert.ok(
+      !config.emergencyCaller.equals(PublicKey.default),
+      "Emergency caller should not be zero after being set"
+    );
+  });
+
   // Mirrors: test_setEmergencyCaller_reverts_if_the_emergency_caller_has_already_been_set
   it("rejects setting emergency caller twice", async function() {
     if (!paEmergencyStopped) throw new Error("PA not stopped - previous test failed");
