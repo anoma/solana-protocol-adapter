@@ -76,16 +76,14 @@ pub fn verify_ed25519_instruction(
         return Err(ErrorCode::InvalidEd25519Instruction.into());
     }
 
-    // We only check the first signature for simplicity
-    // A production version might want to check all signatures match
-
     // Parse offsets for first signature (starting at byte 2)
+    // We verify only the first signature; if multiple are needed, this could be extended.
     let offsets_start = 2;
     let signature_offset = u16::from_le_bytes([
         ix_data[offsets_start],
         ix_data[offsets_start + 1],
     ]) as usize;
-    let _signature_ix_index = u16::from_le_bytes([
+    let signature_ix_index = u16::from_le_bytes([
         ix_data[offsets_start + 2],
         ix_data[offsets_start + 3],
     ]);
@@ -93,7 +91,7 @@ pub fn verify_ed25519_instruction(
         ix_data[offsets_start + 4],
         ix_data[offsets_start + 5],
     ]) as usize;
-    let _pubkey_ix_index = u16::from_le_bytes([
+    let pubkey_ix_index = u16::from_le_bytes([
         ix_data[offsets_start + 6],
         ix_data[offsets_start + 7],
     ]);
@@ -105,10 +103,21 @@ pub fn verify_ed25519_instruction(
         ix_data[offsets_start + 10],
         ix_data[offsets_start + 11],
     ]) as usize;
-    let _message_ix_index = u16::from_le_bytes([
+    let message_ix_index = u16::from_le_bytes([
         ix_data[offsets_start + 12],
         ix_data[offsets_start + 13],
     ]);
+
+    // Validate instruction indices: 0xFFFF means data is in the current instruction.
+    // We require all data to be in the Ed25519 instruction itself, not elsewhere.
+    const CURRENT_INSTRUCTION: u16 = 0xFFFF;
+    if signature_ix_index != CURRENT_INSTRUCTION
+        || pubkey_ix_index != CURRENT_INSTRUCTION
+        || message_ix_index != CURRENT_INSTRUCTION
+    {
+        msg!("Ed25519 data must be in the same instruction (expected 0xFFFF indices)");
+        return Err(ErrorCode::InvalidEd25519Instruction.into());
+    }
 
     msg!("Ed25519 instruction parsed:");
     msg!("  signature_offset: {}", signature_offset);
