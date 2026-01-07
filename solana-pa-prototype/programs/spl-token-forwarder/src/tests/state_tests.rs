@@ -2,13 +2,17 @@
 
 use crate::state::{
     WrapMessage, WrapInput, UnwrapInput,
-    derive_config_pda, derive_escrow_pda, derive_nonce_pda,
+    derive_config_pda, derive_escrow_pda, derive_nonce_bitmap_pda,
+    nonce_to_word_and_bit, is_nonce_used, set_nonce_used,
+    is_pa_emergency_stopped, PA_PAUSED_OFFSET,
+    NONCES_PER_WORD, NONCE_BITMAP_SIZE,
 };
 use anchor_lang::prelude::Pubkey;
 
 #[test]
 fn test_wrap_message_serialization() {
     let msg = WrapMessage {
+        forwarder_id: [0xAAu8; 32], // Domain separation - forwarder program ID
         token_mint: [1u8; 32],
         amount: 1000,
         nonce: 42,
@@ -17,36 +21,75 @@ fn test_wrap_message_serialization() {
     };
 
     let bytes = msg.to_bytes();
-    assert_eq!(bytes.len(), 88);
+    assert_eq!(bytes.len(), WrapMessage::SIZE);
+
+    // Verify forwarder_id (domain separation)
+    assert_eq!(&bytes[0..32], &[0xAAu8; 32]);
 
     // Verify token_mint
-    assert_eq!(&bytes[0..32], &[1u8; 32]);
+    assert_eq!(&bytes[32..64], &[1u8; 32]);
 
     // Verify amount
     assert_eq!(
-        u64::from_le_bytes(bytes[32..40].try_into().unwrap()),
+        u64::from_le_bytes(bytes[64..72].try_into().unwrap()),
         1000
     );
 
     // Verify nonce
     assert_eq!(
-        u64::from_le_bytes(bytes[40..48].try_into().unwrap()),
+        u64::from_le_bytes(bytes[72..80].try_into().unwrap()),
         42
     );
 
     // Verify deadline
     assert_eq!(
-        i64::from_le_bytes(bytes[48..56].try_into().unwrap()),
+        i64::from_le_bytes(bytes[80..88].try_into().unwrap()),
         1700000000
     );
 
     // Verify action_tree_root
-    assert_eq!(&bytes[56..88], &[2u8; 32]);
+    assert_eq!(&bytes[88..120], &[2u8; 32]);
+}
+
+#[test]
+fn test_wrap_message_domain_separation() {
+    // Same message with different forwarder IDs should produce different hashes
+    let msg1 = WrapMessage {
+        forwarder_id: [1u8; 32],
+        token_mint: [0u8; 32],
+        amount: 100,
+        nonce: 1,
+        deadline: 1700000000,
+        action_tree_root: [0u8; 32],
+    };
+
+    let msg2 = WrapMessage {
+        forwarder_id: [2u8; 32], // Different forwarder
+        token_mint: [0u8; 32],
+        amount: 100,
+        nonce: 1,
+        deadline: 1700000000,
+        action_tree_root: [0u8; 32],
+    };
+
+    // Hashes must be different due to domain separation
+    assert_ne!(msg1.hash(), msg2.hash());
+
+    // Same forwarder_id should produce same hash
+    let msg3 = WrapMessage {
+        forwarder_id: [1u8; 32],
+        token_mint: [0u8; 32],
+        amount: 100,
+        nonce: 1,
+        deadline: 1700000000,
+        action_tree_root: [0u8; 32],
+    };
+    assert_eq!(msg1.hash(), msg3.hash());
 }
 
 #[test]
 fn test_wrap_input_parsing() {
-    let mut data = vec![0u8; 185];
+    let mut data = vec![0u8; WrapInput::SIZE];
 
     // token_mint
     data[0..32].copy_from_slice(&[1u8; 32]);
@@ -78,7 +121,7 @@ fn test_wrap_input_parsing() {
 
 #[test]
 fn test_unwrap_input_parsing() {
-    let mut data = vec![0u8; 72];
+    let mut data = vec![0u8; UnwrapInput::SIZE];
 
     // token_mint
     data[0..32].copy_from_slice(&[1u8; 32]);
@@ -109,12 +152,145 @@ fn test_pda_derivation() {
     assert!(escrow_bump <= 255);
     assert_ne!(escrow_pda, Pubkey::default());
 
-    // Nonce PDA
-    let (nonce_pda, nonce_bump) = derive_nonce_pda(&program_id, &user, 42);
-    assert!(nonce_bump <= 255);
-    assert_ne!(nonce_pda, Pubkey::default());
+    // Nonce Bitmap PDA (Permit2-style)
+    // Nonces 0-255 map to word_index 0
+    let (bitmap_pda_0, bitmap_bump_0) = derive_nonce_bitmap_pda(&program_id, &user, 0);
+    assert!(bitmap_bump_0 <= 255);
+    assert_ne!(bitmap_pda_0, Pubkey::default());
 
-    // Different nonces should give different PDAs
-    let (nonce_pda2, _) = derive_nonce_pda(&program_id, &user, 43);
-    assert_ne!(nonce_pda, nonce_pda2);
+    // Nonces 256-511 map to word_index 1 (different PDA)
+    let (bitmap_pda_1, _) = derive_nonce_bitmap_pda(&program_id, &user, 1);
+    assert_ne!(bitmap_pda_0, bitmap_pda_1);
+
+    // Same word_index should give same PDA
+    let (bitmap_pda_0_again, _) = derive_nonce_bitmap_pda(&program_id, &user, 0);
+    assert_eq!(bitmap_pda_0, bitmap_pda_0_again);
+}
+
+#[test]
+fn test_nonce_to_word_and_bit() {
+    // Nonce 0 -> word 0, bit 0
+    assert_eq!(nonce_to_word_and_bit(0), (0, 0));
+
+    // Nonce 1 -> word 0, bit 1
+    assert_eq!(nonce_to_word_and_bit(1), (0, 1));
+
+    // Nonce 255 -> word 0, bit 255
+    assert_eq!(nonce_to_word_and_bit(255), (0, 255));
+
+    // Nonce 256 -> word 1, bit 0 (boundary case)
+    assert_eq!(nonce_to_word_and_bit(256), (1, 0));
+
+    // Nonce 257 -> word 1, bit 1
+    assert_eq!(nonce_to_word_and_bit(257), (1, 1));
+
+    // Large nonce
+    assert_eq!(nonce_to_word_and_bit(1000), (3, 232)); // 1000 / 256 = 3, 1000 % 256 = 232
+
+    // Verify constants
+    assert_eq!(NONCES_PER_WORD, 256);
+    assert_eq!(NONCE_BITMAP_SIZE, 32);
+}
+
+#[test]
+fn test_nonce_bitmap_operations() {
+    let mut bitmap = [0u8; NONCE_BITMAP_SIZE];
+
+    // Initially all bits should be unset
+    for i in 0..=255u8 {
+        assert!(!is_nonce_used(&bitmap, i), "Bit {} should be unset", i);
+    }
+
+    // Set bit 0
+    set_nonce_used(&mut bitmap, 0);
+    assert!(is_nonce_used(&bitmap, 0));
+    assert!(!is_nonce_used(&bitmap, 1));
+
+    // Set bit 7 (end of first byte)
+    set_nonce_used(&mut bitmap, 7);
+    assert!(is_nonce_used(&bitmap, 7));
+    assert_eq!(bitmap[0], 0b10000001); // bits 0 and 7 set
+
+    // Set bit 8 (start of second byte)
+    set_nonce_used(&mut bitmap, 8);
+    assert!(is_nonce_used(&bitmap, 8));
+    assert_eq!(bitmap[1], 0b00000001);
+
+    // Set bit 255 (last bit of last byte)
+    set_nonce_used(&mut bitmap, 255);
+    assert!(is_nonce_used(&bitmap, 255));
+    assert_eq!(bitmap[31], 0b10000000); // bit 7 of byte 31
+
+    // Verify idempotence - setting same bit twice is safe
+    set_nonce_used(&mut bitmap, 0);
+    assert!(is_nonce_used(&bitmap, 0));
+    assert_eq!(bitmap[0], 0b10000001); // unchanged
+}
+
+#[test]
+fn test_bitmap_undersized_handling() {
+    let small_bitmap = [0u8; 16]; // Less than NONCE_BITMAP_SIZE
+
+    // Should return false for undersized bitmap (not panic)
+    assert!(!is_nonce_used(&small_bitmap, 0));
+    assert!(!is_nonce_used(&small_bitmap, 255));
+
+    let mut small_mut = [0u8; 16];
+    // Should be no-op for undersized bitmap (not panic)
+    set_nonce_used(&mut small_mut, 0);
+    assert_eq!(small_mut, [0u8; 16]); // unchanged
+}
+
+// =============================================================================
+// PA Emergency Stopped Tests
+// =============================================================================
+
+#[test]
+fn test_is_pa_emergency_stopped_not_paused() {
+    // PA state layout: discriminator(8) + bump(1) + authority(32) + paused(1)
+    // paused is at offset 41 (PA_PAUSED_OFFSET)
+    let mut pa_state = vec![0u8; 50];
+    // paused = 0 (not stopped)
+    pa_state[PA_PAUSED_OFFSET] = 0;
+
+    assert!(!is_pa_emergency_stopped(&pa_state));
+}
+
+#[test]
+fn test_is_pa_emergency_stopped_paused() {
+    let mut pa_state = vec![0u8; 50];
+    // paused = 1 (stopped)
+    pa_state[PA_PAUSED_OFFSET] = 1;
+
+    assert!(is_pa_emergency_stopped(&pa_state));
+}
+
+#[test]
+fn test_is_pa_emergency_stopped_any_nonzero_is_stopped() {
+    let mut pa_state = vec![0u8; 50];
+
+    // Any non-zero value at paused offset means stopped
+    pa_state[PA_PAUSED_OFFSET] = 255;
+    assert!(is_pa_emergency_stopped(&pa_state));
+
+    pa_state[PA_PAUSED_OFFSET] = 42;
+    assert!(is_pa_emergency_stopped(&pa_state));
+}
+
+#[test]
+fn test_is_pa_emergency_stopped_undersized_data() {
+    // Data too small to contain paused field - should return false (not stopped)
+    let small_data = vec![0u8; PA_PAUSED_OFFSET]; // exactly at offset, not past it
+    assert!(!is_pa_emergency_stopped(&small_data));
+
+    let empty_data: Vec<u8> = vec![];
+    assert!(!is_pa_emergency_stopped(&empty_data));
+}
+
+#[test]
+fn test_pa_paused_offset_value() {
+    // Verify the offset constant matches expected layout
+    // discriminator(8) + bump(1) + authority(32) = 41
+    assert_eq!(PA_PAUSED_OFFSET, 8 + 1 + 32);
+    assert_eq!(PA_PAUSED_OFFSET, 41);
 }
