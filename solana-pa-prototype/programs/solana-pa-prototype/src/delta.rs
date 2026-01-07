@@ -16,7 +16,9 @@ use crate::types::{Delta, Transaction};
 
 use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::solana_program::secp256k1_recover::secp256k1_recover;
-use libsecp256k1::curve::{Affine, Field, Jacobian};
+use k256::elliptic_curve::group::prime::PrimeCurveAffine;
+use k256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
+use k256::{AffinePoint, EncodedPoint, ProjectivePoint};
 
 /// Collect tags (nullifiers and commitments) in compliance unit order.
 /// Returns tags as 32-byte arrays in the order: [nf0, cm0, nf1, cm1, ...]
@@ -49,75 +51,68 @@ fn words_to_bytes(words: &[u32; 8]) -> [u8; 32] {
     *bytemuck::cast_ref(words)
 }
 
-/// Parse a 32-byte big-endian array into a libsecp256k1 Field element.
-fn bytes_to_field(bytes: &[u8; 32]) -> Result<Field, PAError> {
-    let mut fe = Field::default();
-    if !fe.set_b32(bytes) {
-        return Err(PAError::DeltaPointNotOnCurve);
+/// Parse delta coordinates from a compliance instance and return as a ProjectivePoint.
+/// Returns None if the point is the identity (0, 0).
+fn parse_delta_point(
+    x_words: &[u32; 8],
+    y_words: &[u32; 8],
+) -> Result<Option<ProjectivePoint>, PAError> {
+    let x_bytes = words_to_bytes(x_words);
+    let y_bytes = words_to_bytes(y_words);
+
+    // Check if this is the identity point (0, 0)
+    if x_bytes == [0u8; 32] && y_bytes == [0u8; 32] {
+        return Ok(None);
     }
-    Ok(fe)
+
+    // Construct encoded point from affine coordinates (uncompressed format)
+    let encoded_point = EncodedPoint::from_affine_coordinates(
+        (&x_bytes).into(),
+        (&y_bytes).into(),
+        false, // uncompressed
+    );
+
+    // Convert to ProjectivePoint, validating the point is on the curve
+    let point = ProjectivePoint::from_encoded_point(&encoded_point)
+        .into_option()
+        .ok_or(PAError::DeltaPointNotOnCurve)?;
+
+    Ok(Some(point))
 }
 
 /// Accumulate delta points from all compliance instances using EC point addition.
-/// Returns the accumulated point, or None if the result is the identity (infinity).
-pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<Affine>, PAError> {
-    let mut accumulated = Jacobian::default();
-    accumulated.set_infinity();
+/// Returns the accumulated point as an AffinePoint, or None if the result is the identity.
+pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<AffinePoint>, PAError> {
+    let mut accumulated = ProjectivePoint::IDENTITY;
 
     for action in &tx.actions {
         for cu in &action.compliance_units {
             let instance = parse_compliance_instance(&cu.instance)
                 .map_err(|_| PAError::InvalidTransactionData)?;
 
-            // Convert delta coordinates to bytes (matching arm-risc0 encoding)
-            let x_bytes = words_to_bytes(&instance.delta_x);
-            let y_bytes = words_to_bytes(&instance.delta_y);
-
-            // Check if this is the identity point (0, 0)
-            if x_bytes == [0u8; 32] && y_bytes == [0u8; 32] {
-                // Identity point contributes nothing
-                continue;
+            if let Some(point) = parse_delta_point(&instance.delta_x, &instance.delta_y)? {
+                accumulated += point;
             }
-
-            // Parse coordinates as field elements
-            let x = bytes_to_field(&x_bytes)?;
-            let y = bytes_to_field(&y_bytes)?;
-
-            // Create affine point and verify it's on the curve
-            let mut affine = Affine::default();
-            affine.set_xy(&x, &y);
-            if !affine.is_valid_var() {
-                return Err(PAError::DeltaPointNotOnCurve);
-            }
-
-            // Add to accumulated point
-            accumulated = accumulated.add_ge(&affine);
         }
     }
 
-    // Convert back to affine
-    if accumulated.is_infinity() {
+    // Convert to affine and check for identity
+    let affine = accumulated.to_affine();
+    if affine.is_identity().into() {
         Ok(None)
     } else {
-        let mut result = Affine::default();
-        result.set_gej(&accumulated);
-        Ok(Some(result))
+        Ok(Some(affine))
     }
 }
 
 /// Convert an affine point to its "address" representation using Solana syscall.
 /// address = last 20 bytes of SHA-256(x || y)
-fn point_to_address(point: &Affine) -> [u8; 20] {
-    let mut x_bytes = [0u8; 32];
-    let mut y_bytes = [0u8; 32];
-    let mut x = point.x;
-    let mut y = point.y;
-    x.normalize_var();
-    y.normalize_var();
-    x.fill_b32(&mut x_bytes);
-    y.fill_b32(&mut y_bytes);
+fn point_to_address(point: &AffinePoint) -> [u8; 20] {
+    let encoded = point.to_encoded_point(false);
+    let x_bytes = encoded.x().expect("non-identity point has x coordinate");
+    let y_bytes = encoded.y().expect("non-identity point has y coordinate");
 
-    let hash: [u8; 32] = hashv(&[&x_bytes, &y_bytes]).to_bytes();
+    let hash: [u8; 32] = hashv(&[x_bytes, y_bytes]).to_bytes();
 
     // Take last 20 bytes
     let mut address = [0u8; 20];
@@ -156,7 +151,7 @@ pub fn verify_delta_proof(tx: &Transaction) -> Result<(), PAError> {
     // 3. Compute verifying key (message hash) using Solana syscall
     let verifying_key = compute_verifying_key(&tags);
 
-    // 4. Accumulate delta points (still uses libsecp256k1 for EC math)
+    // 4. Accumulate delta points
     let accumulated = accumulate_deltas(tx)?;
 
     // 5. Parse signature (64 bytes) and recovery ID (1 byte)
@@ -176,7 +171,7 @@ pub fn verify_delta_proof(tx: &Transaction) -> Result<(), PAError> {
         return Err(PAError::InvalidDeltaProof);
     }
 
-    // 6. Recover the public key using Solana syscall (much cheaper than libsecp256k1)
+    // 6. Recover the public key using Solana syscall (much cheaper than software recovery)
     let recovered_pubkey = secp256k1_recover(&verifying_key, recid, &sig_bytes)
         .map_err(|_| PAError::DeltaProofVerificationFailed)?;
 
