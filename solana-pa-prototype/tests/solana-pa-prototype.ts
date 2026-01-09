@@ -1238,7 +1238,18 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     );
   });
 
-  it("rejects txdata_close from non-authority", async () => {
+  // -------------------------------------------------------------------------
+  // Security tests for txdata_close authorization
+  // -------------------------------------------------------------------------
+  // These tests document the two-layer security model:
+  // 1. PDA derivation includes authority's pubkey in seeds - attacker derives different PDA
+  // 2. Anchor's seeds constraint verifies PDA matches signer - can't pass someone else's PDA
+  // -------------------------------------------------------------------------
+
+  it("rejects txdata_close for non-existent account (attacker's PDA doesn't exist)", async () => {
+    // SCENARIO: Attacker derives their OWN PDA (using their pubkey in seeds).
+    // Since they never created a TxData at that address, it doesn't exist.
+    // This tests Anchor's account existence check.
     const authority = Keypair.generate();
     const attacker = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
@@ -1248,7 +1259,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const uploadIdLe = Buffer.alloc(8);
     uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
 
-    const [txData] = PublicKey.findProgramAddressSync(
+    const [authorityTxData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
       program.programId
     );
@@ -1256,26 +1267,25 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 10_000);
 
-    // Create TxData with authority
+    // Authority creates TxData at their PDA
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
         paState,
-        txData,
+        txData: authorityTxData,
         authority: authority.publicKey,
         systemProgram: SystemProgram.programId,
       })
       .signers([authority])
       .rpc();
 
-    // Attempt close from attacker (should fail)
-    // Note: PDA derivation uses authority.publicKey, so attacker can't even derive correct PDA
-    // This is expected - attacker would need to know authority's upload_id AND authority pubkey
+    // Attacker derives THEIR OWN PDA (different address because attacker.pubkey != authority.pubkey)
     const [attackerTxData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, attacker.publicKey.toBuffer(), uploadIdLe],
       program.programId
     );
 
+    // Attacker tries to close their own (non-existent) PDA
     try {
       await program.methods
         .txdataClose(uploadId)
@@ -1286,15 +1296,76 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         })
         .signers([attacker])
         .rpc();
-      assert.fail("expected txdata_close to fail for non-authority");
+      assert.fail("should have failed - attackerTxData doesn't exist");
     } catch (e: any) {
-      // Expected: account not found (different PDA derivation) or constraint violation
-      // The PDA is derived from authority's key, so attacker's PDA doesn't exist
       const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      assert.ok(
-        msg.includes("Account") || msg.includes("constraint") || msg.includes("Error") ||
-        msg.includes("AccountNotInitialized") || msg.includes("initialized"),
-        `Should fail for non-authority (PDA doesn't exist), got: ${msg}`
+      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+      const haystack = [msg, ...logs].join("\n");
+      // MUST be AccountNotInitialized - any other error indicates a different bug
+      assert.match(
+        haystack,
+        /AccountNotInitialized/,
+        `Expected AccountNotInitialized (account doesn't exist), got: ${msg}`
+      );
+    }
+  });
+
+  it("rejects txdata_close when attacker passes authority's PDA directly (seed constraint)", async () => {
+    // SCENARIO: Attacker KNOWS authority's TxData address and passes it directly.
+    // But Anchor's seeds constraint computes [TX_DATA_SEED, signer.key(), upload_id].
+    // Since signer is attacker, computed PDA != authority's PDA → ConstraintSeeds error.
+    // This tests Anchor's PDA seed verification.
+    const authority = Keypair.generate();
+    const attacker = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+    await airdrop(provider, attacker.publicKey, 1);
+
+    const uploadId = new anchor.BN(Date.now());
+    const uploadIdLe = Buffer.alloc(8);
+    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+
+    const [authorityTxData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
+
+    // Authority creates TxData
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData: authorityTxData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Attacker tries to close AUTHORITY'S TxData by passing the address directly
+    // Anchor will compute seeds with attacker.pubkey → different PDA → constraint fails
+    try {
+      await program.methods
+        .txdataClose(uploadId)
+        .accounts({
+          txData: authorityTxData,  // <-- Attacker passes authority's actual TxData
+          authority: attacker.publicKey,
+          refund: attacker.publicKey,
+        })
+        .signers([attacker])
+        .rpc();
+      assert.fail("should have failed - seed constraint should reject");
+    } catch (e: any) {
+      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
+      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+      const haystack = [msg, ...logs].join("\n");
+      // MUST be ConstraintSeeds - Anchor computes PDA from signer, doesn't match passed account
+      assert.match(
+        haystack,
+        /ConstraintSeeds|seeds constraint was violated/i,
+        `Expected ConstraintSeeds (PDA mismatch), got: ${msg}`
       );
     }
   });
