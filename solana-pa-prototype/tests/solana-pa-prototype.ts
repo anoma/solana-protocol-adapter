@@ -12,6 +12,12 @@ import { assert } from "chai";
 import { readFileSync } from "fs";
 import path from "path";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
+import {
+  assertRejectsWithError,
+  getErrorHaystack,
+  TX_DATA_EXPIRY,
+  TX_DATA_CHUNK_SIZE,
+} from "./test-utils";
 
 // Import helpers from risc0-solana for PDA derivation
 import { address } from "@solana/kit";
@@ -195,9 +201,8 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       .signers([authority])
       .rpc();
 
-    const chunkSize = 700;
-    for (let offset = 0; offset < payload.length; offset += chunkSize) {
-      const chunk = payload.subarray(offset, Math.min(payload.length, offset + chunkSize));
+    for (let offset = 0; offset < payload.length; offset += TX_DATA_CHUNK_SIZE) {
+      const chunk = payload.subarray(offset, Math.min(payload.length, offset + TX_DATA_CHUNK_SIZE));
       await program.methods
         .txdataWrite(uploadId, offset, Buffer.from(chunk))
         .accounts({
@@ -372,27 +377,19 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     // Patch variant from 1 (Proof) to 0 (Witness)
     txWitness.writeUInt32LE(0, idx);
 
-    try {
-      await settleViaTxData(Keypair.generate(), txWitness);
-      assert.fail("expected settle to fail with ExpectedDeltaProof");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      assert.match(haystack, /ExpectedDeltaProof|Expected delta proof/i);
-    }
+    await assertRejectsWithError(
+      settleViaTxData(Keypair.generate(), txWitness),
+      /ExpectedDeltaProof|Expected delta proof/i,
+      "expected settle to fail with ExpectedDeltaProof"
+    );
   });
 
   it("rejects a tampered tx (proof binding)", async () => {
-    try {
-      await settleViaTxData(Keypair.generate(), txTampered);
-      assert.fail("expected settle to fail");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      assert.match(haystack, /Proof verification failed|ProofVerificationFailed|Verification error/);
-    }
+    await assertRejectsWithError(
+      settleViaTxData(Keypair.generate(), txTampered),
+      /Proof verification failed|ProofVerificationFailed|Verification error/,
+      "expected settle to fail with tampered proof"
+    );
   });
 
   it("accepts a valid Groth16 batch aggregation tx and creates root marker", async () => {
@@ -469,55 +466,55 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       isSigner: false,
     }));
 
-    try {
-      // Attempt settlement - should fail with ExternalCallOutputMismatch
-      const authority = Keypair.generate();
-      await airdrop(provider, authority.publicKey, 2);
+    // Setup: upload TxData for the mismatch fixture
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
 
-      const uploadId = new anchor.BN(Date.now());
-      const uploadIdLe = Buffer.alloc(8);
-      uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const uploadId = new anchor.BN(Date.now());
+    const uploadIdLe = Buffer.alloc(8);
+    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
 
-      const [txData] = PublicKey.findProgramAddressSync(
-        [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-        program.programId
-      );
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
 
-      const capacity = mismatchTx.length;
-      const slot = await provider.connection.getSlot("confirmed");
-      const expiresSlot = new anchor.BN(slot + 10_000);
+    const capacity = mismatchTx.length;
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
 
+    await program.methods
+      .txdataInit(uploadId, capacity, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    for (let offset = 0; offset < mismatchTx.length; offset += TX_DATA_CHUNK_SIZE) {
+      const chunk = mismatchTx.subarray(offset, Math.min(mismatchTx.length, offset + TX_DATA_CHUNK_SIZE));
       await program.methods
-        .txdataInit(uploadId, capacity, expiresSlot)
+        .txdataWrite(uploadId, offset, Buffer.from(chunk))
         .accounts({
-          paState,
           txData,
           authority: authority.publicKey,
-          systemProgram: SystemProgram.programId,
         })
         .signers([authority])
         .rpc();
+    }
 
-      const chunkSize = 700;
-      for (let offset = 0; offset < mismatchTx.length; offset += chunkSize) {
-        const chunk = mismatchTx.subarray(offset, Math.min(mismatchTx.length, offset + chunkSize));
-        await program.methods
-          .txdataWrite(uploadId, offset, Buffer.from(chunk))
-          .accounts({
-            txData,
-            authority: authority.publicKey,
-          })
-          .signers([authority])
-          .rpc();
-      }
+    const allRemainingAccounts = [
+      ...mismatchRemainingAccounts,
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
 
-      const allRemainingAccounts = [
-        ...mismatchRemainingAccounts,
-        { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
-        { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
-      ];
-
-      await program.methods
+    // Settlement should fail with ExternalCallOutputMismatch
+    await assertRejectsWithError(
+      program.methods
         .settleFromTxdata(uploadId)
         .accounts({
           paState,
@@ -534,19 +531,10 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
         ])
         .signers([authority])
-        .rpc();
-
-      assert.fail("expected settle to fail with ExternalCallOutputMismatch");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      assert.match(
-        haystack,
-        /ExternalCallOutputMismatch|external call output mismatch/i,
-        "Should fail with ExternalCallOutputMismatch error"
-      );
-    }
+        .rpc(),
+      /ExternalCallOutputMismatch|external call output mismatch/i,
+      "Should fail with ExternalCallOutputMismatch error"
+    );
   });
 
   // ==========================================================================
@@ -617,28 +605,20 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     const nonAuthority = Keypair.generate();
     await airdrop(provider, nonAuthority.publicKey, 1);
 
-    try {
-      await program.methods
+    // Anchor's has_one constraint produces "A has one constraint was violated"
+    // or our custom error "Unauthorized"
+    await assertRejectsWithError(
+      program.methods
         .emergencyStop()
         .accounts({
           paState,
           authority: nonAuthority.publicKey,
         })
         .signers([nonAuthority])
-        .rpc();
-      assert.fail("expected emergency_stop to fail for non-authority");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      // Anchor's has_one constraint produces "A has one constraint was violated"
-      // or our custom error "Unauthorized"
-      assert.match(
-        haystack,
-        /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
-        "Should fail with Unauthorized or has_one constraint error"
-      );
-    }
+        .rpc(),
+      /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
+      "expected emergency_stop to fail for non-authority"
+    );
   });
 
   it("rejects transfer_authority from non-authority", async () => {
@@ -646,26 +626,18 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     const newAuthority = Keypair.generate();
     await airdrop(provider, nonAuthority.publicKey, 1);
 
-    try {
-      await program.methods
+    await assertRejectsWithError(
+      program.methods
         .transferAuthority(newAuthority.publicKey)
         .accounts({
           paState,
           authority: nonAuthority.publicKey,
         })
         .signers([nonAuthority])
-        .rpc();
-      assert.fail("expected transfer_authority to fail for non-authority");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      assert.match(
-        haystack,
-        /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
-        "Should fail with Unauthorized or has_one constraint error"
-      );
-    }
+        .rpc(),
+      /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
+      "expected transfer_authority to fail for non-authority"
+    );
   });
 
   it("transfers authority when called by current authority", async () => {
@@ -729,25 +701,17 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     // Old authority should not be able to call emergency_stop
-    try {
-      await program.methods
+    await assertRejectsWithError(
+      program.methods
         .emergencyStop()
         .accounts({
           paState,
           authority: provider.wallet.publicKey,
         })
-        .rpc();
-      assert.fail("expected emergency_stop to fail for old authority");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      assert.match(
-        haystack,
-        /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
-        "Should fail with Unauthorized or has_one constraint error"
-      );
-    }
+        .rpc(),
+      /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
+      "expected emergency_stop to fail for old authority"
+    );
 
     // Restore original authority
     await program.methods
@@ -835,10 +799,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
   const PA_STATE_SEED = Buffer.from("pa_state");
   const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
-  // Constants matching Rust (from state.rs)
-  const MIN_EXPIRY_SLOTS = 100;
-  const MAX_EXPIRY_SLOTS = 216_000;
-
   it("rejects txdata_init with expires_slot too soon", async () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 1);
@@ -856,8 +816,8 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     // Set expiry too soon (only 50 slots from now, MIN is 100)
     const expiresSlot = new anchor.BN(slot + 50);
 
-    try {
-      await program.methods
+    await assertRejectsWithError(
+      program.methods
         .txdataInit(uploadId, 100, expiresSlot)
         .accounts({
           paState,
@@ -866,14 +826,10 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
           systemProgram: SystemProgram.programId,
         })
         .signers([authority])
-        .rpc();
-      assert.fail("expected txdata_init to fail with TxDataExpiryTooSoon");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      assert.match(haystack, /TxDataExpiryTooSoon|expires_slot is below minimum/i);
-    }
+        .rpc(),
+      /TxDataExpiryTooSoon|expires_slot is below minimum/i,
+      "expected txdata_init to fail with TxDataExpiryTooSoon"
+    );
   });
 
   it("rejects txdata_init with expires_slot too late", async () => {
@@ -891,10 +847,10 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
     const slot = await provider.connection.getSlot("confirmed");
     // Set expiry too late (MAX + 1000 slots from now)
-    const expiresSlot = new anchor.BN(slot + MAX_EXPIRY_SLOTS + 1000);
+    const expiresSlot = new anchor.BN(slot + TX_DATA_EXPIRY.MAX_SLOTS + 1000);
 
-    try {
-      await program.methods
+    await assertRejectsWithError(
+      program.methods
         .txdataInit(uploadId, 100, expiresSlot)
         .accounts({
           paState,
@@ -903,14 +859,10 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
           systemProgram: SystemProgram.programId,
         })
         .signers([authority])
-        .rpc();
-      assert.fail("expected txdata_init to fail with TxDataExpiryTooLate");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      assert.match(haystack, /TxDataExpiryTooLate|expires_slot exceeds maximum/i);
-    }
+        .rpc(),
+      /TxDataExpiryTooLate|expires_slot exceeds maximum/i,
+      "expected txdata_init to fail with TxDataExpiryTooLate"
+    );
   });
 
   it("accepts txdata_init with valid expires_slot", async () => {
@@ -928,7 +880,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
     const slot = await provider.connection.getSlot("confirmed");
     // Set expiry at midpoint of valid range
-    const expiresSlot = new anchor.BN(slot + Math.floor((MIN_EXPIRY_SLOTS + MAX_EXPIRY_SLOTS) / 2));
+    const expiresSlot = new anchor.BN(slot + Math.floor((TX_DATA_EXPIRY.MIN_SLOTS + TX_DATA_EXPIRY.MAX_SLOTS) / 2));
 
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
@@ -1055,8 +1007,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     );
 
     // Attacker tries to close their own (non-existent) PDA
-    try {
-      await program.methods
+    // MUST be AccountNotInitialized - any other error indicates a different bug
+    await assertRejectsWithError(
+      program.methods
         .txdataClose(uploadId)
         .accounts({
           txData: attackerTxData,
@@ -1064,19 +1017,10 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
           refund: attacker.publicKey,
         })
         .signers([attacker])
-        .rpc();
-      assert.fail("should have failed - attackerTxData doesn't exist");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      // MUST be AccountNotInitialized - any other error indicates a different bug
-      assert.match(
-        haystack,
-        /AccountNotInitialized/,
-        `Expected AccountNotInitialized (account doesn't exist), got: ${msg}`
-      );
-    }
+        .rpc(),
+      /AccountNotInitialized/,
+      "attackerTxData doesn't exist - expected AccountNotInitialized"
+    );
   });
 
   it("rejects txdata_close when attacker passes authority's PDA directly (seed constraint)", async () => {
@@ -1115,8 +1059,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
     // Attacker tries to close AUTHORITY'S TxData by passing the address directly
     // Anchor will compute seeds with attacker.pubkey → different PDA → constraint fails
-    try {
-      await program.methods
+    // MUST be ConstraintSeeds - Anchor computes PDA from signer, doesn't match passed account
+    await assertRejectsWithError(
+      program.methods
         .txdataClose(uploadId)
         .accounts({
           txData: authorityTxData,  // <-- Attacker passes authority's actual TxData
@@ -1124,19 +1069,10 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
           refund: attacker.publicKey,
         })
         .signers([attacker])
-        .rpc();
-      assert.fail("should have failed - seed constraint should reject");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      // MUST be ConstraintSeeds - Anchor computes PDA from signer, doesn't match passed account
-      assert.match(
-        haystack,
-        /ConstraintSeeds|seeds constraint was violated/i,
-        `Expected ConstraintSeeds (PDA mismatch), got: ${msg}`
-      );
-    }
+        .rpc(),
+      /ConstraintSeeds|seeds constraint was violated/i,
+      "seed constraint should reject - expected ConstraintSeeds"
+    );
   });
 
   it("verifies new error types exist in IDL", async () => {
@@ -1247,8 +1183,8 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const currentSlot = await provider.connection.getSlot("confirmed");
     const lowerExpiry = new anchor.BN(currentSlot + 500); // Less than current expires_slot
 
-    try {
-      await program.methods
+    await assertRejectsWithError(
+      program.methods
         .txdataExtend(uploadId, lowerExpiry)
         .accountsStrict({
           paState,
@@ -1256,14 +1192,10 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
           authority: authority.publicKey,
         })
         .signers([authority])
-        .rpc();
-      assert.fail("expected txdata_extend to fail with TxDataExtendMustIncrease");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      assert.match(haystack, /TxDataExtendMustIncrease|extension must increase/i);
-    }
+        .rpc(),
+      /TxDataExtendMustIncrease|extension must increase/i,
+      "expected txdata_extend to fail with TxDataExtendMustIncrease"
+    );
   });
 
   // ===========================================================================
@@ -1311,8 +1243,8 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       .rpc();
 
     // Try to close_expired (should fail - not expired yet)
-    try {
-      await program.methods
+    await assertRejectsWithError(
+      program.methods
         .txdataCloseExpired(uploadId, authority.publicKey)
         .accountsStrict({
           txData,
@@ -1320,14 +1252,10 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
           refund: authority.publicKey,
         })
         .signers([cleaner])
-        .rpc();
-      assert.fail("expected txdata_close_expired to fail with TxDataNotExpired");
-    } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
-      assert.match(haystack, /TxDataNotExpired|has not expired/i);
-    }
+        .rpc(),
+      /TxDataNotExpired|has not expired/i,
+      "expected txdata_close_expired to fail with TxDataNotExpired"
+    );
   });
 
   // ===========================================================================
