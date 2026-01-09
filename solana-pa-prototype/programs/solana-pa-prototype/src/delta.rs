@@ -52,18 +52,16 @@ fn words_to_bytes(words: &[u32; 8]) -> [u8; 32] {
 }
 
 /// Parse delta coordinates from a compliance instance and return as a ProjectivePoint.
-/// Returns None if the point is the identity (0, 0).
+///
+/// All compliance units must provide valid secp256k1 curve points. The point (0, 0)
+/// is NOT on the curve and will error - the identity point (point at infinity) has
+/// no valid affine representation.
 fn parse_delta_point(
     x_words: &[u32; 8],
     y_words: &[u32; 8],
-) -> Result<Option<ProjectivePoint>, PAError> {
+) -> Result<ProjectivePoint, PAError> {
     let x_bytes = words_to_bytes(x_words);
     let y_bytes = words_to_bytes(y_words);
-
-    // Check if this is the identity point (0, 0)
-    if x_bytes == [0u8; 32] && y_bytes == [0u8; 32] {
-        return Ok(None);
-    }
 
     // Construct encoded point from affine coordinates (uncompressed format)
     let encoded_point = EncodedPoint::from_affine_coordinates(
@@ -72,12 +70,11 @@ fn parse_delta_point(
         false, // uncompressed
     );
 
-    // Convert to ProjectivePoint, validating the point is on the curve
-    let point = ProjectivePoint::from_encoded_point(&encoded_point)
+    // Convert to ProjectivePoint, validating the point is on the curve.
+    // This will reject (0, 0) since it's not a valid curve point.
+    ProjectivePoint::from_encoded_point(&encoded_point)
         .into_option()
-        .ok_or(PAError::DeltaPointNotOnCurve)?;
-
-    Ok(Some(point))
+        .ok_or(PAError::DeltaPointNotOnCurve)
 }
 
 /// Accumulate delta points from all compliance instances using EC point addition.
@@ -90,9 +87,8 @@ pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<AffinePoint>, PAErro
             let instance = parse_compliance_instance(&cu.instance)
                 .map_err(|_| PAError::InvalidTransactionData)?;
 
-            if let Some(point) = parse_delta_point(&instance.delta_x, &instance.delta_y)? {
-                accumulated += point;
-            }
+            let point = parse_delta_point(&instance.delta_x, &instance.delta_y)?;
+            accumulated += point;
         }
     }
 

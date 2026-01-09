@@ -42,16 +42,17 @@ proptest! {
         prop_assert_eq!(vk1, vk2, "same tags should produce same verifying key");
     }
 
-    /// Property: zero deltas accumulate to identity (None).
+    /// Property: (0, 0) delta points error because they're not on the secp256k1 curve.
+    /// The identity point (point at infinity) has no valid affine representation.
     #[test]
-    fn prop_zero_deltas_accumulate_to_identity(
+    fn prop_invalid_zero_delta_errors(
         inst1 in arb_compliance_instance_zero_delta(),
         inst2 in arb_compliance_instance_zero_delta(),
     ) {
         let instances = vec![inst1, inst2];
         let tx = build_tx_from_instances(&instances);
-        let result = accumulate_deltas(&tx).unwrap();
-        prop_assert!(result.is_none(), "zero deltas should accumulate to identity (None)");
+        let result = accumulate_deltas(&tx);
+        prop_assert!(result.is_err(), "(0, 0) is not on the curve and should error");
     }
 
     /// Property: witness delta_proof is rejected by verify_delta_proof.
