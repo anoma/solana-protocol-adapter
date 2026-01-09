@@ -172,10 +172,6 @@ pub fn verify_delta_proof(tx: &Transaction) -> Result<(), PAError> {
         recid_byte
     };
 
-    if recid > 3 {
-        return Err(PAError::InvalidDeltaProof);
-    }
-
     // 6. Recover the public key using Solana syscall (much cheaper than libsecp256k1)
     let recovered_pubkey = secp256k1_recover(&verifying_key, recid, &sig_bytes)
         .map_err(|_| PAError::DeltaProofVerificationFailed)?;
