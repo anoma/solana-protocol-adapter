@@ -1,7 +1,7 @@
 //! Anchor account definitions for on-chain PAState.
 //! Named "state" to avoid conflict with Anchor's internal "accounts" module.
 
-use crate::merkle::{INITIAL_TREE_DEPTH, MAX_TREE_DEPTH};
+use crate::merkle::MAX_TREE_DEPTH;
 use crate::types::Digest;
 use anchor_lang::prelude::*;
 

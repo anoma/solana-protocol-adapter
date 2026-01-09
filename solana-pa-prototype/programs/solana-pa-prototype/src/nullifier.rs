@@ -7,7 +7,8 @@
 
 use crate::error::PAError;
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
+use anchor_lang::solana_program::program::invoke_signed;
+use solana_system_interface::instruction as system_instruction;
 
 /// Seeds prefix for nullifier PDA derivation.
 pub const NULLIFIER_SEED: &[u8] = b"nullifier";

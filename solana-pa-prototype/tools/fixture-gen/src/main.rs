@@ -54,36 +54,19 @@ struct Fixture {
     consumed_nullifiers_b64: Vec<String>,
 }
 
-/// Extract the Groth16 selector from a transaction's proof data.
+/// Extract the Groth16 selector from a transaction's aggregation proof.
 /// The selector is the first 4 bytes of the verifier_parameters digest,
 /// which is the last 32 bytes of the serialized proof.
 fn extract_selector(tx: &Transaction) -> Result<String> {
-    // For aggregated proofs, the selector is in the aggregation_proof
-    if let Some(ref agg_proof) = tx.aggregation_proof {
-        let proof_bytes = bincode::serialize(agg_proof)
-            .context("serialize aggregation_proof for selector extraction")?;
-        if proof_bytes.len() < 32 {
-            return Err(anyhow!("aggregation_proof too short for selector extraction"));
-        }
-        let vp_start = proof_bytes.len() - 32;
-        let selector = &proof_bytes[vp_start..vp_start + 4];
-        return Ok(format!("0x{}", hex::encode(selector)));
-    }
-
-    // For non-aggregated proofs, extract from the first compliance unit's proof
-    let first_cu = tx
-        .actions
-        .first()
-        .and_then(|a| a.compliance_units.first())
-        .ok_or_else(|| anyhow!("no compliance units found for selector extraction"))?;
-
-    let proof_bytes = first_cu
-        .proof
+    let agg_proof = tx
+        .aggregation_proof
         .as_ref()
-        .ok_or_else(|| anyhow!("first compliance unit has no proof"))?;
+        .ok_or_else(|| anyhow!("no aggregation_proof found for selector extraction"))?;
 
+    let proof_bytes = bincode::serialize(agg_proof)
+        .context("serialize aggregation_proof for selector extraction")?;
     if proof_bytes.len() < 32 {
-        return Err(anyhow!("compliance proof too short for selector extraction"));
+        return Err(anyhow!("aggregation_proof too short for selector extraction"));
     }
     let vp_start = proof_bytes.len() - 32;
     let selector = &proof_bytes[vp_start..vp_start + 4];
@@ -209,14 +192,9 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
     })
 }
 
-fn generate_test_transaction_with_external_payload(non_aggregated: bool, output_mismatch: bool) -> Result<Transaction> {
-    // For aggregated mode: Inner proofs must be Succinct for aggregation.
-    // For non-aggregated mode: Each proof is individual Groth16.
-    let base_proof_type = if non_aggregated {
-        ProofType::Groth16
-    } else {
-        ProofType::Succinct
-    };
+fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Result<Transaction> {
+    // Inner proofs must be Succinct for aggregation.
+    let base_proof_type = ProofType::Succinct;
 
     // Use the passthrough logic circuit for both consumed and created resources.
     // This allows us to bind arbitrary `app_data.external_payload` into real proofs.
@@ -236,12 +214,7 @@ fn generate_test_transaction_with_external_payload(non_aggregated: bool, output_
     // Stable-ish nonce so the fixture is deterministic.
     // Use different nonce for each fixture variant so they have different nullifiers.
     // This prevents DuplicateNullifier errors when running multiple fixtures in a test suite.
-    let nonce_byte: u8 = match (non_aggregated, output_mismatch) {
-        (false, false) => 0, // batch_groth16.json
-        (true, false) => 1,  // individual_groth16.json
-        (false, true) => 2,  // batch_groth16_mismatch.json
-        (true, true) => 3,   // individual_groth16_mismatch.json (if ever needed)
-    };
+    let nonce_byte: u8 = if output_mismatch { 2 } else { 0 };
     consumed_resource.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
     let consumed_nf = consumed_resource
         .nullifier(&nf_key)
@@ -331,16 +304,15 @@ fn fmt_duration(d: Duration) -> String {
 
 fn print_usage_and_exit() -> Result<()> {
     eprintln!(
-        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--non-aggregated] [--output-mismatch] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --non-aggregated tests/fixtures/individual_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--non-aggregated` generates individual Groth16 proofs without aggregation (for testing non-aggregated path).\n  - `--output-mismatch` generates a fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n"
+        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n"
     );
     Ok(())
 }
 
-fn parse_args() -> Result<(Option<usize>, bool, bool, bool, PathBuf)> {
+fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
     let mut args = env::args().skip(1);
     let mut threads: Option<usize> = None;
     let mut debug_assumptions = false;
-    let mut non_aggregated = false;
     let mut output_mismatch = false;
     let mut out_path: Option<PathBuf> = None;
 
@@ -364,9 +336,6 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, bool, PathBuf)> {
             }
             "--debug-assumptions" => {
                 debug_assumptions = true;
-            }
-            "--non-aggregated" => {
-                non_aggregated = true;
             }
             "--output-mismatch" => {
                 output_mismatch = true;
@@ -400,12 +369,12 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, bool, PathBuf)> {
         PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json")
     });
 
-    Ok((threads, debug_assumptions, non_aggregated, output_mismatch, out_path))
+    Ok((threads, debug_assumptions, output_mismatch, out_path))
 }
 
 fn main() -> Result<()> {
     let total_start = Instant::now();
-    let (threads, debug_assumptions, non_aggregated, output_mismatch, out_path) = parse_args()?;
+    let (threads, debug_assumptions, output_mismatch, out_path) = parse_args()?;
 
     // Configure rayon parallelism deterministically (helps avoid pegging/overheating/OOM).
     // Must happen before any proving work starts.
@@ -420,47 +389,36 @@ fn main() -> Result<()> {
     }
 
     eprintln!("fixture output: {}", out_path.display());
-    if non_aggregated {
-        eprintln!("mode: non-aggregated (individual Groth16 proofs)");
-    } else {
-        eprintln!("mode: aggregated (batch Groth16)");
-    }
+    eprintln!("mode: aggregated (batch Groth16)");
     if output_mismatch {
         eprintln!("mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)");
     }
 
     eprintln!("phase: generate_test_transaction");
     let start = Instant::now();
-    let mut tx = generate_test_transaction_with_external_payload(non_aggregated, output_mismatch)?;
+    let mut tx = generate_test_transaction_with_external_payload(output_mismatch)?;
     eprintln!("phase done: generate_test_transaction ({})", fmt_duration(start.elapsed()));
 
-    if !non_aggregated {
-        if debug_assumptions {
-            eprintln!("phase: debug_assumptions (claim digests must match env::verify calls)");
-            let start = Instant::now();
-            debug_batch_assumptions(&tx)?;
-            eprintln!("phase done: debug_assumptions ({})", fmt_duration(start.elapsed()));
-        }
-
-        eprintln!("phase: aggregate_with_strategy(batch, groth16) (this is the expensive step)");
+    if debug_assumptions {
+        eprintln!("phase: debug_assumptions (claim digests must match env::verify calls)");
         let start = Instant::now();
-        tx.aggregate_with_strategy(AggregationStrategy::Batch, ProofType::Groth16)
-            .context("aggregate tx (batch, groth16)")?;
-        eprintln!(
-            "phase done: aggregate_with_strategy(batch, groth16) ({})",
-            fmt_duration(start.elapsed())
-        );
-
-        eprintln!("phase: verify_aggregation");
-        let start = Instant::now();
-        tx.verify_aggregation().context("verify aggregated proof")?;
-        eprintln!("phase done: verify_aggregation ({})", fmt_duration(start.elapsed()));
-    } else {
-        eprintln!("phase: skipping aggregation (non-aggregated mode)");
-        // Verify individual proofs work
-        tx.clone().verify().context("verify non-aggregated tx")?;
-        eprintln!("phase done: verify individual proofs");
+        debug_batch_assumptions(&tx)?;
+        eprintln!("phase done: debug_assumptions ({})", fmt_duration(start.elapsed()));
     }
+
+    eprintln!("phase: aggregate_with_strategy(batch, groth16) (this is the expensive step)");
+    let start = Instant::now();
+    tx.aggregate_with_strategy(AggregationStrategy::Batch, ProofType::Groth16)
+        .context("aggregate tx (batch, groth16)")?;
+    eprintln!(
+        "phase done: aggregate_with_strategy(batch, groth16) ({})",
+        fmt_duration(start.elapsed())
+    );
+
+    eprintln!("phase: verify_aggregation");
+    let start = Instant::now();
+    tx.verify_aggregation().context("verify aggregated proof")?;
+    eprintln!("phase done: verify_aggregation ({})", fmt_duration(start.elapsed()));
 
     eprintln!("phase: serialize_tx");
     let start = Instant::now();
@@ -500,8 +458,8 @@ fn main() -> Result<()> {
 
     let fixture = Fixture {
         format: "arm-risc0:Transaction(bincode)",
-        aggregation_strategy: if non_aggregated { "none" } else { "batch" },
-        aggregation_proof_type: if non_aggregated { "individual_groth16" } else { "groth16" },
+        aggregation_strategy: "batch",
+        aggregation_proof_type: "groth16",
         selector,
         tx_b64: BASE64.encode(tx_bytes),
         tx_tampered_b64: BASE64.encode(tx_tampered_bytes),
