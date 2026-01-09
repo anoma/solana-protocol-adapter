@@ -56,10 +56,7 @@ fn words_to_bytes(words: &[u32; 8]) -> [u8; 32] {
 /// All compliance units must provide valid secp256k1 curve points. The point (0, 0)
 /// is NOT on the curve and will error - the identity point (point at infinity) has
 /// no valid affine representation.
-fn parse_delta_point(
-    x_words: &[u32; 8],
-    y_words: &[u32; 8],
-) -> Result<ProjectivePoint, PAError> {
+fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<ProjectivePoint, PAError> {
     let x_bytes = words_to_bytes(x_words);
     let y_bytes = words_to_bytes(y_words);
 
