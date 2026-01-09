@@ -53,7 +53,9 @@ pub fn arb_compliance_instance() -> impl Strategy<Value = ComplianceInstance> {
         })
 }
 
-/// Strategy for ComplianceInstance with zero deltas (identity point).
+/// Strategy for ComplianceInstance with zero deltas (0, 0).
+/// NOTE: (0, 0) is NOT a valid secp256k1 curve point - the identity point has no affine
+/// representation. This strategy is useful for testing error handling.
 pub fn arb_compliance_instance_zero_delta() -> impl Strategy<Value = ComplianceInstance> {
     (
         arb_digest(),

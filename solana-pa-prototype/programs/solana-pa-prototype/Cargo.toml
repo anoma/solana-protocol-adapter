@@ -39,8 +39,7 @@ hex = "0.4"
 hex-literal = "0.4"
 
 # Delta proof verification (secp256k1 EC operations)
-# Using libsecp256k1 which is more Solana-compatible
-libsecp256k1 = "0.7"
+k256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
 
 # SHA-256 for verifying key computation (Solana-compatible hash)
 sha2 = "0.10"
@@ -53,9 +52,9 @@ block-time-forwarder = { path = "../block-time-forwarder", default-features = fa
 num-bigint = "0.4"
 num-traits = "0.2"
 
-# Solana program testing
-solana-program-test = "1.18.26"
-solana-sdk = "1.18.26"
+# Solana program testing (must match anchor-lang's solana version)
+solana-program-test = "2.1"
+solana-sdk = "2.1"
 tokio = { version = "1", features = ["full"] }
 
 # Property-based testing (fuzzing parity with EVM PA)
