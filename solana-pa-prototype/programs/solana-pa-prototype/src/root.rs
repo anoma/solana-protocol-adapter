@@ -13,7 +13,8 @@ use crate::merkle::PADDING_LEAF;
 use crate::state::PAStateAccount;
 use crate::types::Digest;
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::{program::invoke_signed, system_instruction};
+use anchor_lang::solana_program::program::invoke_signed;
+use solana_system_interface::instruction as system_instruction;
 
 /// Seeds prefix for root marker PDA derivation.
 pub const ROOT_MARKER_SEED: &[u8] = b"root";
