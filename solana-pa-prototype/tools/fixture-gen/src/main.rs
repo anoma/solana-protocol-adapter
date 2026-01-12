@@ -2,7 +2,8 @@ use anyhow::{anyhow, Context, Result};
 use arm::aggregation::AggregationStrategy;
 use arm::action::Action;
 use arm::action_tree::MerkleTree;
-use arm::compliance::ComplianceWitness;
+use arm::compliance::{ComplianceWitness, INITIAL_ROOT};
+use arm::merkle_path::MerklePath;
 use arm::compliance_unit::ComplianceUnit;
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
@@ -14,6 +15,7 @@ use arm::Digest;
 use arm::utils::bytes_to_words;
 use arm::delta_proof::DeltaWitness;
 use arm::resource::Resource;
+use k256::{elliptic_curve::PrimeField, Scalar};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use rayon::ThreadPoolBuilder;
@@ -224,11 +226,16 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
     created_resource.set_nonce(consumed_nf);
     let created_cm = created_resource.commitment();
 
-    let compliance_witness = ComplianceWitness::with_fixed_rcv(
+    // Create ComplianceWitness with fixed rcv for deterministic fixtures.
+    // The consumed resource is ephemeral, so use empty merkle_path and INITIAL_ROOT.
+    let compliance_witness = ComplianceWitness {
         consumed_resource,
-        nf_key.clone(),
         created_resource,
-    );
+        merkle_path: MerklePath::empty(),
+        rcv: Scalar::ONE.to_bytes().to_vec(),
+        nf_key: nf_key.clone(),
+        ephemeral_root: *INITIAL_ROOT,
+    };
     let compliance_receipt =
         ComplianceUnit::create(&compliance_witness, base_proof_type).context("prove compliance")?;
 

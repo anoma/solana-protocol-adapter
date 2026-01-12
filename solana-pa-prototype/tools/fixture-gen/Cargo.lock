@@ -501,7 +501,7 @@ dependencies = [
  "ark-ff 0.5.0",
  "ark-std 0.5.0",
  "tracing",
- "tracing-subscriber 0.2.25",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -593,7 +593,7 @@ dependencies = [
 
 [[package]]
 name = "arm"
-version = "0.13.0"
+version = "1.0.0"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -606,14 +606,12 @@ dependencies = [
  "serde_with",
  "sha2",
  "sha3",
- "slab",
  "thiserror 2.0.17",
- "tracing-subscriber 0.3.22",
 ]
 
 [[package]]
 name = "arm-gadgets"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "aes-gcm",
  "alloy-primitives",
@@ -629,18 +627,19 @@ dependencies = [
 
 [[package]]
 name = "arm-test-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arm",
  "arm-test-witness",
  "hex",
+ "k256",
  "lazy_static",
  "serde",
 ]
 
 [[package]]
 name = "arm-test-witness"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arm",
  "arm-gadgets",
@@ -1652,6 +1651,7 @@ dependencies = [
  "base64",
  "bincode",
  "hex",
+ "k256",
  "passthrough-logic-methods",
  "rayon",
  "risc0-zkvm",
@@ -2409,6 +2409,7 @@ dependencies = [
  "once_cell",
  "serdect",
  "sha2",
+ "signature",
 ]
 
 [[package]]
@@ -2726,15 +2727,6 @@ name = "no_std_strings"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a5b0c77c1b780822bc749a33e39aeb2c07584ab93332303babeabb645298a76e"
-
-[[package]]
-name = "nu-ansi-term"
-version = "0.50.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
-dependencies = [
- "windows-sys 0.61.2",
-]
 
 [[package]]
 name = "num-bigint"
@@ -4313,15 +4305,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sharded-slab"
-version = "0.1.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
-dependencies = [
- "lazy_static",
-]
-
-[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4550,15 +4533,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.111",
-]
-
-[[package]]
-name = "thread_local"
-version = "1.1.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f60246a4944f24f6e018aa17cdeffb7818b76356965d03b07d6a9886e8962185"
-dependencies = [
- "cfg-if",
 ]
 
 [[package]]
@@ -4813,37 +4787,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "tracing-log"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ee855f1f400bd0e5c02d150ae5de3840039a3f54b025156404e34c23c03f47c3"
-dependencies = [
- "log",
- "once_cell",
- "tracing-core",
-]
-
-[[package]]
 name = "tracing-subscriber"
 version = "0.2.25"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e0d2eaa99c3c2e41547cfa109e910a68ea03823cccad4a0525dcbc9b01e8c71"
 dependencies = [
  "tracing-core",
-]
-
-[[package]]
-name = "tracing-subscriber"
-version = "0.3.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2f30143827ddab0d256fd843b7a66d164e9f271cfa0dde49142c5ca0ca291f1e"
-dependencies = [
- "nu-ansi-term",
- "sharded-slab",
- "smallvec",
- "thread_local",
- "tracing-core",
- "tracing-log",
 ]
 
 [[package]]
