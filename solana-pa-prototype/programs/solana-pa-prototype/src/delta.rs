@@ -15,9 +15,7 @@ use crate::types::{Delta, Transaction};
 
 use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::solana_program::secp256k1_recover::secp256k1_recover;
-use k256::elliptic_curve::group::prime::PrimeCurveAffine;
-use k256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
-use k256::{AffinePoint, EncodedPoint, ProjectivePoint};
+use solana_secp256k1::{Curve, UncompressedPoint};
 
 /// Collect tags (nullifiers and commitments) in compliance unit order.
 /// Returns tags as 32-byte arrays in the order: [nf0, cm0, nf1, cm1, ...]
@@ -38,7 +36,7 @@ pub fn compute_verifying_key(tags: &[[u8; 32]]) -> [u8; 32] {
     hashv(&refs).to_bytes()
 }
 
-/// Convert [u32; 8] words to [u8; 32] bytes.
+/// Convert [u32; 8] words to [u8; 32] bytes (little-endian, matching arm-risc0).
 ///
 /// arm-risc0 uses `bytemuck::cast_slice` for words_to_bytes, which means:
 /// - Words are stored in native (little-endian) byte order
@@ -48,58 +46,105 @@ fn words_to_bytes(words: &[u32; 8]) -> [u8; 32] {
     *bytemuck::cast_ref(words)
 }
 
-/// Parse delta coordinates from a compliance instance and return as a ProjectivePoint.
+/// Check if a 32-byte array is all zeros
+fn is_zero(bytes: &[u8; 32]) -> bool {
+    bytes.iter().all(|&b| b == 0)
+}
+
+/// Safe point addition that handles edge cases:
+/// - Point doubling (P + P): uses the doubling formula
+/// - Inverse points (P + (-P)): returns None (identity)
+/// - Standard addition: delegates to UncompressedPoint::add
+///
+/// Returns None if the result is the identity point.
+fn safe_point_add(
+    p: &UncompressedPoint,
+    q: &UncompressedPoint,
+) -> Result<Option<UncompressedPoint>, PAError> {
+    let x_p = p.x();
+    let x_q = q.x();
+    let y_p = p.y();
+    let y_q = q.y();
+
+    // Check if x-coordinates are equal
+    if x_p == x_q {
+        if y_p == y_q {
+            // Point doubling: P + P
+            // Use ecmul with scalar 2 for efficiency
+            let two: [u8; 32] = {
+                let mut arr = [0u8; 32];
+                arr[31] = 2;
+                arr
+            };
+            let doubled = Curve::ecmul(p, &two).map_err(|_| PAError::DeltaPointNotOnCurve)?;
+            Ok(Some(doubled))
+        } else {
+            // Inverse points: P + (-P) = identity
+            // (same x, different y means they're inverses on secp256k1)
+            Ok(None)
+        }
+    } else {
+        // Standard addition - safe to use the library's Add
+        Ok(Some(*p + *q))
+    }
+}
+
+/// Parse delta coordinates from a compliance instance and return as an UncompressedPoint.
 ///
 /// All compliance units must provide valid secp256k1 curve points. The point (0, 0)
 /// is NOT on the curve and will error - the identity point (point at infinity) has
 /// no valid affine representation.
-fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<ProjectivePoint, PAError> {
+fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<UncompressedPoint, PAError> {
     let x_bytes = words_to_bytes(x_words);
     let y_bytes = words_to_bytes(y_words);
 
-    // Construct encoded point from affine coordinates (uncompressed format)
-    let encoded_point = EncodedPoint::from_affine_coordinates(
-        (&x_bytes).into(),
-        (&y_bytes).into(),
-        false, // uncompressed
-    );
+    // (0, 0) is NOT a valid secp256k1 point - reject it
+    if is_zero(&x_bytes) && is_zero(&y_bytes) {
+        return Err(PAError::DeltaPointNotOnCurve);
+    }
 
-    // Convert to ProjectivePoint, validating the point is on the curve.
-    // This will reject (0, 0) since it's not a valid curve point.
-    ProjectivePoint::from_encoded_point(&encoded_point)
-        .into_option()
-        .ok_or(PAError::DeltaPointNotOnCurve)
+    // Use the same byte format as the original k256 code - no conversion.
+    // k256's EncodedPoint::from_affine_coordinates took these bytes directly.
+    let mut point_bytes = [0u8; 64];
+    point_bytes[..32].copy_from_slice(&x_bytes);
+    point_bytes[32..].copy_from_slice(&y_bytes);
+
+    Ok(UncompressedPoint(point_bytes))
 }
 
 /// Accumulate delta points from all compliance instances using EC point addition.
-/// Returns the accumulated point as an AffinePoint, or None if the result is the identity.
-pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<AffinePoint>, PAError> {
-    let mut accumulated = ProjectivePoint::IDENTITY;
+/// Returns the accumulated point as an UncompressedPoint, or None if the result is the identity.
+pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<UncompressedPoint>, PAError> {
+    let mut accumulated: Option<UncompressedPoint> = None;
 
     for action in &tx.actions {
         for cu in &action.compliance_units {
+            // Direct struct access (ComplianceInstance is now a direct field, not bytes)
             let point = parse_delta_point(&cu.instance.delta_x, &cu.instance.delta_y)?;
-            accumulated += point;
+
+            match accumulated {
+                None => {
+                    // First point
+                    accumulated = Some(point);
+                }
+                Some(acc) => {
+                    // Use safe_point_add which handles:
+                    // - Point doubling (P + P)
+                    // - Inverse points (P + (-P) = identity)
+                    accumulated = safe_point_add(&acc, &point)?;
+                }
+            }
         }
     }
 
-    // Convert to affine and check for identity
-    let affine = accumulated.to_affine();
-    if affine.is_identity().into() {
-        Ok(None)
-    } else {
-        Ok(Some(affine))
-    }
+    Ok(accumulated)
 }
 
-/// Convert an affine point to its "address" representation using Solana syscall.
+/// Convert an uncompressed point to its "address" representation using Solana syscall.
 /// address = last 20 bytes of SHA-256(x || y)
-fn point_to_address(point: &AffinePoint) -> [u8; 20] {
-    let encoded = point.to_encoded_point(false);
-    let x_bytes = encoded.x().expect("non-identity point has x coordinate");
-    let y_bytes = encoded.y().expect("non-identity point has y coordinate");
-
-    let hash: [u8; 32] = hashv(&[x_bytes, y_bytes]).to_bytes();
+fn point_to_address(point: &UncompressedPoint) -> [u8; 20] {
+    // UncompressedPoint stores 64 bytes (x || y) in big-endian
+    let hash: [u8; 32] = hashv(&[&point.0]).to_bytes();
 
     // Take last 20 bytes
     let mut address = [0u8; 20];

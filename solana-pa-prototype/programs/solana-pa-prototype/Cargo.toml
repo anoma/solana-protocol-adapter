@@ -38,15 +38,15 @@ bytemuck = { version = "1.14", features = ["derive"] }
 hex = "0.4"
 hex-literal = "0.4"
 
-# Delta proof verification (secp256k1 EC operations)
-k256 = { version = "0.13", default-features = false, features = ["arithmetic"] }
-
-# SHA-256 for verifying key computation (Solana-compatible hash)
-sha2 = "0.10"
+# Delta proof verification (secp256k1 EC operations via Solana syscalls)
+solana-secp256k1 = "0.1"
 
 [dev-dependencies]
 # Forwarder example program (used in tests for constants/encoding)
 block-time-forwarder = { path = "../block-time-forwarder", default-features = false, features = ["no-entrypoint"] }
+
+# SHA-256 equivalence testing (verifying syscall matches software implementation)
+sha2 = "0.10"
 
 # BN254 field arithmetic for negate_pi_a tests
 num-bigint = "0.4"
