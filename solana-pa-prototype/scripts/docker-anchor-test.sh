@@ -1,11 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deterministic Anchor test runner with two-build strategy.
-#
-# Why two builds:
-# - Default build (no feature): aggregated path works, non-aggregated returns AggregationRequired
-# - Feature build (--features non-aggregated-proofs): both paths work
+# Deterministic Anchor test runner.
 #
 # Why recreate validator: the validator runs with a persisted ledger volume;
 # if it stays up between runs, previously-spent nullifiers can cause test
@@ -21,7 +17,7 @@ cd "$PROJECT_DIR"
 # =============================================================================
 # Step 1: Sync program IDs and build (only rebuilds if IDs changed)
 # =============================================================================
-echo "==> (1/5) Syncing program IDs and building"
+echo "==> (1/3) Syncing program IDs and building"
 docker compose run --rm dev bash -lc '
   cd /workspace/solana-pa-prototype
 
@@ -98,9 +94,8 @@ docker compose run --rm dev bash -lc '
     echo "    block_time_forwarder program ID already synced: $BTF_ID"
   fi
 
-  # Always rebuild PA without features to ensure default build for two-build strategy.
-  # Step 4 will rebuild with features.
-  echo "    Building PA (default, no features)..."
+  # Build PA
+  echo "    Building PA..."
   anchor build -p solana-pa-prototype 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
 
   # Build block_time_forwarder if needed
@@ -112,7 +107,6 @@ docker compose run --rm dev bash -lc '
   # Fixture definitions: path|flags
   FIXTURES=(
     "tests/fixtures/batch_groth16.json|"
-    "tests/fixtures/individual_groth16.json|--non-aggregated"
     "tests/fixtures/batch_groth16_mismatch.json|--output-mismatch"
   )
 
@@ -140,7 +134,7 @@ docker compose run --rm dev bash -lc '
 # =============================================================================
 # Step 2: Start validator
 # =============================================================================
-echo "==> (2/5) Starting validator"
+echo "==> (2/3) Starting validator"
 docker compose --profile validator up -d --force-recreate validator
 
 echo "    Waiting for RPC health..."
@@ -153,58 +147,9 @@ done
 curl -fsS "http://localhost:8899/health" >/dev/null
 
 # =============================================================================
-# Step 3: Run tests (default build - non-aggregated should fail)
+# Step 3: Run tests
 # =============================================================================
-echo "==> (3/5) Running tests (default build)"
-docker compose run --rm dev bash -lc "
-  cd /workspace/solana-pa-prototype
-  set +e
-  anchor test --skip-local-validator --skip-build --provider.cluster '${CLUSTER_URL}' 2>&1 | tee /tmp/test-output.txt
-  exit_code=\${PIPESTATUS[0]}
-
-  # Check if the only failures are the expected AggregationRequired errors
-  if [ \$exit_code -ne 0 ]; then
-    failure_count=\$(grep -oP '\\d+(?= failing)' /tmp/test-output.txt || echo 0)
-    aggregation_errors=\$(grep -ci 'aggregation.*required' /tmp/test-output.txt || echo 0)
-
-    if [ \"\$failure_count\" = \"2\" ] && [ \"\$aggregation_errors\" -ge 2 ]; then
-      echo ''
-      echo '==> Expected failures: Non-aggregated tests correctly rejected with AggregationRequired'
-      echo '==> Default build verification PASSED'
-    else
-      echo ''
-      echo '==> UNEXPECTED FAILURES: expected 2 failures with AggregationRequired'
-      echo \"==> Got \$failure_count failures and \$aggregation_errors AggregationRequired errors\"
-      exit 1
-    fi
-  else
-    echo ''
-    echo '==> All tests passed (this is unexpected for default build)'
-    echo '==> Non-aggregated tests should have failed with AggregationRequired'
-    exit 1
-  fi
-"
-
-# =============================================================================
-# Step 4: Rebuild with non-aggregated feature
-# =============================================================================
-echo "==> (4/5) Rebuilding PA with non-aggregated-proofs feature"
-docker compose run --rm dev bash -lc "cd /workspace/solana-pa-prototype && anchor build -p solana-pa-prototype -- --features non-aggregated-proofs 2>&1 | grep -v '^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report' | cat -s"
-
-# =============================================================================
-# Step 5: Reset validator and run all tests
-# =============================================================================
-echo "==> (5/5) Resetting validator and running all tests"
-docker compose --profile validator up -d --force-recreate validator
-
-for i in {1..60}; do
-  if curl -fsS "http://localhost:8899/health" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-curl -fsS "http://localhost:8899/health" >/dev/null
-
+echo "==> (3/3) Running tests"
 docker compose run --rm dev bash -lc "
   cd /workspace/solana-pa-prototype
   anchor test --skip-local-validator --skip-build --provider.cluster '${CLUSTER_URL}'

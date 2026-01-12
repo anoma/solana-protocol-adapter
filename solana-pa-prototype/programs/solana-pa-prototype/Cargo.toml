@@ -10,7 +10,6 @@ name = "solana_pa_prototype"
 
 [features]
 default = []
-non-aggregated-proofs = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []

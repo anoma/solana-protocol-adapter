@@ -591,8 +591,7 @@ fn execute_settlement<'info>(
     }
 
     // 2.5) Pre-compute action data (tags, logic_refs, action_tree_root) for each action.
-    // This data is used by: non-aggregated verification, ActionExecuted/TransactionExecuted events.
-    // Computing once avoids redundant work in the non-aggregated path.
+    // This data is used by ActionExecuted/TransactionExecuted events.
     struct ActionData {
         tags: Vec<types::Digest>,
         logic_refs: Vec<types::Digest>,
@@ -635,143 +634,11 @@ fn execute_settlement<'info>(
         .map_err(|_| error!(PAError::VerifierRouterFailed))?;
         msg!("Aggregated proof verification passed");
     } else {
-        #[cfg(feature = "non-aggregated-proofs")]
-        {
-            // Non-aggregated path: verify individual proofs
-            use crate::encoding::{find_logic_input, COMPLIANCE_VK_BYTES};
-            use crate::groth16::{
-                extract_groth16_seal_from_inner_receipt, prepare_individual_proof,
-            };
-            use crate::journal::{
-                compute_compliance_journal_digest, compute_logic_journal_digest, LogicInstance,
-            };
-
-            for (action_idx, (action, data)) in
-                tx.actions.iter().zip(action_data.iter()).enumerate()
-            {
-                msg!("Non-aggregated verification: action={}", action_idx);
-                // Tag-count invariant: logic_verifier_inputs.len() == 2 * compliance_units.len()
-                let expected_logic_count = action
-                    .compliance_units
-                    .len()
-                    .checked_mul(2)
-                    .ok_or_else(|| error!(PAError::InvalidTransactionData))?;
-                require!(
-                    action.logic_verifier_inputs.len() == expected_logic_count,
-                    PAError::TagCountMismatch
-                );
-
-                // Use precomputed tags, logic_refs, and action_tree_root
-                let tags = &data.tags;
-                let logic_refs = &data.logic_refs;
-                let action_tree_root = data.action_tree_root;
-
-                // Verify compliance proofs
-                for (cu_idx, cu) in action.compliance_units.iter().enumerate() {
-                    msg!(
-                        "Verifying compliance proof: action={}, cu={}",
-                        action_idx,
-                        cu_idx
-                    );
-                    let proof_bytes = cu
-                        .proof
-                        .as_ref()
-                        .ok_or_else(|| error!(PAError::InvalidProof))?;
-                    // Extract seal and selector from InnerReceipt
-                    let (selector, seal) = extract_groth16_seal_from_inner_receipt(proof_bytes)
-                        .map_err(|_| error!(PAError::InvalidProof))?;
-                    // Use raw instance bytes to match prover format exactly
-                    let journal_digest = compute_compliance_journal_digest(&cu.instance)
-                        .map_err(|_| error!(PAError::InvalidTransactionData))?;
-
-                    let prepared = prepare_individual_proof(
-                        &seal,
-                        selector,
-                        COMPLIANCE_VK_BYTES,
-                        journal_digest,
-                    )
-                    .map_err(|_| error!(PAError::InvalidProof))?;
-
-                    call_verifier_router(
-                        verifier_router_program,
-                        router,
-                        verifier_entry,
-                        verifier_program,
-                        system_program,
-                        prepared.to_seal(),
-                        prepared.image_id,
-                        prepared.journal_digest,
-                    )
-                    .map_err(|_| error!(PAError::VerifierRouterFailed))?;
-                }
-
-                // Verify logic proofs (tag-based lookup with logic-ref check)
-                for (logic_idx, (tag, expected_logic_ref)) in
-                    tags.iter().zip(logic_refs.iter()).enumerate()
-                {
-                    msg!(
-                        "Verifying logic proof: action={}, logic={}",
-                        action_idx,
-                        logic_idx
-                    );
-                    let input = find_logic_input(&action.logic_verifier_inputs, tag)
-                        .map_err(|_| error!(PAError::TagNotFound))?;
-
-                    // Logic-ref consistency check
-                    if input.verifying_key != *expected_logic_ref {
-                        return Err(error!(PAError::LogicRefMismatch));
-                    }
-
-                    let is_consumed = logic_idx % 2 == 0;
-                    let logic_instance = LogicInstance {
-                        tag: input.tag,
-                        is_consumed,
-                        root: action_tree_root,
-                        app_data: &input.app_data,
-                    };
-
-                    let journal_digest = compute_logic_journal_digest(&logic_instance)
-                        .map_err(|_| error!(PAError::InvalidTransactionData))?;
-
-                    let proof_bytes = input
-                        .proof
-                        .as_ref()
-                        .ok_or_else(|| error!(PAError::InvalidProof))?;
-                    // Extract seal and selector from InnerReceipt
-                    let (selector, seal) = extract_groth16_seal_from_inner_receipt(proof_bytes)
-                        .map_err(|_| error!(PAError::InvalidProof))?;
-
-                    let prepared = prepare_individual_proof(
-                        &seal,
-                        selector,
-                        input.verifying_key.to_bytes(),
-                        journal_digest,
-                    )
-                    .map_err(|_| error!(PAError::InvalidProof))?;
-
-                    call_verifier_router(
-                        verifier_router_program,
-                        router,
-                        verifier_entry,
-                        verifier_program,
-                        system_program,
-                        prepared.to_seal(),
-                        prepared.image_id,
-                        prepared.journal_digest,
-                    )
-                    .map_err(|_| error!(PAError::VerifierRouterFailed))?;
-                }
-            }
-        }
-        #[cfg(not(feature = "non-aggregated-proofs"))]
-        {
-            return Err(error!(PAError::AggregationRequired));
-        }
+        return Err(error!(PAError::AggregationRequired));
     }
 
     // 3.5) Verify delta proof (balance conservation)
     // Uses Solana syscalls (secp256k1_recover, hashv) for optimal CU usage.
-    // Required in both aggregated and non-aggregated paths.
     delta::verify_delta_proof(tx)?;
 
     // 3.6) Emit app data events and EVM parity events for indexing

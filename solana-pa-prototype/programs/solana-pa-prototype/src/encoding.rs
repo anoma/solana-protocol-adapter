@@ -68,10 +68,7 @@ fn next_power_of_two(n: usize) -> Result<usize, PAError> {
 
 /// Compute the action tree root from a list of tags.
 /// Uses a power-of-2 balanced merkle tree with PADDING_LEAF for missing nodes.
-///
-/// NOTE: Not feature-gated because it's used in both paths:
-/// - Aggregated: for journal digest computation in `compute_batch_aggregation_journal_digest`
-/// - Non-aggregated: for LogicInstance.root field
+/// Used for journal digest computation in `compute_batch_aggregation_journal_digest`.
 pub fn compute_action_tree_root(tags: &[Digest]) -> Result<Digest, PAError> {
     if tags.is_empty() {
         return Err(PAError::InvalidTransactionData);
@@ -90,19 +87,6 @@ pub fn compute_action_tree_root(tags: &[Digest]) -> Result<Digest, PAError> {
     }
 
     Ok(layer[0])
-}
-
-/// Compute the action tree root directly from an Action.
-/// Extracts tags from compliance instances and computes the merkle root.
-///
-/// Feature-gated: only used in non-aggregated path (convenience wrapper
-/// that combines `extract_tags_and_logic_refs` + `compute_action_tree_root`).
-#[cfg(feature = "non-aggregated-proofs")]
-pub fn compute_action_tree_root_from_action(
-    action: &crate::types::Action,
-) -> Result<Digest, PAError> {
-    let (tags, _) = extract_tags_and_logic_refs(action)?;
-    compute_action_tree_root(&tags)
 }
 
 /// Extract tags (nullifiers/commitments) and their expected logic refs from an action.
@@ -127,10 +111,7 @@ pub fn extract_tags_and_logic_refs(
 }
 
 /// Find a LogicVerifierInputs entry by its tag.
-///
-/// NOTE: Not feature-gated because it's used in both paths:
-/// - Aggregated: for journal digest computation in `compute_batch_aggregation_journal_digest`
-/// - Non-aggregated: for individual logic proof verification
+/// Used for journal digest computation in `compute_batch_aggregation_journal_digest`.
 pub fn find_logic_input<'a>(
     inputs: &'a [LogicVerifierInputs],
     tag: &Digest,

@@ -142,36 +142,6 @@ fn extract_groth16_seal_from_aggregation_proof(
     Ok((selector, seal.to_vec()))
 }
 
-/// Extract the Groth16 seal bytes and selector from a bincode-serialized `InnerReceipt`.
-///
-/// Used for non-aggregated proofs (individual compliance/logic proofs).
-/// The proof format is `InnerReceipt` directly without the `AggregationProof` wrapper.
-///
-/// Returns (selector, seal) where:
-/// - selector: first 4 bytes of verifier_parameters (last 32 bytes of proof)
-/// - seal: the 256-byte Groth16 proof
-#[cfg(feature = "non-aggregated-proofs")]
-pub fn extract_groth16_seal_from_inner_receipt(
-    proof_bytes: &[u8],
-) -> Result<(Selector, Vec<u8>), PAError> {
-    let selector = extract_selector_from_tail(proof_bytes)?;
-
-    // Parse InnerReceipt to extract seal
-    let mut offset = 0usize;
-
-    // InnerReceipt discriminant (Composite=0, Succinct=1, Groth16=2, Fake=3).
-    let inner_variant = read_u32_le(proof_bytes, &mut offset)?;
-    if inner_variant != 2 {
-        return Err(PAError::UnsupportedProofType);
-    }
-
-    // Groth16Receipt begins with `seal: Vec<u8>` as bincode bytes (u64 len + bytes).
-    let seal_len = read_u64_le(proof_bytes, &mut offset)? as usize;
-    let seal = read_bytes(proof_bytes, &mut offset, seal_len)?;
-
-    Ok((selector, seal.to_vec()))
-}
-
 /// Prepared proof data for risc0-solana verification.
 #[derive(Clone)]
 pub struct PreparedProof {
@@ -202,47 +172,6 @@ pub fn prepare_proof_for_verification(tx: &Transaction) -> Result<PreparedProof,
 
     let image_id = BATCH_AGGREGATION_IMAGE_ID;
     let journal_digest = crate::encoding::compute_batch_aggregation_journal_digest(tx)?.to_bytes();
-
-    let mut pi_a = [0u8; 64];
-    let mut pi_b = [0u8; 128];
-    let mut pi_c = [0u8; 64];
-    pi_a.copy_from_slice(&negated_seal[0..64]);
-    pi_b.copy_from_slice(&negated_seal[64..192]);
-    pi_c.copy_from_slice(&negated_seal[192..256]);
-
-    Ok(PreparedProof {
-        proof: Proof { pi_a, pi_b, pi_c },
-        selector,
-        image_id,
-        journal_digest,
-    })
-}
-
-/// Prepare an individual proof (raw seal) for verification.
-///
-/// For non-aggregated paths, each compliance and logic proof is verified individually.
-/// The proof is expected to be a raw Groth16 seal (256 bytes) - receipt extraction
-/// happens off-chain.
-///
-/// # Arguments
-/// * `seal` - Raw Groth16 seal bytes (must be exactly 256 bytes)
-/// * `selector` - The 4-byte selector identifying the verifier version
-/// * `image_id` - The circuit's verifying key (image ID)
-/// * `journal_digest` - SHA256 hash of the serialized instance
-#[cfg(feature = "non-aggregated-proofs")]
-pub fn prepare_individual_proof(
-    seal: &[u8],
-    selector: Selector,
-    image_id: [u8; 32],
-    journal_digest: [u8; 32],
-) -> Result<PreparedProof, PAError> {
-    if seal.len() != 256 {
-        return Err(PAError::InvalidProof);
-    }
-
-    let mut seal_arr = [0u8; 256];
-    seal_arr.copy_from_slice(seal);
-    let negated_seal = negate_pi_a(&seal_arr);
 
     let mut pi_a = [0u8; 64];
     let mut pi_b = [0u8; 128];

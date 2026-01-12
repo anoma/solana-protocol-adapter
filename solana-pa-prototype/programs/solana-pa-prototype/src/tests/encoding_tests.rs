@@ -5,9 +5,6 @@ use crate::merkle;
 use crate::tests::utils::create_minimal_transaction;
 use crate::types::{ComplianceInstance, Digest, OutputMode, SolanaExternalCall};
 
-#[cfg(feature = "non-aggregated-proofs")]
-use crate::encoding::{compute_action_tree_root_from_action, extract_tags_and_logic_refs};
-
 // =========================================================================
 // OUTPUT MODE ENCODING TESTS
 // =========================================================================
@@ -117,35 +114,4 @@ fn test_tag_count_invariant() {
     let expected = action.compliance_units.len() * 2;
     let actual = action.logic_verifier_inputs.len();
     assert_eq!(actual, expected);
-}
-
-#[cfg(feature = "non-aggregated-proofs")]
-#[test]
-fn test_extract_tags_and_logic_refs() {
-    let tx = create_minimal_transaction();
-    let action = &tx.actions[0];
-
-    let (tags, logic_refs) = extract_tags_and_logic_refs(action).expect("should extract");
-    assert_eq!(tags.len(), 2);
-    assert_eq!(logic_refs.len(), 2);
-
-    let cu = &action.compliance_units[0];
-    let instance: ComplianceInstance = bincode::deserialize(&cu.instance).unwrap();
-    assert_eq!(tags[0], instance.consumed_nullifier);
-    assert_eq!(tags[1], instance.created_commitment);
-    assert_eq!(logic_refs[0], instance.consumed_logic_ref);
-    assert_eq!(logic_refs[1], instance.created_logic_ref);
-}
-
-#[cfg(feature = "non-aggregated-proofs")]
-#[test]
-fn test_action_tree_root_from_action_matches_manual() {
-    let tx = create_minimal_transaction();
-    let action = &tx.actions[0];
-
-    let root_from_action = compute_action_tree_root_from_action(action).expect("from action");
-    let (tags, _) = extract_tags_and_logic_refs(action).expect("extract");
-    let root_manual = compute_action_tree_root(&tags).expect("manual");
-
-    assert_eq!(root_from_action, root_manual);
 }

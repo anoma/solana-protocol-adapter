@@ -456,16 +456,9 @@ Fixtures contain pre-generated RM transactions with valid Groth16 proofs. Requir
 ### Generating Fixtures
 
 ```bash
-# Aggregated (batch) fixture
 docker-compose run --rm dev bash -lc '
   cd /workspace/solana-pa-prototype
   ./tools/fixture-gen/target/release/fixture-gen --threads 6 tests/fixtures/batch_groth16.json
-'
-
-# Non-aggregated fixture
-docker-compose run --rm dev bash -lc '
-  cd /workspace/solana-pa-prototype
-  ./tools/fixture-gen/target/release/fixture-gen --non-aggregated --threads 6 tests/fixtures/individual_groth16.json
 '
 ```
 
