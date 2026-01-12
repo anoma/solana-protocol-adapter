@@ -5577,6 +5577,7 @@ dependencies = [
  "sha2 0.10.9",
  "solana-program-test",
  "solana-sdk",
+ "solana-system-interface",
  "tokio",
  "verifier_router",
 ]
