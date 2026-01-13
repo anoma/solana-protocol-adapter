@@ -18,8 +18,8 @@ fn test_sha256_syscall_matches_sha2_crate() {
 
     // sha2 crate result
     let mut hasher = Sha256::new();
-    hasher.update(&left);
-    hasher.update(&right);
+    hasher.update(left);
+    hasher.update(right);
     let sha2_result: [u8; 32] = hasher.finalize().into();
 
     // solana syscall result

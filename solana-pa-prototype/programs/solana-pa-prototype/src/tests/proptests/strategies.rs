@@ -3,6 +3,8 @@
 //! These strategies generate random inputs for property-based testing,
 //! mirroring the `bound()` approach used in the EVM Protocol Adapter's Foundry tests.
 
+#![allow(dead_code)] // Strategies may be used in future tests
+
 use crate::types::*;
 use proptest::prelude::*;
 

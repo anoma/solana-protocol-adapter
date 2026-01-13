@@ -2,6 +2,9 @@
 //!
 //! This module provides common test utilities used across multiple test modules.
 
+#![allow(dead_code)] // Test utilities may be used in future tests
+#![allow(unused_imports)] // Keep imports for future test utilities
+
 use anchor_lang::prelude::Pubkey;
 
 use crate::groth16::Selector;

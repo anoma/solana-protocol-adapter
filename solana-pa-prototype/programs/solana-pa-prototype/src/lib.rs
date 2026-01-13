@@ -446,11 +446,11 @@ pub fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
     let mut current = ZEROS[0];
     let mut index = state.next_index;
 
-    for level in 0..depth {
+    for (level, zero) in ZEROS.iter().enumerate().take(depth) {
         if index & 1 == 1 {
             current = hash_two(&state.get_frontier(level), &current);
         } else {
-            current = hash_two(&current, &ZEROS[level]);
+            current = hash_two(&current, zero);
         }
         index >>= 1;
     }
@@ -520,6 +520,7 @@ fn maybe_grow_account<'info>(
 
 /// Call verifier_router::verify via typed CPI.
 /// Uses Anchor's generated CPI interface for type safety.
+#[allow(clippy::too_many_arguments)]
 fn call_verifier_router<'info>(
     verifier_router_program: &AccountInfo<'info>,
     router: &AccountInfo<'info>,
@@ -541,6 +542,7 @@ fn call_verifier_router<'info>(
 }
 
 /// Shared settlement logic for both settle and settle_from_txdata.
+#[allow(clippy::too_many_arguments)]
 fn execute_settlement<'info>(
     state: &mut PAStateAccount,
     pa_state_info: &AccountInfo<'info>,

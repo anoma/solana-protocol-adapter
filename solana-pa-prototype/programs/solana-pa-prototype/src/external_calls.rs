@@ -86,8 +86,8 @@ fn find_forwarder_segment(
     let seg_start = cursor + seg_start_rel;
 
     let mut seg_end = external_accounts.len();
-    for i in (seg_start + 1)..external_accounts.len() {
-        if call_programs.iter().any(|p| external_accounts[i].key == p) {
+    for (i, account) in external_accounts.iter().enumerate().skip(seg_start + 1) {
+        if call_programs.iter().any(|p| account.key == p) {
             seg_end = i;
             break;
         }

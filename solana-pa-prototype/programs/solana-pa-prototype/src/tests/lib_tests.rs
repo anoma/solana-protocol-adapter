@@ -3,7 +3,6 @@
 use crate::external_calls::{
     build_forwarder_instruction_data, encode_external_call, FORWARD_CALL_DISCRIMINATOR,
 };
-use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
 use crate::settle;
 use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::tests::utils::*;
@@ -395,8 +394,8 @@ mod txdata_expiry_bounds_tests {
         assert_eq!(MIN_EXPIRY_SLOTS, 100);
         // MAX: 216,000 slots * 400ms = ~24 hours
         assert_eq!(MAX_EXPIRY_SLOTS, 216_000);
-        // MAX should be greater than MIN
-        assert!(MAX_EXPIRY_SLOTS > MIN_EXPIRY_SLOTS);
+        // MAX should be greater than MIN (compile-time check)
+        const { assert!(MAX_EXPIRY_SLOTS > MIN_EXPIRY_SLOTS) };
     }
 
     #[test]
