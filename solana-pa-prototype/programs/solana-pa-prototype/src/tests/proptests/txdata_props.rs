@@ -236,7 +236,7 @@ proptest! {
         let current_slot = expires_slot;
 
         // At exact boundary, close_expired should fail (requires slot > expires_slot)
-        prop_assert!(!(current_slot > expires_slot));
+        prop_assert!(current_slot <= expires_slot);
     }
 
     /// Property: close_expired fails before expiry.
@@ -249,7 +249,7 @@ proptest! {
         prop_assume!(current_slot < expires_slot);
 
         // Before expiry, close_expired should fail
-        prop_assert!(!(current_slot > expires_slot));
+        prop_assert!(current_slot <= expires_slot);
     }
 
     // =========================================================================

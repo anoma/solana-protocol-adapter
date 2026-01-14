@@ -1,0 +1,140 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  SOLANA_VERSION: "2.3.9"
+  ANCHOR_VERSION: "0.31.1"
+
+jobs:
+  # Rust format check
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Check formatting
+        working-directory: ./solana-pa-prototype
+        run: cargo fmt -p solana-pa-prototype -p block-time-forwarder --check
+
+  # Clippy linting
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: solana-pa-prototype
+
+      - name: Run clippy
+        working-directory: ./solana-pa-prototype
+        run: |
+          cargo clippy -p solana-pa-prototype -p block-time-forwarder --all-targets -- \
+            -D warnings \
+            -A unexpected_cfgs \
+            -A deprecated
+
+  # Rust unit tests
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: solana-pa-prototype
+
+      - name: Run tests
+        working-directory: ./solana-pa-prototype
+        run: cargo test -p solana-pa-prototype -p block-time-forwarder
+
+  # Anchor integration tests
+  anchor-test:
+    name: Anchor Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: solana-pa-prototype
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Yarn
+        run: npm install -g yarn
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Create Solana keypair
+        run: solana-keygen new --no-bip39-passphrase
+
+      - name: Install Anchor CLI
+        run: |
+          curl -fsSL -o anchor "https://github.com/coral-xyz/anchor/releases/download/v${{ env.ANCHOR_VERSION }}/anchor-${{ env.ANCHOR_VERSION }}-x86_64-unknown-linux-gnu"
+          chmod +x anchor
+          sudo mv anchor /usr/local/bin/
+
+      - name: Install node dependencies
+        working-directory: ./solana-pa-prototype
+        run: yarn install --frozen-lockfile || yarn install
+
+      - name: Install risc0-solana dependencies
+        working-directory: ./risc0-solana/solana-verifier
+        run: yarn install --frozen-lockfile || yarn install
+
+      - name: Patch risc0-solana with committed keypairs
+        run: ./solana-pa-prototype/scripts/patch-risc0-solana.sh
+
+      - name: Build and test
+        working-directory: ./solana-pa-prototype
+        run: anchor test

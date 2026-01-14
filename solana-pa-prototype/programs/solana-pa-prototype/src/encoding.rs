@@ -13,7 +13,7 @@ use serde::Serialize;
 /// Convert bytes to words (matching arm-risc0).
 /// Pads with zeros to word boundary. Uses little-endian byte order.
 pub fn bytes_to_words(bytes: &[u8]) -> Vec<u32> {
-    let padded_len = (bytes.len() + 3) / 4 * 4;
+    let padded_len = bytes.len().div_ceil(4) * 4;
     let mut padded = bytes.to_vec();
     padded.resize(padded_len, 0);
     padded

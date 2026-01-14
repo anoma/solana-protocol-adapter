@@ -60,7 +60,7 @@ impl WordWrite for WordCounter {
     }
 
     fn write_padded_bytes(&mut self, bytes: &[u8]) -> Result<()> {
-        let padded_words = (bytes.len() + (WORD_SIZE - 1)) / WORD_SIZE;
+        let padded_words = bytes.len().div_ceil(WORD_SIZE);
         self.words = self.words.saturating_add(padded_words);
         Ok(())
     }

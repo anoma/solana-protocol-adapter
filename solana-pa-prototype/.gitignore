@@ -1,6 +1,5 @@
 .anchor
 .DS_Store
-target
 **/*.rs.bk
 node_modules
 test-ledger
@@ -14,3 +13,5 @@ dist/
 
 # Generated files
 compiled_rust_sources.txt
+
+# Build artifacts (keypairs exception is in root .gitignore)
