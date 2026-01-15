@@ -3,15 +3,20 @@
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
     "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
-    "test:verifier": "ts-node test-verifier.ts"
+    "test:verifier": "ts-node test-verifier.ts",
+    "ui:dev": "vite --config vite.config.ts",
+    "ui:build": "vite build --config vite.config.ts",
+    "ui:preview": "vite preview --config vite.config.ts"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",
     "@solana/kit": "^2.1.0",
     "@solana/web3.js": "^1.95.0",
+    "buffer": "^6.0.3",
     "bs58": "^6.0.0",
     "decimal.js": "^10.4.3",
     "dotenv": "^16.4.7",
+    "process": "^0.11.10",
     "tslog": "^4.9.3"
   },
   "devDependencies": {
@@ -24,6 +29,8 @@
     "@types/mocha": "^9.0.0",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2",
-    "prettier": "^2.6.2"
+    "prettier": "^2.6.2",
+    "vite": "^5.4.11",
+    "vite-plugin-node-polyfills": "^0.22.0"
   }
 }

@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Solana PA Explorer</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Solana Protocol Adapter</p>
+          <h1>PA Explorer</h1>
+          <p class="lede">
+            Visualize readiness, upload transactions, settle proofs, and inspect on-chain state
+            without leaving the browser.
+          </p>
+        </div>
+        <div class="hero-badge">
+          <div class="badge-title">Status</div>
+          <div class="badge-value" id="status-overall">Not connected</div>
+        </div>
+      </header>
+
+      <section class="grid">
+        <section class="panel" style="--delay: 0ms">
+          <h2>Connection & Wallet</h2>
+          <div class="field">
+            <label for="rpc-url">RPC URL</label>
+            <div class="row">
+              <input id="rpc-url" value="http://127.0.0.1:8899" />
+              <button id="connect-btn" class="primary">Connect</button>
+            </div>
+            <p class="hint" id="rpc-status">Disconnected</p>
+          </div>
+          <div class="field">
+            <label for="keypair-json">Keypair JSON</label>
+            <textarea id="keypair-json" rows="4" placeholder="[12, 34, ...]"></textarea>
+            <div class="row">
+              <button id="load-keypair-btn">Load Keypair</button>
+              <button id="airdrop-btn">Airdrop 2 SOL</button>
+            </div>
+            <p class="hint" id="wallet-status">No wallet loaded</p>
+          </div>
+        </section>
+
+        <section class="panel" style="--delay: 40ms">
+          <h2>Program Config</h2>
+          <div class="field">
+            <label for="pa-program-id">PA Program ID</label>
+            <input id="pa-program-id" value="AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt" />
+          </div>
+          <div class="field">
+            <label for="router-program-id">Verifier Router Program ID</label>
+            <input id="router-program-id" placeholder="Verifier router program id" />
+          </div>
+          <div class="field">
+            <label for="groth16-program-id">Groth16 Verifier Program ID</label>
+            <input id="groth16-program-id" placeholder="Groth16 verifier program id" />
+          </div>
+          <div class="field">
+            <label for="forwarder-program-id">Block Time Forwarder ID</label>
+            <input id="forwarder-program-id" value="FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq" />
+          </div>
+          <div class="field">
+            <label for="idl-file">PA IDL (solana_pa_prototype.json)</label>
+            <input id="idl-file" type="file" accept="application/json" />
+            <p class="hint" id="idl-status">IDL not loaded</p>
+          </div>
+        </section>
+
+        <section class="panel" style="--delay: 80ms">
+          <h2>Fixture & Payload</h2>
+          <div class="field">
+            <label for="fixture-file">Fixture JSON</label>
+            <input id="fixture-file" type="file" accept="application/json" />
+            <p class="hint" id="fixture-status">No fixture loaded</p>
+          </div>
+          <div class="field">
+            <label for="payload-source">Payload Source</label>
+            <select id="payload-source">
+              <option value="tx_b64">tx_b64</option>
+              <option value="tx_tampered_b64">tx_tampered_b64</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="selector-hex">Verifier Selector (hex)</label>
+            <input id="selector-hex" placeholder="0x73c457ba" />
+          </div>
+          <div class="field">
+            <label for="upload-id">Upload ID (u64)</label>
+            <input id="upload-id" placeholder="leave blank for timestamp" />
+          </div>
+        </section>
+
+        <section class="panel" style="--delay: 120ms">
+          <h2>Readiness</h2>
+          <ul class="status-list">
+            <li data-status="rpc">RPC connected</li>
+            <li data-status="wallet">Wallet loaded</li>
+            <li data-status="idl">IDL loaded</li>
+            <li data-status="program">Program ready</li>
+            <li data-status="pda">PDAs derived</li>
+            <li data-status="fixture">Fixture loaded</li>
+          </ul>
+          <div class="field">
+            <button id="derive-pdas-btn" class="primary">Derive PDAs</button>
+          </div>
+          <div class="mono-box" id="pda-display">
+            <div>paState: -</div>
+            <div>router PDA: -</div>
+            <div>verifier entry: -</div>
+            <div>genesis marker: -</div>
+            <div>nullifiers: -</div>
+          </div>
+        </section>
+      </section>
+
+      <section class="grid">
+        <section class="panel wide" style="--delay: 160ms">
+          <h2>Actions</h2>
+          <div class="actions">
+            <button id="fetch-state-btn">Fetch State</button>
+            <button id="initialize-btn">Initialize PA</button>
+            <button id="upload-txdata-btn" class="primary">Upload TxData</button>
+            <button id="settle-btn">Settle From TxData</button>
+            <button id="extend-txdata-btn">Extend TxData</button>
+            <button id="close-txdata-btn">Close TxData</button>
+            <button id="close-expired-btn">Close Expired TxData</button>
+            <button id="emergency-stop-btn">Emergency Stop</button>
+            <button id="transfer-authority-btn">Transfer Authority</button>
+            <button id="update-expiry-btn">Update Expiry Config</button>
+          </div>
+          <div class="field-group">
+            <div class="field">
+              <label for="expiry-offset">Expiry Offset (slots)</label>
+              <input id="expiry-offset" value="10000" />
+            </div>
+            <div class="field">
+              <label for="chunk-size">Chunk Size</label>
+              <input id="chunk-size" value="700" />
+            </div>
+            <div class="field">
+              <label for="new-expiry-slot">New Expiry Slot</label>
+              <input id="new-expiry-slot" placeholder="optional" />
+            </div>
+            <div class="field">
+              <label for="close-expired-authority">Close Expired Authority</label>
+              <input id="close-expired-authority" placeholder="pubkey" />
+            </div>
+            <div class="field">
+              <label for="new-authority">New Authority</label>
+              <input id="new-authority" placeholder="pubkey" />
+            </div>
+            <div class="field">
+              <label for="min-expiry">Min Expiry Slots</label>
+              <input id="min-expiry" placeholder="e.g. 100" />
+            </div>
+            <div class="field">
+              <label for="max-expiry">Max Expiry Slots</label>
+              <input id="max-expiry" placeholder="e.g. 216000" />
+            </div>
+            <div class="field">
+              <label for="extra-root-markers">Extra Root Markers (comma)</label>
+              <input id="extra-root-markers" placeholder="pubkey1,pubkey2" />
+            </div>
+            <div class="field">
+              <label for="new-root-hex">New Root (hex, optional)</label>
+              <input id="new-root-hex" placeholder="32-byte hex without 0x" />
+            </div>
+          </div>
+        </section>
+
+        <section class="panel" style="--delay: 200ms">
+          <h2>State Snapshot</h2>
+          <div class="mono-box" id="state-display">
+            <div>authority: -</div>
+            <div>paused: -</div>
+            <div>root: -</div>
+            <div>next_index: -</div>
+            <div>depth: -</div>
+            <div>min_expiry: -</div>
+            <div>max_expiry: -</div>
+          </div>
+          <div class="mono-box">
+            <div>balance: <span id="balance-display">-</span></div>
+            <div>slot: <span id="slot-display">-</span></div>
+          </div>
+        </section>
+
+        <section class="panel" style="--delay: 240ms">
+          <h2>Execution Log</h2>
+          <div class="log" id="log-output"></div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

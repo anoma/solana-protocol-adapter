@@ -30,6 +30,8 @@ services:
       - "8900:8900"
       # Solana validator faucet
       - "9900:9900"
+      # PA Explorer UI (Vite)
+      - "5173:5173"
     environment:
       - RUST_BACKTRACE=1
       - RUST_LOG=solana_runtime::system_instruction_processor=trace,solana_runtime::message_processor=trace

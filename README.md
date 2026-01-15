@@ -73,6 +73,23 @@ docker-compose run --rm dev bash -c '
 
 ---
 
+## Web UI (PA Explorer)
+
+The PA Explorer is a lightweight web UI for stepping through the same flows as the tests.
+
+To avoid host-specific JS tooling differences, run the UI in the dev container:
+
+```bash
+./scripts/docker-dev.sh ui
+```
+
+This uses the containerized Node + Yarn toolchain and the pinned `yarn.lock` to install
+dependencies, then starts Vite on port 5173.
+
+Open `http://localhost:5173` and load:
+- IDL: `solana-pa-prototype/target/idl/solana_pa_prototype.json`
+- Fixture: `solana-pa-prototype/tests/fixtures/batch_groth16.json`
+
 ## Writing a Forwarder
 
 A forwarder is a Solana program that the PA calls via CPI after proof verification. Forwarders execute side effects (token transfers, state updates, etc.) and return output that the PA verifies against the proof.

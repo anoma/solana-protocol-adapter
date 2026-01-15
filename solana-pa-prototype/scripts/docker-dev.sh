@@ -44,6 +44,11 @@ case "$1" in
         docker compose run --rm dev bash -c "cd /workspace/risc0-solana/solana-verifier && anchor build"
         ;;
 
+    ui)
+        echo "Starting PA Explorer UI..."
+        docker compose run --rm --service-ports dev bash -lc "cd /workspace/solana-pa-prototype && yarn install --frozen-lockfile || (echo 'Lockfile out of date, updating...' && yarn install) && yarn ui:dev --host 0.0.0.0 --port 5173"
+        ;;
+
     full-test)
         echo "Running full integration test..."
         docker compose run --rm --service-ports dev bash -c "
@@ -84,6 +89,7 @@ case "$1" in
         echo "  anchor-build   Build Anchor programs"
         echo "  anchor-test    Run Anchor integration tests"
         echo "  build-verifier Build risc0-solana verifier"
+        echo "  ui             Run the PA Explorer web UI"
         echo "  full-test      Run full integration test suite"
         echo "  update-deps    Update yarn.lock when package.json changes"
         echo "  clean          Stop and remove containers/volumes"
