@@ -8,11 +8,15 @@ skip-lint = false
 block_time_forwarder = "FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq"
 solana_pa_prototype = "AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt"
 
+[programs.devnet]
+block_time_forwarder = "FFLBDCaVJkdamigjmRjzhWPR2rJ4N6k4QpiBiR4Npq7d"
+solana_pa_prototype = "4Lc29cQ8ErbX23jcUXypYFB5kTGSrS8wD6EBHu6hR6Ns"
+
 [registry]
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
