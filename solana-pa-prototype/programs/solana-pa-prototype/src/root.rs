@@ -11,9 +11,10 @@
 use crate::error::PAError;
 use crate::merkle::PADDING_LEAF;
 use crate::state::PAStateAccount;
-use crate::types::Digest;
+use crate::types::ToBytes;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke_signed;
+use arm_types::utils::Digest;
 use solana_system_interface::instruction as system_instruction;
 
 /// Seeds prefix for root marker PDA derivation.

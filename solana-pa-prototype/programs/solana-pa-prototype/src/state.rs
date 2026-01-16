@@ -2,8 +2,9 @@
 //! Named "state" to avoid conflict with Anchor's internal "accounts" module.
 
 use crate::merkle::MAX_TREE_DEPTH;
-use crate::types::Digest;
+use crate::types::ToBytes;
 use anchor_lang::prelude::*;
+use arm_types::utils::Digest;
 
 /// On-chain Protocol Adapter state.
 /// Stores the commitment tree frontier only.

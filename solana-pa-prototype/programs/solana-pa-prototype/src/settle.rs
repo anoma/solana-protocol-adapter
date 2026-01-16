@@ -2,8 +2,8 @@
 
 use crate::error::PAError;
 use crate::external_calls::decode_external_call;
-use crate::journal::parse_compliance_instance;
-use crate::types::{Digest, SolanaExternalCall, Transaction};
+use crate::types::SolanaExternalCall;
+use arm_types::{transaction::Transaction, utils::Digest};
 
 /// Extract nullifiers from a transaction by parsing each ComplianceUnit.instance.
 /// This matches arm-risc0's nf_duplication_check behavior:
@@ -12,7 +12,7 @@ pub fn extract_nullifiers(tx: &Transaction) -> Result<Vec<Digest>, PAError> {
     let mut nullifiers = Vec::new();
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let instance = parse_compliance_instance(&cu.instance)?;
+            let instance = &cu.instance;
             nullifiers.push(instance.consumed_nullifier);
         }
     }
@@ -25,7 +25,7 @@ pub fn extract_commitments(tx: &Transaction) -> Result<Vec<Digest>, PAError> {
     let mut commitments = Vec::new();
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let instance = parse_compliance_instance(&cu.instance)?;
+            let instance = &cu.instance;
             commitments.push(instance.created_commitment);
         }
     }

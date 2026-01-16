@@ -1,7 +1,10 @@
 //! Groth16 proof extraction and preparation for risc0-solana verification.
 
 use crate::error::PAError;
-use crate::types::Transaction;
+use arm_types::{
+    aggregation::{BatchCU, BatchLP, get_batch_journal},
+    transaction::Transaction,
+};
 
 // Re-export types for use in lib.rs
 // Proof comes from groth_16_verifier (verifier_router uses it but doesn't re-export)
@@ -171,7 +174,20 @@ pub fn prepare_proof_for_verification(tx: &Transaction) -> Result<PreparedProof,
     let negated_seal = negate_pi_a(&seal);
 
     let image_id = BATCH_AGGREGATION_IMAGE_ID;
-    let journal_digest = crate::encoding::compute_batch_aggregation_journal_digest(tx)?.to_bytes();
+    // TODO! Remove unwrap
+    let BatchCU {
+        instances: compliance_instances,
+        journals: _,
+    } = tx.get_batch_cu();
+    let BatchLP {
+        instances: logic_instances,
+        keys: logic_keys,
+        journals: _,
+    } = tx.get_batch_lp().unwrap();
+    let journal_digest = get_batch_journal(compliance_instances, logic_instances, logic_keys)
+        .unwrap()
+        .try_into()
+        .unwrap();
 
     let mut pi_a = [0u8; 64];
     let mut pi_b = [0u8; 128];

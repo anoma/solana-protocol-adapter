@@ -1,8 +1,13 @@
 //! External call encoding, decoding, and CPI execution.
 
-use crate::encoding::{bytes_to_words, words_to_bytes};
 use crate::error::PAError;
-use crate::types::{ExpirableBlob, OutputMode, SolanaExternalCall};
+use crate::types::ToBytes;
+use crate::types::{OutputMode, SolanaExternalCall};
+use arm_types::{
+    logic_instance::ExpirableBlob,
+    transaction::Transaction,
+    utils::{Digest, bytes_to_words, words_to_bytes},
+};
 
 /// Encode an external call into an ExpirableBlob.
 /// Serializes using bincode and converts to word array.
@@ -192,7 +197,7 @@ fn read_forwarder_output<'info>(
 /// The caller is responsible for finding the segment and slicing accounts.
 #[cfg(not(test))]
 fn execute_forwarder_call<'info>(
-    logic_ref: &crate::types::Digest,
+    logic_ref: &Digest,
     call: &SolanaExternalCall,
     forwarder_program_info: &anchor_lang::prelude::AccountInfo<'info>,
     cpi_accounts: &[anchor_lang::prelude::AccountInfo<'info>],
@@ -228,7 +233,7 @@ fn execute_forwarder_call<'info>(
 /// Execute all external calls from a transaction via CPI.
 #[cfg(not(test))]
 pub fn execute_external_calls<'info>(
-    tx: &crate::types::Transaction,
+    tx: &Transaction,
     remaining_accounts: &[anchor_lang::prelude::AccountInfo<'info>],
     nullifier_count: usize,
 ) -> Result<(), PAError> {
