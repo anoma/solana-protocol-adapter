@@ -496,7 +496,7 @@ dependencies = [
 [[package]]
 name = "arm_types"
 version = "1.0.0"
-source = "git+https://github.com/anoma/arm-risc0?rev=4e05706a1938e092f84d78b178be1f6851bd847a#4e05706a1938e092f84d78b178be1f6851bd847a"
+source = "git+https://github.com/anoma/arm-risc0?rev=a093bd6350f7fbb3a276c22f6ba589a00fac8704#a093bd6350f7fbb3a276c22f6ba589a00fac8704"
 dependencies = [
  "bytemuck",
  "hex",

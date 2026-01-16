@@ -22,7 +22,7 @@ solana-system-interface = "1.0"
 
 risc0-serde = {git = "https://github.com/agureev/risc0", package = "risc0-serde", rev = "160073c324d72a0bfb74c7f2cf8d8e2ee5879bca", default-features = false}
 
-arm-types = {git = "https://github.com/anoma/arm-risc0", package = "arm_types", rev = "4e05706a1938e092f84d78b178be1f6851bd847a"}
+arm-types = {git = "https://github.com/anoma/arm-risc0", package = "arm_types", rev = "a093bd6350f7fbb3a276c22f6ba589a00fac8704"}
 
 # Serialization - must match arm-risc0 exactly
 bincode = "1.3.3"
