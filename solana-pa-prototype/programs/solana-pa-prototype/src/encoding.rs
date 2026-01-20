@@ -29,7 +29,7 @@ pub fn words_to_bytes(words: &[u32]) -> Vec<u8> {
 
 /// Image ID for the compliance circuit (from `arm-risc0/arm/src/constants.rs`).
 pub const COMPLIANCE_VK_BYTES: [u8; 32] =
-    hex_literal::hex!("3003123ba707922b5a7124dccb3765cfb8a590852d4f25e29c9002f6efcfaa35");
+    hex_literal::hex!("1176e7f038c55009f369e2eafd1dd9bc5b51a6f5fc6369cc9f54779258f898fc");
 
 #[derive(Clone, Debug)]
 struct U32Array56([u32; 56]);

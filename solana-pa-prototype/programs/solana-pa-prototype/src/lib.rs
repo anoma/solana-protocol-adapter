@@ -629,7 +629,7 @@ fn execute_settlement<'info>(
             verifier_entry,
             verifier_program,
             system_program,
-            prepared.to_seal(),
+            prepared.seal,
             prepared.image_id,
             prepared.journal_digest,
         )
