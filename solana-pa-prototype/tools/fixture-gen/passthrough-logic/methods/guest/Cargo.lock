@@ -252,6 +252,7 @@ dependencies = [
 [[package]]
 name = "arm"
 version = "1.0.0"
+source = "git+https://github.com/anoma/arm-risc0?rev=3da9a640ed8f733dce6a082f1043ef9571ad1bdf#3da9a640ed8f733dce6a082f1043ef9571ad1bdf"
 dependencies = [
  "bincode",
  "bytemuck",

@@ -594,6 +594,7 @@ dependencies = [
 [[package]]
 name = "arm"
 version = "1.0.0"
+source = "git+https://github.com/anoma/arm-risc0?rev=3da9a640ed8f733dce6a082f1043ef9571ad1bdf#3da9a640ed8f733dce6a082f1043ef9571ad1bdf"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -612,6 +613,7 @@ dependencies = [
 [[package]]
 name = "arm-gadgets"
 version = "1.0.0"
+source = "git+https://github.com/anoma/arm-risc0?rev=3da9a640ed8f733dce6a082f1043ef9571ad1bdf#3da9a640ed8f733dce6a082f1043ef9571ad1bdf"
 dependencies = [
  "aes-gcm",
  "alloy-primitives",
@@ -628,6 +630,7 @@ dependencies = [
 [[package]]
 name = "arm-test-app"
 version = "1.0.0"
+source = "git+https://github.com/anoma/arm-risc0?rev=3da9a640ed8f733dce6a082f1043ef9571ad1bdf#3da9a640ed8f733dce6a082f1043ef9571ad1bdf"
 dependencies = [
  "arm",
  "arm-test-witness",
@@ -640,6 +643,7 @@ dependencies = [
 [[package]]
 name = "arm-test-witness"
 version = "1.0.0"
+source = "git+https://github.com/anoma/arm-risc0?rev=3da9a640ed8f733dce6a082f1043ef9571ad1bdf#3da9a640ed8f733dce6a082f1043ef9571ad1bdf"
 dependencies = [
  "arm",
  "arm-gadgets",
