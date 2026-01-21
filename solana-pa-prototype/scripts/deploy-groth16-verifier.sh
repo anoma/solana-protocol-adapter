@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 PA_ROOT="$REPO_ROOT/solana-pa-prototype"
 
-CLUSTER_URL="${CLUSTER_URL:-http://localhost:8899}"
+CLUSTER_URL="${CLUSTER_URL:-${ANCHOR_PROVIDER_URL:-http://localhost:8899}}"
 
 VERIFIER_ROOT="${VERIFIER_ROOT:-$REPO_ROOT/risc0-solana/solana-verifier}"
 PROGRAM_NAME="groth_16_verifier"

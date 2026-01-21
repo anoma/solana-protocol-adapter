@@ -55,7 +55,7 @@ pub fn create_minimal_transaction() -> Transaction {
     Transaction {
         actions: vec![Action {
             compliance_units: vec![ComplianceUnit {
-                instance: bincode::serialize(&instance).unwrap(),
+                instance,
                 proof: None,
             }],
             logic_verifier_inputs: vec![
@@ -97,14 +97,7 @@ pub fn create_compliance_instance(nullifier: Digest, commitment: Digest) -> Comp
 pub fn create_transaction_with_compliance_instances(
     instances: Vec<ComplianceInstance>,
 ) -> Transaction {
-    let compliance_units: Vec<ComplianceUnit> = instances
-        .iter()
-        .map(|inst| ComplianceUnit {
-            instance: bincode::serialize(inst).unwrap(),
-            proof: None,
-        })
-        .collect();
-
+    // Build logic_verifier_inputs first (before consuming instances)
     let mut logic_verifier_inputs: Vec<LogicVerifierInputs> = Vec::new();
     for inst in &instances {
         logic_verifier_inputs.push(LogicVerifierInputs {
@@ -120,6 +113,14 @@ pub fn create_transaction_with_compliance_instances(
             proof: None,
         });
     }
+
+    let compliance_units: Vec<ComplianceUnit> = instances
+        .into_iter()
+        .map(|instance| ComplianceUnit {
+            instance,
+            proof: None,
+        })
+        .collect();
 
     Transaction {
         actions: vec![Action {
@@ -151,9 +152,7 @@ pub fn create_transaction_with_external_payload_and_logic_ref(
 
     // Update the consumed logic ref in the compliance instance, and align the LVI's verifying_key.
     let cu = &mut tx.actions[0].compliance_units[0];
-    let mut instance: ComplianceInstance = bincode::deserialize(&cu.instance).unwrap();
-    instance.consumed_logic_ref = verifying_key;
-    cu.instance = bincode::serialize(&instance).unwrap();
+    cu.instance.consumed_logic_ref = verifying_key;
 
     tx.actions[0].logic_verifier_inputs[0].verifying_key = verifying_key;
     tx.actions[0].logic_verifier_inputs[0]
@@ -197,7 +196,7 @@ pub fn create_transaction_with_multiple_lvi_external_payloads(
     Transaction {
         actions: vec![Action {
             compliance_units: vec![ComplianceUnit {
-                instance: bincode::serialize(&instance).unwrap(),
+                instance,
                 proof: None,
             }],
             logic_verifier_inputs,

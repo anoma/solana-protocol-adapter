@@ -557,8 +557,6 @@ fn execute_settlement<'info>(
     verifier_program: &AccountInfo<'info>,
 ) -> Result<()> {
     use crate::encoding::{compute_action_tree_root, extract_tags_and_logic_refs};
-    use crate::journal::parse_compliance_instance;
-
     // 1) State anchor check (supports historical roots)
     for (action_idx, action) in tx.actions.iter().enumerate() {
         for (cu_idx, cu) in action.compliance_units.iter().enumerate() {
@@ -567,13 +565,11 @@ fn execute_settlement<'info>(
                 action_idx,
                 cu_idx
             );
-            let instance = parse_compliance_instance(&cu.instance)
-                .map_err(|_| error!(PAError::InvalidTransactionData))?;
             // Check if root is valid (current, PADDING_LEAF, or historical marker exists)
             if !root::is_root_valid(
                 state,
                 pa_state_key,
-                &instance.consumed_commitment_tree_root,
+                &cu.instance.consumed_commitment_tree_root,
                 remaining_accounts,
             ) {
                 return Err(error!(PAError::NonExistingRoot));
@@ -586,9 +582,7 @@ fn execute_settlement<'info>(
     for (action_idx, action) in tx.actions.iter().enumerate() {
         for (cu_idx, cu) in action.compliance_units.iter().enumerate() {
             msg!("Extracting nullifier: action={}, cu={}", action_idx, cu_idx);
-            let instance = parse_compliance_instance(&cu.instance)
-                .map_err(|_| error!(PAError::InvalidTransactionData))?;
-            nullifiers.push(instance.consumed_nullifier.to_bytes());
+            nullifiers.push(cu.instance.consumed_nullifier.to_bytes());
         }
     }
 

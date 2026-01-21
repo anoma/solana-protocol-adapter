@@ -100,7 +100,7 @@ pub fn extract_tags_and_logic_refs(
     let mut logic_refs = Vec::new();
 
     for cu in &action.compliance_units {
-        let instance = parse_compliance_instance(&cu.instance)?;
+        let instance = &cu.instance;
         tags.push(instance.consumed_nullifier);
         tags.push(instance.created_commitment);
         logic_refs.push(instance.consumed_logic_ref);
@@ -181,7 +181,9 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
         .map_err(|_| PAError::InvalidTransactionData)?;
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let words = bytes_to_words(&cu.instance);
+            let instance_bytes =
+                bincode::serialize(&cu.instance).map_err(|_| PAError::InvalidTransactionData)?;
+            let words = bytes_to_words(&instance_bytes);
             let fixed: [u32; 56] = words
                 .try_into()
                 .map_err(|_| PAError::InvalidTransactionData)?;
@@ -211,7 +213,7 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
         let mut logics: Vec<Digest> = Vec::new();
 
         for cu in &action.compliance_units {
-            let instance = parse_compliance_instance(&cu.instance)?;
+            let instance = &cu.instance;
             tags.push(instance.consumed_nullifier);
             tags.push(instance.created_commitment);
             logics.push(instance.consumed_logic_ref);

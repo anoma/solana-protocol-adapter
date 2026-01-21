@@ -2,7 +2,6 @@
 
 use crate::error::PAError;
 use crate::external_calls::decode_external_call;
-use crate::journal::parse_compliance_instance;
 use crate::types::{Digest, SolanaExternalCall, Transaction};
 
 /// Extract nullifiers from a transaction by parsing each ComplianceUnit.instance.
@@ -12,8 +11,7 @@ pub fn extract_nullifiers(tx: &Transaction) -> Result<Vec<Digest>, PAError> {
     let mut nullifiers = Vec::new();
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let instance = parse_compliance_instance(&cu.instance)?;
-            nullifiers.push(instance.consumed_nullifier);
+            nullifiers.push(cu.instance.consumed_nullifier);
         }
     }
     Ok(nullifiers)
@@ -25,8 +23,7 @@ pub fn extract_commitments(tx: &Transaction) -> Result<Vec<Digest>, PAError> {
     let mut commitments = Vec::new();
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let instance = parse_compliance_instance(&cu.instance)?;
-            commitments.push(instance.created_commitment);
+            commitments.push(cu.instance.created_commitment);
         }
     }
     Ok(commitments)
