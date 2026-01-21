@@ -1656,7 +1656,6 @@ dependencies = [
  "bincode",
  "hex",
  "k256",
- "passthrough-logic-methods",
  "rayon",
  "risc0-zkvm",
  "serde",
@@ -2951,13 +2950,6 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
-]
-
-[[package]]
-name = "passthrough-logic-methods"
-version = "0.1.0"
-dependencies = [
- "risc0-build",
 ]
 
 [[package]]

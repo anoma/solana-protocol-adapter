@@ -1,33 +1,33 @@
 use anyhow::{anyhow, Context, Result};
-use arm::aggregation::AggregationStrategy;
 use arm::action::Action;
 use arm::action_tree::MerkleTree;
+use arm::aggregation::AggregationStrategy;
 use arm::compliance::{ComplianceWitness, INITIAL_ROOT};
-use arm::merkle_path::MerklePath;
 use arm::compliance_unit::ComplianceUnit;
+use arm::delta_proof::DeltaWitness;
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
 use arm::logic_proof::LogicVerifier;
+use arm::merkle_path::MerklePath;
 use arm::nullifier_key::NullifierKey;
 use arm::proving_system::ProofType;
-use arm::transaction::{Delta, Transaction};
-use arm::Digest;
-use arm::utils::bytes_to_words;
-use arm::delta_proof::DeltaWitness;
 use arm::resource::Resource;
-use k256::{elliptic_curve::PrimeField, Scalar};
+use arm::transaction::{Delta, Transaction};
+use arm::utils::bytes_to_words;
+use arm::Digest;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use k256::{elliptic_curve::PrimeField, Scalar};
 use rayon::ThreadPoolBuilder;
-use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
 use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
+use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use passthrough_logic_methods::{PASSTHROUGH_LOGIC_GUEST_ELF, PASSTHROUGH_LOGIC_GUEST_ID};
+use arm::constants::{PADDING_LOGIC_PK, PADDING_LOGIC_VK};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct SolanaExternalCall {
@@ -68,7 +68,9 @@ fn extract_selector(tx: &Transaction) -> Result<String> {
     let proof_bytes = bincode::serialize(agg_proof)
         .context("serialize aggregation_proof for selector extraction")?;
     if proof_bytes.len() < 32 {
-        return Err(anyhow!("aggregation_proof too short for selector extraction"));
+        return Err(anyhow!(
+            "aggregation_proof too short for selector extraction"
+        ));
     }
     let vp_start = proof_bytes.len() - 32;
     let selector = &proof_bytes[vp_start..vp_start + 4];
@@ -108,7 +110,9 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
         }
     }
     if !updated {
-        return Err(anyhow!("could not find created logic verifier input for tamper"));
+        return Err(anyhow!(
+            "could not find created logic verifier input for tamper"
+        ));
     }
 
     Ok(())
@@ -200,7 +204,7 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
 
     // Use the passthrough logic circuit for both consumed and created resources.
     // This allows us to bind arbitrary `app_data.external_payload` into real proofs.
-    let passthrough_vk: Digest = PASSTHROUGH_LOGIC_GUEST_ID.into();
+    let passthrough_vk: Digest = *PADDING_LOGIC_VK;
 
     let nf_key = NullifierKey::default();
     let nf_key_cm = nf_key.commit();
@@ -263,10 +267,10 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
     };
 
     let (consumed_proof, consumed_journal) =
-        arm::proving_system::prove(PASSTHROUGH_LOGIC_GUEST_ELF, &consumed_instance, base_proof_type)
+        arm::proving_system::prove(PADDING_LOGIC_PK, &consumed_instance, base_proof_type)
             .context("prove consumed passthrough logic")?;
     let (created_proof, created_journal) =
-        arm::proving_system::prove(PASSTHROUGH_LOGIC_GUEST_ELF, &created_instance, base_proof_type)
+        arm::proving_system::prove(PADDING_LOGIC_PK, &created_instance, base_proof_type)
             .context("prove created passthrough logic")?;
 
     let consumed_logic = LogicVerifier {
@@ -280,8 +284,11 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
         verifying_key: passthrough_vk,
     };
 
-    let action = Action::new(vec![compliance_receipt], vec![consumed_logic, created_logic])
-        .context("build action")?;
+    let action = Action::new(
+        vec![compliance_receipt],
+        vec![consumed_logic, created_logic],
+    )
+    .context("build action")?;
 
     // Delta witness is derived from compliance witness RCVs.
     let delta_witness =
@@ -348,10 +355,7 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
                 output_mismatch = true;
             }
             _ if arg.starts_with("--threads=") => {
-                let value = arg
-                    .split_once('=')
-                    .map(|(_, v)| v)
-                    .unwrap_or_default();
+                let value = arg.split_once('=').map(|(_, v)| v).unwrap_or_default();
                 let parsed = value
                     .parse::<usize>()
                     .with_context(|| format!("invalid --threads value: {value}"))?;
@@ -372,9 +376,8 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
         }
     }
 
-    let out_path = out_path.unwrap_or_else(|| {
-        PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json")
-    });
+    let out_path = out_path
+        .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
 
     Ok((threads, debug_assumptions, output_mismatch, out_path))
 }
@@ -398,19 +401,27 @@ fn main() -> Result<()> {
     eprintln!("fixture output: {}", out_path.display());
     eprintln!("mode: aggregated (batch Groth16)");
     if output_mismatch {
-        eprintln!("mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)");
+        eprintln!(
+            "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
+        );
     }
 
     eprintln!("phase: generate_test_transaction");
     let start = Instant::now();
     let mut tx = generate_test_transaction_with_external_payload(output_mismatch)?;
-    eprintln!("phase done: generate_test_transaction ({})", fmt_duration(start.elapsed()));
+    eprintln!(
+        "phase done: generate_test_transaction ({})",
+        fmt_duration(start.elapsed())
+    );
 
     if debug_assumptions {
         eprintln!("phase: debug_assumptions (claim digests must match env::verify calls)");
         let start = Instant::now();
         debug_batch_assumptions(&tx)?;
-        eprintln!("phase done: debug_assumptions ({})", fmt_duration(start.elapsed()));
+        eprintln!(
+            "phase done: debug_assumptions ({})",
+            fmt_duration(start.elapsed())
+        );
     }
 
     eprintln!("phase: aggregate_with_strategy(batch, groth16) (this is the expensive step)");
@@ -425,7 +436,10 @@ fn main() -> Result<()> {
     eprintln!("phase: verify_aggregation");
     let start = Instant::now();
     tx.verify_aggregation().context("verify aggregated proof")?;
-    eprintln!("phase done: verify_aggregation ({})", fmt_duration(start.elapsed()));
+    eprintln!(
+        "phase done: verify_aggregation ({})",
+        fmt_duration(start.elapsed())
+    );
 
     eprintln!("phase: serialize_tx");
     let start = Instant::now();
@@ -445,7 +459,10 @@ fn main() -> Result<()> {
             consumed_nullifiers_b64.push(BASE64.encode(instance.consumed_nullifier.as_bytes()));
         }
     }
-    eprintln!("phase done: extract_nullifiers ({})", fmt_duration(start.elapsed()));
+    eprintln!(
+        "phase done: extract_nullifiers ({})",
+        fmt_duration(start.elapsed())
+    );
 
     eprintln!("phase: tamper_tx_and_serialize");
     let start = Instant::now();
@@ -461,7 +478,11 @@ fn main() -> Result<()> {
     eprintln!("phase: extract_selector");
     let start = Instant::now();
     let selector = extract_selector(&tx).context("extract selector from proof")?;
-    eprintln!("phase done: extract_selector ({}, selector={})", fmt_duration(start.elapsed()), selector);
+    eprintln!(
+        "phase done: extract_selector ({}, selector={})",
+        fmt_duration(start.elapsed()),
+        selector
+    );
 
     let fixture = Fixture {
         format: "arm-risc0:Transaction(bincode)",
@@ -521,7 +542,10 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
             let words = arm::utils::bytes_to_words(&cu.instance);
             let padded_bytes = arm::utils::words_to_bytes(&words);
             let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
-            let expected_claim = ReceiptClaim::ok(*arm::constants::COMPLIANCE_VK, MaybePruned::Pruned(journal_digest));
+            let expected_claim = ReceiptClaim::ok(
+                *arm::constants::COMPLIANCE_VK,
+                MaybePruned::Pruned(journal_digest),
+            );
             let expected_claim_digest = expected_claim.digest();
 
             eprintln!(
