@@ -1,154 +1,62 @@
 #!/usr/bin/env bash
+# Verify RISC0 verifier infrastructure is available for localnet testing.
+#
+# The verifier programs AND their initialized state are automatically cloned
+# from devnet when solana-test-validator starts (via Anchor.toml or docker-compose.yml).
+# This script only verifies the cloned state is correct.
+
 set -euo pipefail
 
-# Auto-detect paths relative to this script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-PA_ROOT="$REPO_ROOT/solana-pa-prototype"
+PA_ROOT="$SCRIPT_DIR/.."
 
-CLUSTER_URL="${CLUSTER_URL:-${ANCHOR_PROVIDER_URL:-http://localhost:8899}}"
+# Use Anchor's provider URL if available, otherwise fall back to CLUSTER_URL or localhost
+CLUSTER_URL="${ANCHOR_PROVIDER_URL:-${CLUSTER_URL:-http://localhost:8899}}"
 
-VERIFIER_ROOT="${VERIFIER_ROOT:-$REPO_ROOT/risc0-solana/solana-verifier}"
-PROGRAM_NAME="groth_16_verifier"
+# Devnet program addresses (cloned by solana-test-validator)
+VERIFIER_ROUTER_ID="CnhgPbCm2mjYYT2konzKsBD7RL8Mfg63nuzB7xsbABFq"
+GROTH16_VERIFIER_ID="DBcDFEFD87rLdoepucSxbvG13idCo6HYS4sutVihkmbk"
 
-KEYPAIR_PATH="${KEYPAIR_PATH:-$VERIFIER_ROOT/target/deploy/${PROGRAM_NAME}-keypair.json}"
-SO_PATH="${SO_PATH:-$VERIFIER_ROOT/target/deploy/${PROGRAM_NAME}.so}"
+# Devnet state PDAs (cloned by solana-test-validator)
+ROUTER_PDA="5GzjEjtL3JqKSp8sx4Kjzxuwg6xQ3pPyuTqnQJxbemEk"
+VERIFIER_ENTRY_PDA="DMXuNWRSEVjJnfDovkQLdgmoSi1HBRvG7svJUEBqfz3F"
 
-echo "==> Deploying ${PROGRAM_NAME} to ${CLUSTER_URL}"
+echo "==> Verifying RISC0 verifier infrastructure"
+echo "    Cluster URL: $CLUSTER_URL"
 
-cd "$VERIFIER_ROOT"
-
-if [[ -f Cargo.lock ]]; then
-  # risc0-solana sometimes regenerates lockfiles as v4; anchor/solana tooling expects v3.
-  sed -i 's/^version = 4$/version = 3/' Cargo.lock || true
-fi
-
-if [[ ! -f "$KEYPAIR_PATH" ]]; then
-  echo "==> Building ${PROGRAM_NAME} (generates keypair)"
-  anchor build -p "$PROGRAM_NAME" 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
-fi
-
-PROGRAM_ID="$(solana-keygen pubkey "$KEYPAIR_PATH")"
-echo "==> ${PROGRAM_NAME} program id: ${PROGRAM_ID}"
-
-echo "==> Syncing program id into verifier sources"
-sed -i -E "s/^declare_id!\\(\"[^\"]+\"\\);/declare_id!(\"${PROGRAM_ID}\");/" \
-  "$VERIFIER_ROOT/programs/${PROGRAM_NAME}/src/lib.rs"
-sed -i -E "s/^${PROGRAM_NAME} = \"[^\"]+\"$/${PROGRAM_NAME} = \"${PROGRAM_ID}\"/" \
-  "$VERIFIER_ROOT/Anchor.toml"
-
-echo "==> Building ${PROGRAM_NAME}"
-anchor build -p "$PROGRAM_NAME" 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
-
-if [[ ! -f "$SO_PATH" ]]; then
-  echo "missing ${SO_PATH}"
-  exit 1
-fi
-
-echo "==> Setting Solana CLI cluster"
+# Configure Solana CLI
 solana config set --url "$CLUSTER_URL" >/dev/null
 
-echo "==> Airdrop (best-effort)"
-solana airdrop 5 >/dev/null 2>&1 || true
-
-# Check if program is already deployed
-if solana program show "$PROGRAM_ID" >/dev/null 2>&1; then
-  echo "==> Program already deployed: ${PROGRAM_ID}"
-else
-  echo "==> Deploying program"
-  solana program deploy --program-id "$KEYPAIR_PATH" "$SO_PATH" >/dev/null
-  echo "==> Deployed ${PROGRAM_ID}"
+# Verify programs were cloned from devnet
+echo "==> Verifying cloned programs"
+if ! solana program show "$VERIFIER_ROUTER_ID" >/dev/null 2>&1; then
+    echo "ERROR: Verifier router program not found at $VERIFIER_ROUTER_ID"
+    echo "       Ensure solana-test-validator was started with --clone-upgradeable-program"
+    exit 1
 fi
-
-# =============================================================================
-# Deploy verifier_router (for dual emergency check / EVM parity)
-# =============================================================================
-
-ROUTER_NAME="verifier_router"
-ROUTER_KEYPAIR_PATH="$VERIFIER_ROOT/target/deploy/${ROUTER_NAME}-keypair.json"
-ROUTER_SO_PATH="$VERIFIER_ROOT/target/deploy/${ROUTER_NAME}.so"
-
-# CRITICAL: Router requires INITIAL_OWNER at build time
-# Get the test wallet's pubkey for initialization
-WALLET_PUBKEY="$(solana-keygen pubkey ~/.config/solana/id.json)"
-export INITIAL_OWNER="$WALLET_PUBKEY"
-
-echo "==> Building ${ROUTER_NAME} with INITIAL_OWNER=${INITIAL_OWNER}"
-
-if [[ ! -f "$ROUTER_KEYPAIR_PATH" ]]; then
-  echo "==> Building ${ROUTER_NAME} (generates keypair)"
-  anchor build -p "$ROUTER_NAME" 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
+if ! solana program show "$GROTH16_VERIFIER_ID" >/dev/null 2>&1; then
+    echo "ERROR: Groth16 verifier program not found at $GROTH16_VERIFIER_ID"
+    echo "       Ensure solana-test-validator was started with --clone-upgradeable-program"
+    exit 1
 fi
+echo "    Router program:  $VERIFIER_ROUTER_ID ✓"
+echo "    Groth16 program: $GROTH16_VERIFIER_ID ✓"
 
-ROUTER_ID="$(solana-keygen pubkey "$ROUTER_KEYPAIR_PATH")"
-echo "==> ${ROUTER_NAME} program id: ${ROUTER_ID}"
-
-echo "==> Syncing router program id into sources"
-sed -i -E "s/^declare_id!\\(\"[^\"]+\"\\);/declare_id!(\"${ROUTER_ID}\");/" \
-  "$VERIFIER_ROOT/programs/${ROUTER_NAME}/src/lib.rs"
-sed -i -E "s/^${ROUTER_NAME} = \"[^\"]+\"$/${ROUTER_NAME} = \"${ROUTER_ID}\"/" \
-  "$VERIFIER_ROOT/Anchor.toml"
-
-echo "==> Building ${ROUTER_NAME}"
-anchor build -p "$ROUTER_NAME" 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
-
-if [[ ! -f "$ROUTER_SO_PATH" ]]; then
-  echo "missing ${ROUTER_SO_PATH}"
-  exit 1
+# Verify state PDAs were cloned from devnet
+echo "==> Verifying cloned state"
+if ! solana account "$ROUTER_PDA" >/dev/null 2>&1; then
+    echo "ERROR: Router PDA not found at $ROUTER_PDA"
+    echo "       Ensure solana-test-validator was started with --clone $ROUTER_PDA"
+    exit 1
 fi
-
-# Check if router is already deployed
-if solana program show "$ROUTER_ID" >/dev/null 2>&1; then
-  echo "==> Router already deployed: ${ROUTER_ID}"
-else
-  echo "==> Deploying ${ROUTER_NAME}"
-  solana program deploy --program-id "$ROUTER_KEYPAIR_PATH" "$ROUTER_SO_PATH" >/dev/null
-  echo "==> Deployed ${ROUTER_ID}"
+if ! solana account "$VERIFIER_ENTRY_PDA" >/dev/null 2>&1; then
+    echo "ERROR: Verifier entry PDA not found at $VERIFIER_ENTRY_PDA"
+    echo "       Ensure solana-test-validator was started with --clone $VERIFIER_ENTRY_PDA"
+    exit 1
 fi
+echo "    Router PDA:         $ROUTER_PDA ✓"
+echo "    Verifier Entry PDA: $VERIFIER_ENTRY_PDA ✓"
 
-# =============================================================================
-# Initialize router and register groth16 verifier
-# =============================================================================
-
-echo "==> Initializing router and registering verifier"
-
-# Read selector from fixture file (generated by fixture-gen)
-FIXTURE_PATH="${FIXTURE_PATH:-$PA_ROOT/tests/fixtures/batch_groth16.json}"
-if [[ ! -f "$FIXTURE_PATH" ]]; then
-  echo "ERROR: Fixture not found at $FIXTURE_PATH"
-  echo "Run fixture-gen first to generate the test fixture with selector metadata."
-  exit 1
-fi
-
-GROTH16_SELECTOR="$(jq -r '.selector' "$FIXTURE_PATH")"
-if [[ -z "$GROTH16_SELECTOR" || "$GROTH16_SELECTOR" == "null" ]]; then
-  echo "ERROR: Could not read selector from fixture"
-  exit 1
-fi
-echo "==> Using selector from fixture: ${GROTH16_SELECTOR}"
-
-# Switch to solana-pa-prototype for our setup script
-cd "$PA_ROOT"
-
-# Ensure dependencies are installed (always run yarn to get new dependencies)
-echo "==> Installing dependencies"
-yarn install
-
-# Install risc0-solana dependencies (setup.ts imports from risc0-solana/solana-verifier)
-echo "==> Installing risc0-solana dependencies"
-cd "$VERIFIER_ROOT"
-yarn install
-cd "$PA_ROOT"
-
-# WebSocket is on port 8900 (solana-test-validator default)
-WS_URL="${CLUSTER_URL/http/ws}"
-WS_URL="${WS_URL/:8899/:8900}"
-
-RPC="${CLUSTER_URL}" \
-RPC_SUBSCRIPTION="${WS_URL}" \
-ROUTER_ADDRESS="${ROUTER_ID}" \
-VERIFIER_ADDRESS="${PROGRAM_ID}" \
-SELECTOR="${GROTH16_SELECTOR}" \
-yarn ts-node scripts/setup.ts
-
-echo "==> Router initialized with groth16 verifier registered"
+echo "==> RISC0 verifier infrastructure ready"
+echo "    Router:  $VERIFIER_ROUTER_ID"
+echo "    Groth16: $GROTH16_VERIFIER_ID"

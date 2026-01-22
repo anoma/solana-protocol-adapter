@@ -16,8 +16,28 @@ solana_pa_prototype = "AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "devnet"
-wallet = "/workspace/solana-pa-prototype/scripts/devnet-wallet.json"
+cluster = "localnet"
+wallet = "~/.config/solana/id.json"
+
+# Clone RISC0 verifier programs and state from devnet at startup
+[test.validator]
+url = "https://api.devnet.solana.com"
+
+# Verifier Router Program
+[[test.validator.clone]]
+address = "CnhgPbCm2mjYYT2konzKsBD7RL8Mfg63nuzB7xsbABFq"
+
+# Groth16 Verifier Program
+[[test.validator.clone]]
+address = "DBcDFEFD87rLdoepucSxbvG13idCo6HYS4sutVihkmbk"
+
+# Router PDA (initialized state)
+[[test.validator.clone]]
+address = "5GzjEjtL3JqKSp8sx4Kjzxuwg6xQ3pPyuTqnQJxbemEk"
+
+# Verifier Entry PDA (groth16 selector 0x73c457ba registered)
+[[test.validator.clone]]
+address = "DMXuNWRSEVjJnfDovkQLdgmoSi1HBRvG7svJUEBqfz3F"
 
 [scripts]
 test = "bash -lc './scripts/deploy-groth16-verifier.sh && yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts'"

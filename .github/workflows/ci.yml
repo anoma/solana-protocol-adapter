@@ -128,13 +128,6 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: yarn install --frozen-lockfile || yarn install
 
-      - name: Install risc0-solana dependencies
-        working-directory: ./risc0-solana/solana-verifier
-        run: yarn install --frozen-lockfile || yarn install
-
-      - name: Patch risc0-solana with committed keypairs
-        run: ./solana-pa-prototype/scripts/patch-risc0-solana.sh
-
       - name: Build and test
         working-directory: ./solana-pa-prototype
         run: anchor test

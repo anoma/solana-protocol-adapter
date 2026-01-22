@@ -6,13 +6,14 @@ These keypairs are for **LOCAL TESTING ONLY** and ensure consistent program IDs 
 
 These private keys are intentionally committed to the repository for test reproducibility. They must **NEVER** be used for mainnet or devnet deployments.
 
-## risc0-solana Keypairs
+## Verifier Programs
 
-Located in `risc0-solana/`:
-- `groth_16_verifier-keypair.json`
-- `verifier_router-keypair.json`
+The RISC0 verifier programs (router, groth16 verifier) are **downloaded from devnet** at test time rather than built from source. This ensures:
+1. Tests use the exact same binaries as production
+2. No need to maintain a submodule dependency
+3. Faster CI builds (no verifier compilation)
 
-**Production:** Use the official risc0 verifier program IDs deployed by the risc0 team, not these test addresses.
+See `scripts/download-devnet-verifiers.sh` for the download script.
 
 ## Protocol Adapter Keypairs
 
