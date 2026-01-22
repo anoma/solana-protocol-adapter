@@ -502,6 +502,7 @@ dependencies = [
 [[package]]
 name = "arm"
 version = "1.0.0"
+source = "git+https://github.com/anoma/arm-risc0?rev=7a6c2e7e5c100c50028f46516cecbfa9c9127e52#7a6c2e7e5c100c50028f46516cecbfa9c9127e52"
 dependencies = [
  "anchor-lang",
  "bincode",
