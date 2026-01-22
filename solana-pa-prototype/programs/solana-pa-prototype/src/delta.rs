@@ -15,7 +15,7 @@ use crate::types::{Delta, Transaction};
 
 use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::solana_program::secp256k1_recover::secp256k1_recover;
-use solana_secp256k1::{Curve, UncompressedPoint};
+use solana_secp256k1::{Curve, Secp256k1Point, UncompressedPoint};
 
 /// Collect tags (nullifiers and commitments) in compliance unit order.
 /// Returns tags as 32-byte arrays in the order: [nf0, cm0, nf1, cm1, ...]
