@@ -44,11 +44,6 @@ fn words_to_bytes(words: &[u32; 8]) -> [u8; 32] {
     *bytemuck::cast_ref(words)
 }
 
-/// Check if a 32-byte array is all zeros
-fn is_zero(bytes: &[u8; 32]) -> bool {
-    bytes.iter().all(|&b| b == 0)
-}
-
 /// Safe point addition that handles edge cases:
 /// - Point doubling (P + P): uses the doubling formula
 /// - Inverse points (P + (-P)): returns None (identity)
@@ -67,13 +62,12 @@ fn safe_point_add(
     // Check if x-coordinates are equal
     if x_p == x_q {
         if y_p == y_q {
-            // Point doubling: P + P
-            // Use ecmul with scalar 2 for efficiency
-            let two: [u8; 32] = {
-                let mut arr = [0u8; 32];
-                arr[31] = 2;
-                arr
-            };
+            // Point doubling: P + P via scalar multiplication by 2
+            #[rustfmt::skip]
+            let two: [u8; 32] = [
+                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2
+            ];
             let doubled = Curve::ecmul(p, &two).map_err(|_| PAError::DeltaPointNotOnCurve)?;
             Ok(Some(doubled))
         } else {
@@ -90,38 +84,27 @@ fn safe_point_add(
 /// Parse delta coordinates from a compliance instance and return as an UncompressedPoint.
 ///
 /// Validates the point is on the secp256k1 curve (y² = x³ + 7 mod p).
-/// The point (0, 0) is NOT on the curve and will error.
 fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<UncompressedPoint, PAError> {
     let x_bytes = words_to_bytes(x_words);
     let y_bytes = words_to_bytes(y_words);
 
-    // (0, 0) is NOT a valid secp256k1 point - reject it
-    if is_zero(&x_bytes) && is_zero(&y_bytes) {
-        return Err(PAError::DeltaPointNotOnCurve);
-    }
-
-    // Validate point is on curve by computing valid y from x via lift_x.
-    // lift_x returns the even y; the other valid y is p - y (odd).
+    // lift_x computes valid y from x, returns error if x is not on curve
     let valid_point =
         UncompressedPoint::lift_x(&x_bytes).map_err(|_| PAError::DeltaPointNotOnCurve)?;
-    let valid_y = valid_point.y();
 
-    // Check if provided y matches either valid y or its negation
-    if y_bytes != valid_y {
-        // Check negated y: p - y
-        let mut negated = valid_point;
-        negated.invert();
-        if y_bytes != negated.y() {
-            return Err(PAError::DeltaPointNotOnCurve);
-        }
+    // Check if provided y matches the even y
+    if y_bytes == valid_point.y() {
+        return Ok(valid_point);
     }
 
-    // Point is valid - construct UncompressedPoint
-    let mut point_bytes = [0u8; 64];
-    point_bytes[..32].copy_from_slice(&x_bytes);
-    point_bytes[32..].copy_from_slice(&y_bytes);
+    // Check if provided y matches the odd y (negation)
+    let mut negated = valid_point;
+    negated.invert();
+    if y_bytes == negated.y() {
+        return Ok(negated);
+    }
 
-    Ok(UncompressedPoint(point_bytes))
+    Err(PAError::DeltaPointNotOnCurve)
 }
 
 /// Accumulate delta points from all compliance instances using EC point addition.
