@@ -109,10 +109,7 @@ fn test_wrong_y_coordinate_rejected() {
     let tx = build_tx_with_delta(delta_x, delta_y);
     let result = accumulate_deltas(&tx);
 
-    assert!(
-        result.is_err(),
-        "Valid x with wrong y should be rejected"
-    );
+    assert!(result.is_err(), "Valid x with wrong y should be rejected");
     assert!(
         matches!(result.err(), Some(PAError::DeltaPointNotOnCurve)),
         "Should return DeltaPointNotOnCurve error"
@@ -197,4 +194,116 @@ fn test_verifying_key_deterministic() {
     let vk2 = compute_verifying_key(&tags);
 
     assert_eq!(vk1, vk2, "Same tags should produce same verifying key");
+}
+
+/// Build a transaction with two compliance units having given deltas.
+fn build_tx_with_two_deltas(
+    delta1_x: [u32; 8],
+    delta1_y: [u32; 8],
+    delta2_x: [u32; 8],
+    delta2_y: [u32; 8],
+) -> Transaction {
+    use crate::types::{ComplianceInstance, Digest};
+
+    let nf1 = Digest::from_bytes([1u8; 32]);
+    let cm1 = Digest::from_bytes([2u8; 32]);
+    let nf2 = Digest::from_bytes([3u8; 32]);
+    let cm2 = Digest::from_bytes([4u8; 32]);
+
+    let instance1 = ComplianceInstance {
+        consumed_nullifier: nf1,
+        consumed_logic_ref: Digest::default(),
+        consumed_commitment_tree_root: Digest::default(),
+        created_commitment: cm1,
+        created_logic_ref: Digest::default(),
+        delta_x: delta1_x,
+        delta_y: delta1_y,
+    };
+
+    let instance2 = ComplianceInstance {
+        consumed_nullifier: nf2,
+        consumed_logic_ref: Digest::default(),
+        consumed_commitment_tree_root: Digest::default(),
+        created_commitment: cm2,
+        created_logic_ref: Digest::default(),
+        delta_x: delta2_x,
+        delta_y: delta2_y,
+    };
+
+    Transaction {
+        actions: vec![Action {
+            compliance_units: vec![
+                ComplianceUnit {
+                    instance: instance1,
+                    proof: None,
+                },
+                ComplianceUnit {
+                    instance: instance2,
+                    proof: None,
+                },
+            ],
+            logic_verifier_inputs: vec![],
+        }],
+        delta_proof: Delta::Witness(vec![]),
+        expected_balance: None,
+        aggregation_proof: None,
+    }
+}
+
+/// Compute -G (negation of generator point).
+fn compute_neg_g() -> ([u32; 8], [u32; 8]) {
+    use num_bigint::BigUint;
+    use num_traits::Num;
+
+    let p = BigUint::from_str_radix(
+        "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F",
+        16,
+    )
+    .unwrap();
+    let gy = BigUint::from_bytes_be(&G_Y_BE);
+    let neg_gy = &p - &gy;
+
+    let mut neg_gy_bytes = [0u8; 32];
+    let neg_gy_vec = neg_gy.to_bytes_be();
+    neg_gy_bytes[32 - neg_gy_vec.len()..].copy_from_slice(&neg_gy_vec);
+
+    (bytes_to_words_be(&G_X_BE), bytes_to_words_be(&neg_gy_bytes))
+}
+
+#[test]
+fn test_point_doubling_g_plus_g() {
+    // G + G = 2G (point doubling case in safe_point_add)
+    let delta_x = bytes_to_words_be(&G_X_BE);
+    let delta_y = bytes_to_words_be(&G_Y_BE);
+
+    let tx = build_tx_with_two_deltas(delta_x, delta_y, delta_x, delta_y);
+    let result = accumulate_deltas(&tx);
+
+    assert!(result.is_ok(), "G + G should succeed: {:?}", result.err());
+
+    let point = result.unwrap();
+    assert!(point.is_some(), "G + G = 2G, not identity");
+
+    // Verify it's different from G (it's 2G)
+    let two_g = point.unwrap();
+    assert_ne!(two_g.0[..32], G_X_BE, "2G should have different x than G");
+}
+
+#[test]
+fn test_inverse_points_g_plus_neg_g_equals_identity() {
+    // G + (-G) = identity (inverse points case in safe_point_add)
+    let (g_x, g_y) = (bytes_to_words_be(&G_X_BE), bytes_to_words_be(&G_Y_BE));
+    let (neg_g_x, neg_g_y) = compute_neg_g();
+
+    let tx = build_tx_with_two_deltas(g_x, g_y, neg_g_x, neg_g_y);
+    let result = accumulate_deltas(&tx);
+
+    assert!(
+        result.is_ok(),
+        "G + (-G) should succeed: {:?}",
+        result.err()
+    );
+
+    let point = result.unwrap();
+    assert!(point.is_none(), "G + (-G) should equal identity (None)");
 }
