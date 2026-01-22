@@ -16,7 +16,9 @@
 
 ### Groth16 Verifier
 - **Program ID:** `DBcDFEFD87rLdoepucSxbvG13idCo6HYS4sutVihkmbk`
-- **Selector:** `0x00000001`
+- **Selectors:**
+  - `0x00000001` (generic)
+  - `0x73c457ba` (matches fixture verifier_parameters)
 - **Authority:** `5GzjEjtL3JqKSp8sx4Kjzxuwg6xQ3pPyuTqnQJxbemEk` (Router PDA)
 
 ## Architecture
