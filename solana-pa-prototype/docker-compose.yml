@@ -64,6 +64,11 @@ services:
       --rpc-port 8899
       --faucet-port 9900
       --bind-address 0.0.0.0
+      --url devnet
+      --clone-upgradeable-program CnhgPbCm2mjYYT2konzKsBD7RL8Mfg63nuzB7xsbABFq
+      --clone-upgradeable-program DBcDFEFD87rLdoepucSxbvG13idCo6HYS4sutVihkmbk
+      --clone 5GzjEjtL3JqKSp8sx4Kjzxuwg6xQ3pPyuTqnQJxbemEk
+      --clone DMXuNWRSEVjJnfDovkQLdgmoSi1HBRvG7svJUEBqfz3F
       --log
     profiles:
       - validator

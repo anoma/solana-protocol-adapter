@@ -29,16 +29,6 @@ docker compose run --rm dev bash -lc '
     yarn install
   fi
 
-  # Install risc0-solana dependencies (imported by setup.ts and tests)
-  echo "    Installing risc0-solana dependencies..."
-  cd /workspace/risc0-solana/solana-verifier
-  if ! yarn install --frozen-lockfile 2>/dev/null; then
-    echo "    risc0-solana lockfile out of sync, regenerating..."
-    rm -f yarn.lock package-lock.json
-    yarn install
-  fi
-  cd /workspace/solana-pa-prototype
-
   NEEDS_BUILD=false
 
   # Build to generate keypairs if they don'\''t exist

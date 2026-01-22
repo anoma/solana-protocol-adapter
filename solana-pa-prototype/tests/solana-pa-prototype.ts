@@ -13,12 +13,13 @@ import { readFileSync } from "fs";
 import path from "path";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 
-// Import helpers from risc0-solana for PDA derivation
-import { address } from "@solana/kit";
+// Import helpers for PDA derivation (local utilities)
 import {
   getRouterPda,
   getVerifierEntryPda,
-} from "../../risc0-solana/solana-verifier/scripts/utils/utils";
+  VERIFIER_ROUTER_ID,
+  GROTH16_VERIFIER_ID,
+} from "../scripts/verifier-utils";
 
 type Fixture = {
   format: string;
@@ -69,19 +70,14 @@ function parseSelectorFromFixture(selectorHex: string): Buffer {
   return Buffer.from(hex, "hex");
 }
 
-// Derive router and verifier entry PDAs from risc0-solana helpers.
-// Handles @solana/kit <-> @solana/web3.js type conversion.
-async function deriveRouterAccounts(
+// Derive router and verifier entry PDAs using local utilities.
+function deriveRouterAccounts(
   verifierRouterId: PublicKey,
   selector: Buffer
-): Promise<{ routerPda: PublicKey; verifierEntryPda: PublicKey }> {
-  const routerAddr = address(verifierRouterId.toBase58());
-  const routerPdaInfo = await getRouterPda(routerAddr);
-  const verifierEntryPdaInfo = await getVerifierEntryPda(routerAddr, selector);
-  return {
-    routerPda: new PublicKey(routerPdaInfo.address),
-    verifierEntryPda: new PublicKey(verifierEntryPdaInfo.address),
-  };
+): { routerPda: PublicKey; verifierEntryPda: PublicKey } {
+  const [routerPda] = getRouterPda(verifierRouterId);
+  const [verifierEntryPda] = getVerifierEntryPda(selector, verifierRouterId);
+  return { routerPda, verifierEntryPda };
 }
 
 describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
@@ -93,29 +89,9 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
   const fixture = readJson<Fixture>(fixturePath);
 
-  // Load groth16 verifier program ID
-  const groth16KeypairPath = path.resolve(
-    process.cwd(),
-    "..",
-    "risc0-solana",
-    "solana-verifier",
-    "target",
-    "deploy",
-    "groth_16_verifier-keypair.json"
-  );
-  const groth16VerifierId = programIdFromKeypairFile(groth16KeypairPath);
-
-  // Load verifier_router program ID
-  const routerKeypairPath = path.resolve(
-    process.cwd(),
-    "..",
-    "risc0-solana",
-    "solana-verifier",
-    "target",
-    "deploy",
-    "verifier_router-keypair.json"
-  );
-  const verifierRouterId = programIdFromKeypairFile(routerKeypairPath);
+  // Use devnet program IDs (downloaded from devnet and deployed to localnet)
+  const groth16VerifierId = GROTH16_VERIFIER_ID;
+  const verifierRouterId = VERIFIER_ROUTER_ID;
 
   const tx = Buffer.from(fixture.tx_b64, "base64");
   const txTampered = Buffer.from(fixture.tx_tampered_b64, "base64");
@@ -258,7 +234,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
 
   before(async () => {
     // Derive PDAs using utility function
-    const accounts = await deriveRouterAccounts(verifierRouterId, GROTH16_SELECTOR);
+    const accounts = deriveRouterAccounts(verifierRouterId, GROTH16_SELECTOR);
     routerPda = accounts.routerPda;
     verifierEntryPda = accounts.verifierEntryPda;
 
