@@ -154,7 +154,7 @@ pub fn arb_minimal_transaction() -> impl Strategy<Value = Transaction> {
         Transaction {
             actions: vec![Action {
                 compliance_units: vec![ComplianceUnit {
-                    instance: bincode::serialize(&instance).unwrap(),
+                    instance,
                     proof: None,
                 }],
                 logic_verifier_inputs: vec![
@@ -187,7 +187,7 @@ pub fn arb_transaction_with_n_cus(n: usize) -> impl Strategy<Value = Transaction
 
         for inst in &instances {
             cus.push(ComplianceUnit {
-                instance: bincode::serialize(inst).unwrap(),
+                instance: inst.clone(),
                 proof: None,
             });
             lvis.push(LogicVerifierInputs {
@@ -221,7 +221,7 @@ pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction 
     let cus: Vec<ComplianceUnit> = instances
         .iter()
         .map(|inst| ComplianceUnit {
-            instance: bincode::serialize(inst).unwrap(),
+            instance: inst.clone(),
             proof: None,
         })
         .collect();

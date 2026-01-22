@@ -79,7 +79,7 @@ pub struct LogicVerifierInputs {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ComplianceUnit {
     pub proof: Option<Vec<u8>>,
-    pub instance: Vec<u8>,
+    pub instance: ComplianceInstance,
 }
 
 /// Action containing compliance units and logic verifier inputs.

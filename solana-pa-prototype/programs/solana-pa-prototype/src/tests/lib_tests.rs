@@ -63,15 +63,6 @@ mod fixture_tests {
     }
 
     #[test]
-    fn test_aggregation_proof_discriminant() {
-        // The proof bytes are bincode-serialized; the first 4 bytes are the enum discriminant.
-        // We accept both discriminants (0/1) but always attempt batch verification.
-        let batch_bytes = fake_aggregation_proof_bytes(1, 256);
-        let seq_bytes = fake_aggregation_proof_bytes(0, 256);
-        assert_ne!(&batch_bytes[0..4], &seq_bytes[0..4]);
-    }
-
-    #[test]
     fn test_transaction_bincode_roundtrip() {
         // Full transaction roundtrip test
         let tx = create_minimal_transaction();

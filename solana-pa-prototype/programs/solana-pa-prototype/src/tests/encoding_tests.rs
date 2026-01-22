@@ -3,7 +3,7 @@
 use crate::encoding::{compute_action_tree_root, find_logic_input};
 use crate::merkle;
 use crate::tests::utils::create_minimal_transaction;
-use crate::types::{ComplianceInstance, Digest, OutputMode, SolanaExternalCall};
+use crate::types::{Digest, OutputMode, SolanaExternalCall};
 
 // =========================================================================
 // OUTPUT MODE ENCODING TESTS
@@ -89,8 +89,7 @@ fn test_find_logic_input_by_tag() {
     let action = &tx.actions[0];
 
     let cu = &action.compliance_units[0];
-    let instance: ComplianceInstance = bincode::deserialize(&cu.instance).unwrap();
-    let consumed_tag = instance.consumed_nullifier;
+    let consumed_tag = cu.instance.consumed_nullifier;
 
     let found = find_logic_input(&action.logic_verifier_inputs, &consumed_tag);
     assert!(found.is_ok());

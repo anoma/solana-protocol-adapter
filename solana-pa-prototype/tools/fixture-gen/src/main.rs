@@ -1,31 +1,34 @@
+use anchor_lang::prelude::AnchorDeserialize;
 use anyhow::{anyhow, Context, Result};
-use arm::aggregation::AggregationStrategy;
 use arm::action::Action;
 use arm::action_tree::MerkleTree;
-use arm::compliance::{ComplianceWitness, INITIAL_ROOT};
-use arm::merkle_path::MerklePath;
+use arm::aggregation::batch::BatchProof;
+use arm::aggregation::{AggregationProof, AggregationStrategy};
+use arm::compliance::{ComplianceInstance, ComplianceWitness, INITIAL_ROOT};
 use arm::compliance_unit::ComplianceUnit;
+use arm::delta_proof::DeltaWitness;
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
 use arm::logic_proof::LogicVerifier;
+use arm::merkle_path::MerklePath;
 use arm::nullifier_key::NullifierKey;
-use arm::proving_system::ProofType;
-use arm::transaction::{Delta, Transaction};
-use arm::Digest;
-use arm::utils::bytes_to_words;
-use arm::delta_proof::DeltaWitness;
+use arm::proving_system::{encode_seal, ProofType};
 use arm::resource::Resource;
-use k256::{elliptic_curve::PrimeField, Scalar};
+use arm::transaction::{Delta, Transaction};
+use arm::utils::bytes_to_words;
+use arm::Digest;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use k256::Scalar;
 use rayon::ThreadPoolBuilder;
-use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
 use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
+use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use verifier_router::Seal;
 
 use passthrough_logic_methods::{PASSTHROUGH_LOGIC_GUEST_ELF, PASSTHROUGH_LOGIC_GUEST_ID};
 
@@ -65,14 +68,8 @@ fn extract_selector(tx: &Transaction) -> Result<String> {
         .as_ref()
         .ok_or_else(|| anyhow!("no aggregation_proof found for selector extraction"))?;
 
-    let proof_bytes = bincode::serialize(agg_proof)
-        .context("serialize aggregation_proof for selector extraction")?;
-    if proof_bytes.len() < 32 {
-        return Err(anyhow!("aggregation_proof too short for selector extraction"));
-    }
-    let vp_start = proof_bytes.len() - 32;
-    let selector = &proof_bytes[vp_start..vp_start + 4];
-    Ok(format!("0x{}", hex::encode(selector)))
+    let seal: Seal = Seal::try_from_slice(agg_proof).unwrap();
+    Ok(format!("0x{}", hex::encode(seal.selector)))
 }
 
 fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> {
@@ -85,7 +82,7 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
         .get_mut(0)
         .ok_or_else(|| anyhow!("tx has no compliance units"))?;
 
-    let instance = cu.get_instance().context("decode compliance instance")?;
+    let instance = cu.instance.clone();
     let old_created_commitment = instance.created_commitment;
 
     let mut new_bytes = [0u8; 32];
@@ -95,7 +92,7 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
 
     let mut new_instance = instance.clone();
     new_instance.created_commitment = new_created_commitment;
-    cu.instance = bincode::serialize(&new_instance).context("re-encode compliance instance")?;
+    cu.instance = new_instance;
 
     // Update the corresponding created logic verifier input tag so decoding and
     // digest computation still succeeds (proof must then fail).
@@ -108,7 +105,9 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
         }
     }
     if !updated {
-        return Err(anyhow!("could not find created logic verifier input for tamper"));
+        return Err(anyhow!(
+            "could not find created logic verifier input for tamper"
+        ));
     }
 
     Ok(())
@@ -262,12 +261,18 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
         app_data: AppData::default(),
     };
 
-    let (consumed_proof, consumed_journal) =
-        arm::proving_system::prove(PASSTHROUGH_LOGIC_GUEST_ELF, &consumed_instance, base_proof_type)
-            .context("prove consumed passthrough logic")?;
-    let (created_proof, created_journal) =
-        arm::proving_system::prove(PASSTHROUGH_LOGIC_GUEST_ELF, &created_instance, base_proof_type)
-            .context("prove created passthrough logic")?;
+    let (consumed_proof, consumed_journal) = arm::proving_system::prove(
+        PASSTHROUGH_LOGIC_GUEST_ELF,
+        &consumed_instance,
+        base_proof_type,
+    )
+    .context("prove consumed passthrough logic")?;
+    let (created_proof, created_journal) = arm::proving_system::prove(
+        PASSTHROUGH_LOGIC_GUEST_ELF,
+        &created_instance,
+        base_proof_type,
+    )
+    .context("prove created passthrough logic")?;
 
     let consumed_logic = LogicVerifier {
         proof: Some(consumed_proof),
@@ -280,8 +285,11 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
         verifying_key: passthrough_vk,
     };
 
-    let action = Action::new(vec![compliance_receipt], vec![consumed_logic, created_logic])
-        .context("build action")?;
+    let action = Action::new(
+        vec![compliance_receipt],
+        vec![consumed_logic, created_logic],
+    )
+    .context("build action")?;
 
     // Delta witness is derived from compliance witness RCVs.
     let delta_witness =
@@ -290,6 +298,7 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
     let tx = Transaction::create(vec![action], Delta::Witness(delta_witness));
     let balanced_tx = tx.generate_delta_proof().context("generate delta proof")?;
     balanced_tx.clone().verify().context("verify tx")?;
+
     Ok(balanced_tx)
 }
 
@@ -348,10 +357,7 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
                 output_mismatch = true;
             }
             _ if arg.starts_with("--threads=") => {
-                let value = arg
-                    .split_once('=')
-                    .map(|(_, v)| v)
-                    .unwrap_or_default();
+                let value = arg.split_once('=').map(|(_, v)| v).unwrap_or_default();
                 let parsed = value
                     .parse::<usize>()
                     .with_context(|| format!("invalid --threads value: {value}"))?;
@@ -372,9 +378,8 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
         }
     }
 
-    let out_path = out_path.unwrap_or_else(|| {
-        PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json")
-    });
+    let out_path = out_path
+        .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
 
     Ok((threads, debug_assumptions, output_mismatch, out_path))
 }
@@ -398,19 +403,27 @@ fn main() -> Result<()> {
     eprintln!("fixture output: {}", out_path.display());
     eprintln!("mode: aggregated (batch Groth16)");
     if output_mismatch {
-        eprintln!("mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)");
+        eprintln!(
+            "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
+        );
     }
 
     eprintln!("phase: generate_test_transaction");
     let start = Instant::now();
     let mut tx = generate_test_transaction_with_external_payload(output_mismatch)?;
-    eprintln!("phase done: generate_test_transaction ({})", fmt_duration(start.elapsed()));
+    eprintln!(
+        "phase done: generate_test_transaction ({})",
+        fmt_duration(start.elapsed())
+    );
 
     if debug_assumptions {
         eprintln!("phase: debug_assumptions (claim digests must match env::verify calls)");
         let start = Instant::now();
         debug_batch_assumptions(&tx)?;
-        eprintln!("phase done: debug_assumptions ({})", fmt_duration(start.elapsed()));
+        eprintln!(
+            "phase done: debug_assumptions ({})",
+            fmt_duration(start.elapsed())
+        );
     }
 
     eprintln!("phase: aggregate_with_strategy(batch, groth16) (this is the expensive step)");
@@ -425,7 +438,22 @@ fn main() -> Result<()> {
     eprintln!("phase: verify_aggregation");
     let start = Instant::now();
     tx.verify_aggregation().context("verify aggregated proof")?;
-    eprintln!("phase done: verify_aggregation ({})", fmt_duration(start.elapsed()));
+    eprintln!(
+        "phase done: verify_aggregation ({})",
+        fmt_duration(start.elapsed())
+    );
+
+    eprintln!("phase: encode seal");
+    let agg_proof_bytes = tx.aggregation_proof.as_ref().unwrap();
+    let agg_proof: AggregationProof =
+        bincode::deserialize(agg_proof_bytes).context("deserialize AggregationProof")?;
+    let inner_receipt = match agg_proof {
+        AggregationProof::Batch(BatchProof(inner)) => inner,
+        _ => return Err(anyhow!("expected Batch aggregation proof")),
+    };
+    let inner_bytes = bincode::serialize(&inner_receipt).context("serialize InnerReceipt")?;
+    tx.aggregation_proof = Some(encode_seal(&inner_bytes).context("encode seal")?);
+    eprintln!("phase done: encode seal");
 
     eprintln!("phase: serialize_tx");
     let start = Instant::now();
@@ -441,11 +469,14 @@ fn main() -> Result<()> {
     let mut consumed_nullifiers_b64 = Vec::new();
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let instance = cu.get_instance().context("decode compliance instance")?;
+            let instance = cu.instance.clone();
             consumed_nullifiers_b64.push(BASE64.encode(instance.consumed_nullifier.as_bytes()));
         }
     }
-    eprintln!("phase done: extract_nullifiers ({})", fmt_duration(start.elapsed()));
+    eprintln!(
+        "phase done: extract_nullifiers ({})",
+        fmt_duration(start.elapsed())
+    );
 
     eprintln!("phase: tamper_tx_and_serialize");
     let start = Instant::now();
@@ -461,7 +492,11 @@ fn main() -> Result<()> {
     eprintln!("phase: extract_selector");
     let start = Instant::now();
     let selector = extract_selector(&tx).context("extract selector from proof")?;
-    eprintln!("phase done: extract_selector ({}, selector={})", fmt_duration(start.elapsed()), selector);
+    eprintln!(
+        "phase done: extract_selector ({}, selector={})",
+        fmt_duration(start.elapsed()),
+        selector
+    );
 
     let fixture = Fixture {
         format: "arm-risc0:Transaction(bincode)",
@@ -515,21 +550,21 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 
             let inner: InnerReceipt =
                 bincode::deserialize(proof_bytes).context("decode compliance InnerReceipt")?;
-            let receipt = Receipt::new(inner, cu.instance.clone());
+            let receipt = Receipt::new(inner, cu.instance.to_journal().unwrap());
             let receipt_claim_digest = receipt.claim().context("read compliance claim")?.digest();
 
-            let words = arm::utils::bytes_to_words(&cu.instance);
+            let words = arm::utils::bytes_to_words(&cu.instance.to_journal().unwrap());
             let padded_bytes = arm::utils::words_to_bytes(&words);
             let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
-            let expected_claim = ReceiptClaim::ok(*arm::constants::COMPLIANCE_VK, MaybePruned::Pruned(journal_digest));
+            let expected_claim = ReceiptClaim::ok(
+                *arm::constants::COMPLIANCE_VK,
+                MaybePruned::Pruned(journal_digest),
+            );
             let expected_claim_digest = expected_claim.digest();
 
             eprintln!(
-                "debug_assumptions: compliance[{compliance_idx}] instance_len={} (mod4={}) receipt_claim_digest={} expected_claim_digest={}",
-                cu.instance.len(),
-                cu.instance.len() % 4,
-                receipt_claim_digest,
-                expected_claim_digest
+                "debug_assumptions: receipt_claim_digest={} expected_claim_digest={}",
+                receipt_claim_digest, expected_claim_digest
             );
 
             compliance_idx += 1;
@@ -540,12 +575,11 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
     for (action_idx, action) in tx.actions.iter().enumerate() {
         // Mirror `arm::action::Action::get_logic_verifiers` to derive the logic instances that the
         // batch aggregation circuit verifies.
-        let compliance_instances = action
+        let compliance_instances: Vec<ComplianceInstance> = action
             .compliance_units
             .iter()
-            .map(|cu| cu.get_instance())
-            .collect::<Result<Vec<_>, _>>()
-            .context("decode compliance instances for action")?;
+            .map(|cu| cu.instance.clone())
+            .collect();
 
         let tags: Vec<risc0_zkvm::Digest> = compliance_instances
             .iter()

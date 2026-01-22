@@ -5,9 +5,9 @@
 #![allow(dead_code)] // Test utilities may be used in future tests
 #![allow(unused_imports)] // Keep imports for future test utilities
 
-use anchor_lang::prelude::Pubkey;
+use anchor_lang::prelude::{AnchorSerialize, Pubkey};
 
-use crate::groth16::Selector;
+use crate::groth16::{Proof, Seal, Selector};
 use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
 use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::types::*;
@@ -18,27 +18,18 @@ use crate::types::*;
 pub const FAKE_SELECTOR: Selector = [0x31, 0x0f, 0xe5, 0x98];
 
 /// Generate fake aggregation proof bytes for testing.
-///
-/// Matches the parser in `groth16.rs` for extract_groth16_seal_from_aggregation_proof:
-/// - u32 AggregationProof discriminant
-/// - u32 InnerReceipt discriminant (Groth16 = 2)
-/// - u64 seal len + seal bytes
-/// - u32 claim discriminant (MaybePruned::Pruned = 1)
-/// - 32 bytes claim digest
-/// - 32 bytes verifier_parameters digest (selector in first 4 bytes)
-pub fn fake_aggregation_proof_bytes(strategy_discriminant: u32, seal_len: usize) -> Vec<u8> {
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&strategy_discriminant.to_le_bytes()); // AggregationProof discriminant
-    bytes.extend_from_slice(&2u32.to_le_bytes()); // InnerReceipt::Groth16 = 2
-    bytes.extend_from_slice(&(seal_len as u64).to_le_bytes()); // seal len
-    bytes.resize(bytes.len() + seal_len, 0u8); // seal bytes
-    bytes.extend_from_slice(&1u32.to_le_bytes()); // MaybePruned::Pruned = 1
-    bytes.resize(bytes.len() + 32, 0u8); // claim digest (32 bytes)
-                                         // verifier_parameters is a 32-byte Digest; selector is the first 4 bytes
-    let mut vp = [0u8; 32];
-    vp[..4].copy_from_slice(&FAKE_SELECTOR);
-    bytes.extend_from_slice(&vp);
-    bytes
+pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
+    let proof = Proof {
+        pi_a: [0u8; 64],
+        pi_b: [1u8; 128],
+        pi_c: [2u8; 64],
+    };
+    let seal = Seal {
+        selector: FAKE_SELECTOR,
+        proof,
+    };
+
+    seal.try_to_vec().unwrap()
 }
 
 /// Create a minimal transaction for testing.
@@ -64,7 +55,7 @@ pub fn create_minimal_transaction() -> Transaction {
     Transaction {
         actions: vec![Action {
             compliance_units: vec![ComplianceUnit {
-                instance: bincode::serialize(&instance).unwrap(),
+                instance,
                 proof: None,
             }],
             logic_verifier_inputs: vec![
@@ -106,14 +97,7 @@ pub fn create_compliance_instance(nullifier: Digest, commitment: Digest) -> Comp
 pub fn create_transaction_with_compliance_instances(
     instances: Vec<ComplianceInstance>,
 ) -> Transaction {
-    let compliance_units: Vec<ComplianceUnit> = instances
-        .iter()
-        .map(|inst| ComplianceUnit {
-            instance: bincode::serialize(inst).unwrap(),
-            proof: None,
-        })
-        .collect();
-
+    // Build logic_verifier_inputs first (before consuming instances)
     let mut logic_verifier_inputs: Vec<LogicVerifierInputs> = Vec::new();
     for inst in &instances {
         logic_verifier_inputs.push(LogicVerifierInputs {
@@ -129,6 +113,14 @@ pub fn create_transaction_with_compliance_instances(
             proof: None,
         });
     }
+
+    let compliance_units: Vec<ComplianceUnit> = instances
+        .into_iter()
+        .map(|instance| ComplianceUnit {
+            instance,
+            proof: None,
+        })
+        .collect();
 
     Transaction {
         actions: vec![Action {
@@ -160,9 +152,7 @@ pub fn create_transaction_with_external_payload_and_logic_ref(
 
     // Update the consumed logic ref in the compliance instance, and align the LVI's verifying_key.
     let cu = &mut tx.actions[0].compliance_units[0];
-    let mut instance: ComplianceInstance = bincode::deserialize(&cu.instance).unwrap();
-    instance.consumed_logic_ref = verifying_key;
-    cu.instance = bincode::serialize(&instance).unwrap();
+    cu.instance.consumed_logic_ref = verifying_key;
 
     tx.actions[0].logic_verifier_inputs[0].verifying_key = verifying_key;
     tx.actions[0].logic_verifier_inputs[0]
@@ -206,7 +196,7 @@ pub fn create_transaction_with_multiple_lvi_external_payloads(
     Transaction {
         actions: vec![Action {
             compliance_units: vec![ComplianceUnit {
-                instance: bincode::serialize(&instance).unwrap(),
+                instance,
                 proof: None,
             }],
             logic_verifier_inputs,

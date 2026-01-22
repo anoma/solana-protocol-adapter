@@ -11,7 +11,6 @@
 //! 4. Verify ECDSA signature using Solana secp256k1_recover syscall
 
 use crate::error::PAError;
-use crate::journal::parse_compliance_instance;
 use crate::types::{Delta, Transaction};
 
 use anchor_lang::solana_program::hash::hashv;
@@ -26,10 +25,8 @@ pub fn collect_tags(tx: &Transaction) -> Result<Vec<[u8; 32]>, PAError> {
     let mut tags = Vec::new();
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let instance = parse_compliance_instance(&cu.instance)
-                .map_err(|_| PAError::InvalidTransactionData)?;
-            tags.push(instance.consumed_nullifier.to_bytes());
-            tags.push(instance.created_commitment.to_bytes());
+            tags.push(cu.instance.consumed_nullifier.to_bytes());
+            tags.push(cu.instance.created_commitment.to_bytes());
         }
     }
     Ok(tags)
@@ -81,10 +78,7 @@ pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<AffinePoint>, PAErro
 
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let instance = parse_compliance_instance(&cu.instance)
-                .map_err(|_| PAError::InvalidTransactionData)?;
-
-            let point = parse_delta_point(&instance.delta_x, &instance.delta_y)?;
+            let point = parse_delta_point(&cu.instance.delta_x, &cu.instance.delta_y)?;
             accumulated += point;
         }
     }

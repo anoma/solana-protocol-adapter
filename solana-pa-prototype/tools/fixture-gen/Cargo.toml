@@ -5,8 +5,9 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-arm = { git = "https://github.com/anoma/arm-risc0", rev = "3da9a640ed8f733dce6a082f1043ef9571ad1bdf", package = "arm", features = ["aggregation", "solana"] }
-arm-test-app = {  git = "https://github.com/anoma/arm-risc0", rev = "3da9a640ed8f733dce6a082f1043ef9571ad1bdf", package = "arm-test-app"}
+arm = { git = "https://github.com/anoma/arm-risc0", rev = "7a6c2e7e5c100c50028f46516cecbfa9c9127e52", default-features = false, features = ["aggregation", "solana", "prove"] }
+#arm-test-app = { path = "../../../arm-risc0/arm_tests/arm_test_app" }
+verifier_router = {path = "../../../risc0-solana/solana-verifier/programs/verifier_router/"}
 base64 = "0.22"
 bincode = "1.3.3"
 hex = "0.4"
@@ -16,6 +17,7 @@ risc0-zkvm = "3.0.3"
 passthrough-logic-methods = { path = "passthrough-logic/methods" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+anchor-lang = {version = "0.31.1"}
 
 [workspace]
 members = ["passthrough-logic/methods"]
