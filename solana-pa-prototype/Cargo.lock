@@ -5501,6 +5501,7 @@ dependencies = [
  "bincode",
  "block-time-forwarder",
  "bytemuck",
+ "dashu",
  "hex",
  "hex-literal",
  "num-bigint 0.4.6",

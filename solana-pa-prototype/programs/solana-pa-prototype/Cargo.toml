@@ -35,6 +35,9 @@ hex-literal = "0.4"
 # Delta proof verification (secp256k1 EC operations via Solana syscalls)
 solana-secp256k1 = "0.1"
 
+# Big integer arithmetic for curve validation (re-export from solana-secp256k1's dependency)
+dashu = "0.4"
+
 [dev-dependencies]
 # Forwarder example program (used in tests for constants/encoding)
 block-time-forwarder = { path = "../block-time-forwarder", default-features = false, features = ["no-entrypoint"] }
