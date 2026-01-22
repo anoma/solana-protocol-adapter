@@ -15,7 +15,8 @@ use crate::types::{Delta, Transaction};
 
 use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::solana_program::secp256k1_recover::secp256k1_recover;
-use solana_secp256k1::{Curve, UncompressedPoint};
+use dashu::integer::UBig;
+use solana_secp256k1::{Curve, Secp256k1Point, UncompressedPoint};
 
 /// Collect tags (nullifiers and commitments) in compliance unit order.
 /// Returns tags as 32-byte arrays in the order: [nf0, cm0, nf1, cm1, ...]
@@ -83,28 +84,34 @@ fn safe_point_add(
 
 /// Parse delta coordinates from a compliance instance and return as an UncompressedPoint.
 ///
-/// Validates the point is on the secp256k1 curve (y² = x³ + 7 mod p).
+/// Validates the point is on the secp256k1 curve by checking y² ≡ x³ + 7 (mod p).
+/// This is more efficient than lift_x as it avoids computing a modular square root.
 fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<UncompressedPoint, PAError> {
     let x_bytes = words_to_bytes(x_words);
     let y_bytes = words_to_bytes(y_words);
 
-    // lift_x computes valid y from x, returns error if x is not on curve
-    let valid_point =
-        UncompressedPoint::lift_x(&x_bytes).map_err(|_| PAError::DeltaPointNotOnCurve)?;
+    // Direct curve equation verification: y² ≡ x³ + 7 (mod p)
+    // This is cheaper than lift_x which computes a modular square root.
+    let p = UBig::from_be_bytes(&Curve::P);
+    let x = UBig::from_be_bytes(&x_bytes);
+    let y = UBig::from_be_bytes(&y_bytes);
 
-    // Check if provided y matches the even y
-    if y_bytes == valid_point.y() {
-        return Ok(valid_point);
+    // Compute y² mod p
+    let y_squared = y.sqr() % &p;
+
+    // Compute x³ + 7 mod p
+    let x_cubed_plus_7 = (x.cubic() + UBig::from_word(7)) % &p;
+
+    // Verify the curve equation
+    if y_squared != x_cubed_plus_7 {
+        return Err(PAError::DeltaPointNotOnCurve);
     }
 
-    // Check if provided y matches the odd y (negation)
-    let mut negated = valid_point;
-    negated.invert();
-    if y_bytes == negated.y() {
-        return Ok(negated);
-    }
-
-    Err(PAError::DeltaPointNotOnCurve)
+    // Point is valid - construct UncompressedPoint
+    let mut point_bytes = [0u8; 64];
+    point_bytes[..32].copy_from_slice(&x_bytes);
+    point_bytes[32..].copy_from_slice(&y_bytes);
+    Ok(UncompressedPoint(point_bytes))
 }
 
 /// Accumulate delta points from all compliance instances using EC point addition.
