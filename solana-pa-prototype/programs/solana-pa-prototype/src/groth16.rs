@@ -8,11 +8,10 @@ use crate::types::Transaction;
 use anchor_lang::prelude::*;
 
 // ============================================================================
-// Type definitions (matching risc0-solana exactly for CPI compatibility)
+// Type definitions (must match deployed risc0 verifier program layout)
 // ============================================================================
 
 /// Groth16 proof elements on BN254 curve.
-/// Matches `groth_16_verifier::Proof` exactly.
 #[derive(Clone, PartialEq, Eq, AnchorDeserialize, AnchorSerialize)]
 pub struct Proof {
     /// G1 point (must be negated before verification)
@@ -27,7 +26,6 @@ pub struct Proof {
 pub type Selector = [u8; 4];
 
 /// An encoded RISC Zero proof along with a selector.
-/// Matches `verifier_router::Seal` exactly.
 #[derive(Clone, PartialEq, Eq, AnchorDeserialize, AnchorSerialize)]
 pub struct Seal {
     pub selector: Selector,
