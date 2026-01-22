@@ -30,6 +30,7 @@ import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 const VERIFIER_ROUTER_ID = new PublicKey("CnhgPbCm2mjYYT2konzKsBD7RL8Mfg63nuzB7xsbABFq");
 const GROTH16_VERIFIER_ID = new PublicKey("DBcDFEFD87rLdoepucSxbvG13idCo6HYS4sutVihkmbk");
 const ROUTER_PDA = new PublicKey("5GzjEjtL3JqKSp8sx4Kjzxuwg6xQ3pPyuTqnQJxbemEk");
+const BLOCK_TIME_FORWARDER_ID = new PublicKey("FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq");
 
 // Selector from the fixture (matches RISC0 verifier_parameters)
 // Note: We also have 0x00000001 registered but the fixture uses 0x73c457ba
@@ -229,15 +230,24 @@ describe("Devnet Router Settlement Test", () => {
       console.log(`   ✓ Chunk at offset ${offset} (${chunk.length} bytes)`);
     }
 
-    // Build remaining accounts: nullifiers
-    const remainingAccounts = nullifierPdas.map((pubkey) => ({
+    // Build remaining accounts: nullifiers + external call accounts
+    const nullifierAccounts = nullifierPdas.map((pubkey) => ({
       pubkey,
       isWritable: true,
       isSigner: false,
     }));
 
+    // External call segment for the block-time-forwarder:
+    // The fixture contains external calls that require this forwarder + clock sysvar
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: BLOCK_TIME_FORWARDER_ID, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+
     console.log("\n3. Calling settleFromTxdata via verifier_router...");
     console.log("   Nullifiers:", nullifierPdas.length);
+    console.log("   Block Time Forwarder:", BLOCK_TIME_FORWARDER_ID.toBase58());
     console.log("   Router:", VERIFIER_ROUTER_ID.toBase58());
     console.log("   Router PDA:", ROUTER_PDA.toBase58());
     console.log("   Verifier Entry:", verifierEntry.toBase58());

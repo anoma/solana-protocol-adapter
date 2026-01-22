@@ -21,33 +21,39 @@
   - `0x73c457ba` (matches fixture verifier_parameters)
 - **Authority:** `5GzjEjtL3JqKSp8sx4Kjzxuwg6xQ3pPyuTqnQJxbemEk` (Router PDA)
 
+### Block Time Forwarder
+- **Program ID:** `FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq`
+- **Purpose:** External call forwarder for time comparisons (required by fixture)
+
 ## Architecture
 
 ```
-┌─────────────────────┐
-│  Protocol Adapter   │
-│  (PA Program)       │
-│  AV1dFJCfq...       │
-└─────────┬───────────┘
-          │ CPI (verify)
-          ▼
-┌─────────────────────┐
-│  Verifier Router    │
-│  CnhgPbCm...        │
-│  ┌───────────────┐  │
-│  │  Router PDA   │  │
-│  │  5GzjEjt...   │  │
-│  │  - owner      │  │
-│  │  - verifiers  │  │
-│  └───────────────┘  │
-└─────────┬───────────┘
-          │ Routes by selector
-          ▼
-┌─────────────────────┐
-│  Groth16 Verifier   │
-│  DBcDFEFD...        │
-│  selector: 0x01     │
-└─────────────────────┘
+                    ┌─────────────────────┐
+                    │  Protocol Adapter   │
+                    │  (PA Program)       │
+                    │  AV1dFJCfq...       │
+                    └─────────┬───────────┘
+                              │
+          ┌───────────────────┼───────────────────┐
+          │ CPI (verify)      │                   │ CPI (external calls)
+          ▼                   │                   ▼
+┌─────────────────────┐       │       ┌─────────────────────┐
+│  Verifier Router    │       │       │  Block Time         │
+│  CnhgPbCm...        │       │       │  Forwarder          │
+│  ┌───────────────┐  │       │       │  FLh2rbn...         │
+│  │  Router PDA   │  │       │       └─────────────────────┘
+│  │  5GzjEjt...   │  │       │
+│  │  - owner      │  │       │
+│  │  - verifiers  │  │       │
+│  └───────────────┘  │       │
+└─────────┬───────────┘       │
+          │ Routes by selector│
+          ▼                   │
+┌─────────────────────┐       │
+│  Groth16 Verifier   │       │
+│  DBcDFEFD...        │       │
+│  selector: 0x01     │       │
+└─────────────────────┘       │
 ```
 
 ## Deployment Wallet
