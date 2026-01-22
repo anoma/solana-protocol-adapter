@@ -15,7 +15,6 @@ pub mod encoding;
 pub mod error;
 pub mod external_calls;
 pub mod groth16;
-pub mod journal;
 pub mod merkle;
 pub mod nullifier;
 pub mod risc0_serde;
