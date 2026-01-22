@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::program::invoke;
 
 extern crate alloc;
 
@@ -28,7 +29,7 @@ pub mod txdata;
 pub mod types;
 
 pub use error::PAError;
-use groth16::prepare_proof_for_verification;
+use groth16::{prepare_proof_for_verification, Seal, VERIFIER_ROUTER_ID};
 use merkle::{
     hash_two, EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, MAX_TREE_DEPTH, PADDING_LEAF, ZEROS,
 };
@@ -518,8 +519,14 @@ fn maybe_grow_account<'info>(
     Ok(())
 }
 
-/// Call verifier_router::verify via typed CPI.
-/// Uses Anchor's generated CPI interface for type safety.
+/// Call verifier_router::verify via manual CPI.
+/// Uses invoke() with manually constructed instruction to avoid risc0-solana dependency.
+///
+/// Instruction format (Anchor):
+/// - 8-byte discriminator: sha256("global:verify")[0..8]
+/// - Seal: 4-byte selector + Proof (64 + 128 + 64 = 256 bytes) = 260 bytes total
+/// - image_id: 32 bytes
+/// - journal_digest: 32 bytes
 #[allow(clippy::too_many_arguments)]
 fn call_verifier_router<'info>(
     verifier_router_program: &AccountInfo<'info>,
@@ -527,18 +534,51 @@ fn call_verifier_router<'info>(
     verifier_entry: &AccountInfo<'info>,
     verifier_program: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
-    seal: verifier_router::Seal,
+    seal: Seal,
     image_id: [u8; 32],
     journal_digest: [u8; 32],
 ) -> Result<()> {
-    let cpi_accounts = verifier_router::cpi::accounts::Verify {
-        router: router.clone(),
-        verifier_entry: verifier_entry.clone(),
-        verifier_program: verifier_program.clone(),
-        system_program: system_program.clone(),
+    // Anchor discriminator: sha256("global:verify")[0..8]
+    // Pre-computed: echo -n "global:verify" | sha256sum -> 85a18d3078c65896...
+    let discriminator: [u8; 8] = [0x85, 0xa1, 0x8d, 0x30, 0x78, 0xc6, 0x58, 0x96];
+
+    // Build instruction data: discriminator + seal + image_id + journal_digest
+    // Seal layout: selector (4) + pi_a (64) + pi_b (128) + pi_c (64) = 260 bytes
+    let mut data = Vec::with_capacity(8 + 260 + 32 + 32);
+    data.extend_from_slice(&discriminator);
+    data.extend_from_slice(&seal.selector);
+    data.extend_from_slice(&seal.proof.pi_a);
+    data.extend_from_slice(&seal.proof.pi_b);
+    data.extend_from_slice(&seal.proof.pi_c);
+    data.extend_from_slice(&image_id);
+    data.extend_from_slice(&journal_digest);
+
+    // Account metas matching verifier_router::cpi::accounts::Verify
+    // Use full paths to avoid conflicts with anchor-lang's AccountMeta
+    use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
+    let accounts = vec![
+        AccountMeta::new(*router.key, false), // router (mut)
+        AccountMeta::new_readonly(*verifier_entry.key, false), // verifier_entry
+        AccountMeta::new_readonly(*verifier_program.key, false), // verifier_program
+        AccountMeta::new_readonly(*system_program.key, false), // system_program
+    ];
+
+    let ix = Instruction {
+        program_id: *verifier_router_program.key,
+        accounts,
+        data,
     };
-    let cpi_ctx = CpiContext::new(verifier_router_program.clone(), cpi_accounts);
-    verifier_router::cpi::verify(cpi_ctx, seal, image_id, journal_digest)
+
+    invoke(
+        &ix,
+        &[
+            router.clone(),
+            verifier_entry.clone(),
+            verifier_program.clone(),
+            system_program.clone(),
+        ],
+    )
+    .map_err(|_| error!(PAError::VerifierRouterFailed))
 }
 
 /// Shared settlement logic for both settle and settle_from_txdata.
@@ -804,10 +844,12 @@ pub struct Settle<'info> {
     pub system_program: Program<'info, System>,
 
     /// CHECK: Verified via address constraint.
-    #[account(address = verifier_router::ID)]
+    #[account(address = VERIFIER_ROUTER_ID)]
     pub verifier_router_program: UncheckedAccount<'info>,
 
     /// CHECK: Router state PDA - validated by verifier_router during CPI.
+    /// Mutable because verifier_router may update state during verification.
+    #[account(mut)]
     pub router: UncheckedAccount<'info>,
 
     /// CHECK: Verifier entry PDA - validated by verifier_router during CPI.
@@ -839,10 +881,12 @@ pub struct SettleFromTxData<'info> {
     pub system_program: Program<'info, System>,
 
     /// CHECK: Verified via address constraint.
-    #[account(address = verifier_router::ID)]
+    #[account(address = VERIFIER_ROUTER_ID)]
     pub verifier_router_program: UncheckedAccount<'info>,
 
     /// CHECK: Router state PDA - validated by verifier_router during CPI.
+    /// Mutable because verifier_router may update state during verification.
+    #[account(mut)]
     pub router: UncheckedAccount<'info>,
 
     /// CHECK: Verifier entry PDA - validated by verifier_router during CPI.

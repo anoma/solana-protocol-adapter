@@ -1,13 +1,50 @@
 //! Groth16 proof extraction and preparation for risc0-solana verification.
+//!
+//! This module defines the types locally to avoid depending on the risc0-solana submodule.
+//! The type definitions match exactly what the deployed risc0 verifier programs expect.
 
 use crate::error::PAError;
 use crate::types::Transaction;
+use anchor_lang::prelude::*;
 
-use anchor_lang::prelude::AnchorDeserialize;
-// Re-export types for use in lib.rs
-// Proof comes from groth_16_verifier (verifier_router uses it but doesn't re-export)
-pub use groth_16_verifier::Proof;
-pub use verifier_router::{Seal, Selector};
+// ============================================================================
+// Type definitions (matching risc0-solana exactly for CPI compatibility)
+// ============================================================================
+
+/// Groth16 proof elements on BN254 curve.
+/// Matches `groth_16_verifier::Proof` exactly.
+#[derive(Clone, PartialEq, Eq, AnchorDeserialize, AnchorSerialize)]
+pub struct Proof {
+    /// G1 point (must be negated before verification)
+    pub pi_a: [u8; 64],
+    /// G2 point
+    pub pi_b: [u8; 128],
+    /// G1 point
+    pub pi_c: [u8; 64],
+}
+
+/// Verifier selector - identifies which verifier version to use.
+pub type Selector = [u8; 4];
+
+/// An encoded RISC Zero proof along with a selector.
+/// Matches `verifier_router::Seal` exactly.
+#[derive(Clone, PartialEq, Eq, AnchorDeserialize, AnchorSerialize)]
+pub struct Seal {
+    pub selector: Selector,
+    pub proof: Proof,
+}
+
+// ============================================================================
+// Official risc0 devnet program IDs
+// ============================================================================
+
+/// Official risc0 groth16_verifier program ID (devnet).
+pub const GROTH16_VERIFIER_ID: Pubkey =
+    anchor_lang::solana_program::pubkey!("DBcDFEFD87rLdoepucSxbvG13idCo6HYS4sutVihkmbk");
+
+/// Official risc0 verifier_router program ID (devnet).
+pub const VERIFIER_ROUTER_ID: Pubkey =
+    anchor_lang::solana_program::pubkey!("CnhgPbCm2mjYYT2konzKsBD7RL8Mfg63nuzB7xsbABFq");
 
 /// Image ID for batch aggregation circuit (from arm-risc0 constants.rs).
 pub const BATCH_AGGREGATION_IMAGE_ID: [u8; 32] =
@@ -22,8 +59,10 @@ pub struct PreparedProof {
 }
 
 /// Prepare proof data for verification.
-/// Extracts seal and selector, negates pi_a, computes journal digest, and selects image ID.
-pub fn prepare_proof_for_verification(tx: &Transaction) -> Result<PreparedProof, PAError> {
+/// The aggregation_proof is expected to be a prepared Seal (with pi_a already negated).
+pub fn prepare_proof_for_verification(
+    tx: &Transaction,
+) -> core::result::Result<PreparedProof, PAError> {
     let proof_bytes: &Vec<u8> = tx.aggregation_proof.as_ref().ok_or(PAError::InvalidProof)?;
 
     let seal: Seal = Seal::try_from_slice(proof_bytes).map_err(|_| PAError::InvalidProof)?;
