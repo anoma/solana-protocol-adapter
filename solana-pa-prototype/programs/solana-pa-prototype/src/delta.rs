@@ -36,13 +36,11 @@ pub fn compute_verifying_key(tags: &[[u8; 32]]) -> [u8; 32] {
     hashv(&refs).to_bytes()
 }
 
-/// Convert [u32; 8] words to [u8; 32] bytes (little-endian, matching arm-risc0).
+/// Convert [u32; 8] words to [u8; 32] bytes.
 ///
-/// arm-risc0 uses `bytemuck::cast_slice` for words_to_bytes, which means:
-/// - Words are stored in native (little-endian) byte order
-/// - The 8 words map directly to 32 bytes via bytemuck
+/// This matches arm-risc0's `bytemuck::cast_slice` approach. The round-trip
+/// bytes_to_words → words_to_bytes preserves the original byte order.
 fn words_to_bytes(words: &[u32; 8]) -> [u8; 32] {
-    // bytemuck cast - same as arm-risc0's words_to_bytes
     *bytemuck::cast_ref(words)
 }
 
@@ -91,9 +89,8 @@ fn safe_point_add(
 
 /// Parse delta coordinates from a compliance instance and return as an UncompressedPoint.
 ///
-/// All compliance units must provide valid secp256k1 curve points. The point (0, 0)
-/// is NOT on the curve and will error - the identity point (point at infinity) has
-/// no valid affine representation.
+/// Validates the point is on the secp256k1 curve (y² = x³ + 7 mod p).
+/// The point (0, 0) is NOT on the curve and will error.
 fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<UncompressedPoint, PAError> {
     let x_bytes = words_to_bytes(x_words);
     let y_bytes = words_to_bytes(y_words);
@@ -103,8 +100,23 @@ fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<Uncompres
         return Err(PAError::DeltaPointNotOnCurve);
     }
 
-    // Use the same byte format as the original k256 code - no conversion.
-    // k256's EncodedPoint::from_affine_coordinates took these bytes directly.
+    // Validate point is on curve by computing valid y from x via lift_x.
+    // lift_x returns the even y; the other valid y is p - y (odd).
+    let valid_point =
+        UncompressedPoint::lift_x(&x_bytes).map_err(|_| PAError::DeltaPointNotOnCurve)?;
+    let valid_y = valid_point.y();
+
+    // Check if provided y matches either valid y or its negation
+    if y_bytes != valid_y {
+        // Check negated y: p - y
+        let mut negated = valid_point;
+        negated.invert();
+        if y_bytes != negated.y() {
+            return Err(PAError::DeltaPointNotOnCurve);
+        }
+    }
+
+    // Point is valid - construct UncompressedPoint
     let mut point_bytes = [0u8; 64];
     point_bytes[..32].copy_from_slice(&x_bytes);
     point_bytes[32..].copy_from_slice(&y_bytes);
