@@ -121,7 +121,6 @@ pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<UncompressedPoint>, 
 
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            // Direct struct access (ComplianceInstance is now a direct field, not bytes)
             let point = parse_delta_point(&cu.instance.delta_x, &cu.instance.delta_y)?;
 
             match accumulated {
