@@ -2252,6 +2252,7 @@ dependencies = [
 [[package]]
 name = "groth_16_verifier"
 version = "0.1.0"
+source = "git+https://github.com/risc0/risc0-solana.git?rev=8329541#832954160f12a5b292a33a7aa4f1afb649a1df23"
 dependencies = [
  "anchor-lang",
  "hex-literal",
@@ -3468,6 +3469,7 @@ dependencies = [
 [[package]]
 name = "ownable"
 version = "0.1.0"
+source = "git+https://github.com/risc0/risc0-solana.git?rev=8329541#832954160f12a5b292a33a7aa4f1afb649a1df23"
 dependencies = [
  "anchor-lang",
  "ownable-macro",
@@ -3476,6 +3478,7 @@ dependencies = [
 [[package]]
 name = "ownable-macro"
 version = "0.1.0"
+source = "git+https://github.com/risc0/risc0-solana.git?rev=8329541#832954160f12a5b292a33a7aa4f1afb649a1df23"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -8552,6 +8555,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "verifier_router"
 version = "0.1.0"
+source = "git+https://github.com/risc0/risc0-solana.git?rev=8329541#832954160f12a5b292a33a7aa4f1afb649a1df23"
 dependencies = [
  "anchor-lang",
  "groth_16_verifier",

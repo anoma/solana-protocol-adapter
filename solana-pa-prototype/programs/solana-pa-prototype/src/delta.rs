@@ -15,9 +15,6 @@ use crate::types::{Delta, Transaction};
 
 use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::solana_program::secp256k1_recover::secp256k1_recover;
-// NOTE: We use solana-secp256k1 instead of k256 because k256's pure-Rust implementation
-// causes stack overflows on Solana due to its large stack footprint. solana-secp256k1
-// uses dashu for big integer arithmetic which has a smaller stack footprint.
 use dashu::integer::UBig;
 use solana_secp256k1::{Curve, Secp256k1Point, UncompressedPoint};
 
@@ -59,9 +56,8 @@ fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<Uncompres
     let x_bytes = words_to_bytes(x_words);
     let y_bytes = words_to_bytes(y_words);
 
-    // NOTE: Unlike k256 which validates points automatically via from_encoded_point(),
-    // solana-secp256k1 does not validate that points lie on the curve. We must check
-    // the curve equation manually: y² ≡ x³ + 7 (mod p)
+    // solana-secp256k1 does not validate that points lie on the curve.
+    // We must check the curve equation manually: y² ≡ x³ + 7 (mod p)
     let p = UBig::from_be_bytes(&Curve::P);
     let x = UBig::from_be_bytes(&x_bytes);
     let y = UBig::from_be_bytes(&y_bytes);
@@ -83,10 +79,7 @@ fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<Uncompres
 /// Accumulate delta points from all compliance instances using EC point addition.
 /// Returns the accumulated point as an UncompressedPoint, or None if the result is the identity.
 pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<UncompressedPoint>, PAError> {
-    // NOTE: Unlike k256's ProjectivePoint which has an IDENTITY constant and handles
-    // all edge cases in its Add implementation, solana-secp256k1's UncompressedPoint
-    // has no identity representation and its Add trait panics on edge cases.
-    // We track identity explicitly with Option and handle edge cases manually.
+    // UncompressedPoint has no identity representation, so we track it with Option.
     let mut accumulated: Option<UncompressedPoint> = None;
 
     for action in &tx.actions {
@@ -96,10 +89,8 @@ pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<UncompressedPoint>, 
             accumulated = match accumulated {
                 None => Some(point),
                 Some(acc) => {
-                    // NOTE: solana-secp256k1's Add trait does not handle:
-                    // 1. Point doubling (P + P) - uses wrong formula, would give incorrect result
-                    // 2. Inverse points (P + (-P)) - would divide by zero
-                    // We must detect and handle these cases explicitly.
+                    // solana-secp256k1's Add does not handle point doubling (P + P)
+                    // or inverse points (P + (-P)). We detect and handle these cases.
                     let x_acc = acc.x();
                     let x_pt = point.x();
 
@@ -112,7 +103,10 @@ pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<UncompressedPoint>, 
                                 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
                                 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2
                             ];
-                            Some(Curve::ecmul(&acc, &two).map_err(|_| PAError::DeltaPointNotOnCurve)?)
+                            Some(
+                                Curve::ecmul(&acc, &two)
+                                    .map_err(|_| PAError::DeltaPointNotOnCurve)?,
+                            )
                         } else {
                             // Inverse points: P + (-P) = identity
                             None
