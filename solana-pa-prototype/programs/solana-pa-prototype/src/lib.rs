@@ -6,6 +6,11 @@ extern crate alloc;
 // Same as `solana-keygen pubkey target/deploy/solana_pa_prototype-keypair.json`
 declare_id!("AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt");
 
+/// Verifier Router program ID (devnet deployment).
+/// The verifier_router crate's ID doesn't match our deployed program, so we hardcode it.
+pub const VERIFIER_ROUTER_ID: Pubkey =
+    anchor_lang::solana_program::pubkey!("CnhgPbCm2mjYYT2konzKsBD7RL8Mfg63nuzB7xsbABFq");
+
 // =============================================================================
 // Modules
 // =============================================================================
@@ -803,7 +808,7 @@ pub struct Settle<'info> {
     pub system_program: Program<'info, System>,
 
     /// CHECK: Verified via address constraint.
-    #[account(address = verifier_router::ID)]
+    #[account(address = VERIFIER_ROUTER_ID)]
     pub verifier_router_program: UncheckedAccount<'info>,
 
     /// CHECK: Router state PDA - validated by verifier_router during CPI.
@@ -838,7 +843,7 @@ pub struct SettleFromTxData<'info> {
     pub system_program: Program<'info, System>,
 
     /// CHECK: Verified via address constraint.
-    #[account(address = verifier_router::ID)]
+    #[account(address = VERIFIER_ROUTER_ID)]
     pub verifier_router_program: UncheckedAccount<'info>,
 
     /// CHECK: Router state PDA - validated by verifier_router during CPI.
