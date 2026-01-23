@@ -15,6 +15,9 @@ use crate::types::{Delta, Transaction};
 
 use anchor_lang::solana_program::hash::hashv;
 use anchor_lang::solana_program::secp256k1_recover::secp256k1_recover;
+// NOTE: We use solana-secp256k1 instead of k256 because k256's pure-Rust implementation
+// causes stack overflows on Solana due to its large stack footprint. solana-secp256k1
+// uses dashu for big integer arithmetic which has a smaller stack footprint.
 use dashu::integer::UBig;
 use solana_secp256k1::{Curve, Secp256k1Point, UncompressedPoint};
 
@@ -39,70 +42,33 @@ pub fn compute_verifying_key(tags: &[[u8; 32]]) -> [u8; 32] {
 
 /// Convert [u32; 8] words to [u8; 32] bytes.
 ///
-/// This matches arm-risc0's `bytemuck::cast_slice` approach. The round-trip
-/// bytes_to_words → words_to_bytes preserves the original byte order.
+/// arm-risc0 uses `bytemuck::cast_slice` for words_to_bytes, which means:
+/// - Words are stored in native (little-endian) byte order
+/// - The 8 words map directly to 32 bytes via bytemuck
 fn words_to_bytes(words: &[u32; 8]) -> [u8; 32] {
+    // bytemuck cast - same as arm-risc0's words_to_bytes
     *bytemuck::cast_ref(words)
-}
-
-/// Safe point addition that handles edge cases:
-/// - Point doubling (P + P): uses the doubling formula
-/// - Inverse points (P + (-P)): returns None (identity)
-/// - Standard addition: delegates to UncompressedPoint::add
-///
-/// Returns None if the result is the identity point.
-fn safe_point_add(
-    p: &UncompressedPoint,
-    q: &UncompressedPoint,
-) -> Result<Option<UncompressedPoint>, PAError> {
-    let x_p = p.x();
-    let x_q = q.x();
-    let y_p = p.y();
-    let y_q = q.y();
-
-    // Check if x-coordinates are equal
-    if x_p == x_q {
-        if y_p == y_q {
-            // Point doubling: P + P via scalar multiplication by 2
-            #[rustfmt::skip]
-            let two: [u8; 32] = [
-                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
-                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2
-            ];
-            let doubled = Curve::ecmul(p, &two).map_err(|_| PAError::DeltaPointNotOnCurve)?;
-            Ok(Some(doubled))
-        } else {
-            // Inverse points: P + (-P) = identity
-            // (same x, different y means they're inverses on secp256k1)
-            Ok(None)
-        }
-    } else {
-        // Standard addition - safe to use the library's Add
-        Ok(Some(*p + *q))
-    }
 }
 
 /// Parse delta coordinates from a compliance instance and return as an UncompressedPoint.
 ///
-/// Validates the point is on the secp256k1 curve by checking y² ≡ x³ + 7 (mod p).
-/// This is more efficient than lift_x as it avoids computing a modular square root.
+/// All compliance units must provide valid secp256k1 curve points. The point (0, 0)
+/// is NOT on the curve and will error - the identity point (point at infinity) has
+/// no valid affine representation.
 fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<UncompressedPoint, PAError> {
     let x_bytes = words_to_bytes(x_words);
     let y_bytes = words_to_bytes(y_words);
 
-    // Direct curve equation verification: y² ≡ x³ + 7 (mod p)
-    // This is cheaper than lift_x which computes a modular square root.
+    // NOTE: Unlike k256 which validates points automatically via from_encoded_point(),
+    // solana-secp256k1 does not validate that points lie on the curve. We must check
+    // the curve equation manually: y² ≡ x³ + 7 (mod p)
     let p = UBig::from_be_bytes(&Curve::P);
     let x = UBig::from_be_bytes(&x_bytes);
     let y = UBig::from_be_bytes(&y_bytes);
 
-    // Compute y² mod p
     let y_squared = y.sqr() % &p;
-
-    // Compute x³ + 7 mod p
     let x_cubed_plus_7 = (x.cubic() + UBig::from_word(7)) % &p;
 
-    // Verify the curve equation
     if y_squared != x_cubed_plus_7 {
         return Err(PAError::DeltaPointNotOnCurve);
     }
@@ -117,25 +83,46 @@ fn parse_delta_point(x_words: &[u32; 8], y_words: &[u32; 8]) -> Result<Uncompres
 /// Accumulate delta points from all compliance instances using EC point addition.
 /// Returns the accumulated point as an UncompressedPoint, or None if the result is the identity.
 pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<UncompressedPoint>, PAError> {
+    // NOTE: Unlike k256's ProjectivePoint which has an IDENTITY constant and handles
+    // all edge cases in its Add implementation, solana-secp256k1's UncompressedPoint
+    // has no identity representation and its Add trait panics on edge cases.
+    // We track identity explicitly with Option and handle edge cases manually.
     let mut accumulated: Option<UncompressedPoint> = None;
 
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            // Direct struct access (ComplianceInstance is now a direct field, not bytes)
             let point = parse_delta_point(&cu.instance.delta_x, &cu.instance.delta_y)?;
 
-            match accumulated {
-                None => {
-                    // First point
-                    accumulated = Some(point);
-                }
+            accumulated = match accumulated {
+                None => Some(point),
                 Some(acc) => {
-                    // Use safe_point_add which handles:
-                    // - Point doubling (P + P)
-                    // - Inverse points (P + (-P) = identity)
-                    accumulated = safe_point_add(&acc, &point)?;
+                    // NOTE: solana-secp256k1's Add trait does not handle:
+                    // 1. Point doubling (P + P) - uses wrong formula, would give incorrect result
+                    // 2. Inverse points (P + (-P)) - would divide by zero
+                    // We must detect and handle these cases explicitly.
+                    let x_acc = acc.x();
+                    let x_pt = point.x();
+
+                    if x_acc == x_pt {
+                        // Same x-coordinate: either doubling or inverse
+                        if acc.y() == point.y() {
+                            // Point doubling: P + P - use scalar multiplication by 2
+                            #[rustfmt::skip]
+                            let two: [u8; 32] = [
+                                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+                                0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2
+                            ];
+                            Some(Curve::ecmul(&acc, &two).map_err(|_| PAError::DeltaPointNotOnCurve)?)
+                        } else {
+                            // Inverse points: P + (-P) = identity
+                            None
+                        }
+                    } else {
+                        // Standard case - library's Add is safe here
+                        Some(acc + point)
+                    }
                 }
-            }
+            };
         }
     }
 
@@ -145,7 +132,7 @@ pub fn accumulate_deltas(tx: &Transaction) -> Result<Option<UncompressedPoint>, 
 /// Convert an uncompressed point to its "address" representation using Solana syscall.
 /// address = last 20 bytes of SHA-256(x || y)
 fn point_to_address(point: &UncompressedPoint) -> [u8; 20] {
-    // UncompressedPoint stores 64 bytes (x || y) in big-endian
+    // UncompressedPoint stores 64 bytes (x || y)
     let hash: [u8; 32] = hashv(&[&point.0]).to_bytes();
 
     // Take last 20 bytes
