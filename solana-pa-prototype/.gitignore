@@ -15,3 +15,6 @@ dist/
 compiled_rust_sources.txt
 
 # Build artifacts (keypairs exception is in root .gitignore)
+
+# Proptest regression files
+proptest-regressions/
