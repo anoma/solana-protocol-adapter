@@ -28,9 +28,9 @@ serde_bytes = "0.11"
 # CPI into risc0-solana Verifier Router (for dual emergency check / EVM parity)
 # Routes through groth_16_verifier with built-in estopped check
 # Using git dependency instead of submodule to simplify build process
-verifier_router = { git = "https://github.com/risc0/risc0-solana.git", rev = "8329541", features = ["cpi"] }
+verifier_router = { git = "https://github.com/risc0/risc0-solana.git", tag = "v3.0.0", features = ["cpi"] }
 # Need groth_16_verifier for Proof type (verifier_router uses but doesn't re-export)
-groth_16_verifier = { git = "https://github.com/risc0/risc0-solana.git", rev = "8329541" }
+groth_16_verifier = { git = "https://github.com/risc0/risc0-solana.git", tag = "v3.0.0" }
 
 # Word/byte conversion (matches arm-risc0)
 bytemuck = { version = "1.14", features = ["derive"] }
