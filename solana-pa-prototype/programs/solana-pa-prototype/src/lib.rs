@@ -8,7 +8,7 @@ declare_id!("AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt");
 /// Verifier Router program ID (devnet deployment).
 /// The verifier_router crate's ID doesn't match our deployed program, so we hardcode it.
 pub const VERIFIER_ROUTER_ID: Pubkey =
-    anchor_lang::solana_program::pubkey!("CnhgPbCm2mjYYT2konzKsBD7RL8Mfg63nuzB7xsbABFq");
+    anchor_lang::solana_program::pubkey!("BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg");
 
 // =============================================================================
 // Modules

@@ -8,8 +8,8 @@
 import { PublicKey } from "@solana/web3.js";
 
 // Devnet program addresses (cloned to localnet for testing)
-export const VERIFIER_ROUTER_ID = new PublicKey("CnhgPbCm2mjYYT2konzKsBD7RL8Mfg63nuzB7xsbABFq");
-export const GROTH16_VERIFIER_ID = new PublicKey("DBcDFEFD87rLdoepucSxbvG13idCo6HYS4sutVihkmbk");
+export const VERIFIER_ROUTER_ID = new PublicKey("BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg");
+export const GROTH16_VERIFIER_ID = new PublicKey("2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD");
 
 /**
  * Derive the Router PDA (state account).

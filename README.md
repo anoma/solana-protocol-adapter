@@ -6,10 +6,10 @@ Port of the [EVM Protocol Adapter](https://github.com/anoma/evm-protocol-adapter
 
 ```
 solana-protocol-adapter/
-├── solana-pa-prototype/     # Solana PA implementation
-├── risc0-solana/            # On-chain Groth16 proof verifier (submodule)
-└── arm-risc0/               # RM implementation for zkVM (submodule)
+└── solana-pa-prototype/     # Solana PA implementation
 ```
+
+The RISC0 Groth16 verifier programs are automatically cloned from devnet during testing (no local build required).
 
 ## Local Development Setup
 
@@ -18,10 +18,10 @@ solana-protocol-adapter/
 - Docker and docker-compose
 - User in `docker` group (or use `sg docker -c "..."`)
 
-### 1. Clone with Submodules
+### 1. Clone
 
 ```bash
-git clone --recurse-submodules https://github.com/anoma/solana-protocol-adapter
+git clone https://github.com/anoma/solana-protocol-adapter
 cd solana-protocol-adapter
 ```
 
@@ -35,37 +35,7 @@ export DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
 docker-compose build
 ```
 
-### 3. Build and Sync groth_16_verifier
-
-The risc0-solana verifier ships with a placeholder program ID. Sync it to your local keypair:
-
-```bash
-docker-compose run --rm dev bash -c '
-  cd /workspace/risc0-solana/solana-verifier
-  anchor build -p groth_16_verifier
-'
-```
-
-Get the generated program ID:
-
-```bash
-docker-compose run --rm dev solana-keygen pubkey /workspace/risc0-solana/solana-verifier/target/deploy/groth_16_verifier-keypair.json
-```
-
-Update both files with this pubkey:
-- `risc0-solana/solana-verifier/programs/groth_16_verifier/src/lib.rs` line 32: `declare_id!("YOUR_PUBKEY");`
-- `risc0-solana/solana-verifier/Anchor.toml` line 8: `groth_16_verifier = "YOUR_PUBKEY"`
-
-Rebuild:
-
-```bash
-docker-compose run --rm dev bash -c '
-  cd /workspace/risc0-solana/solana-verifier
-  anchor build -p groth_16_verifier
-'
-```
-
-### 4. Run Tests
+### 3. Run Tests
 
 ```bash
 ./scripts/docker-dev.sh anchor-test
@@ -475,22 +445,34 @@ Fixtures embed the `block_time_forwarder` program ID. If that ID changes, fixtur
 
 ## Deployment
 
-### Start Validator
+### Local Testing
+
+The local test validator automatically clones RISC0 verifier programs from devnet. This is configured in `Anchor.toml`:
+
+```toml
+[test.validator]
+url = "https://api.devnet.solana.com"
+
+[[test.validator.clone]]
+address = "BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"  # Verifier Router
+
+[[test.validator.clone]]
+address = "2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"  # Groth16 Verifier
+
+[[test.validator.clone]]
+address = "9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"  # Router PDA (initialized state)
+
+[[test.validator.clone]]
+address = "4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"  # Verifier Entry PDA (groth16 selector registered)
+```
+
+### Start Validator Manually
 
 ```bash
 docker-compose --profile validator up -d validator
 ```
 
-### Deploy groth_16_verifier
-
-```bash
-docker-compose run --rm dev bash -c '
-  solana config set --url http://solana-validator:8899
-  solana program deploy \
-    --program-id /workspace/risc0-solana/solana-verifier/target/deploy/groth_16_verifier-keypair.json \
-    /workspace/risc0-solana/solana-verifier/target/deploy/groth_16_verifier.so
-'
-```
+The validator is configured to clone the RISC0 verifier programs from devnet on startup.
 
 ### Deploy PA Programs
 
@@ -514,7 +496,7 @@ sg docker -c "docker-compose build"
 
 ### DeclaredProgramIdMismatch (Error 4100)
 
-Program ID in source doesn't match keypair. For PA programs, `docker-anchor-test.sh` syncs automatically. For groth_16_verifier, see setup step 3.
+Program ID in source doesn't match keypair. For PA programs, `docker-anchor-test.sh` syncs automatically.
 
 ### Fixture Generation Fails
 

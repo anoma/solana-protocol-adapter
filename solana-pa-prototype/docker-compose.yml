@@ -65,10 +65,10 @@ services:
       --faucet-port 9900
       --bind-address 0.0.0.0
       --url devnet
-      --clone-upgradeable-program CnhgPbCm2mjYYT2konzKsBD7RL8Mfg63nuzB7xsbABFq
-      --clone-upgradeable-program DBcDFEFD87rLdoepucSxbvG13idCo6HYS4sutVihkmbk
-      --clone 5GzjEjtL3JqKSp8sx4Kjzxuwg6xQ3pPyuTqnQJxbemEk
-      --clone DMXuNWRSEVjJnfDovkQLdgmoSi1HBRvG7svJUEBqfz3F
+      --clone-upgradeable-program BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg
+      --clone-upgradeable-program 2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD
+      --clone 9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S
+      --clone 4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey
       --log
     profiles:
       - validator
