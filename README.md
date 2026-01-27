@@ -15,30 +15,99 @@ The RISC0 Groth16 verifier programs are automatically cloned from devnet during 
 
 ### Prerequisites
 
-- Docker and docker-compose
-- User in `docker` group (or use `sg docker -c "..."`)
+- Docker and Docker Compose
+- User in `docker` group (check with `groups | grep docker`)
 
-### 1. Clone
-
+If you're not in the docker group:
 ```bash
-git clone https://github.com/anoma/solana-protocol-adapter
-cd solana-protocol-adapter
+sudo usermod -aG docker $USER
+# Log out and back in for changes to take effect
 ```
 
-### 2. Build Docker Environment
+### Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/anoma/solana-protocol-adapter
+cd solana-protocol-adapter/solana-pa-prototype
+
+# Build and run tests (handles everything automatically)
+./scripts/docker-dev.sh anchor-test
+```
+
+That's it! The script will:
+1. Build the Docker image (first run only, ~10 minutes)
+2. Build the Solana programs
+3. Start a local validator with RISC0 verifier programs cloned from devnet
+4. Run the full test suite
+
+### Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `./scripts/docker-dev.sh anchor-test` | Build programs and run integration tests |
+| `./scripts/docker-dev.sh shell` | Open an interactive shell in the dev container |
+| `./scripts/docker-dev.sh anchor-build` | Build Anchor programs only |
+| `./scripts/docker-dev.sh test` | Run Rust unit tests |
+| `./scripts/docker-dev.sh validator` | Start the local validator |
+| `./scripts/docker-dev.sh clean` | Stop containers and remove volumes |
+
+### Rebuilding From Scratch
+
+If you encounter issues, do a complete rebuild:
+
+```bash
+# Remove all containers and volumes
+docker compose down -v --remove-orphans
+
+# Rebuild the image (no cache)
+docker compose build --no-cache dev
+
+# Run tests
+./scripts/docker-dev.sh anchor-test
+```
+
+### Manual Docker Build (Optional)
+
+If you need to customize the build (e.g., for different user IDs):
 
 ```bash
 cd solana-pa-prototype
+
+# Set environment variables for Docker user mapping
 export UID="$(id -u)"
 export GID="$(id -g)"
 export DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
-docker-compose build
+
+# Build the image
+docker compose build dev
+
+# Run tests
+./scripts/docker-dev.sh anchor-test
 ```
 
-### 3. Run Tests
+### Interactive Development
+
+For iterative development, use the shell command:
 
 ```bash
-./scripts/docker-dev.sh anchor-test
+./scripts/docker-dev.sh shell
+```
+
+Inside the container:
+```bash
+cd /workspace/solana-pa-prototype
+
+# Build programs
+anchor build
+
+# Run tests (start validator separately first)
+anchor test --skip-local-validator --provider.cluster http://solana-validator:8899
+```
+
+To start the validator in another terminal:
+```bash
+docker compose --profile validator up validator
 ```
 
 ---
@@ -490,17 +559,74 @@ docker-compose run --rm dev bash -c '
 
 ### Docker Permission Denied
 
+Add yourself to the docker group:
 ```bash
-sg docker -c "docker-compose build"
+sudo usermod -aG docker $USER
+# Log out and back in
+```
+
+Or run commands with `sg docker`:
+```bash
+sg docker -c "./scripts/docker-dev.sh anchor-test"
+```
+
+### Container Name Already In Use
+
+A previous container wasn't cleaned up:
+```bash
+docker rm -f solana-validator
+docker compose down -v --remove-orphans
+```
+
+### Volume Permission Errors
+
+If you see "Permission denied" errors related to `/home/developer/.config/solana` or ledger directories:
+```bash
+# Remove all volumes and rebuild
+docker compose down -v --remove-orphans
+docker volume prune -f
+./scripts/docker-dev.sh anchor-test
+```
+
+### Validator Won't Start / Connection Refused
+
+The validator may have crashed or port 8899 is in use:
+```bash
+# Check if port is in use
+lsof -i :8899
+
+# Kill any running validators
+docker rm -f solana-validator
+
+# Clean up and retry
+docker compose down -v --remove-orphans
+./scripts/docker-dev.sh anchor-test
 ```
 
 ### DeclaredProgramIdMismatch (Error 4100)
 
-Program ID in source doesn't match keypair. For PA programs, `docker-anchor-test.sh` syncs automatically.
+Program ID in source doesn't match keypair. The `docker-anchor-test.sh` script syncs IDs automatically. If you see this error, try:
+```bash
+docker compose down -v --remove-orphans
+./scripts/docker-dev.sh anchor-test
+```
+
+### Build Fails on "verifier_router" Dependency
+
+Ensure you're on a branch that uses git dependencies (not local paths):
+```bash
+git checkout feature/remove-submodule-with-pkg-deps
+docker compose down -v --remove-orphans
+./scripts/docker-dev.sh anchor-test
+```
 
 ### Fixture Generation Fails
 
-Ensure Docker socket is accessible:
+Ensure Docker socket is accessible inside the container:
 ```bash
-docker-compose run --rm dev docker ps
+docker compose run --rm dev docker ps
 ```
+
+### Slow First Build
+
+The first build downloads and compiles many dependencies (~10-20 minutes). Subsequent builds use cached layers and complete in seconds.
