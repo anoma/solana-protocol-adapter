@@ -174,13 +174,7 @@ pub fn verify_delta_proof(tx: &Transaction) -> Result<(), PAError> {
         .try_into()
         .map_err(|_| PAError::InvalidDeltaProof)?;
 
-    let recid_byte = signature_bytes[64];
-    // Convert from Ethereum format (27/28) to recovery ID (0/1)
-    let recid = if recid_byte >= 27 {
-        recid_byte - 27
-    } else {
-        recid_byte
-    };
+    let recid = signature_bytes[64];
 
     // 6. Recover the public key using Solana syscall (much cheaper than software recovery)
     let recovered_pubkey = secp256k1_recover(&verifying_key, recid, &sig_bytes)
