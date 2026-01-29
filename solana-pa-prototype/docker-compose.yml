@@ -1,19 +1,32 @@
 services:
+  dind:
+    image: docker:24-dind
+    privileged: true
+    container_name: solana-pa-dind
+    environment:
+      - DOCKER_TLS_CERTDIR=
+    command: --host=tcp://0.0.0.0:2375
+    volumes:
+      - dind-data:/var/lib/docker
+    healthcheck:
+      test: ["CMD", "docker", "info"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
   # Development environment with all tooling
   dev:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        UID: ${UID:-1001}
-        GID: ${GID:-1001}
+        UID: ${HOST_UID}
+        GID: ${HOST_GID}
         DOCKER_GID: ${DOCKER_GID:-30001}
     container_name: solana-pa-dev
     volumes:
       # Mount entire parent repo to preserve submodule git references
       - ..:/workspace
-      # Allow tooling (e.g. risc0 Groth16 prover) to run Docker via the host daemon.
-      - /var/run/docker.sock:/var/run/docker.sock
       # Required for risc0-groth16: it bind-mounts a temp dir; with docker.sock it must be a host-visible path.
       - /tmp:/tmp
       # Persist cargo cache
@@ -31,8 +44,16 @@ services:
       # Solana validator faucet
       - "9900:9900"
     environment:
+      - HOME=/home/developer
+      - CARGO_HOME=/home/developer/.cargo
+      - RUSTUP_HOME=/home/developer/.rustup
       - RUST_BACKTRACE=1
       - RUST_LOG=solana_runtime::system_instruction_processor=trace,solana_runtime::message_processor=trace
+      - DOCKER_HOST=tcp://dind:2375
+    user: "${CONTAINER_UID}:${CONTAINER_GID}"
+    depends_on:
+      dind:
+        condition: service_healthy
     stdin_open: true
     tty: true
     working_dir: /workspace/solana-pa-prototype
@@ -44,8 +65,8 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        UID: ${UID:-1001}
-        GID: ${GID:-1001}
+        UID: ${HOST_UID}
+        GID: ${HOST_GID}
         DOCKER_GID: ${DOCKER_GID:-30001}
     container_name: solana-validator
     volumes:
@@ -77,3 +98,4 @@ volumes:
   cargo-git:
   solana-cache:
   solana-config:
+  dind-data:

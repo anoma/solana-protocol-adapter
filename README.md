@@ -16,13 +16,12 @@ The RISC0 Groth16 verifier programs are automatically cloned from devnet during 
 ### Prerequisites
 
 - Docker and Docker Compose
-- User in `docker` group (check with `groups | grep docker`)
 
-If you're not in the docker group:
-```bash
-sudo usermod -aG docker $USER
-# Log out and back in for changes to take effect
-```
+The helper scripts automatically set `HOST_UID`/`HOST_GID` for Docker builds to
+match the current user, so the mounted workspace stays writable without manual
+setup. If you run `docker compose` directly, export `HOST_UID` and `HOST_GID`
+yourself. For rootless Docker, also set `CONTAINER_UID=0` and
+`CONTAINER_GID=0`.
 
 ### Quick Start
 

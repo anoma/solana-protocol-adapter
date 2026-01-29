@@ -8,30 +8,57 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_DIR"
 
+ensure_dind() {
+    ./scripts/docker.sh compose up -d dind
+    for i in {1..60}; do
+        if ./scripts/docker.sh compose exec -T dind docker info >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    echo "ERROR: Docker daemon did not become ready." >&2
+    exit 1
+}
+
+ensure_dev_image() {
+    local host_uid dev_uid
+    host_uid="$(id -u)"
+    dev_uid="$(./scripts/docker.sh compose run --rm dev id -u 2>/dev/null || echo "")"
+    if [[ -z "$dev_uid" || "$dev_uid" != "$host_uid" ]]; then
+        ./scripts/docker.sh compose build dev
+    fi
+}
+
 case "$1" in
     build)
         echo "Building Docker image..."
-        docker compose build dev
+        ./scripts/docker.sh compose build dev
         ;;
 
     shell)
         echo "Starting development shell..."
-        docker compose run --rm --service-ports dev
+        ensure_dind
+        ensure_dev_image
+        ./scripts/docker.sh compose run --rm --service-ports dev
         ;;
 
     validator)
         echo "Starting Solana test validator..."
-        docker compose --profile validator up validator
+        ./scripts/docker.sh compose --profile validator up validator
         ;;
 
     test)
         echo "Running tests in container..."
-        docker compose run --rm dev bash -c "cd /workspace/solana-pa-prototype && cargo test --workspace"
+        ensure_dind
+        ensure_dev_image
+        ./scripts/docker.sh compose run --rm dev bash -c "cd /workspace/solana-pa-prototype && cargo test --workspace"
         ;;
 
     anchor-build)
         echo "Building Anchor programs..."
-        docker compose run --rm dev bash -c "cd /workspace/solana-pa-prototype && anchor build"
+        ensure_dind
+        ensure_dev_image
+        ./scripts/docker.sh compose run --rm dev bash -c "cd /workspace/solana-pa-prototype && anchor build"
         ;;
 
     anchor-test)
@@ -41,12 +68,16 @@ case "$1" in
 
     build-verifier)
         echo "Building risc0-solana verifier..."
-        docker compose run --rm dev bash -c "cd /workspace/risc0-solana/solana-verifier && anchor build"
+        ensure_dind
+        ensure_dev_image
+        ./scripts/docker.sh compose run --rm dev bash -c "cd /workspace/risc0-solana/solana-verifier && anchor build"
         ;;
 
     full-test)
         echo "Running full integration test..."
-        docker compose run --rm --service-ports dev bash -c "
+        ensure_dind
+        ensure_dev_image
+        ./scripts/docker.sh compose run --rm --service-ports dev bash -c "
             cd /workspace/solana-pa-prototype
             echo '=== Building PA ==='
             anchor build
@@ -63,12 +94,14 @@ case "$1" in
 
     update-deps)
         echo "Regenerating yarn.lock inside Docker..."
-        docker compose run --rm dev bash -c "cd /workspace/solana-pa-prototype && rm -f yarn.lock package-lock.json && yarn install"
+        ensure_dind
+        ensure_dev_image
+        ./scripts/docker.sh compose run --rm dev bash -c "cd /workspace/solana-pa-prototype && rm -f yarn.lock package-lock.json && yarn install"
         ;;
 
     clean)
         echo "Cleaning up..."
-        docker compose down -v
+        ./scripts/docker.sh compose down -v
         ;;
 
     *)

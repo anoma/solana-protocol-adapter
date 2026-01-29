@@ -15,10 +15,30 @@ CLUSTER_URL="${CLUSTER_URL:-http://solana-validator:8899}"
 cd "$PROJECT_DIR"
 
 # =============================================================================
+# Step 0: Ensure Docker-in-Docker daemon is up
+# =============================================================================
+echo "==> (0/4) Starting Docker daemon"
+./scripts/docker.sh compose up -d dind
+for i in {1..60}; do
+  if ./scripts/docker.sh compose exec -T dind docker info >/dev/null 2>&1; then
+    break
+  fi
+  sleep 1
+done
+
+# Ensure dev image user matches host UID/GID
+HOST_UID="$(id -u)"
+DEV_UID="$(./scripts/docker.sh compose run --rm dev id -u 2>/dev/null || echo "")"
+if [[ -z "$DEV_UID" || "$DEV_UID" != "$HOST_UID" ]]; then
+  echo "==> (1/4) Rebuilding dev image for UID/GID"
+  ./scripts/docker.sh compose build dev
+fi
+
+# =============================================================================
 # Step 1: Sync program IDs and build (only rebuilds if IDs changed)
 # =============================================================================
-echo "==> (1/3) Syncing program IDs and building"
-docker compose run --rm dev bash -lc '
+echo "==> (2/4) Syncing program IDs and building"
+./scripts/docker.sh compose run --rm dev bash -lc '
   cd /workspace/solana-pa-prototype
 
   # Install node dependencies (needed for fixture validation)
@@ -124,8 +144,8 @@ docker compose run --rm dev bash -lc '
 # =============================================================================
 # Step 2: Start validator
 # =============================================================================
-echo "==> (2/3) Starting validator"
-docker compose --profile validator up -d --force-recreate validator
+echo "==> (3/4) Starting validator"
+./scripts/docker.sh compose --profile validator up -d --force-recreate validator
 
 echo "    Waiting for RPC health..."
 for i in {1..60}; do
@@ -139,9 +159,16 @@ curl -fsS "http://localhost:8899/health" >/dev/null
 # =============================================================================
 # Step 3: Run tests
 # =============================================================================
-echo "==> (3/3) Running tests"
-docker compose run --rm dev bash -lc "
+echo "==> (4/4) Running tests"
+./scripts/docker.sh compose run --rm dev bash -lc "
   cd /workspace/solana-pa-prototype
+  echo \"    Funding test authority...\"
+  for i in {1..5}; do
+    if solana airdrop 10 --url '${CLUSTER_URL}' >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
   anchor test --skip-local-validator --skip-build --provider.cluster '${CLUSTER_URL}'
 "
 
