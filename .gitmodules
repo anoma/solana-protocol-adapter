@@ -1,3 +1,0 @@
-[submodule "risc0-solana"]
-	path = risc0-solana
-	url = https://github.com/risc0/risc0-solana.git

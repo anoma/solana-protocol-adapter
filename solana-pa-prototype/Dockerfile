@@ -58,20 +58,20 @@ ENV PATH="/home/developer/.local/share/solana/install/active_release/bin:${PATH}
 # Install Anchor CLI 0.31.1 (matches risc0-solana requirements)
 RUN cargo install --git https://github.com/coral-xyz/anchor --tag v0.31.1 anchor-cli --locked
 
-# Generate default Solana keypair
-RUN solana-keygen new --no-bip39-passphrase -o /home/developer/.config/solana/id.json
-
-# Set Solana to use localhost by default
-RUN solana config set --url localhost
-
 # Pre-create paths that are later backed by named volumes so empty volumes
 # get initialized with the correct ownership (Docker copies existing dir
 # contents/metadata into a fresh volume on first mount).
-RUN mkdir -p /home/developer/validator-ledger \
+RUN mkdir -p /home/developer/.config/solana \
+    && mkdir -p /home/developer/validator-ledger \
     && mkdir -p /home/developer/.cache/solana
+
+# Copy entrypoint script (ensures keypair exists on container start)
+COPY --chown=developer:developer scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 # Set working directory for the project
 WORKDIR /workspace
 
-# Default command
+# Entrypoint handles runtime initialization (keypair generation, etc.)
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["/bin/bash"]

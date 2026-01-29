@@ -6,69 +6,108 @@ Port of the [EVM Protocol Adapter](https://github.com/anoma/evm-protocol-adapter
 
 ```
 solana-protocol-adapter/
-├── solana-pa-prototype/     # Solana PA implementation
-├── risc0-solana/            # On-chain Groth16 proof verifier (submodule)
-└── arm-risc0/               # RM implementation for zkVM (submodule)
+└── solana-pa-prototype/     # Solana PA implementation
 ```
+
+The RISC0 Groth16 verifier programs are automatically cloned from devnet during testing (no local build required).
 
 ## Local Development Setup
 
 ### Prerequisites
 
-- Docker and docker-compose
-- User in `docker` group (or use `sg docker -c "..."`)
+- Docker and Docker Compose
+- User in `docker` group (check with `groups | grep docker`)
 
-### 1. Clone with Submodules
-
+If you're not in the docker group:
 ```bash
-git clone --recurse-submodules https://github.com/anoma/solana-protocol-adapter
-cd solana-protocol-adapter
+sudo usermod -aG docker $USER
+# Log out and back in for changes to take effect
 ```
 
-### 2. Build Docker Environment
+### Quick Start
+
+```bash
+# Clone the repository
+git clone https://github.com/anoma/solana-protocol-adapter
+cd solana-protocol-adapter/solana-pa-prototype
+
+# Build and run tests (handles everything automatically)
+./scripts/docker-dev.sh anchor-test
+```
+
+That's it! The script will:
+1. Build the Docker image (first run only, ~10 minutes)
+2. Build the Solana programs
+3. Start a local validator with RISC0 verifier programs cloned from devnet
+4. Run the full test suite
+
+### Available Commands
+
+| Command | Description |
+|---------|-------------|
+| `./scripts/docker-dev.sh anchor-test` | Build programs and run integration tests |
+| `./scripts/docker-dev.sh shell` | Open an interactive shell in the dev container |
+| `./scripts/docker-dev.sh anchor-build` | Build Anchor programs only |
+| `./scripts/docker-dev.sh test` | Run Rust unit tests |
+| `./scripts/docker-dev.sh validator` | Start the local validator |
+| `./scripts/docker-dev.sh clean` | Stop containers and remove volumes |
+
+### Rebuilding From Scratch
+
+If you encounter issues, do a complete rebuild:
+
+```bash
+# Remove all containers and volumes
+docker compose down -v --remove-orphans
+
+# Rebuild the image (no cache)
+docker compose build --no-cache dev
+
+# Run tests
+./scripts/docker-dev.sh anchor-test
+```
+
+### Manual Docker Build (Optional)
+
+If you need to customize the build (e.g., for different user IDs):
 
 ```bash
 cd solana-pa-prototype
+
+# Set environment variables for Docker user mapping
 export UID="$(id -u)"
 export GID="$(id -g)"
 export DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
-docker-compose build
-```
 
-### 3. Build and Sync groth_16_verifier
+# Build the image
+docker compose build dev
 
-The risc0-solana verifier ships with a placeholder program ID. Sync it to your local keypair:
-
-```bash
-docker-compose run --rm dev bash -c '
-  cd /workspace/risc0-solana/solana-verifier
-  anchor build -p groth_16_verifier
-'
-```
-
-Get the generated program ID:
-
-```bash
-docker-compose run --rm dev solana-keygen pubkey /workspace/risc0-solana/solana-verifier/target/deploy/groth_16_verifier-keypair.json
-```
-
-Update both files with this pubkey:
-- `risc0-solana/solana-verifier/programs/groth_16_verifier/src/lib.rs` line 32: `declare_id!("YOUR_PUBKEY");`
-- `risc0-solana/solana-verifier/Anchor.toml` line 8: `groth_16_verifier = "YOUR_PUBKEY"`
-
-Rebuild:
-
-```bash
-docker-compose run --rm dev bash -c '
-  cd /workspace/risc0-solana/solana-verifier
-  anchor build -p groth_16_verifier
-'
-```
-
-### 4. Run Tests
-
-```bash
+# Run tests
 ./scripts/docker-dev.sh anchor-test
+```
+
+### Interactive Development
+
+For iterative development, use the shell command:
+
+```bash
+./scripts/docker-dev.sh shell
+```
+
+Inside the container:
+```bash
+cd /workspace/solana-pa-prototype
+
+# Build programs
+anchor build
+
+# Run tests (start validator separately first)
+anchor test --skip-local-validator --provider.cluster http://solana-validator:8899
+```
+
+To start the validator in another terminal:
+```bash
+docker compose --profile validator up validator
 ```
 
 ---
@@ -475,22 +514,34 @@ Fixtures embed the `block_time_forwarder` program ID. If that ID changes, fixtur
 
 ## Deployment
 
-### Start Validator
+### Local Testing
+
+The local test validator automatically clones RISC0 verifier programs from devnet. This is configured in `Anchor.toml`:
+
+```toml
+[test.validator]
+url = "https://api.devnet.solana.com"
+
+[[test.validator.clone]]
+address = "BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"  # Verifier Router
+
+[[test.validator.clone]]
+address = "2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"  # Groth16 Verifier
+
+[[test.validator.clone]]
+address = "9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"  # Router PDA (initialized state)
+
+[[test.validator.clone]]
+address = "4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"  # Verifier Entry PDA (groth16 selector registered)
+```
+
+### Start Validator Manually
 
 ```bash
 docker-compose --profile validator up -d validator
 ```
 
-### Deploy groth_16_verifier
-
-```bash
-docker-compose run --rm dev bash -c '
-  solana config set --url http://solana-validator:8899
-  solana program deploy \
-    --program-id /workspace/risc0-solana/solana-verifier/target/deploy/groth_16_verifier-keypair.json \
-    /workspace/risc0-solana/solana-verifier/target/deploy/groth_16_verifier.so
-'
-```
+The validator is configured to clone the RISC0 verifier programs from devnet on startup.
 
 ### Deploy PA Programs
 
@@ -508,17 +559,74 @@ docker-compose run --rm dev bash -c '
 
 ### Docker Permission Denied
 
+Add yourself to the docker group:
 ```bash
-sg docker -c "docker-compose build"
+sudo usermod -aG docker $USER
+# Log out and back in
+```
+
+Or run commands with `sg docker`:
+```bash
+sg docker -c "./scripts/docker-dev.sh anchor-test"
+```
+
+### Container Name Already In Use
+
+A previous container wasn't cleaned up:
+```bash
+docker rm -f solana-validator
+docker compose down -v --remove-orphans
+```
+
+### Volume Permission Errors
+
+If you see "Permission denied" errors related to `/home/developer/.config/solana` or ledger directories:
+```bash
+# Remove all volumes and rebuild
+docker compose down -v --remove-orphans
+docker volume prune -f
+./scripts/docker-dev.sh anchor-test
+```
+
+### Validator Won't Start / Connection Refused
+
+The validator may have crashed or port 8899 is in use:
+```bash
+# Check if port is in use
+lsof -i :8899
+
+# Kill any running validators
+docker rm -f solana-validator
+
+# Clean up and retry
+docker compose down -v --remove-orphans
+./scripts/docker-dev.sh anchor-test
 ```
 
 ### DeclaredProgramIdMismatch (Error 4100)
 
-Program ID in source doesn't match keypair. For PA programs, `docker-anchor-test.sh` syncs automatically. For groth_16_verifier, see setup step 3.
+Program ID in source doesn't match keypair. The `docker-anchor-test.sh` script syncs IDs automatically. If you see this error, try:
+```bash
+docker compose down -v --remove-orphans
+./scripts/docker-dev.sh anchor-test
+```
+
+### Build Fails on "verifier_router" Dependency
+
+Ensure you're on a branch that uses git dependencies (not local paths):
+```bash
+git checkout feature/remove-submodule-with-pkg-deps
+docker compose down -v --remove-orphans
+./scripts/docker-dev.sh anchor-test
+```
 
 ### Fixture Generation Fails
 
-Ensure Docker socket is accessible:
+Ensure Docker socket is accessible inside the container:
 ```bash
-docker-compose run --rm dev docker ps
+docker compose run --rm dev docker ps
 ```
+
+### Slow First Build
+
+The first build downloads and compiles many dependencies (~10-20 minutes). Subsequent builds use cached layers and complete in seconds.
