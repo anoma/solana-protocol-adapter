@@ -195,10 +195,7 @@ pub fn verify_delta_proof(tx: &Transaction) -> Result<(), PAError> {
     let expected_address = match accumulated {
         Some(point) => point_to_address(&point),
         None => {
-            // Identity point - the "zero address"
-            // For a balanced transaction with all deltas canceling out,
-            // the accumulated point is the identity
-            [0u8; 20]
+            return Err(PAError::DeltaProofVerificationFailed);
         }
     };
 
