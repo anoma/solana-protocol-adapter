@@ -6155,6 +6155,7 @@ dependencies = [
  "base64ct",
  "bincode",
  "block-time-forwarder",
+ "borsh 1.6.0",
  "bytemuck",
  "dashu",
  "groth_16_verifier",
