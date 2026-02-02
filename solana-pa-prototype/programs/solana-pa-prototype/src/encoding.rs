@@ -6,9 +6,8 @@ use alloc::vec::Vec;
 
 use crate::error::PAError;
 use crate::merkle::{hash_two, PADDING_LEAF};
-use crate::risc0_serde;
-use crate::types::{AppData, Digest, LogicVerifierInputs, Transaction};
-use serde::Serialize;
+use crate::types::{Digest, LogicVerifierInputs, Transaction};
+use anoma_rm_risc0::logic_instance::LogicInstance;
 
 // Re-export bytes_to_words from arm-risc0
 pub use anoma_rm_risc0::utils::bytes_to_words;
@@ -21,36 +20,6 @@ pub fn words_to_bytes(words: &[u32]) -> Vec<u8> {
 
 // Re-export Solana-specific constants from arm-risc0
 pub use anoma_rm_risc0::solana_constants::COMPLIANCE_VK_BYTES;
-
-#[derive(Clone, Debug)]
-struct U32Array56([u32; 56]);
-
-impl serde::Serialize for U32Array56 {
-    fn serialize<S>(&self, serializer: S) -> core::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeTuple;
-
-        let mut tuple = serializer.serialize_tuple(56)?;
-        for word in self.0.iter() {
-            tuple.serialize_element(word)?;
-        }
-        tuple.end()
-    }
-}
-
-#[derive(Clone, Debug, serde::Serialize)]
-struct ComplianceInstanceWords {
-    pub u32_words: U32Array56,
-}
-
-/// Parse a bincode-serialized ComplianceInstance.
-pub fn parse_compliance_instance(
-    instance_bytes: &[u8],
-) -> Result<crate::types::ComplianceInstance, PAError> {
-    bincode::deserialize(instance_bytes).map_err(|_| PAError::InvalidTransactionData)
-}
 
 fn next_power_of_two(n: usize) -> Result<usize, PAError> {
     n.checked_next_power_of_two()
@@ -115,45 +84,14 @@ pub fn find_logic_input<'a>(
 
 /// Compute the journal digest for verifying a *batch aggregation* proof.
 ///
-/// This matches `arm-risc0/arm/src/aggregation/batch.rs::verify_transaction_aggregation`.
+/// This uses Borsh serialization to match the Solana-variant guest program output.
+/// The journal contains:
+/// 1. Vec<ComplianceInstance> - all compliance instances
+/// 2. Digest - compliance verifying key
+/// 3. Vec<LogicInstance> - all logic instances
+/// 4. Vec<Digest> - all logic verifying keys
 pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Digest, PAError> {
     use anchor_lang::solana_program::hash::Hasher;
-    use serde::ser::Serializer as _;
-
-    #[derive(Clone, Debug, serde::Serialize)]
-    struct LogicInstanceRef<'a> {
-        pub tag: Digest,
-        pub is_consumed: bool,
-        pub root: Digest,
-        pub app_data: &'a AppData,
-    }
-
-    struct HasherWordWriter<'a> {
-        hasher: &'a mut Hasher,
-    }
-
-    impl<'a> risc0_serde::WordWrite for HasherWordWriter<'a> {
-        fn write_words(&mut self, words: &[u32]) -> risc0_serde::Result<()> {
-            for word in words {
-                self.hasher.hash(&word.to_le_bytes());
-            }
-            Ok(())
-        }
-
-        fn write_padded_bytes(&mut self, bytes: &[u8]) -> risc0_serde::Result<()> {
-            let mut offset = 0usize;
-            while offset + 4 <= bytes.len() {
-                self.hasher.hash(&bytes[offset..offset + 4]);
-                offset += 4;
-            }
-            if offset < bytes.len() {
-                let mut last = [0u8; 4];
-                last[..bytes.len() - offset].copy_from_slice(&bytes[offset..]);
-                self.hasher.hash(&last);
-            }
-            Ok(())
-        }
-    }
 
     let compliance_count: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
     let logic_count = compliance_count
@@ -161,44 +99,31 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
         .ok_or(PAError::InvalidTransactionData)?;
 
     let mut hasher = Hasher::default();
-    let mut writer = HasherWordWriter {
-        hasher: &mut hasher,
-    };
-    let mut serializer = risc0_serde::Serializer::new(&mut writer);
 
-    // 1) Vec<ComplianceInstanceWords>
-    serializer
-        .serialize_u32(compliance_count as u32)
-        .map_err(|_| PAError::InvalidTransactionData)?;
+    // 1) Vec<ComplianceInstance> - serialize count then each instance
+    let count_bytes = (compliance_count as u32).to_le_bytes();
+    hasher.hash(&count_bytes);
+
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let instance_bytes =
-                bincode::serialize(&cu.instance).map_err(|_| PAError::InvalidTransactionData)?;
-            let words = bytes_to_words(&instance_bytes);
-            let fixed: [u32; 56] = words
-                .try_into()
+            let instance_bytes = borsh::to_vec(&cu.instance)
                 .map_err(|_| PAError::InvalidTransactionData)?;
-            let element = ComplianceInstanceWords {
-                u32_words: U32Array56(fixed),
-            };
-            element
-                .serialize(&mut serializer)
-                .map_err(|_| PAError::InvalidTransactionData)?;
+            hasher.hash(&instance_bytes);
         }
     }
 
-    // 2) compliance_vk Digest
+    // 2) Digest - compliance verifying key
     let compliance_vk = Digest::from_bytes(COMPLIANCE_VK_BYTES);
-    compliance_vk
-        .serialize(&mut serializer)
+    let vk_bytes = borsh::to_vec(&compliance_vk)
         .map_err(|_| PAError::InvalidTransactionData)?;
+    hasher.hash(&vk_bytes);
 
-    // 3) Vec<Vec<u32>> logic_instances (each inner Vec is the LogicInstance word stream)
-    serializer
-        .serialize_u32(logic_count as u32)
-        .map_err(|_| PAError::InvalidTransactionData)?;
+    // 3) Vec<LogicInstance> - serialize count then each instance
+    let logic_count_bytes = (logic_count as u32).to_le_bytes();
+    hasher.hash(&logic_count_bytes);
 
     let mut logic_keys: Vec<Digest> = Vec::with_capacity(logic_count);
+
     for action in &tx.actions {
         let mut tags: Vec<Digest> = Vec::new();
         let mut logics: Vec<Digest> = Vec::new();
@@ -223,34 +148,29 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
                 return Err(PAError::InvalidTransactionData);
             }
 
-            let instance = LogicInstanceRef {
+            let logic_instance = LogicInstance {
                 tag: input.tag,
                 is_consumed: index % 2 == 0,
                 root: action_tree_root,
-                app_data: &input.app_data,
+                app_data: input.app_data.clone(),
             };
 
-            let word_len =
-                risc0_serde::count_words(&instance).map_err(|_| PAError::InvalidTransactionData)?;
-
-            serializer
-                .serialize_u32(word_len as u32)
+            let instance_bytes = borsh::to_vec(&logic_instance)
                 .map_err(|_| PAError::InvalidTransactionData)?;
-            instance
-                .serialize(&mut serializer)
-                .map_err(|_| PAError::InvalidTransactionData)?;
+            hasher.hash(&instance_bytes);
 
             logic_keys.push(input.verifying_key);
         }
     }
 
-    // 4) Vec<Digest> logic_keys
-    serializer
-        .serialize_u32(logic_keys.len() as u32)
-        .map_err(|_| PAError::InvalidTransactionData)?;
+    // 4) Vec<Digest> - logic verifying keys
+    let keys_count_bytes = (logic_keys.len() as u32).to_le_bytes();
+    hasher.hash(&keys_count_bytes);
+
     for vk in logic_keys {
-        vk.serialize(&mut serializer)
+        let vk_bytes = borsh::to_vec(&vk)
             .map_err(|_| PAError::InvalidTransactionData)?;
+        hasher.hash(&vk_bytes);
     }
 
     Ok(Digest::from_bytes(hasher.result().to_bytes()))

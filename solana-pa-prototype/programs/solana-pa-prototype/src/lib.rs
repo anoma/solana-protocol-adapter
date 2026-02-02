@@ -21,7 +21,6 @@ pub mod external_calls;
 pub mod groth16;
 pub mod merkle;
 pub mod nullifier;
-pub mod risc0_serde;
 pub mod root;
 pub mod settle;
 pub mod state;
