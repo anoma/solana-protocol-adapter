@@ -365,12 +365,13 @@ dependencies = [
 [[package]]
 name = "anoma-rm-risc0"
 version = "1.0.0"
-source = "git+https://github.com/anoma/arm-risc0.git?branch=anthony%2Fsolana-integration-stage-1#d75d0376dde01d36be98216e73938d5aed747acc"
+source = "git+https://github.com/anoma/arm-risc0.git?branch=anthony%2Fsolana-integration-stage-1#be4f8af6164d70fb048d495e8ab402d184e35acd"
 dependencies = [
  "bincode",
  "borsh 1.6.0",
  "bytemuck",
  "hex",
+ "hex-literal",
  "k256 0.13.3",
  "rand 0.8.5",
  "serde",

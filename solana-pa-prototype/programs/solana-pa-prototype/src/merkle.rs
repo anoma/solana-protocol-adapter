@@ -13,11 +13,11 @@ pub const INITIAL_TREE_DEPTH: usize = 1;
 /// Supports up to 2^32 = 4,294,967,296 leaves.
 pub const MAX_TREE_DEPTH: usize = 32;
 
-/// Padding leaf used for empty tree slots (from arm-risc0 merkle_path.rs).
-/// Hex: cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06
-pub const PADDING_LEAF: Digest = Digest([
-    0x832f1dcc, 0x7adb4584, 0xf91d43ec, 0x1f878aee, 0x5eaae740, 0x56c04f06, 0xc6f83e63, 0x067bab0f,
-]);
+// Import padding leaf from arm-risc0
+use anoma_rm_risc0::merkle_path::PADDING_LEAF_WORDS;
+
+/// Padding leaf used for empty tree slots.
+pub const PADDING_LEAF: Digest = Digest(PADDING_LEAF_WORDS);
 
 /// Precomputed zero hashes at each level of the tree.
 /// zeros[0] = PADDING_LEAF, zeros[i] = hash(zeros[i-1], zeros[i-1]).
