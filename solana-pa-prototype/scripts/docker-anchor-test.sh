@@ -88,8 +88,8 @@ docker compose run --rm dev bash -lc '
   echo "    Building PA..."
   anchor build -p solana-pa-prototype 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
 
-  # Build block_time_forwarder if needed
-  if [[ "$NEEDS_BUILD" == "true" ]] || [[ ! -f "target/deploy/block_time_forwarder.so" ]]; then
+  # Build block_time_forwarder if needed (check both .so and IDL since anchor test streams logs from all programs)
+  if [[ "$NEEDS_BUILD" == "true" ]] || [[ ! -f "target/deploy/block_time_forwarder.so" ]] || [[ ! -f "target/idl/block_time_forwarder.json" ]]; then
     echo "    Building block_time_forwarder..."
     anchor build -p block-time-forwarder 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
   fi
