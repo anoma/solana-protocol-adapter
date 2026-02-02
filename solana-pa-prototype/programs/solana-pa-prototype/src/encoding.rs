@@ -1,6 +1,6 @@
 //! Encoding utilities for word<->byte conversion.
 //!
-//! Must match arm-risc0's bytes_to_words and words_to_bytes.
+//! Shared utilities are imported from arm-risc0 where possible.
 
 use alloc::vec::Vec;
 
@@ -10,26 +10,17 @@ use crate::risc0_serde;
 use crate::types::{AppData, Digest, LogicVerifierInputs, Transaction};
 use serde::Serialize;
 
-/// Convert bytes to words (matching arm-risc0).
-/// Pads with zeros to word boundary. Uses little-endian byte order.
-pub fn bytes_to_words(bytes: &[u8]) -> Vec<u32> {
-    let padded_len = bytes.len().div_ceil(4) * 4;
-    let mut padded = bytes.to_vec();
-    padded.resize(padded_len, 0);
-    padded
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect()
-}
+// Re-export bytes_to_words from arm-risc0
+pub use anoma_rm_risc0::utils::bytes_to_words;
 
 /// Convert words to bytes using little-endian byte order.
+/// Wrapper around arm-risc0's words_to_bytes that returns Vec<u8> for compatibility.
 pub fn words_to_bytes(words: &[u32]) -> Vec<u8> {
-    words.iter().flat_map(|w| w.to_le_bytes()).collect()
+    anoma_rm_risc0::utils::words_to_bytes(words).to_vec()
 }
 
-/// Image ID for the compliance circuit (from `arm-risc0/arm/src/constants.rs`).
-pub const COMPLIANCE_VK_BYTES: [u8; 32] =
-    hex_literal::hex!("1176e7f038c55009f369e2eafd1dd9bc5b51a6f5fc6369cc9f54779258f898fc");
+// Re-export Solana-specific constants from arm-risc0
+pub use anoma_rm_risc0::solana_constants::COMPLIANCE_VK_BYTES;
 
 #[derive(Clone, Debug)]
 struct U32Array56([u32; 56]);

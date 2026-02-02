@@ -9,9 +9,8 @@ use anchor_lang::prelude::AnchorDeserialize;
 pub use groth_16_verifier::Proof;
 pub use verifier_router::{Seal, Selector};
 
-/// Image ID for batch aggregation circuit (from arm-risc0 constants.rs).
-pub const BATCH_AGGREGATION_IMAGE_ID: [u8; 32] =
-    hex_literal::hex!("4297db7ea74c296acd49ca55e160a6e930478da2605931ea0654d466c0f95099");
+// Import from arm-risc0
+use anoma_rm_risc0::solana_constants::BATCH_AGGREGATION_VK_BYTES as BATCH_AGGREGATION_IMAGE_ID;
 
 /// Prepared proof data for risc0-solana verification.
 #[derive(Clone)]
