@@ -27,7 +27,7 @@ proptest! {
     #[test]
     fn prop_digest_hex_roundtrip(digest in arb_digest()) {
         let hex_str = hex::encode(digest.to_bytes());
-        let recovered = Digest::from_hex(&hex_str);
+        let recovered = Digest::from_hex(&hex_str).expect("valid hex should parse");
         prop_assert_eq!(digest.to_bytes(), recovered.to_bytes());
     }
 

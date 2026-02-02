@@ -39,6 +39,12 @@ bytemuck = { version = "1.14", features = ["derive"] }
 hex = "0.4"
 hex-literal = "0.4"
 
+# ARM shared types (solana feature excludes risc0-zkvm dependency)
+anoma-rm-risc0 = { git = "https://github.com/anoma/arm-risc0.git", branch = "anthony/solana-integration-stage-1", default-features = false, features = ["solana"] }
+
+# Pin: base64ct >=1.8 requires edition 2024, incompatible with Rust 1.84
+base64ct = "<=1.7.3"
+
 # Delta proof verification (secp256k1 EC operations via Solana syscalls)
 solana-secp256k1 = "0.1"
 
