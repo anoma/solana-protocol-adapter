@@ -10,7 +10,7 @@ pub use groth_16_verifier::Proof;
 pub use verifier_router::{Seal, Selector};
 
 // Import from arm-risc0
-use anoma_rm_risc0::solana_constants::BATCH_AGGREGATION_VK_BYTES as BATCH_AGGREGATION_IMAGE_ID;
+pub use anoma_rm_risc0::solana_constants::BATCH_AGGREGATION_VK_BYTES as BATCH_AGGREGATION_IMAGE_ID;
 
 /// Prepared proof data for risc0-solana verification.
 #[derive(Clone)]
