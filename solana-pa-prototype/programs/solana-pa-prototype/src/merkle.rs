@@ -13,7 +13,6 @@ pub const INITIAL_TREE_DEPTH: usize = 1;
 /// Supports up to 2^32 = 4,294,967,296 leaves.
 pub const MAX_TREE_DEPTH: usize = 32;
 
-// Import padding leaf from arm-risc0
 use anoma_rm_risc0::merkle_path::PADDING_LEAF_WORDS;
 
 /// Padding leaf used for empty tree slots.

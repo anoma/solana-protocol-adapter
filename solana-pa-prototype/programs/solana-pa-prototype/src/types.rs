@@ -1,6 +1,4 @@
 //! Core type definitions for the Solana Protocol Adapter.
-//!
-//! Shared types are re-exported from arm-risc0.
 
 use serde::{Deserialize, Serialize};
 

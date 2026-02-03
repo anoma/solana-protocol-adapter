@@ -179,7 +179,6 @@ fn test_collect_tags_with_valid_delta() {
     let tx = build_tx_with_delta(delta_x, delta_y);
     let tags = collect_tags(&tx);
 
-    // collect_tags returns Vec<[u8; 32]> directly (infallible)
     assert_eq!(tags.len(), 2, "Should have 2 tags (nf, cm) for 1 CU");
 }
 

@@ -1,6 +1,4 @@
-//! Encoding utilities for word<->byte conversion.
-//!
-//! Shared utilities are imported from arm-risc0 where possible.
+//! Encoding utilities for word<->byte conversion and journal digest computation.
 
 use alloc::vec::Vec;
 
@@ -8,17 +6,13 @@ use crate::error::PAError;
 use crate::merkle::{hash_two, PADDING_LEAF};
 use crate::types::{Digest, LogicVerifierInputs, Transaction};
 
-// Re-export bytes_to_words from arm-risc0
 pub use anoma_rm_risc0::utils::bytes_to_words;
+pub use anoma_rm_risc0::solana_constants::COMPLIANCE_VK_BYTES;
 
-/// Convert words to bytes using little-endian byte order.
-/// Wrapper around arm-risc0's words_to_bytes that returns Vec<u8> for compatibility.
+/// Convert words to bytes (Vec variant for callers that need owned bytes).
 pub fn words_to_bytes(words: &[u32]) -> Vec<u8> {
     anoma_rm_risc0::utils::words_to_bytes(words).to_vec()
 }
-
-// Re-export Solana-specific constants from arm-risc0
-pub use anoma_rm_risc0::solana_constants::COMPLIANCE_VK_BYTES;
 
 fn next_power_of_two(n: usize) -> Result<usize, PAError> {
     n.checked_next_power_of_two()
