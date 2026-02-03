@@ -8,30 +8,36 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
 cd "$PROJECT_DIR"
 
+# Build compose command: add GPU override when USE_GPU=1
+COMPOSE="docker compose"
+if [[ "${USE_GPU:-}" == "1" ]]; then
+  COMPOSE="docker compose -f docker-compose.yml -f docker-compose.gpu.yml"
+fi
+
 case "$1" in
     build)
         echo "Building Docker image..."
-        docker compose build dev
+        $COMPOSE build dev
         ;;
 
     shell)
         echo "Starting development shell..."
-        docker compose run --rm --service-ports dev
+        $COMPOSE run --rm --service-ports dev
         ;;
 
     validator)
         echo "Starting Solana test validator..."
-        docker compose --profile validator up validator
+        $COMPOSE --profile validator up validator
         ;;
 
     test)
         echo "Running tests in container..."
-        docker compose run --rm dev bash -c "cd /workspace/solana-protocol-adapter/solana-pa-prototype && cargo test --workspace"
+        $COMPOSE run --rm dev bash -c "cd /workspace/solana-protocol-adapter/solana-pa-prototype && cargo test --workspace"
         ;;
 
     anchor-build)
         echo "Building Anchor programs..."
-        docker compose run --rm dev bash -c "cd /workspace/solana-protocol-adapter/solana-pa-prototype && anchor build"
+        $COMPOSE run --rm dev bash -c "cd /workspace/solana-protocol-adapter/solana-pa-prototype && anchor build"
         ;;
 
     anchor-test)
@@ -41,12 +47,12 @@ case "$1" in
 
     build-verifier)
         echo "Building risc0-solana verifier..."
-        docker compose run --rm dev bash -c "cd /workspace/risc0-solana/solana-verifier && anchor build"
+        $COMPOSE run --rm dev bash -c "cd /workspace/risc0-solana/solana-verifier && anchor build"
         ;;
 
     full-test)
         echo "Running full integration test..."
-        docker compose run --rm --service-ports dev bash -c "
+        $COMPOSE run --rm --service-ports dev bash -c "
             cd /workspace/solana-protocol-adapter/solana-pa-prototype
             echo '=== Building PA ==='
             anchor build
@@ -63,12 +69,12 @@ case "$1" in
 
     update-deps)
         echo "Regenerating yarn.lock inside Docker..."
-        docker compose run --rm dev bash -c "cd /workspace/solana-protocol-adapter/solana-pa-prototype && rm -f yarn.lock package-lock.json && yarn install"
+        $COMPOSE run --rm dev bash -c "cd /workspace/solana-protocol-adapter/solana-pa-prototype && rm -f yarn.lock package-lock.json && yarn install"
         ;;
 
     clean)
         echo "Cleaning up..."
-        docker compose down -v
+        $COMPOSE down -v
         ;;
 
     *)

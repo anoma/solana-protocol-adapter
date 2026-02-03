@@ -13,14 +13,8 @@ services:
     # the host user (UID 1000), giving correct workspace permissions. Set HOME
     # so volume mounts and tool paths (solana, anchor, cargo) resolve correctly.
     user: "0:0"
-    # Enable NVIDIA GPU access for CUDA-accelerated proving
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # For GPU-accelerated proving, use the GPU override:
+    #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml run --rm dev bash
     volumes:
       # Mount grandparent (solana-pa/) to make both repos available:
       # /workspace/solana-protocol-adapter/ and /workspace/arm-risc0/
