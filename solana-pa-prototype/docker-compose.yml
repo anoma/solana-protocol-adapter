@@ -9,6 +9,8 @@ services:
         GID: ${GID:-1001}
         DOCKER_GID: ${DOCKER_GID:-30001}
     container_name: solana-pa-dev
+    # For GPU-accelerated proving, use the GPU override:
+    #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml run --rm dev bash
     volumes:
       # Mount entire parent repo to preserve submodule git references
       - ..:/workspace
