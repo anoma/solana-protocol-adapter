@@ -259,7 +259,7 @@ dependencies = [
 [[package]]
 name = "anoma-rm-risc0"
 version = "1.0.0"
-source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Fsolana-integration-stage-1#d7d786dd5c365f7c0eed93e135f9794c288d08f1"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Fsolana-integration-stage-1#b53f660cd330c6c3bd950a587e6cca5b7d25ee3a"
 dependencies = [
  "bincode",
  "borsh 1.6.0",
