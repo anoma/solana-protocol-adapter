@@ -30,6 +30,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "anoma-rm-risc0"
+version = "1.0.0"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Fsolana-integration-stage-1#50b137bc6ff4ce9adf3706f68a7f80c3f7f9c494"
+dependencies = [
+ "bincode",
+ "bytemuck",
+ "hex",
+ "k256",
+ "rand 0.8.5",
+ "serde",
+ "serde_with",
+ "thiserror",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.100"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -247,23 +262,6 @@ checksum = "246a225cc6131e9ee4f24619af0f19d67761fff15d7ccc22e42b80846e69449a"
 dependencies = [
  "num-traits",
  "rand 0.8.5",
-]
-
-[[package]]
-name = "arm"
-version = "1.0.0"
-source = "git+https://github.com/anoma/arm-risc0?rev=7a6c2e7e5c100c50028f46516cecbfa9c9127e52#7a6c2e7e5c100c50028f46516cecbfa9c9127e52"
-dependencies = [
- "bincode",
- "bytemuck",
- "hex",
- "k256",
- "lazy_static",
- "rand 0.8.5",
- "risc0-zkvm",
- "serde",
- "serde_with",
- "thiserror",
 ]
 
 [[package]]
@@ -1111,7 +1109,7 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 name = "passthrough-logic-guest"
 version = "0.1.0"
 dependencies = [
- "arm",
+ "anoma-rm-risc0",
  "risc0-zkvm",
 ]
 

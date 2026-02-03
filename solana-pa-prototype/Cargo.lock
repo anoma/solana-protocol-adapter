@@ -365,7 +365,7 @@ dependencies = [
 [[package]]
 name = "anoma-rm-risc0"
 version = "1.0.0"
-source = "git+https://github.com/anoma/arm-risc0.git?branch=anthony%2Fsolana-integration-stage-1#4e22e29ce85989101fb56e02295c0ec03cfaefce"
+source = "git+https://github.com/anoma/arm-risc0.git?branch=anthony%2Fsolana-integration-stage-1#d7d786dd5c365f7c0eed93e135f9794c288d08f1"
 dependencies = [
  "bincode",
  "borsh 1.6.0",
@@ -376,6 +376,7 @@ dependencies = [
  "rand 0.8.5",
  "serde",
  "serde_with",
+ "sha2 0.10.9",
  "thiserror 2.0.17",
 ]
 

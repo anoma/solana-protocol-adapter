@@ -4,7 +4,7 @@ use arm::action::Action;
 use arm::action_tree::MerkleTree;
 use arm::aggregation::batch::BatchProof;
 use arm::aggregation::{AggregationProof, AggregationStrategy};
-use arm::compliance::{ComplianceInstance, ComplianceWitness, INITIAL_ROOT};
+use arm::compliance::{initial_root, ComplianceInstance, ComplianceWitness};
 use arm::compliance_unit::ComplianceUnit;
 use arm::delta_proof::DeltaWitness;
 use arm::logic_instance::ExpirableBlob;
@@ -233,7 +233,7 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
         merkle_path: MerklePath::empty(),
         rcv: Scalar::ONE.to_bytes().to_vec(),
         nf_key: nf_key.clone(),
-        ephemeral_root: *INITIAL_ROOT,
+        ephemeral_root: initial_root(),
     };
     let compliance_receipt =
         ComplianceUnit::create(&compliance_witness, base_proof_type).context("prove compliance")?;

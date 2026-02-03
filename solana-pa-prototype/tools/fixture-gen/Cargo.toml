@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-arm = { git = "https://github.com/anoma/arm-risc0", rev = "7a6c2e7e5c100c50028f46516cecbfa9c9127e52", default-features = false, features = ["aggregation", "solana", "prove"] }
+arm = { package = "anoma-rm-risc0", git = "https://github.com/anoma/arm-risc0", branch = "anthony/solana-integration-stage-1", default-features = false, features = ["aggregation", "prove", "borsh"] }
 #arm-test-app = { path = "../../../arm-risc0/arm_tests/arm_test_app" }
 verifier_router = { git = "https://github.com/risc0/risc0-solana.git", tag = "v3.0.0" }
 base64 = "0.22"
