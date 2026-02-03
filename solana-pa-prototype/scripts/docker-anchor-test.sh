@@ -88,8 +88,13 @@ docker compose run --rm dev bash -lc '
   echo "    Building PA..."
   anchor build -p solana-pa-prototype 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
 
-  # Build block_time_forwarder if needed
-  if [[ "$NEEDS_BUILD" == "true" ]] || [[ ! -f "target/deploy/block_time_forwarder.so" ]]; then
+  # Build block_time_forwarder if needed.
+  # Also rebuild when any source file is newer than the .so — catches the case
+  # where a previous run synced declare_id!() but the .so was never recompiled.
+  BTF_SO="target/deploy/block_time_forwarder.so"
+  if [[ "$NEEDS_BUILD" == "true" ]] || \
+     [[ ! -f "$BTF_SO" ]] || \
+     [[ -n "$(find programs/block-time-forwarder -name '*.rs' -o -name 'Cargo.toml' -newer "$BTF_SO" 2>/dev/null)" ]]; then
     echo "    Building block_time_forwarder..."
     anchor build -p block-time-forwarder 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
   fi
