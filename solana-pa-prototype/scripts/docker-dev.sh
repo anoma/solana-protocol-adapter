@@ -26,12 +26,12 @@ case "$1" in
 
     test)
         echo "Running tests in container..."
-        docker compose run --rm dev bash -c "cd /workspace/solana-pa-prototype && cargo test --workspace"
+        docker compose run --rm dev bash -c "cd /workspace/solana-protocol-adapter/solana-pa-prototype && cargo test --workspace"
         ;;
 
     anchor-build)
         echo "Building Anchor programs..."
-        docker compose run --rm dev bash -c "cd /workspace/solana-pa-prototype && anchor build"
+        docker compose run --rm dev bash -c "cd /workspace/solana-protocol-adapter/solana-pa-prototype && anchor build"
         ;;
 
     anchor-test)
@@ -47,7 +47,7 @@ case "$1" in
     full-test)
         echo "Running full integration test..."
         docker compose run --rm --service-ports dev bash -c "
-            cd /workspace/solana-pa-prototype
+            cd /workspace/solana-protocol-adapter/solana-pa-prototype
             echo '=== Building PA ==='
             anchor build
 
@@ -56,14 +56,14 @@ case "$1" in
             anchor build
 
             echo '=== Starting validator and running tests ==='
-            cd /workspace/solana-pa-prototype
+            cd /workspace/solana-protocol-adapter/solana-pa-prototype
             anchor test
         "
         ;;
 
     update-deps)
         echo "Regenerating yarn.lock inside Docker..."
-        docker compose run --rm dev bash -c "cd /workspace/solana-pa-prototype && rm -f yarn.lock package-lock.json && yarn install"
+        docker compose run --rm dev bash -c "cd /workspace/solana-protocol-adapter/solana-pa-prototype && rm -f yarn.lock package-lock.json && yarn install"
         ;;
 
     clean)

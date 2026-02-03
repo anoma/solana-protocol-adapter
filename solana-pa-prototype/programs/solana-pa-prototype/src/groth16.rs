@@ -25,7 +25,11 @@ pub struct PreparedProof {
 pub fn prepare_proof_for_verification(tx: &Transaction) -> Result<PreparedProof, PAError> {
     let proof_bytes: &Vec<u8> = tx.aggregation_proof.as_ref().ok_or(PAError::InvalidProof)?;
 
-    let seal: Seal = Seal::try_from_slice(proof_bytes).map_err(|_| PAError::InvalidProof)?;
+    let mut seal: Seal = Seal::try_from_slice(proof_bytes).map_err(|_| PAError::InvalidProof)?;
+
+    // The risc0-solana groth16 verifier expects pi_a to be negated (on BN254 G1).
+    seal.proof.pi_a = groth_16_verifier::negate_g1(&seal.proof.pi_a);
+
     let image_id = BATCH_AGGREGATION_IMAGE_ID;
     let journal_digest = crate::encoding::compute_batch_aggregation_journal_digest(tx)?.to_bytes();
     Ok(PreparedProof {

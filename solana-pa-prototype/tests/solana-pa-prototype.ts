@@ -133,7 +133,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   }));
 
   // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-  const blockTimeForwarderId = new PublicKey("FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq");
+  const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
 
   // Helper to settle with optional new root marker PDA
   async function settleViaTxData(
@@ -224,6 +224,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       .remainingAccounts(allRemainingAccounts)
       .preInstructions([
         ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
       ])
       .signers([authority])
       .rpc();
@@ -508,6 +509,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
         ])
         .signers([authority])
         .rpc();

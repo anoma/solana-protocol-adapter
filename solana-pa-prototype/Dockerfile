@@ -1,5 +1,5 @@
 # Solana Protocol Adapter Development Environment
-# Includes: Solana CLI, Anchor, Rust with sbpf target, Node.js
+# Includes: Solana CLI, Anchor, Rust with sbpf target, Node.js, CUDA toolkit
 
 FROM ubuntu:22.04
 
@@ -20,12 +20,33 @@ RUN apt-get update && apt-get install -y \
     cmake \
     ca-certificates \
     jq \
+    gnupg \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
+
+# Install CUDA toolkit for GPU-accelerated proving
+RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb -o /tmp/cuda-keyring.deb \
+    && dpkg -i /tmp/cuda-keyring.deb \
+    && rm /tmp/cuda-keyring.deb \
+    && apt-get update \
+    && apt-get install -y cuda-toolkit-12-4 \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/usr/local/cuda/bin:${PATH}"
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
 
 # Install Node.js 20.x
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g yarn
+
+# Install Rust and RISC0 toolchain for root user (needed for rootless Docker)
+# In rootless Docker, container root maps to host user, so root needs these tools
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN cargo install rzup --locked \
+    && rzup install rust \
+    && rzup install cargo-risczero
 
 # Create non-root user with UID matching host user for volume permissions
 ARG UID=1001

@@ -19,7 +19,7 @@ cd "$PROJECT_DIR"
 # =============================================================================
 echo "==> (1/3) Syncing program IDs and building"
 docker compose run --rm dev bash -lc '
-  cd /workspace/solana-pa-prototype
+  cd /workspace/solana-protocol-adapter/solana-pa-prototype
 
   # Install node dependencies (needed for fixture validation)
   # Try frozen-lockfile first; if it fails, regenerate lockfile
@@ -141,7 +141,7 @@ curl -fsS "http://localhost:8899/health" >/dev/null
 # =============================================================================
 echo "==> (3/3) Running tests"
 docker compose run --rm dev bash -lc "
-  cd /workspace/solana-pa-prototype
+  cd /workspace/solana-protocol-adapter/solana-pa-prototype
   anchor test --skip-local-validator --skip-build --provider.cluster '${CLUSTER_URL}'
 "
 
