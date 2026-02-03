@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     jq \
     gnupg \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 # Install CUDA toolkit for GPU-accelerated proving (used when docker-compose.gpu.yml is active)
@@ -38,6 +39,14 @@ ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH}"
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g yarn
+
+# Install Rust and RISC0 toolchain for root user (needed for rootless Docker)
+# In rootless Docker, container root maps to host user, so root needs these tools
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN cargo install rzup --locked \
+    && rzup install rust \
+    && rzup install cargo-risczero
 
 # Create non-root user with UID matching host user for volume permissions
 ARG UID=1001
