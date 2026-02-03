@@ -64,12 +64,14 @@ pub fn create_minimal_transaction() -> Transaction {
                     verifying_key: consumed_logic_ref,
                     app_data: AppData::default(),
                     proof: None,
+                    instance_journal: Vec::new(),
                 },
                 LogicVerifierInputs {
                     tag: created_commitment,
                     verifying_key: created_logic_ref,
                     app_data: AppData::default(),
                     proof: None,
+                    instance_journal: Vec::new(),
                 },
             ],
         }],
@@ -105,12 +107,14 @@ pub fn create_transaction_with_compliance_instances(
             verifying_key: inst.consumed_logic_ref,
             app_data: AppData::default(),
             proof: None,
+            instance_journal: Vec::new(),
         });
         logic_verifier_inputs.push(LogicVerifierInputs {
             tag: inst.created_commitment,
             verifying_key: inst.created_logic_ref,
             app_data: AppData::default(),
             proof: None,
+            instance_journal: Vec::new(),
         });
     }
 
@@ -190,6 +194,7 @@ pub fn create_transaction_with_multiple_lvi_external_payloads(
                 application_payload: vec![],
             },
             proof: None,
+            instance_journal: Vec::new(),
         })
         .collect();
 
