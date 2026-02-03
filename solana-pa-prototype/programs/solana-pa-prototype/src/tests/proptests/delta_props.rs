@@ -18,7 +18,7 @@ proptest! {
     ) {
         let instances = vec![inst1.clone(), inst2.clone()];
         let tx = build_tx_from_instances(&instances);
-        let tags = collect_tags(&tx).unwrap();
+        let tags = collect_tags(&tx);
 
         // Expected order: nf1, cm1, nf2, cm2
         prop_assert_eq!(tags.len(), 4, "should have 4 tags for 2 instances");
@@ -35,7 +35,7 @@ proptest! {
     ) {
         let instances = vec![inst.clone()];
         let tx = build_tx_from_instances(&instances);
-        let tags = collect_tags(&tx).unwrap();
+        let tags = collect_tags(&tx);
 
         let vk1 = compute_verifying_key(&tags);
         let vk2 = compute_verifying_key(&tags);

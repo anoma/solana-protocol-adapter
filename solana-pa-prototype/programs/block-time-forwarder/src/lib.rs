@@ -13,7 +13,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::set_return_data;
 
-declare_id!("FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq");
+declare_id!("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
 
 /// Comparison result constants.
 pub const RESULT_LT: u8 = 0; // expected < current

@@ -1,9 +1,9 @@
 //! Unit tests for delta proof verification and curve point validation.
 
 use crate::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
-use crate::error::PAError;
 use crate::tests::utils::create_compliance_instance;
 use crate::types::{Action, ComplianceUnit, Delta, LogicVerifierInputs, Transaction};
+use anoma_rm_risc0::error::ArmError;
 
 /// Convert big-endian bytes to [u32; 8] words using arm-risc0's encoding.
 ///
@@ -97,7 +97,7 @@ fn test_zero_point_rejected() {
 
     assert!(result.is_err(), "(0, 0) should be rejected as invalid");
     assert!(
-        matches!(result.err(), Some(PAError::DeltaPointNotOnCurve)),
+        matches!(result.err(), Some(ArmError::DeltaPointNotOnCurve)),
         "Should return DeltaPointNotOnCurve error"
     );
 }
@@ -113,7 +113,7 @@ fn test_wrong_y_coordinate_rejected() {
 
     assert!(result.is_err(), "Valid x with wrong y should be rejected");
     assert!(
-        matches!(result.err(), Some(PAError::DeltaPointNotOnCurve)),
+        matches!(result.err(), Some(ArmError::DeltaPointNotOnCurve)),
         "Should return DeltaPointNotOnCurve error"
     );
 }
@@ -179,8 +179,7 @@ fn test_collect_tags_with_valid_delta() {
     let tx = build_tx_with_delta(delta_x, delta_y);
     let tags = collect_tags(&tx);
 
-    assert!(tags.is_ok());
-    let tags = tags.unwrap();
+    // collect_tags returns Vec<[u8; 32]> directly (infallible)
     assert_eq!(tags.len(), 2, "Should have 2 tags (nf, cm) for 1 CU");
 }
 
@@ -190,7 +189,7 @@ fn test_verifying_key_deterministic() {
     let delta_y = bytes_to_words_be(&G_Y_BE);
 
     let tx = build_tx_with_delta(delta_x, delta_y);
-    let tags = collect_tags(&tx).unwrap();
+    let tags = collect_tags(&tx);
 
     let vk1 = compute_verifying_key(&tags);
     let vk2 = compute_verifying_key(&tags);

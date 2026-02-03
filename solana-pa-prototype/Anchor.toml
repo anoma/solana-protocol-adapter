@@ -5,12 +5,12 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-block_time_forwarder = "FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq"
-solana_pa_prototype = "AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt"
+block_time_forwarder = "J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6"
+solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
 
 [programs.localnet]
-block_time_forwarder = "FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq"
-solana_pa_prototype = "AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt"
+block_time_forwarder = "J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6"
+solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
 
 [registry]
 url = "https://api.apr.dev"
