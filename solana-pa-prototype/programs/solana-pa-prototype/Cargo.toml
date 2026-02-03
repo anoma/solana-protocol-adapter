@@ -41,8 +41,7 @@ hex = "0.4"
 hex-literal = "0.4"
 
 # ARM shared types (solana feature excludes risc0-zkvm dependency)
-# Local path for development - switch to git dep before pushing
-anoma-rm-risc0 = { path = "../../../../arm-risc0/arm", default-features = false, features = ["solana"] }
+anoma-rm-risc0 = { git = "https://github.com/anoma/arm-risc0", branch = "anthony/solana-integration-stage-1", default-features = false, features = ["solana"] }
 
 # Pin: edition 2024 crates incompatible with Rust 1.84 / Cargo 1.84
 base64ct = "<=1.7.3"
