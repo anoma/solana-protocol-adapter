@@ -139,6 +139,7 @@ pub fn arb_logic_verifier_inputs() -> impl Strategy<Value = LogicVerifierInputs>
             verifying_key: vk,
             app_data,
             proof: None,
+            instance_journal: Vec::new(),
         }
     })
 }
@@ -163,12 +164,14 @@ pub fn arb_minimal_transaction() -> impl Strategy<Value = Transaction> {
                         verifying_key: clr,
                         app_data: AppData::default(),
                         proof: None,
+                        instance_journal: Vec::new(),
                     },
                     LogicVerifierInputs {
                         tag: cm,
                         verifying_key: clr2,
                         app_data: AppData::default(),
                         proof: None,
+                        instance_journal: Vec::new(),
                     },
                 ],
             }],
@@ -195,12 +198,14 @@ pub fn arb_transaction_with_n_cus(n: usize) -> impl Strategy<Value = Transaction
                 verifying_key: inst.consumed_logic_ref,
                 app_data: AppData::default(),
                 proof: None,
+                instance_journal: Vec::new(),
             });
             lvis.push(LogicVerifierInputs {
                 tag: inst.created_commitment,
                 verifying_key: inst.created_logic_ref,
                 app_data: AppData::default(),
                 proof: None,
+                instance_journal: Vec::new(),
             });
         }
 
@@ -233,12 +238,14 @@ pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction 
             verifying_key: inst.consumed_logic_ref,
             app_data: AppData::default(),
             proof: None,
+            instance_journal: Vec::new(),
         });
         lvis.push(LogicVerifierInputs {
             tag: inst.created_commitment,
             verifying_key: inst.created_logic_ref,
             app_data: AppData::default(),
             proof: None,
+            instance_journal: Vec::new(),
         });
     }
 
