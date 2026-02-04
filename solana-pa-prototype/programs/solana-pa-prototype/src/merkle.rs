@@ -13,10 +13,10 @@ pub const INITIAL_TREE_DEPTH: usize = 1;
 /// Supports up to 2^32 = 4,294,967,296 leaves.
 pub const MAX_TREE_DEPTH: usize = 32;
 
-use anoma_rm_risc0::merkle_path::PADDING_LEAF_WORDS;
+use anoma_rm_risc0::constants::EMPTY_HASH_WORDS;
 
 /// Padding leaf used for empty tree slots.
-pub const PADDING_LEAF: Digest = Digest(PADDING_LEAF_WORDS);
+pub const PADDING_LEAF: Digest = Digest(EMPTY_HASH_WORDS);
 
 /// Precomputed zero hashes at each level of the tree.
 /// zeros[0] = PADDING_LEAF, zeros[i] = hash(zeros[i-1], zeros[i-1]).
