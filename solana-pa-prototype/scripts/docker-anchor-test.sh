@@ -88,8 +88,8 @@ docker compose run --rm dev bash -lc '
   echo "    Building PA..."
   anchor build -p solana-pa-prototype 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
 
-  # Build block_time_forwarder if needed
-  if [[ "$NEEDS_BUILD" == "true" ]] || [[ ! -f "target/deploy/block_time_forwarder.so" ]]; then
+  # Build block_time_forwarder if needed (check both .so and IDL since anchor test streams logs from all programs)
+  if [[ "$NEEDS_BUILD" == "true" ]] || [[ ! -f "target/deploy/block_time_forwarder.so" ]] || [[ ! -f "target/idl/block_time_forwarder.json" ]]; then
     echo "    Building block_time_forwarder..."
     anchor build -p block-time-forwarder 2>&1 | grep -v "^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report" | cat -s
   fi
@@ -137,12 +137,21 @@ done
 curl -fsS "http://localhost:8899/health" >/dev/null
 
 # =============================================================================
-# Step 3: Run tests
+# Step 3: Deploy programs and run tests
 # =============================================================================
-echo "==> (3/3) Running tests"
+echo "==> (3/3) Deploying and running tests"
 docker compose run --rm dev bash -lc "
   cd /workspace/solana-pa-prototype
-  anchor test --skip-local-validator --skip-build --provider.cluster '${CLUSTER_URL}'
+
+  # Deploy programs to the external validator
+  anchor deploy --provider.cluster '${CLUSTER_URL}'
+
+  # Run the test script directly (from Anchor.toml [scripts] test)
+  # This avoids anchor test's stream_logs() which fails with Permission
+  # denied when the validator runs in a separate container.
+  ANCHOR_PROVIDER_URL='${CLUSTER_URL}' \
+  ANCHOR_WALLET=~/.config/solana/id.json \
+    yarn run ts-mocha -p ./tsconfig.json -t 1000000 'tests/**/*.ts'
 "
 
 echo "==> All tests passed"
