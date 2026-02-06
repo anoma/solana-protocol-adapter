@@ -12,13 +12,19 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 CLUSTER_URL="${CLUSTER_URL:-http://solana-validator:8899}"
 
+# Build compose command: add GPU override when USE_GPU=1
+COMPOSE="docker compose"
+if [[ "${USE_GPU:-}" == "1" ]]; then
+  COMPOSE="docker compose -f docker-compose.yml -f docker-compose.gpu.yml"
+fi
+
 cd "$PROJECT_DIR"
 
 # =============================================================================
 # Step 1: Sync program IDs and build (only rebuilds if IDs changed)
 # =============================================================================
 echo "==> (1/3) Syncing program IDs and building"
-docker compose run --rm dev bash -lc '
+$COMPOSE run --rm dev bash -lc '
   cd /workspace/solana-pa-prototype
 
   # Install node dependencies (needed for fixture validation)
@@ -125,7 +131,7 @@ docker compose run --rm dev bash -lc '
 # Step 2: Start validator
 # =============================================================================
 echo "==> (2/3) Starting validator"
-docker compose --profile validator up -d --force-recreate validator
+$COMPOSE --profile validator up -d --force-recreate validator
 
 echo "    Waiting for RPC health..."
 for i in {1..60}; do
@@ -140,7 +146,7 @@ curl -fsS "http://localhost:8899/health" >/dev/null
 # Step 3: Deploy programs and run tests
 # =============================================================================
 echo "==> (3/3) Deploying and running tests"
-docker compose run --rm dev bash -lc "
+$COMPOSE run --rm dev bash -lc "
   cd /workspace/solana-pa-prototype
 
   # Deploy programs to the external validator

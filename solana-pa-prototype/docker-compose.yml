@@ -9,11 +9,18 @@ services:
         GID: ${GID:-1001}
         DOCKER_GID: ${DOCKER_GID:-30001}
     container_name: solana-pa-dev
+    # Run as root inside container. In rootless Docker, container root maps to
+    # the host user (UID 1000), giving correct workspace permissions. Set HOME
+    # so volume mounts and tool paths (solana, anchor, cargo) resolve correctly.
+    user: "0:0"
+    # For GPU-accelerated proving, use the GPU override:
+    #   docker compose -f docker-compose.yml -f docker-compose.gpu.yml run --rm dev bash
     volumes:
       # Mount entire parent repo to preserve submodule git references
       - ..:/workspace
       # Allow tooling (e.g. risc0 Groth16 prover) to run Docker via the host daemon.
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Use XDG_RUNTIME_DIR for rootless Docker, fallback to /var/run for system Docker
+      - ${XDG_RUNTIME_DIR:-/var/run}/docker.sock:/var/run/docker.sock
       # Required for risc0-groth16: it bind-mounts a temp dir; with docker.sock it must be a host-visible path.
       - /tmp:/tmp
       # Persist cargo cache
@@ -31,8 +38,10 @@ services:
       # Solana validator faucet
       - "9900:9900"
     environment:
+      - HOME=/home/developer
       - RUST_BACKTRACE=1
       - RUST_LOG=solana_runtime::system_instruction_processor=trace,solana_runtime::message_processor=trace
+      - DOCKER_HOST=unix:///var/run/docker.sock
     stdin_open: true
     tty: true
     working_dir: /workspace/solana-pa-prototype
@@ -48,6 +57,7 @@ services:
         GID: ${GID:-1001}
         DOCKER_GID: ${DOCKER_GID:-30001}
     container_name: solana-validator
+    user: "0:0"
     volumes:
       - solana-config:/home/developer/.config/solana
     ports:
@@ -55,6 +65,7 @@ services:
       - "8900:8900"
       - "9900:9900"
     environment:
+      - HOME=/home/developer
       - RUST_BACKTRACE=1
     command: >
       solana-test-validator
