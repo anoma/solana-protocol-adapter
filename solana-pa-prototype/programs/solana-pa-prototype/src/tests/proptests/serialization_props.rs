@@ -8,6 +8,7 @@ use super::strategies::{
     arb_compliance_instance, arb_digest, arb_expirable_blob, arb_solana_external_call,
 };
 use crate::types::{ComplianceInstance, Digest, ExpirableBlob, SolanaExternalCall};
+use hex::FromHex;
 
 /// Expected serialized size of ComplianceInstance:
 /// 5 Digests (5 * 32 bytes) + 2 delta arrays (2 * 8 * 4 bytes) = 160 + 64 = 224 bytes

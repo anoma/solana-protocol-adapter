@@ -6,8 +6,8 @@ use crate::error::PAError;
 use crate::merkle::{hash_two, PADDING_LEAF};
 use crate::types::{Digest, LogicVerifierInputs, Transaction};
 
-pub use anoma_rm_risc0::utils::bytes_to_words;
 pub use anoma_rm_risc0::constants::COMPLIANCE_VK_BYTES;
+pub use anoma_rm_risc0::utils::bytes_to_words;
 
 /// Convert words to bytes (Vec variant for callers that need owned bytes).
 pub fn words_to_bytes(words: &[u32]) -> Vec<u8> {
@@ -137,8 +137,7 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
         logic_instances,
         logic_keys,
     );
-    let journal_bytes = borsh::to_vec(&output)
-        .map_err(|_| PAError::InvalidTransactionData)?;
+    let journal_bytes = borsh::to_vec(&output).map_err(|_| PAError::InvalidTransactionData)?;
 
     // 5) Hash the journal bytes
     Ok(Digest::from_bytes(hash(&journal_bytes).to_bytes()))

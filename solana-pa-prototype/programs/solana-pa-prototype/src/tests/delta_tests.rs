@@ -2,7 +2,7 @@
 
 use crate::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
 use crate::tests::utils::create_compliance_instance;
-use crate::types::{Action, ComplianceUnit, Delta, LogicVerifierInputs, Transaction};
+use crate::types::{Action, ComplianceUnit, Delta, DeltaWitness, LogicVerifierInputs, Transaction};
 use anoma_rm_risc0::error::ArmError;
 
 /// Convert big-endian bytes to [u32; 8] words using arm-risc0's encoding.
@@ -61,7 +61,7 @@ fn build_tx_with_delta(delta_x: [u32; 8], delta_y: [u32; 8]) -> Transaction {
                 },
             ],
         }],
-        delta_proof: Delta::Witness(vec![]),
+        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
         expected_balance: None,
         aggregation_proof: None,
     }
@@ -244,7 +244,7 @@ fn build_tx_with_two_deltas(
             ],
             logic_verifier_inputs: vec![],
         }],
-        delta_proof: Delta::Witness(vec![]),
+        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
         expected_balance: None,
         aggregation_proof: None,
     }
