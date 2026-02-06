@@ -175,7 +175,7 @@ pub fn arb_minimal_transaction() -> impl Strategy<Value = Transaction> {
                     },
                 ],
             }],
-            delta_proof: Delta::Witness(vec![]),
+            delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
             expected_balance: None,
             aggregation_proof: None,
         }
@@ -214,7 +214,7 @@ pub fn arb_transaction_with_n_cus(n: usize) -> impl Strategy<Value = Transaction
                 compliance_units: cus,
                 logic_verifier_inputs: lvis,
             }],
-            delta_proof: Delta::Witness(vec![]),
+            delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
             expected_balance: None,
             aggregation_proof: None,
         }
@@ -254,7 +254,7 @@ pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction 
             compliance_units: cus,
             logic_verifier_inputs: lvis,
         }],
-        delta_proof: Delta::Witness(vec![]),
+        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
         expected_balance: None,
         aggregation_proof: None,
     }

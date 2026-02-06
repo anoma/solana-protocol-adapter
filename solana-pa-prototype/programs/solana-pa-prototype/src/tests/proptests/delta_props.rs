@@ -4,7 +4,7 @@ use super::strategies::{
     arb_compliance_instance, arb_compliance_instance_zero_delta, build_tx_from_instances,
 };
 use crate::delta::{accumulate_deltas, collect_tags, compute_verifying_key, verify_delta_proof};
-use crate::types::Delta;
+use crate::types::{Delta, DeltaWitness};
 use proptest::prelude::*;
 
 proptest! {
@@ -59,7 +59,7 @@ proptest! {
     #[test]
     fn prop_witness_rejected(inst in arb_compliance_instance_zero_delta()) {
         let mut tx = build_tx_from_instances(&[inst]);
-        tx.delta_proof = Delta::Witness(vec![1, 2, 3]);
+        tx.delta_proof = Delta::Witness(DeltaWitness([1u8; 32]));
 
         let result = verify_delta_proof(&tx);
         prop_assert!(result.is_err(), "witness delta_proof should be rejected");

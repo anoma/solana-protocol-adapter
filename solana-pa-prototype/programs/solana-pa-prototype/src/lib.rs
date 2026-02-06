@@ -51,9 +51,7 @@ pub mod solana_pa_prototype {
     ///
     /// The genesis root marker is required so that transactions built against the
     /// initial empty tree remain valid after subsequent transactions update the root.
-    pub fn initialize<'a, 'b, 'c, 'info>(
-        ctx: Context<'a, 'b, 'c, 'info, Initialize<'info>>,
-    ) -> Result<()> {
+    pub fn initialize<'info>(ctx: Context<'_, '_, '_, 'info, Initialize<'info>>) -> Result<()> {
         // Genesis root marker is required
         require!(
             !ctx.remaining_accounts.is_empty(),
@@ -103,8 +101,8 @@ pub mod solana_pa_prototype {
     ///
     /// # Arguments
     /// * `transaction_data` - Bincode-serialized arm-risc0 Transaction
-    pub fn settle<'a, 'b, 'c, 'info>(
-        ctx: Context<'a, 'b, 'c, 'info, Settle<'info>>,
+    pub fn settle<'info>(
+        ctx: Context<'_, '_, '_, 'info, Settle<'info>>,
         transaction_data: Vec<u8>,
     ) -> Result<()> {
         require!(!ctx.accounts.pa_state.paused, PAError::Paused);
@@ -322,8 +320,8 @@ pub mod solana_pa_prototype {
 
     /// Execute settlement from a TxData account.
     #[allow(unused_variables)]
-    pub fn settle_from_txdata<'a, 'b, 'c, 'info>(
-        ctx: Context<'a, 'b, 'c, 'info, SettleFromTxData<'info>>,
+    pub fn settle_from_txdata<'info>(
+        ctx: Context<'_, '_, '_, 'info, SettleFromTxData<'info>>,
         upload_id: u64,
     ) -> Result<()> {
         require!(!ctx.accounts.pa_state.paused, PAError::Paused);

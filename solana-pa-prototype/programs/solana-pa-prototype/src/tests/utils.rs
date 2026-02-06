@@ -75,7 +75,7 @@ pub fn create_minimal_transaction() -> Transaction {
                 },
             ],
         }],
-        delta_proof: Delta::Witness(vec![]),
+        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
         expected_balance: None,
         aggregation_proof: None,
     }
@@ -131,7 +131,7 @@ pub fn create_transaction_with_compliance_instances(
             compliance_units,
             logic_verifier_inputs,
         }],
-        delta_proof: Delta::Witness(vec![]),
+        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
         expected_balance: None,
         aggregation_proof: None,
     }
@@ -206,7 +206,7 @@ pub fn create_transaction_with_multiple_lvi_external_payloads(
             }],
             logic_verifier_inputs,
         }],
-        delta_proof: Delta::Witness(vec![]),
+        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
         expected_balance: None,
         aggregation_proof: None,
     }

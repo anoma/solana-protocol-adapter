@@ -331,19 +331,22 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
 
     // In bincode, Delta enum is serialized as:
     // - u32 variant index (0 = Witness, 1 = Proof)
-    // - u64 length of Vec<u8>
-    // - bytes
+    // - u64 length prefix (DeltaProof uses serialize_bytes → 65 = 0x41)
+    // - payload bytes (DeltaProof = 65 bytes)
     //
-    // The delta proof is 65 bytes (ECDSA signature: r, s, v).
-    // We search for: variant=1 (0x01000000) + length=65 (0x4100000000000000)
-    const proofPattern = Buffer.from([
-      0x01, 0x00, 0x00, 0x00,  // variant index 1 (Proof)
-      0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00  // length 65
+    // Patching variant from 1 (Proof) to 0 (Witness) causes the deserializer
+    // to misinterpret subsequent bytes, shifting all fields. This will either
+    // produce an ExpectedDeltaProof error or an Invalid transaction data error.
+    // Search for the unique 12-byte pattern: variant(1) + length(65) to avoid
+    // matching other [01 00 00 00] occurrences (e.g. Vec length at offset 0).
+    const deltaProofHeader = Buffer.from([
+      0x01, 0x00, 0x00, 0x00, // variant index 1 (Proof)
+      0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // length prefix 65
     ]);
 
-    const idx = txWitness.indexOf(proofPattern);
+    const idx = txWitness.indexOf(deltaProofHeader);
     if (idx === -1) {
-      throw new Error("Could not find Delta::Proof pattern in tx bytes");
+      throw new Error("Could not find Delta::Proof variant+length tag in tx bytes");
     }
 
     // Patch variant from 1 (Proof) to 0 (Witness)
@@ -351,12 +354,12 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
 
     try {
       await settleViaTxData(Keypair.generate(), txWitness);
-      assert.fail("expected settle to fail with ExpectedDeltaProof");
+      assert.fail("expected settle to fail");
     } catch (e: any) {
       const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
       const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
       const haystack = [msg, ...logs].join("\n");
-      assert.match(haystack, /ExpectedDeltaProof|Expected delta proof/i);
+      assert.match(haystack, /ExpectedDeltaProof|Expected delta proof|Invalid transaction data/i);
     }
   });
 
