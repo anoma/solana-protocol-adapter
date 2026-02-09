@@ -4,9 +4,13 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
     flake-utils.url = "github:numtide/flake-utils";
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     flake-utils.lib.eachSystem [
       "x86_64-linux"
       "x86_64-darwin"
@@ -14,8 +18,17 @@
     ]
       (system:
         let
-          pkgs = import nixpkgs { inherit system; };
+          pkgs = import nixpkgs {
+            inherit system;
+            overlays = [ rust-overlay.overlays.default ];
+          };
           lib = pkgs.lib;
+
+          # Rust 1.84.1: matches the platform-tools rustc version and is
+          # the last release compatible with Anchor 0.31.x (Rust >= 1.85
+          # introduces coherence changes that break the Anchor build).
+          rustToolchain = pkgs.rust-bin.stable."1.84.1".default;
+
           solanaRelease = {
             "x86_64-linux" = {
               target = "x86_64-unknown-linux-gnu";
@@ -65,6 +78,16 @@
 
             nativeBuildInputs = [
               pkgs.bash
+            ] ++ lib.optionals pkgs.stdenv.isLinux [
+              pkgs.autoPatchelfHook
+            ];
+
+            buildInputs = lib.optionals pkgs.stdenv.isLinux [
+              pkgs.stdenv.cc.cc.lib
+              pkgs.zlib
+              pkgs.libffi
+              pkgs.openssl
+              pkgs.udev
             ];
 
             dontUnpack = true;
@@ -90,6 +113,12 @@ EOF
               mkdir -p "$out/bin/platform-tools-sdk/sbf/dependencies/criterion"
               tar -xjf "${criterionSrc}" --strip-components=1 -C "$out/bin/platform-tools-sdk/sbf/dependencies/criterion"
               touch "$out/bin/platform-tools-sdk/sbf/dependencies/criterion-${solanaRelease.criterionVersion}.md"
+
+              # Remove optional components with unsatisfiable deps (SGX, CUDA, lldb)
+              rm -rf "$out/bin/perf-libs"
+              rm -rf "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/llvm/lib/liblldb"*
+              rm -rf "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/llvm/lib/python3.10"
+              rm -f "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/llvm/bin/lldb"*
 
               mv "$out/bin/cargo-build-sbf" "$out/bin/cargo-build-sbf-real"
               cat > "$out/bin/cargo-build-sbf" <<'EOF'
@@ -138,39 +167,36 @@ EOF
           packages.solana-toolchain = solanaToolchain;
 
           devShells.default = pkgs.mkShell {
-            packages = with pkgs; [
+            packages = [
               solanaToolchain
-              anchor
-              cargo
-              rustc
-              rustfmt
-              clippy
-              cargo-risczero
-              nodejs_20
-              yarn
-              pkg-config
-              openssl
-              clang
-              llvm
-              cmake
-              protobuf
-              git
-              curl
-              jq
-              gnugrep
-              gnused
-              gawk
-              findutils
-              coreutils
-              bashInteractive
+              rustToolchain
+              pkgs.anchor
+              pkgs.cargo-risczero
+              pkgs.nodejs_20
+              pkgs.yarn
+              pkgs.pkg-config
+              pkgs.openssl
+              pkgs.clang
+              pkgs.llvm
+              pkgs.cmake
+              pkgs.protobuf
+              pkgs.git
+              pkgs.curl
+              pkgs.jq
+              pkgs.gnugrep
+              pkgs.gnused
+              pkgs.gawk
+              pkgs.findutils
+              pkgs.coreutils
+              pkgs.bashInteractive
             ]
-            ++ lib.optionals stdenv.isLinux [
-              udev
+            ++ lib.optionals pkgs.stdenv.isLinux [
+              pkgs.udev
             ]
-            ++ lib.optionals stdenv.isDarwin [
-              libiconv
-              darwin.apple_sdk.frameworks.Security
-              darwin.apple_sdk.frameworks.SystemConfiguration
+            ++ lib.optionals pkgs.stdenv.isDarwin [
+              pkgs.libiconv
+              pkgs.darwin.apple_sdk.frameworks.Security
+              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
             ];
 
             shellHook = ''
