@@ -15,28 +15,26 @@ The RISC0 Groth16 verifier programs are automatically cloned from devnet during 
 
 ### Prerequisites
 
-- Docker and Docker Compose
-- User in `docker` group (check with `groups | grep docker`)
-
-If you're not in the docker group:
-```bash
-sudo usermod -aG docker $USER
-# Log out and back in for changes to take effect
-```
+- Nix with flakes enabled (`nix --version`)
+- Supported host platforms for the pinned Agave toolchain: `x86_64-linux`, `x86_64-darwin`, `aarch64-darwin`
 
 ### Quick Start
 
 ```bash
 # Clone the repository
 git clone https://github.com/anoma/solana-protocol-adapter
-cd solana-protocol-adapter/solana-pa-prototype
+cd solana-protocol-adapter
 
-# Build and run tests (handles everything automatically)
-./scripts/docker-dev.sh anchor-test
+# Enter the pinned development environment
+nix --extra-experimental-features 'nix-command flakes' develop
+
+# Build and run tests
+cd solana-pa-prototype
+./scripts/dev.sh anchor-test
 ```
 
 That's it! The script will:
-1. Build the Docker image (first run only, ~10 minutes)
+1. Ensure toolchain and dependencies are available in the Nix shell
 2. Build the Solana programs
 3. Start a local validator with RISC0 verifier programs cloned from devnet
 4. Run the full test suite
@@ -45,45 +43,31 @@ That's it! The script will:
 
 | Command | Description |
 |---------|-------------|
-| `./scripts/docker-dev.sh anchor-test` | Build programs and run integration tests |
-| `./scripts/docker-dev.sh shell` | Open an interactive shell in the dev container |
-| `./scripts/docker-dev.sh anchor-build` | Build Anchor programs only |
-| `./scripts/docker-dev.sh test` | Run Rust unit tests |
-| `./scripts/docker-dev.sh validator` | Start the local validator |
-| `./scripts/docker-dev.sh clean` | Stop containers and remove volumes |
+| `./scripts/dev.sh anchor-test` | Build programs and run integration tests |
+| `./scripts/dev.sh shell` | Open an interactive shell in the Nix dev environment |
+| `./scripts/dev.sh anchor-build` | Build Anchor programs only |
+| `./scripts/dev.sh test` | Run Rust unit tests |
+| `./scripts/dev.sh validator` | Start the local validator |
+| `./scripts/dev.sh clean` | Remove local validator/test artifacts |
 
 ### Rebuilding From Scratch
 
 If you encounter issues, do a complete rebuild:
 
 ```bash
-# Remove all containers and volumes
-docker compose down -v --remove-orphans
-
-# Rebuild the image (no cache)
-docker compose build --no-cache dev
+# Remove local validator/test state
+./scripts/dev.sh clean
 
 # Run tests
-./scripts/docker-dev.sh anchor-test
+./scripts/dev.sh anchor-test
 ```
 
-### Manual Docker Build (Optional)
+### Updating Toolchain Inputs
 
-If you need to customize the build (e.g., for different user IDs):
+To update pinned Nix dependencies:
 
 ```bash
-cd solana-pa-prototype
-
-# Set environment variables for Docker user mapping
-export UID="$(id -u)"
-export GID="$(id -g)"
-export DOCKER_GID="$(stat -c %g /var/run/docker.sock)"
-
-# Build the image
-docker compose build dev
-
-# Run tests
-./scripts/docker-dev.sh anchor-test
+nix --extra-experimental-features 'nix-command flakes' flake update
 ```
 
 ### Interactive Development
@@ -91,23 +75,24 @@ docker compose build dev
 For iterative development, use the shell command:
 
 ```bash
-./scripts/docker-dev.sh shell
+./scripts/dev.sh shell
 ```
 
-Inside the container:
+Inside the shell:
 ```bash
-cd /workspace/solana-pa-prototype
+cd solana-pa-prototype
 
 # Build programs
 anchor build
 
 # Run tests (start validator separately first)
-anchor test --skip-local-validator --provider.cluster http://solana-validator:8899
+yarn run ts-mocha -p ./tsconfig.json -t 1000000 'tests/**/*.ts'
 ```
 
 To start the validator in another terminal:
 ```bash
-docker compose --profile validator up validator
+cd solana-pa-prototype
+./scripts/dev.sh validator
 ```
 
 ---
@@ -187,7 +172,7 @@ The fixture uses timestamp `-1` (before Unix epoch), so against any current time
 
 ```bash
 cd solana-pa-prototype
-./scripts/docker-dev.sh anchor-test
+./scripts/dev.sh anchor-test
 ```
 
 Find the test **"accepts a valid Groth16 batch aggregation tx"** and look for these log lines:
@@ -290,7 +275,7 @@ The PA iterates through external calls, consuming accounts from this list for ea
 
 1. **Scaffold the program**:
    ```bash
-   cd /workspace/solana-pa-prototype
+   cd solana-pa-prototype
    anchor new my-forwarder
    ```
 
@@ -495,10 +480,9 @@ Fixtures contain pre-generated RM transactions with valid Groth16 proofs. Requir
 ### Generating Fixtures
 
 ```bash
-docker-compose run --rm dev bash -lc '
-  cd /workspace/solana-pa-prototype
-  ./tools/fixture-gen/target/release/fixture-gen --threads 6 tests/fixtures/batch_groth16.json
-'
+cd solana-pa-prototype
+cargo build --manifest-path tools/fixture-gen/Cargo.toml --release
+./tools/fixture-gen/target/release/fixture-gen --threads 6 tests/fixtures/batch_groth16.json
 ```
 
 **Dev mode** (fake proofs, fast, won't verify on-chain):
@@ -538,7 +522,8 @@ address = "4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"  # Verifier Entry PDA (
 ### Start Validator Manually
 
 ```bash
-docker-compose --profile validator up -d validator
+cd solana-pa-prototype
+./scripts/dev.sh validator
 ```
 
 The validator is configured to clone the RISC0 verifier programs from devnet on startup.
@@ -546,47 +531,26 @@ The validator is configured to clone the RISC0 verifier programs from devnet on 
 ### Deploy PA Programs
 
 ```bash
-docker-compose run --rm dev bash -c '
-  cd /workspace/solana-pa-prototype
-  solana config set --url http://solana-validator:8899
-  anchor deploy
-'
+cd solana-pa-prototype
+solana config set --url http://127.0.0.1:8899
+anchor deploy --provider.cluster http://127.0.0.1:8899
 ```
 
 ---
 
 ## Troubleshooting
 
-### Docker Permission Denied
+### `nix develop` Fails
 
-Add yourself to the docker group:
+Ensure flakes are enabled:
 ```bash
-sudo usermod -aG docker $USER
-# Log out and back in
+nix --extra-experimental-features 'nix-command flakes' develop
 ```
 
-Or run commands with `sg docker`:
-```bash
-sg docker -c "./scripts/docker-dev.sh anchor-test"
-```
+### Unsupported Host: `aarch64-linux`
 
-### Container Name Already In Use
-
-A previous container wasn't cleaned up:
-```bash
-docker rm -f solana-validator
-docker compose down -v --remove-orphans
-```
-
-### Volume Permission Errors
-
-If you see "Permission denied" errors related to `/home/developer/.config/solana` or ledger directories:
-```bash
-# Remove all volumes and rebuild
-docker compose down -v --remove-orphans
-docker volume prune -f
-./scripts/docker-dev.sh anchor-test
-```
+The pinned Agave `v3.0.13` release does not publish `aarch64-unknown-linux-gnu` binaries.  
+Use an `x86_64-linux` host (or macOS) for this repo's pinned Nix workflow.
 
 ### Validator Won't Start / Connection Refused
 
@@ -595,20 +559,17 @@ The validator may have crashed or port 8899 is in use:
 # Check if port is in use
 lsof -i :8899
 
-# Kill any running validators
-docker rm -f solana-validator
-
 # Clean up and retry
-docker compose down -v --remove-orphans
-./scripts/docker-dev.sh anchor-test
+./scripts/dev.sh clean
+./scripts/dev.sh anchor-test
 ```
 
 ### DeclaredProgramIdMismatch (Error 4100)
 
-Program ID in source doesn't match keypair. The `docker-anchor-test.sh` script syncs IDs automatically. If you see this error, try:
+Program ID in source doesn't match keypair. The `anchor-test.sh` script syncs IDs automatically. If you see this error, try:
 ```bash
-docker compose down -v --remove-orphans
-./scripts/docker-dev.sh anchor-test
+./scripts/dev.sh clean
+./scripts/dev.sh anchor-test
 ```
 
 ### Build Fails on "verifier_router" Dependency
@@ -616,17 +577,18 @@ docker compose down -v --remove-orphans
 Ensure you're on a branch that uses git dependencies (not local paths):
 ```bash
 git checkout feature/remove-submodule-with-pkg-deps
-docker compose down -v --remove-orphans
-./scripts/docker-dev.sh anchor-test
+./scripts/dev.sh clean
+./scripts/dev.sh anchor-test
 ```
 
 ### Fixture Generation Fails
 
-Ensure Docker socket is accessible inside the container:
+Ensure the `fixture-gen` binary exists and can run:
 ```bash
-docker compose run --rm dev docker ps
+cargo build --manifest-path tools/fixture-gen/Cargo.toml --release
+./tools/fixture-gen/target/release/fixture-gen --help
 ```
 
 ### Slow First Build
 
-The first build downloads and compiles many dependencies (~10-20 minutes). Subsequent builds use cached layers and complete in seconds.
+The first build downloads and compiles many dependencies (~10-20 minutes). Subsequent builds reuse the local Nix/cargo caches and are much faster.

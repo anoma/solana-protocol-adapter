@@ -102,8 +102,8 @@ async function main() {
   console.log("Testing groth_16_verifier on-chain...");
   console.log("Program ID:", GROTH16_VERIFIER_PROGRAM_ID.toBase58());
 
-  // Connect to validator - use container name if in Docker, localhost otherwise
-  const rpcUrl = process.env.RPC_URL || "http://solana-validator:8899";
+  // Connect to validator - use localhost by default
+  const rpcUrl = process.env.RPC_URL || "http://127.0.0.1:8899";
   console.log("RPC URL:", rpcUrl);
   const connection = new Connection(rpcUrl, "confirmed");
 
@@ -116,7 +116,7 @@ async function main() {
     process.exit(1);
   }
 
-  // Load keypair from default Solana config (different path in Docker vs host)
+  // Load keypair from the default Solana config path
   const homeDir = process.env.HOME || "/home/developer";
   const keypairPath = path.join(homeDir, ".config/solana/id.json");
   let payer: Keypair;

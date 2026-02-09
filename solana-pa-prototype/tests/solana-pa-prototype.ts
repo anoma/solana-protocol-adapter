@@ -427,7 +427,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       mismatchFixture = readJson<Fixture>(mismatchFixturePath);
     } catch (e) {
       // Skip test if fixture doesn't exist yet
-      console.log("Skipping: batch_groth16_mismatch.json not found. Generate with: docker compose run dev cargo run -p fixture-gen -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json");
+      console.log("Skipping: batch_groth16_mismatch.json not found. Generate with: cargo run --manifest-path tools/fixture-gen/Cargo.toml -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json");
       return;
     }
 
