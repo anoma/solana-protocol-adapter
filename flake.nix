@@ -29,6 +29,22 @@
           # introduces coherence changes that break the Anchor build).
           rustToolchain = pkgs.rust-bin.stable."1.84.1".default;
 
+          # Nightly toolchain needed only for Anchor IDL generation
+          # (anchor build calls `cargo +nightly` internally).
+          rustNightly = pkgs.rust-bin.nightly.latest.minimal.override {
+            extensions = [ "rust-src" ];
+          };
+
+          # Wrapper so `cargo +nightly` dispatches to the Nix-provided
+          # nightly toolchain instead of relying on rustup.
+          cargoWrapper = pkgs.writeShellScriptBin "cargo" ''
+            if [ "''${1:-}" = "+nightly" ]; then
+              shift
+              exec env PATH="${rustNightly}/bin:$PATH" RUSTC="${rustNightly}/bin/rustc" "${rustNightly}/bin/cargo" "$@"
+            fi
+            exec "${rustToolchain}/bin/cargo" "$@"
+          '';
+
           solanaRelease = {
             "x86_64-linux" = {
               target = "x86_64-unknown-linux-gnu";
@@ -169,6 +185,7 @@ EOF
           devShells.default = pkgs.mkShell {
             packages = [
               solanaToolchain
+              cargoWrapper
               rustToolchain
               pkgs.anchor
               pkgs.cargo-risczero

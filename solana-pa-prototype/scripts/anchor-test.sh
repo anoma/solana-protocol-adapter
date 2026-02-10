@@ -130,10 +130,10 @@ else
 fi
 
 echo "    Building PA..."
-build_with_filtered_output anchor build --no-idl -p solana-pa-prototype
+build_with_filtered_output anchor build -p solana-pa-prototype
 
 echo "    Building block_time_forwarder..."
-build_with_filtered_output anchor build --no-idl -p block-time-forwarder
+build_with_filtered_output anchor build -p block-time-forwarder
 
 REQUIRED_FIXTURE="tests/fixtures/batch_groth16.json"
 OPTIONAL_MISMATCH_FIXTURE="tests/fixtures/batch_groth16_mismatch.json"
