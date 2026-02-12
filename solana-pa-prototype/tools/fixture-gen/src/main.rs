@@ -2,8 +2,6 @@ use anchor_lang::prelude::AnchorDeserialize;
 use anyhow::{anyhow, Context, Result};
 use arm::action::Action;
 use arm::action_tree::MerkleTree;
-use arm::aggregation::batch::BatchProof;
-use arm::aggregation::{AggregationProof, AggregationStrategy};
 use arm::compliance::{initial_root, ComplianceInstance, ComplianceWitness};
 use arm::compliance_unit::ComplianceUnit;
 use arm::delta_proof::DeltaWitness;
@@ -428,7 +426,7 @@ fn main() -> Result<()> {
 
     eprintln!("phase: aggregate_with_strategy(batch, groth16) (this is the expensive step)");
     let start = Instant::now();
-    tx.aggregate_with_strategy(AggregationStrategy::Batch, ProofType::Groth16)
+    tx.aggregate(ProofType::Groth16)
         .context("aggregate tx (batch, groth16)")?;
     eprintln!(
         "phase done: aggregate_with_strategy(batch, groth16) ({})",
@@ -445,14 +443,7 @@ fn main() -> Result<()> {
 
     eprintln!("phase: encode seal");
     let agg_proof_bytes = tx.aggregation_proof.as_ref().unwrap();
-    let agg_proof: AggregationProof =
-        bincode::deserialize(agg_proof_bytes).context("deserialize AggregationProof")?;
-    let inner_receipt = match agg_proof {
-        AggregationProof::Batch(BatchProof(inner)) => inner,
-        _ => return Err(anyhow!("expected Batch aggregation proof")),
-    };
-    let inner_bytes = bincode::serialize(&inner_receipt).context("serialize InnerReceipt")?;
-    tx.aggregation_proof = Some(encode_seal(&inner_bytes).context("encode seal")?);
+    tx.aggregation_proof = Some(encode_seal(agg_proof_bytes).context("encode seal")?);
     eprintln!("phase done: encode seal");
 
     eprintln!("phase: serialize_tx");
