@@ -481,14 +481,20 @@ Fixtures contain pre-generated RM transactions with valid Groth16 proofs. Requir
 
 ```bash
 cd solana-pa-prototype
-cargo build --manifest-path tools/fixture-gen/Cargo.toml --release
-./tools/fixture-gen/target/release/fixture-gen --threads 6 tests/fixtures/batch_groth16.json
+cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- --threads 6 tests/fixtures/batch_groth16.json
 ```
 
 **Dev mode** (fake proofs, fast, won't verify on-chain):
 ```bash
-RISC0_DEV_MODE=1 ./tools/fixture-gen/target/release/fixture-gen ...
+RISC0_DEV_MODE=1 cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- ...
 ```
+
+Generate the mismatch fixture used by the `ExternalCallOutputMismatch` test:
+```bash
+cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json
+```
+
+`fixture-gen` now uses an embedded passthrough guest artifact, so no extra feature flags are required.
 
 ### Fixture Staleness
 
@@ -585,8 +591,8 @@ git checkout feature/remove-submodule-with-pkg-deps
 
 Ensure the `fixture-gen` binary exists and can run:
 ```bash
-cargo build --manifest-path tools/fixture-gen/Cargo.toml --release
-./tools/fixture-gen/target/release/fixture-gen --help
+cargo check --locked --manifest-path tools/fixture-gen/Cargo.toml
+cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml -- --help
 ```
 
 ### Slow First Build
