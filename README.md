@@ -494,7 +494,8 @@ Generate the mismatch fixture used by the `ExternalCallOutputMismatch` test:
 cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json
 ```
 
-`fixture-gen` now uses an embedded passthrough guest artifact, so no extra feature flags are required.
+`fixture-gen` builds `passthrough-logic-guest` in Docker during build/startup.
+Keep Docker running, and no extra cargo feature flags are required.
 
 ### Fixture Staleness
 
@@ -589,10 +590,11 @@ git checkout feature/remove-submodule-with-pkg-deps
 
 ### Fixture Generation Fails
 
-Ensure the `fixture-gen` binary exists and can run:
+Ensure Docker is available, and that `fixture-gen` can compile and start:
 ```bash
+docker --version
 cargo check --locked --manifest-path tools/fixture-gen/Cargo.toml
-cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml -- --help
+timeout 8 tools/fixture-gen/target/debug/fixture-gen tools/fixture-gen/target/tmp-fixture-check.json
 ```
 
 ### Slow First Build

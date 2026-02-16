@@ -2897,6 +2897,10 @@ dependencies = [
 [[package]]
 name = "passthrough-logic-methods"
 version = "0.1.0"
+dependencies = [
+ "risc0-binfmt",
+ "risc0-zkos-v1compat",
+]
 
 [[package]]
 name = "paste"
