@@ -481,14 +481,22 @@ Fixtures contain pre-generated RM transactions with valid Groth16 proofs. Requir
 
 ```bash
 cd solana-pa-prototype
-cargo build --manifest-path tools/fixture-gen/Cargo.toml --release
-./tools/fixture-gen/target/release/fixture-gen --threads 6 tests/fixtures/batch_groth16.json
+cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- --threads 6 tests/fixtures/batch_groth16.json
 ```
 
 **Dev mode** (fake proofs, fast, won't verify on-chain):
 ```bash
-RISC0_DEV_MODE=1 ./tools/fixture-gen/target/release/fixture-gen ...
+RISC0_DEV_MODE=1 cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- ...
 ```
+
+Generate the mismatch fixture used by the `ExternalCallOutputMismatch` test:
+```bash
+cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json
+```
+
+`fixture-gen` builds `passthrough-logic-guest` in Docker during build/startup.
+Docker is required because the guest is compiled with the RISC0 guest toolchain (`cargo +risc0` and the RISC-V C toolchain) provided by the `risczero/risc0-guest-builder` image.
+Keep Docker running, and no extra cargo feature flags are required.
 
 ### Fixture Staleness
 
@@ -583,10 +591,12 @@ git checkout feature/remove-submodule-with-pkg-deps
 
 ### Fixture Generation Fails
 
-Ensure the `fixture-gen` binary exists and can run:
+`fixture-gen` needs Docker specifically for guest compilation (`passthrough-logic-guest`) via the RISC0 guest-builder image.
+Then verify Docker is available, and that `fixture-gen` can compile and start:
 ```bash
-cargo build --manifest-path tools/fixture-gen/Cargo.toml --release
-./tools/fixture-gen/target/release/fixture-gen --help
+docker --version
+cargo check --locked --manifest-path tools/fixture-gen/Cargo.toml
+timeout 8 tools/fixture-gen/target/debug/fixture-gen tools/fixture-gen/target/tmp-fixture-check.json
 ```
 
 ### Slow First Build
