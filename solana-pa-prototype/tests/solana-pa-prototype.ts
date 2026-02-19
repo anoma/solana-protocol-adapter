@@ -29,16 +29,10 @@ type Fixture = {
   tx_b64: string;
   tx_tampered_b64: string;
   consumed_nullifiers_b64: string[];
-  created_commitments_b64?: string[];
 };
 
 function readJson<T>(filePath: string): T {
   return JSON.parse(readFileSync(filePath, "utf8")) as T;
-}
-
-function programIdFromKeypairFile(keypairPath: string): PublicKey {
-  const secret = Uint8Array.from(readJson<number[]>(keypairPath));
-  return Keypair.fromSecretKey(secret).publicKey;
 }
 
 async function airdrop(provider: anchor.AnchorProvider, to: PublicKey, sol: number) {
