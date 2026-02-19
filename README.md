@@ -482,8 +482,7 @@ Fixtures contain pre-generated RM transactions with valid Groth16 proofs. Requir
   "selector": "0x73c457ba",
   "tx_b64": "<base64 encoded RM transaction>",
   "tx_tampered_b64": "<base64 encoded tampered transaction>",
-  "consumed_nullifiers_b64": ["<base64>", ...],
-  "created_commitments_b64": ["<base64>", ...]
+  "consumed_nullifiers_b64": ["<base64>", ...]
 }
 ```
 
