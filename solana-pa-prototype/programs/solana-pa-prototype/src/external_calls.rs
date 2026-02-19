@@ -144,10 +144,11 @@ fn invoke_forwarder<'info>(
 
 /// Read forwarder output based on the output mode.
 #[cfg(not(test))]
-fn read_forwarder_output(
+#[allow(clippy::needless_lifetimes)]
+fn read_forwarder_output<'info>(
     output_mode: &OutputMode,
     program_id: &Pubkey,
-    remaining_accounts: &[anchor_lang::prelude::AccountInfo<'_>],
+    remaining_accounts: &[anchor_lang::prelude::AccountInfo<'info>],
 ) -> Result<Vec<u8>, PAError> {
     use anchor_lang::solana_program::program::get_return_data;
 
@@ -227,9 +228,10 @@ fn execute_forwarder_call<'info>(
 
 /// Execute all external calls from a transaction via CPI.
 #[cfg(not(test))]
-pub fn execute_external_calls(
+#[allow(clippy::needless_lifetimes)]
+pub fn execute_external_calls<'info>(
     tx: &crate::types::Transaction,
-    remaining_accounts: &[anchor_lang::prelude::AccountInfo<'_>],
+    remaining_accounts: &[anchor_lang::prelude::AccountInfo<'info>],
     nullifier_count: usize,
 ) -> Result<(), PAError> {
     use crate::settle::extract_external_calls;

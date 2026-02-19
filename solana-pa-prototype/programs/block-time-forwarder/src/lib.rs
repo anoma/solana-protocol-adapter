@@ -35,6 +35,7 @@ pub mod block_time_forwarder {
     /// * 0 = expected_time < current_time (LT)
     /// * 1 = expected_time == current_time (EQ)
     /// * 2 = expected_time > current_time (GT)
+    #[allow(clippy::comparison_chain)]
     pub fn forward_call(
         ctx: Context<ForwardCall>,
         logic_ref: [u8; 32],
@@ -59,19 +60,15 @@ pub mod block_time_forwarder {
         msg!("  current_time: {}", current_time);
 
         // Compare and determine result
-        let result = match expected_time.cmp(&current_time) {
-            std::cmp::Ordering::Less => {
-                msg!("  result: LT (expected < current)");
-                RESULT_LT
-            }
-            std::cmp::Ordering::Greater => {
-                msg!("  result: GT (expected > current)");
-                RESULT_GT
-            }
-            std::cmp::Ordering::Equal => {
-                msg!("  result: EQ (expected == current)");
-                RESULT_EQ
-            }
+        let result = if expected_time < current_time {
+            msg!("  result: LT (expected < current)");
+            RESULT_LT
+        } else if expected_time > current_time {
+            msg!("  result: GT (expected > current)");
+            RESULT_GT
+        } else {
+            msg!("  result: EQ (expected == current)");
+            RESULT_EQ
         };
 
         // Return result via set_return_data
