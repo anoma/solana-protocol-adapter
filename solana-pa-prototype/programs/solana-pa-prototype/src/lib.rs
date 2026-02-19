@@ -638,6 +638,9 @@ fn execute_settlement<'info>(
     delta::verify_delta_proof(tx)?;
 
     // 3.6) Emit app data events and EVM parity events for indexing
+    // NOTE: AppData for events/external calls is read from transaction fields directly.
+    // Proof verification is bound to `instance_journal` bytes via aggregation digest.
+    // This split is intentional and matches the EVM PA assumption model.
     // Only payloads with deletion_criterion == Never are emitted (matches EVM PA).
     let mut all_tags: Vec<[u8; 32]> = Vec::new();
     let mut all_logic_refs: Vec<[u8; 32]> = Vec::new();
@@ -660,6 +663,8 @@ fn execute_settlement<'info>(
     }
 
     // Execute external calls (after proof verification, before state updates)
+    // Uses `logic_verifier_inputs.app_data.external_payload` as the execution source.
+    // On-chain journal decoding/cross-checking is intentionally not performed.
     // This ensures external call failures don't leave state partially updated
     #[cfg(not(test))]
     {

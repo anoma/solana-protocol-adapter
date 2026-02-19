@@ -99,6 +99,8 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
     // Use the pre-serialized instance_journal (risc0 serde format) from each LogicVerifierInputs.
     // This is necessary because the logic circuits commit with risc0 serde, and we can't
     // reproduce that format on Solana without the risc0 crate.
+    // NOTE: We intentionally do not deserialize journals on-chain to reconstruct AppData fields.
+    // External-call execution consumes `logic_verifier_inputs.app_data` directly (EVM parity model).
     let mut logic_instances: Vec<Vec<u32>> = Vec::new();
     let mut logic_keys: Vec<Digest> = Vec::new();
 
