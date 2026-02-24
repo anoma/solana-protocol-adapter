@@ -4,9 +4,8 @@
 //! mocking the instructions sysvar.
 
 use crate::ed25519::{
-    parse_ed25519_offsets, validate_ed25519_data,
-    Ed25519Offsets, Ed25519ParseError,
-    SIGNATURE_OFFSETS_SERIALIZED_SIZE, ED25519_MIN_INSTRUCTION_SIZE, CURRENT_INSTRUCTION_INDEX,
+    parse_ed25519_offsets, validate_ed25519_data, Ed25519Offsets, Ed25519ParseError,
+    CURRENT_INSTRUCTION_INDEX, ED25519_MIN_INSTRUCTION_SIZE, SIGNATURE_OFFSETS_SERIALIZED_SIZE,
 };
 
 /// Helper to build a valid Ed25519 instruction data buffer.
@@ -121,7 +120,7 @@ fn test_parse_offsets_exactly_minimum_size() {
     // Exactly 16 bytes - should parse header/offsets but data validation may fail later
     let mut data = vec![0u8; 16];
     data[0] = 1; // num_signatures
-    // Set all instruction indices to 0xFFFF
+                 // Set all instruction indices to 0xFFFF
     data[4..6].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
     data[8..10].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
     data[14..16].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
@@ -143,7 +142,7 @@ fn test_parse_offsets_no_signatures() {
 fn test_parse_offsets_external_signature_reference() {
     let mut data = vec![0u8; 16];
     data[0] = 1; // num_signatures
-    // sig_ix = 0 (not 0xFFFF) - references another instruction
+                 // sig_ix = 0 (not 0xFFFF) - references another instruction
     data[4..6].copy_from_slice(&0u16.to_le_bytes());
     data[8..10].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());
     data[14..16].copy_from_slice(&CURRENT_INSTRUCTION_INDEX.to_le_bytes());

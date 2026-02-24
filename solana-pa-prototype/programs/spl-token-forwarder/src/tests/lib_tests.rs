@@ -1,6 +1,6 @@
 //! Tests for lib.rs (constants and program entry points)
 
-use crate::{OP_WRAP, OP_UNWRAP, RESULT_SUCCESS, SPL_TOKEN_PROGRAM_ID};
+use crate::{OP_UNWRAP, OP_WRAP, RESULT_SUCCESS, SPL_TOKEN_PROGRAM_ID};
 use anchor_lang::prelude::Pubkey;
 use std::str::FromStr;
 

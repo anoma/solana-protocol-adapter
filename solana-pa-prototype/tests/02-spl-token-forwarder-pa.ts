@@ -37,11 +37,12 @@ import path from "path";
 import bs58 from "bs58";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
-import { address } from "@solana/kit";
 import {
   getRouterPda,
   getVerifierEntryPda,
-} from "../../risc0-solana/solana-verifier/scripts/utils/utils";
+  VERIFIER_ROUTER_ID,
+  GROTH16_VERIFIER_ID,
+} from "../scripts/verifier-utils";
 
 // Fixture types
 type SplTokenWrapMetadata = {
@@ -83,11 +84,6 @@ function readJson<T>(filePath: string): T {
   return JSON.parse(readFileSync(filePath, "utf8")) as T;
 }
 
-function programIdFromKeypairFile(keypairPath: string): PublicKey {
-  const secret = Uint8Array.from(readJson<number[]>(keypairPath));
-  return Keypair.fromSecretKey(secret).publicKey;
-}
-
 async function airdrop(provider: anchor.AnchorProvider, to: PublicKey, sol: number) {
   const sig = await provider.connection.requestAirdrop(to, sol * LAMPORTS_PER_SOL);
   await provider.connection.confirmTransaction(sig, "confirmed");
@@ -101,16 +97,15 @@ function parseSelectorFromFixture(selectorHex: string): Buffer {
   return Buffer.from(hex, "hex");
 }
 
-async function deriveRouterAccounts(
+function deriveRouterAccounts(
   verifierRouterId: PublicKey,
   selector: Buffer
-): Promise<{ routerPda: PublicKey; verifierEntryPda: PublicKey }> {
-  const routerAddr = address(verifierRouterId.toBase58());
-  const routerPdaInfo = await getRouterPda(routerAddr);
-  const verifierEntryPdaInfo = await getVerifierEntryPda(routerAddr, selector);
+): { routerPda: PublicKey; verifierEntryPda: PublicKey } {
+  const [routerPda] = getRouterPda(verifierRouterId);
+  const [verifierEntryPda] = getVerifierEntryPda(selector, verifierRouterId);
   return {
-    routerPda: new PublicKey(routerPdaInfo.address),
-    verifierEntryPda: new PublicKey(verifierEntryPdaInfo.address),
+    routerPda,
+    verifierEntryPda,
   };
 }
 
@@ -140,29 +135,8 @@ describe("SPL Token Forwarder PA Integration", function () {
   const paProgram = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
   const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
 
-  // Load groth16 verifier program ID
-  const groth16KeypairPath = path.resolve(
-    process.cwd(),
-    "..",
-    "risc0-solana",
-    "solana-verifier",
-    "target",
-    "deploy",
-    "groth_16_verifier-keypair.json"
-  );
-  const groth16VerifierId = programIdFromKeypairFile(groth16KeypairPath);
-
-  // Load verifier_router program ID
-  const routerKeypairPath = path.resolve(
-    process.cwd(),
-    "..",
-    "risc0-solana",
-    "solana-verifier",
-    "target",
-    "deploy",
-    "verifier_router-keypair.json"
-  );
-  const verifierRouterId = programIdFromKeypairFile(routerKeypairPath);
+  const groth16VerifierId = GROTH16_VERIFIER_ID;
+  const verifierRouterId = VERIFIER_ROUTER_ID;
 
   const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], paProgram.programId);
 
@@ -227,7 +201,7 @@ describe("SPL Token Forwarder PA Integration", function () {
     const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
 
     // Derive PDAs
-    const accounts = await deriveRouterAccounts(verifierRouterId, GROTH16_SELECTOR);
+    const accounts = deriveRouterAccounts(verifierRouterId, GROTH16_SELECTOR);
     routerPda = accounts.routerPda;
     verifierEntryPda = accounts.verifierEntryPda;
 
@@ -287,7 +261,7 @@ describe("SPL Token Forwarder PA Integration", function () {
   ) {
     const payload = Buffer.from(fixture.tx_b64, "base64");
     const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
-    const { routerPda, verifierEntryPda } = await deriveRouterAccounts(verifierRouterId, GROTH16_SELECTOR);
+    const { routerPda, verifierEntryPda } = deriveRouterAccounts(verifierRouterId, GROTH16_SELECTOR);
 
     await airdrop(provider, authority.publicKey, 2);
 
@@ -359,6 +333,7 @@ describe("SPL Token Forwarder PA Integration", function () {
     const allPreInstructions = [
       ...(preInstructions || []),
       ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
     ];
 
     return paProgram.methods

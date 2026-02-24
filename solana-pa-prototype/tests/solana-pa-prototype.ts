@@ -389,24 +389,27 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     assert.equal(info!.data.length, 0, "Root marker should be 0 bytes (existence-only)");
   });
 
-  it("initializes with depth 1 (variable-depth tree)", async () => {
+  it("maintains coherent variable-depth tree metadata", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(
-      state.currentDepth,
-      1,
-      "Initial tree depth should be 1 (capacity = 2 leaves)"
-    );
+    assert.isAtLeast(state.currentDepth, 1, "Tree depth should be at least 1");
+    assert.isAtMost(state.currentDepth, 32, "Tree depth should not exceed 32");
+
     assert.equal(
       state.frontier.length,
-      1,
-      "Initial frontier should have 1 element (depth 1)"
+      state.currentDepth,
+      "Frontier length must match current depth"
     );
-    const rootBytes = Buffer.from(state.root as number[]);
-    assert.deepEqual(
-      rootBytes,
-      EMPTY_TREE_ROOT_INITIAL,
-      "Initial root should be ZEROS[0] for depth-1 tree"
-    );
+
+    // If no commitments have been appended yet, root must equal the depth-1 empty root.
+    // Once other suites append commitments, root is expected to differ.
+    if (state.nextIndex.toNumber() === 0) {
+      const rootBytes = Buffer.from(state.root as number[]);
+      assert.deepEqual(
+        rootBytes,
+        EMPTY_TREE_ROOT_INITIAL,
+        "Empty tree root should match depth-1 zero root when nextIndex=0"
+      );
+    }
   });
 
   it("account size matches expected size for current depth (no over-allocation)", async () => {
@@ -505,6 +508,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     // Get the current state before settlement to know the pre-settlement root
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const rootBeforeBytes = Buffer.from(stateBefore.root as number[]);
+    const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
     await settleViaTxData(Keypair.generate(), tx);
 
@@ -516,7 +520,11 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     }
 
     const stateAfter = await program.account.paStateAccount.fetch(paState);
-    assert.equal(stateAfter.nextIndex.toNumber(), 1);
+    assert.equal(
+      stateAfter.nextIndex.toNumber(),
+      nextIndexBefore + 1,
+      "nextIndex should increase by exactly one after settlement"
+    );
 
     // Verify the root changed after settlement
     const rootAfterBytes = Buffer.from(stateAfter.root as number[]);

@@ -10,7 +10,7 @@
 //! - contracts/test/ERC20Forwarder.t.sol
 
 use crate::error::ErrorCode;
-use crate::state::{WrapInput, UnwrapInput, WrapMessage};
+use crate::state::{UnwrapInput, WrapInput, WrapMessage};
 use anchor_lang::prelude::Pubkey;
 
 // =============================================================================

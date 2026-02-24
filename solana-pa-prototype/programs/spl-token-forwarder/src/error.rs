@@ -11,7 +11,6 @@ pub enum ErrorCode {
     // =========================================================================
     // Input Validation Errors (mirrors EVM's revert with parameters via msg!())
     // =========================================================================
-
     /// Generic input validation failure. Check logs for expected/actual values.
     /// Mirrors EVM: `InvalidInputLength({expected: X, actual: Y})`
     #[msg("Invalid input data - check logs for expected vs actual length")]
