@@ -9,6 +9,8 @@
 //! - Only handles specific logic_ref (resource type)
 //! - User authorization via Ed25519 signature over action_tree_root
 
+#![allow(deprecated)] // Anchor program macro currently expands to AccountInfo::realloc.
+
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::{invoke_signed, set_return_data};
 
@@ -144,10 +146,7 @@ pub mod spl_token_forwarder {
         );
 
         // Mirrors: test_constructor_reverts_if_the_logic_ref_is_zero
-        require!(
-            logic_ref != [0u8; 32],
-            ErrorCode::ZeroAddressNotAllowed
-        );
+        require!(logic_ref != [0u8; 32], ErrorCode::ZeroAddressNotAllowed);
 
         // Mirrors: test_constructor_reverts_if_the_emergency_committe_address_is_zero
         require!(
@@ -192,7 +191,7 @@ pub mod spl_token_forwarder {
         debug_msg!("  logic_ref validated");
 
         // Parse operation code
-        let op = *input.get(0).ok_or(ErrorCode::InvalidInput)?;
+        let op = *input.first().ok_or(ErrorCode::InvalidInput)?;
         debug_msg!("  operation: {}", op);
 
         match op {
@@ -313,7 +312,11 @@ const TOKEN_ACCOUNT_AMOUNT_OFFSET: usize = 64;
 fn read_token_balance(token_account: &AccountInfo) -> Result<u64> {
     let data = token_account.try_borrow_data()?;
     if data.len() < TOKEN_ACCOUNT_AMOUNT_OFFSET + 8 {
-        msg!("Invalid token account data length: {} (expected >= {})", data.len(), TOKEN_ACCOUNT_AMOUNT_OFFSET + 8);
+        msg!(
+            "Invalid token account data length: {} (expected >= {})",
+            data.len(),
+            TOKEN_ACCOUNT_AMOUNT_OFFSET + 8
+        );
         return Err(ErrorCode::InvalidTokenAccountData.into());
     }
     let amount_bytes: [u8; 8] = data[TOKEN_ACCOUNT_AMOUNT_OFFSET..TOKEN_ACCOUNT_AMOUNT_OFFSET + 8]
@@ -343,7 +346,11 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     //   https://eips.ethereum.org/EIPS/eip-2612
     let clock = &ctx.accounts.clock;
     if clock.unix_timestamp > wrap_input.deadline {
-        msg!("Deadline expired: current={}, deadline={}", clock.unix_timestamp, wrap_input.deadline);
+        msg!(
+            "Deadline expired: current={}, deadline={}",
+            clock.unix_timestamp,
+            wrap_input.deadline
+        );
         return Err(ErrorCode::DeadlineExpired.into());
     }
     debug_msg!("  deadline check passed");
@@ -352,7 +359,10 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     // conditions before expensive Ed25519 signature verification)
     let remaining = &ctx.remaining_accounts;
     if remaining.len() < 8 {
-        msg!("Expected 8 remaining accounts for wrap, got {}", remaining.len());
+        msg!(
+            "Expected 8 remaining accounts for wrap, got {}",
+            remaining.len()
+        );
         return Err(ErrorCode::InsufficientRemainingAccounts.into());
     }
 
@@ -368,13 +378,17 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     // Verify nonce bitmap PDA derivation and check nonce BEFORE signature verification
     // (Permit2-style bitmap pattern - rejects replays without wasting compute on sig verify)
     let (word_index, bit_position) = nonce_to_word_and_bit(wrap_input.nonce);
-    let (expected_bitmap_pda, bitmap_bump) = derive_nonce_bitmap_pda(
-        ctx.program_id,
-        &wrap_input.user,
-        word_index,
+    let (expected_bitmap_pda, bitmap_bump) =
+        derive_nonce_bitmap_pda(ctx.program_id, &wrap_input.user, word_index);
+    require!(
+        nonce_bitmap_pda.key() == expected_bitmap_pda,
+        ErrorCode::InvalidNonceBitmapPda
     );
-    require!(nonce_bitmap_pda.key() == expected_bitmap_pda, ErrorCode::InvalidNonceBitmapPda);
-    debug_msg!("  nonce bitmap PDA verified (word={}, bit={})", word_index, bit_position);
+    debug_msg!(
+        "  nonce bitmap PDA verified (word={}, bit={})",
+        word_index,
+        bit_position
+    );
 
     // Check if bitmap exists and if nonce bit is already set
     let bitmap_exists = nonce_bitmap_pda.data_len() >= NONCE_BITMAP_SIZE
@@ -383,7 +397,11 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     if bitmap_exists {
         let bitmap_data = nonce_bitmap_pda.try_borrow_data()?;
         if is_nonce_used(&bitmap_data, bit_position) {
-            msg!("Nonce {} already used for user {}", wrap_input.nonce, wrap_input.user);
+            msg!(
+                "Nonce {} already used for user {}",
+                wrap_input.nonce,
+                wrap_input.user
+            );
             return Err(ErrorCode::NonceAlreadyUsed.into());
         }
         drop(bitmap_data);
@@ -404,7 +422,10 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     debug_msg!("  signature verified");
 
     // Verify token program
-    require!(token_program.key() == SPL_TOKEN_PROGRAM_ID, ErrorCode::InvalidTokenProgram);
+    require!(
+        token_program.key() == SPL_TOKEN_PROGRAM_ID,
+        ErrorCode::InvalidTokenProgram
+    );
 
     // Verify token mint account matches input
     require!(
@@ -418,14 +439,20 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         &[ESCROW_SEED, wrap_input.token_mint.as_ref()],
         ctx.program_id,
     );
-    require!(escrow_pda.key() == expected_escrow_pda, ErrorCode::InvalidEscrowPda);
+    require!(
+        escrow_pda.key() == expected_escrow_pda,
+        ErrorCode::InvalidEscrowPda
+    );
     debug_msg!("  escrow PDA verified");
 
     // Validate delegate approval before attempting transfer
     // SPL Token account layout: mint(32) + owner(32) + amount(8) + delegate_option(4) + delegate(32) + state(1) + is_native_option(4) + is_native(8) + delegated_amount(8)
     let user_ata_data = user_ata.try_borrow_data()?;
     if user_ata_data.len() < 129 {
-        msg!("Invalid token account data length: {} (expected >= 129)", user_ata_data.len());
+        msg!(
+            "Invalid token account data length: {} (expected >= 129)",
+            user_ata_data.len()
+        );
         return Err(ErrorCode::InvalidTokenAccountData.into());
     }
 
@@ -440,17 +467,29 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let delegate_bytes: [u8; 32] = user_ata_data[76..108].try_into().unwrap();
     let delegate_pubkey = Pubkey::new_from_array(delegate_bytes);
     if delegate_pubkey != escrow_pda.key() {
-        msg!("Delegate mismatch: expected escrow PDA {}, got {}", escrow_pda.key(), delegate_pubkey);
+        msg!(
+            "Delegate mismatch: expected escrow PDA {}, got {}",
+            escrow_pda.key(),
+            delegate_pubkey
+        );
         return Err(ErrorCode::InsufficientDelegateApproval.into());
     }
 
     // Check delegated amount (offset 121-129)
     let delegated_amount = u64::from_le_bytes(user_ata_data[121..129].try_into().unwrap());
     if delegated_amount < wrap_input.amount {
-        msg!("Insufficient delegated amount: have {}, need {}", delegated_amount, wrap_input.amount);
+        msg!(
+            "Insufficient delegated amount: have {}, need {}",
+            delegated_amount,
+            wrap_input.amount
+        );
         return Err(ErrorCode::InsufficientDelegateApproval.into());
     }
-    debug_msg!("  delegate approval verified: {} >= {}", delegated_amount, wrap_input.amount);
+    debug_msg!(
+        "  delegate approval verified: {} >= {}",
+        delegated_amount,
+        wrap_input.amount
+    );
 
     drop(user_ata_data); // Release borrow before CPI
 
@@ -486,7 +525,8 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
             token_program.to_account_info(),
         ],
         signer_seeds,
-    ).map_err(|e| {
+    )
+    .map_err(|e| {
         msg!("Token transfer failed: {:?}", e);
         ErrorCode::TokenTransferFailed
     })?;
@@ -495,10 +535,18 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let escrow_balance_after = read_token_balance(escrow_ata)?;
     let actual_delta = escrow_balance_after.saturating_sub(escrow_balance_before);
     debug_msg!("  escrow balance after: {}", escrow_balance_after);
-    debug_msg!("  actual delta: {}, expected: {}", actual_delta, wrap_input.amount);
+    debug_msg!(
+        "  actual delta: {}, expected: {}",
+        actual_delta,
+        wrap_input.amount
+    );
 
     if actual_delta != wrap_input.amount {
-        msg!("Balance mismatch: expected {}, actual {}", wrap_input.amount, actual_delta);
+        msg!(
+            "Balance mismatch: expected {}, actual {}",
+            wrap_input.amount,
+            actual_delta
+        );
         return Err(ErrorCode::BalanceMismatch.into());
     }
     debug_msg!("  balance verification passed");
@@ -509,14 +557,23 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         // Bitmap exists - just set the bit
         let mut bitmap_data = nonce_bitmap_pda.try_borrow_mut_data()?;
         set_nonce_used(&mut bitmap_data, bit_position);
-        debug_msg!("  nonce {} marked in existing bitmap (word={})", wrap_input.nonce, word_index);
+        debug_msg!(
+            "  nonce {} marked in existing bitmap (word={})",
+            wrap_input.nonce,
+            word_index
+        );
     } else {
         // Bitmap doesn't exist - create it with this nonce set
         let rent = Rent::get()?;
         let lamports = rent.minimum_balance(NONCE_BITMAP_SIZE);
 
         let word_bytes = word_index.to_le_bytes();
-        let bitmap_seeds = &[NONCE_BITMAP_SEED, wrap_input.user.as_ref(), &word_bytes, &[bitmap_bump]];
+        let bitmap_seeds = &[
+            NONCE_BITMAP_SEED,
+            wrap_input.user.as_ref(),
+            &word_bytes,
+            &[bitmap_bump],
+        ];
         let bitmap_signer_seeds = &[&bitmap_seeds[..]];
 
         let create_account_ix = anchor_lang::solana_program::system_instruction::create_account(
@@ -540,7 +597,11 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         // Set the nonce bit in the newly created bitmap
         let mut bitmap_data = nonce_bitmap_pda.try_borrow_mut_data()?;
         set_nonce_used(&mut bitmap_data, bit_position);
-        debug_msg!("  created bitmap for word {} and marked nonce {}", word_index, wrap_input.nonce);
+        debug_msg!(
+            "  created bitmap for word {} and marked nonce {}",
+            word_index,
+            wrap_input.nonce
+        );
     }
 
     // Emit structured event (mirrors EVM Wrapped event)
@@ -570,7 +631,10 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
 
     let remaining = &ctx.remaining_accounts;
     if remaining.len() < 5 {
-        msg!("Expected 5 remaining accounts for unwrap, got {}", remaining.len());
+        msg!(
+            "Expected 5 remaining accounts for unwrap, got {}",
+            remaining.len()
+        );
         return Err(ErrorCode::InsufficientRemainingAccounts.into());
     }
 
@@ -580,7 +644,10 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let token_program = &remaining[3];
     let token_mint_account = &remaining[4];
 
-    require!(token_program.key() == SPL_TOKEN_PROGRAM_ID, ErrorCode::InvalidTokenProgram);
+    require!(
+        token_program.key() == SPL_TOKEN_PROGRAM_ID,
+        ErrorCode::InvalidTokenProgram
+    );
 
     // Verify token mint account matches input
     require!(
@@ -594,7 +661,10 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         &[ESCROW_SEED, unwrap_input.token_mint.as_ref()],
         ctx.program_id,
     );
-    require!(escrow_pda.key() == expected_escrow_pda, ErrorCode::InvalidEscrowPda);
+    require!(
+        escrow_pda.key() == expected_escrow_pda,
+        ErrorCode::InvalidEscrowPda
+    );
     debug_msg!("  escrow PDA verified");
 
     // Read recipient balance before transfer (mirrors EVM balanceBefore pattern)
@@ -617,7 +687,11 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         data: transfer_data,
     };
 
-    let escrow_seeds = &[ESCROW_SEED, unwrap_input.token_mint.as_ref(), &[escrow_bump]];
+    let escrow_seeds = &[
+        ESCROW_SEED,
+        unwrap_input.token_mint.as_ref(),
+        &[escrow_bump],
+    ];
     let signer_seeds = &[&escrow_seeds[..]];
 
     invoke_signed(
@@ -629,7 +703,8 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
             token_program.to_account_info(),
         ],
         signer_seeds,
-    ).map_err(|e| {
+    )
+    .map_err(|e| {
         msg!("Token transfer failed: {:?}", e);
         ErrorCode::InsufficientEscrowBalance
     })?;
@@ -638,10 +713,18 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let recipient_balance_after = read_token_balance(recipient_ata)?;
     let actual_delta = recipient_balance_after.saturating_sub(recipient_balance_before);
     debug_msg!("  recipient balance after: {}", recipient_balance_after);
-    debug_msg!("  actual delta: {}, expected: {}", actual_delta, unwrap_input.amount);
+    debug_msg!(
+        "  actual delta: {}, expected: {}",
+        actual_delta,
+        unwrap_input.amount
+    );
 
     if actual_delta != unwrap_input.amount {
-        msg!("Balance mismatch: expected {}, actual {}", unwrap_input.amount, actual_delta);
+        msg!(
+            "Balance mismatch: expected {}, actual {}",
+            unwrap_input.amount,
+            actual_delta
+        );
         return Err(ErrorCode::BalanceMismatch.into());
     }
     debug_msg!("  balance verification passed");
@@ -663,7 +746,10 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
 
 fn execute_emergency_withdraw(ctx: &Context<ForwardEmergencyCall>, input: &[u8]) -> Result<()> {
     if input.len() != 72 {
-        msg!("Emergency withdraw input must be 72 bytes, got {}", input.len());
+        msg!(
+            "Emergency withdraw input must be 72 bytes, got {}",
+            input.len()
+        );
         return Err(ErrorCode::InvalidEmergencyInputLength.into());
     }
 
@@ -678,7 +764,10 @@ fn execute_emergency_withdraw(ctx: &Context<ForwardEmergencyCall>, input: &[u8])
 
     let remaining = &ctx.remaining_accounts;
     if remaining.len() < 4 {
-        msg!("Expected 4 remaining accounts for emergency withdraw, got {}", remaining.len());
+        msg!(
+            "Expected 4 remaining accounts for emergency withdraw, got {}",
+            remaining.len()
+        );
         return Err(ErrorCode::InsufficientRemainingAccounts.into());
     }
 
@@ -687,14 +776,18 @@ fn execute_emergency_withdraw(ctx: &Context<ForwardEmergencyCall>, input: &[u8])
     let escrow_pda = &remaining[2];
     let token_program = &remaining[3];
 
-    require!(token_program.key() == SPL_TOKEN_PROGRAM_ID, ErrorCode::InvalidTokenProgram);
+    require!(
+        token_program.key() == SPL_TOKEN_PROGRAM_ID,
+        ErrorCode::InvalidTokenProgram
+    );
 
     // Verify escrow PDA
-    let (expected_escrow_pda, escrow_bump) = Pubkey::find_program_address(
-        &[ESCROW_SEED, token_mint.as_ref()],
-        ctx.program_id,
+    let (expected_escrow_pda, escrow_bump) =
+        Pubkey::find_program_address(&[ESCROW_SEED, token_mint.as_ref()], ctx.program_id);
+    require!(
+        escrow_pda.key() == expected_escrow_pda,
+        ErrorCode::InvalidEscrowPda
     );
-    require!(escrow_pda.key() == expected_escrow_pda, ErrorCode::InvalidEscrowPda);
 
     // Read recipient balance before transfer (mirrors EVM balanceBefore pattern)
     let recipient_balance_before = read_token_balance(recipient_ata)?;
@@ -737,7 +830,11 @@ fn execute_emergency_withdraw(ctx: &Context<ForwardEmergencyCall>, input: &[u8])
     debug_msg!("  actual delta: {}, expected: {}", actual_delta, amount);
 
     if actual_delta != amount {
-        msg!("Balance mismatch: expected {}, actual {}", amount, actual_delta);
+        msg!(
+            "Balance mismatch: expected {}, actual {}",
+            amount,
+            actual_delta
+        );
         return Err(ErrorCode::BalanceMismatch.into());
     }
     debug_msg!("  balance verification passed");
@@ -870,4 +967,3 @@ pub struct SetEmergencyCaller<'info> {
     )]
     pub pa_state: AccountInfo<'info>,
 }
-

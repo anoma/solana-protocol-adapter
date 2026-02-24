@@ -3054,6 +3054,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "spl-token-forwarder"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "bytemuck",
+]
+
+[[package]]
 name = "stability"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

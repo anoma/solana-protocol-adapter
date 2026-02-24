@@ -117,7 +117,11 @@ pub fn derive_escrow_pda(program_id: &Pubkey, token_mint: &Pubkey) -> (Pubkey, u
 /// - Bit index = nonce % 256
 ///
 /// Seeds: ["nonce_bitmap", user, word_index_le_bytes]
-pub fn derive_nonce_bitmap_pda(program_id: &Pubkey, user: &Pubkey, word_index: u64) -> (Pubkey, u8) {
+pub fn derive_nonce_bitmap_pda(
+    program_id: &Pubkey,
+    user: &Pubkey,
+    word_index: u64,
+) -> (Pubkey, u8) {
     let word_bytes = word_index.to_le_bytes();
     Pubkey::find_program_address(&[NONCE_BITMAP_SEED, user.as_ref(), &word_bytes], program_id)
 }
@@ -192,13 +196,13 @@ pub struct WrapMessage {
 impl WrapMessage {
     // Byte offsets for serialization (prevents off-by-one errors on struct changes)
     const OFF_FORWARDER_ID: usize = 0;
-    const OFF_TOKEN_MINT: usize = 32;    // forwarder_id (32)
-    const OFF_AMOUNT: usize = 64;        // + token_mint (32)
-    const OFF_NONCE: usize = 72;         // + amount (8)
-    const OFF_DEADLINE: usize = 80;      // + nonce (8)
-    const OFF_ACTION_ROOT: usize = 88;   // + deadline (8)
+    const OFF_TOKEN_MINT: usize = 32; // forwarder_id (32)
+    const OFF_AMOUNT: usize = 64; // + token_mint (32)
+    const OFF_NONCE: usize = 72; // + amount (8)
+    const OFF_DEADLINE: usize = 80; // + nonce (8)
+    const OFF_ACTION_ROOT: usize = 88; // + deadline (8)
     /// Total serialized size in bytes.
-    pub const SIZE: usize = 120;         // + action_tree_root (32)
+    pub const SIZE: usize = 120; // + action_tree_root (32)
 
     /// Serialize to bytes for hashing.
     ///
@@ -217,7 +221,8 @@ impl WrapMessage {
         bytes[Self::OFF_TOKEN_MINT..Self::OFF_AMOUNT].copy_from_slice(&self.token_mint);
         bytes[Self::OFF_AMOUNT..Self::OFF_NONCE].copy_from_slice(&self.amount.to_le_bytes());
         bytes[Self::OFF_NONCE..Self::OFF_DEADLINE].copy_from_slice(&self.nonce.to_le_bytes());
-        bytes[Self::OFF_DEADLINE..Self::OFF_ACTION_ROOT].copy_from_slice(&self.deadline.to_le_bytes());
+        bytes[Self::OFF_DEADLINE..Self::OFF_ACTION_ROOT]
+            .copy_from_slice(&self.deadline.to_le_bytes());
         bytes[Self::OFF_ACTION_ROOT..Self::SIZE].copy_from_slice(&self.action_tree_root);
         bytes
     }
@@ -248,15 +253,15 @@ pub struct WrapInput {
 impl WrapInput {
     // Byte offsets for parsing (prevents off-by-one errors on struct changes)
     const OFF_TOKEN_MINT: usize = 0;
-    const OFF_AMOUNT: usize = 32;     // token_mint (32)
-    const OFF_USER: usize = 40;       // + amount (8)
-    const OFF_NONCE: usize = 72;      // + user (32)
-    const OFF_DEADLINE: usize = 80;   // + nonce (8)
+    const OFF_AMOUNT: usize = 32; // token_mint (32)
+    const OFF_USER: usize = 40; // + amount (8)
+    const OFF_NONCE: usize = 72; // + user (32)
+    const OFF_DEADLINE: usize = 80; // + nonce (8)
     const OFF_ACTION_ROOT: usize = 88; // + deadline (8)
     const OFF_SIGNATURE: usize = 120; // + action_tree_root (32)
-    const OFF_IX_INDEX: usize = 184;  // + signature (64)
+    const OFF_IX_INDEX: usize = 184; // + signature (64)
     /// Total expected input size in bytes.
-    pub const SIZE: usize = 185;      // + ed25519_ix_index (1)
+    pub const SIZE: usize = 185; // + ed25519_ix_index (1)
 
     /// Parse from bytes (excluding op code byte).
     ///
@@ -277,24 +282,29 @@ impl WrapInput {
         }
 
         let token_mint = Pubkey::new_from_array(
-            data[Self::OFF_TOKEN_MINT..Self::OFF_AMOUNT].try_into().unwrap()
+            data[Self::OFF_TOKEN_MINT..Self::OFF_AMOUNT]
+                .try_into()
+                .unwrap(),
         );
-        let amount = u64::from_le_bytes(
-            data[Self::OFF_AMOUNT..Self::OFF_USER].try_into().unwrap()
-        );
-        let user = Pubkey::new_from_array(
-            data[Self::OFF_USER..Self::OFF_NONCE].try_into().unwrap()
-        );
+        let amount = u64::from_le_bytes(data[Self::OFF_AMOUNT..Self::OFF_USER].try_into().unwrap());
+        let user =
+            Pubkey::new_from_array(data[Self::OFF_USER..Self::OFF_NONCE].try_into().unwrap());
         let nonce = u64::from_le_bytes(
-            data[Self::OFF_NONCE..Self::OFF_DEADLINE].try_into().unwrap()
+            data[Self::OFF_NONCE..Self::OFF_DEADLINE]
+                .try_into()
+                .unwrap(),
         );
         let deadline = i64::from_le_bytes(
-            data[Self::OFF_DEADLINE..Self::OFF_ACTION_ROOT].try_into().unwrap()
+            data[Self::OFF_DEADLINE..Self::OFF_ACTION_ROOT]
+                .try_into()
+                .unwrap(),
         );
-        let action_tree_root: [u8; 32] =
-            data[Self::OFF_ACTION_ROOT..Self::OFF_SIGNATURE].try_into().unwrap();
-        let signature: [u8; 64] =
-            data[Self::OFF_SIGNATURE..Self::OFF_IX_INDEX].try_into().unwrap();
+        let action_tree_root: [u8; 32] = data[Self::OFF_ACTION_ROOT..Self::OFF_SIGNATURE]
+            .try_into()
+            .unwrap();
+        let signature: [u8; 64] = data[Self::OFF_SIGNATURE..Self::OFF_IX_INDEX]
+            .try_into()
+            .unwrap();
         let ed25519_ix_index = data[Self::OFF_IX_INDEX];
 
         Ok(Self {
@@ -339,10 +349,10 @@ pub struct UnwrapInput {
 impl UnwrapInput {
     // Byte offsets for parsing (prevents off-by-one errors on struct changes)
     const OFF_TOKEN_MINT: usize = 0;
-    const OFF_AMOUNT: usize = 32;     // token_mint (32)
-    const OFF_RECIPIENT: usize = 40;  // + amount (8)
+    const OFF_AMOUNT: usize = 32; // token_mint (32)
+    const OFF_RECIPIENT: usize = 40; // + amount (8)
     /// Total expected input size in bytes.
-    pub const SIZE: usize = 72;       // + recipient (32)
+    pub const SIZE: usize = 72; // + recipient (32)
 
     /// Parse from bytes (excluding op code byte).
     ///
@@ -358,14 +368,17 @@ impl UnwrapInput {
         }
 
         let token_mint = Pubkey::new_from_array(
-            data[Self::OFF_TOKEN_MINT..Self::OFF_AMOUNT].try_into().unwrap()
+            data[Self::OFF_TOKEN_MINT..Self::OFF_AMOUNT]
+                .try_into()
+                .unwrap(),
         );
         let amount = u64::from_le_bytes(
-            data[Self::OFF_AMOUNT..Self::OFF_RECIPIENT].try_into().unwrap()
+            data[Self::OFF_AMOUNT..Self::OFF_RECIPIENT]
+                .try_into()
+                .unwrap(),
         );
-        let recipient = Pubkey::new_from_array(
-            data[Self::OFF_RECIPIENT..Self::SIZE].try_into().unwrap()
-        );
+        let recipient =
+            Pubkey::new_from_array(data[Self::OFF_RECIPIENT..Self::SIZE].try_into().unwrap());
 
         Ok(Self {
             token_mint,

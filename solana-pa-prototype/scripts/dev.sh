@@ -42,7 +42,8 @@ case "${1:-}" in
     ;;
 
   test)
-    run_in_project "cargo test --workspace"
+    # Keep Rust test artifacts isolated from Anchor/SBF build outputs.
+    run_in_project "CARGO_TARGET_DIR=target/nix-tests cargo test --workspace"
     ;;
 
   anchor-build)

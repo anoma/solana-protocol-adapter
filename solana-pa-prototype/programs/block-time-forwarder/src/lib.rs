@@ -10,6 +10,8 @@
 //! - Forwarder returns output via set_return_data
 //! - PA reads return data and verifies against expected_output
 
+#![allow(deprecated)] // Anchor program macro currently expands to AccountInfo::realloc.
+
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::set_return_data;
 

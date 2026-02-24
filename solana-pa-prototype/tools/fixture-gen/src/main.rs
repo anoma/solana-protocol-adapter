@@ -80,6 +80,26 @@ struct Fixture {
     consumed_nullifiers_b64: Vec<String>,
 }
 
+const FIXTURE_FORMAT: &str = "arm-risc0:Transaction(bincode)";
+
+#[derive(Deserialize)]
+struct FixtureInput {
+    format: String,
+    selector: String,
+    tx_b64: String,
+    tx_tampered_b64: String,
+    #[serde(default)]
+    consumed_nullifiers_b64: Vec<String>,
+}
+
+enum CliCommand {
+    Generate(CliArgs),
+    Validate {
+        fixture_path: PathBuf,
+        program_id: [u8; 32],
+    },
+}
+
 struct CliArgs {
     threads: Option<usize>,
     debug_assumptions: bool,
@@ -160,6 +180,96 @@ fn decode_base58_32(s: &str) -> Result<[u8; 32]> {
 
 fn test_forwarder_program_id() -> Result<[u8; 32]> {
     decode_base58_32("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD")
+}
+
+fn validate_selector(selector: &str) -> Result<()> {
+    let raw = selector
+        .strip_prefix("0x")
+        .ok_or_else(|| anyhow!("selector must start with 0x"))?;
+    if raw.len() != 8 || !raw.as_bytes().iter().all(|b| b.is_ascii_hexdigit()) {
+        return Err(anyhow!(
+            "selector must be 4 bytes of hex (expected 0xXXXXXXXX)"
+        ));
+    }
+    Ok(())
+}
+
+fn deserialize_tx_for_validation(bytes: &[u8], field_name: &str) -> Result<Transaction> {
+    bincode::deserialize::<Transaction>(bytes)
+        .with_context(|| format!("{field_name} does not deserialize with current Transaction layout"))
+}
+
+fn validate_fixture_file(path: &PathBuf, expected_program_id: [u8; 32]) -> Result<()> {
+    let raw = fs::read(path).with_context(|| format!("read fixture {}", path.display()))?;
+    let fixture: FixtureInput = serde_json::from_slice(&raw)
+        .with_context(|| format!("parse fixture JSON {}", path.display()))?;
+
+    if fixture.format != FIXTURE_FORMAT {
+        return Err(anyhow!(
+            "unsupported fixture format {:?}; expected {:?}",
+            fixture.format,
+            FIXTURE_FORMAT
+        ));
+    }
+
+    validate_selector(&fixture.selector)?;
+
+    let tx_bytes = BASE64
+        .decode(&fixture.tx_b64)
+        .context("decode fixture tx_b64 from base64")?;
+    let tx_tampered_bytes = BASE64
+        .decode(&fixture.tx_tampered_b64)
+        .context("decode fixture tx_tampered_b64 from base64")?;
+
+    let tx = deserialize_tx_for_validation(&tx_bytes, "tx_b64")?;
+    let tx_tampered = deserialize_tx_for_validation(&tx_tampered_bytes, "tx_tampered_b64")?;
+
+    if tx.actions.is_empty() {
+        return Err(anyhow!("tx_b64 deserialized to empty transaction"));
+    }
+    if tx_tampered.actions.is_empty() {
+        return Err(anyhow!("tx_tampered_b64 deserialized to empty transaction"));
+    }
+
+    let tx_proof = tx
+        .aggregation_proof
+        .as_ref()
+        .ok_or_else(|| anyhow!("tx_b64 is missing aggregation_proof"))?;
+    Seal::try_from_slice(tx_proof)
+        .context("tx_b64 aggregation_proof is not a valid verifier_router Seal")?;
+
+    let tx_tampered_proof = tx_tampered
+        .aggregation_proof
+        .as_ref()
+        .ok_or_else(|| anyhow!("tx_tampered_b64 is missing aggregation_proof"))?;
+    Seal::try_from_slice(tx_tampered_proof)
+        .context("tx_tampered_b64 aggregation_proof is not a valid verifier_router Seal")?;
+
+    if fixture.consumed_nullifiers_b64.is_empty() {
+        return Err(anyhow!("fixture must include consumed_nullifiers_b64 entries"));
+    }
+    for (idx, nf_b64) in fixture.consumed_nullifiers_b64.iter().enumerate() {
+        let bytes = BASE64
+            .decode(nf_b64)
+            .with_context(|| format!("decode consumed_nullifiers_b64[{idx}]"))?;
+        if bytes.len() != 32 {
+            return Err(anyhow!(
+                "consumed_nullifiers_b64[{idx}] must decode to 32 bytes, got {}",
+                bytes.len()
+            ));
+        }
+    }
+
+    if !tx_bytes
+        .windows(expected_program_id.len())
+        .any(|w| w == expected_program_id.as_slice())
+    {
+        return Err(anyhow!(
+            "transaction bytes do not contain expected program ID bytes"
+        ));
+    }
+
+    Ok(())
 }
 
 fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
@@ -567,7 +677,7 @@ fn generate_error_variant_fixtures(
         let tx_bytes = bincode::serialize(variant_tx)
             .with_context(|| format!("serialize variant tx for {file_name}"))?;
         let fixture = Fixture {
-            format: "arm-risc0:Transaction(bincode)",
+            format: FIXTURE_FORMAT,
             aggregation_strategy: "batch",
             aggregation_proof_type: "groth16",
             selector: selector.to_owned(),
@@ -637,12 +747,54 @@ where
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [--forwarder-fail] [--forwarder-silent] [--forwarder-output-account] [--nonce-seed N] [--multi-external-call] [--error-variants DIR] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n  fixture-gen --forwarder-fail tests/fixtures/batch_groth16_forwarder_fail.json\n  fixture-gen --forwarder-silent tests/fixtures/batch_groth16_forwarder_silent.json\n  fixture-gen --forwarder-output-account tests/fixtures/batch_groth16_forwarder_output_account.json\n  fixture-gen --nonce-seed 7 --multi-external-call /tmp/batch_groth16_multi.json\n  fixture-gen --error-variants tests/fixtures/error_variants tests/fixtures/batch_groth16.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a block-time-forwarder fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n  - `--forwarder-fail` uses the test-forwarder with an instruction that fails before output checks.\n  - `--forwarder-silent` uses the test-forwarder with no return data so output comparison fails.\n  - `--forwarder-output-account` uses the test-forwarder with OutputAccount mode.\n  - At most one of `--output-mismatch`, `--forwarder-fail`, `--forwarder-silent`, `--forwarder-output-account` may be set.\n  - `--nonce-seed` overrides the deterministic nonce byte used to derive nullifiers.\n  - `--multi-external-call` appends a second block-time-forwarder external call blob when block-time-forwarder mode is selected.\n  - `--error-variants` writes wrong_root/no_aggregation/garbage_proof fixtures from the final aggregated tx.\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]\n  fixture-gen --validate FIXTURE_PATH --program-id PROGRAM_ID_B58\n\nForwarder types:\n  - (default) BlockTime forwarder\n  - --spl-token-wrap SPL Token wrap with Ed25519 signature\n  - --spl-token-unwrap SPL Token unwrap (escrow release)\n\nNotes:\n  - --threads N sets rayon thread pool size\n  - --validate checks fixture deserialization and program-id binding\n  - At most one forwarder mode flag may be set\n"
     );
 }
 
-fn parse_args() -> Result<CliArgs> {
-    let mut args = env::args().skip(1);
+fn parse_validate_args(args: impl Iterator<Item = String>) -> Result<CliCommand> {
+    let mut args = args;
+    let mut fixture_path: Option<PathBuf> = None;
+    let mut program_id_b58: Option<String> = None;
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--program-id" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--program-id requires a value"))?;
+                program_id_b58 = Some(value);
+            }
+            _ if arg.starts_with("--program-id=") => {
+                let value = arg
+                    .split_once('=')
+                    .map(|(_, v)| v)
+                    .ok_or_else(|| anyhow!("--program-id requires a value"))?;
+                program_id_b58 = Some(value.to_string());
+            }
+            _ if arg.starts_with('-') => {
+                return Err(anyhow!("unknown flag in validate mode: {arg}"));
+            }
+            _ => {
+                if fixture_path.is_some() {
+                    return Err(anyhow!("unexpected extra argument in validate mode: {arg}"));
+                }
+                fixture_path = Some(PathBuf::from(arg));
+            }
+        }
+    }
+
+    let fixture_path = fixture_path.ok_or_else(|| anyhow!("--validate requires FIXTURE_PATH"))?;
+    let program_id_b58 =
+        program_id_b58.ok_or_else(|| anyhow!("--validate requires --program-id PROGRAM_ID_B58"))?;
+    let program_id = decode_base58_32(&program_id_b58).context("invalid --program-id")?;
+
+    Ok(CliCommand::Validate {
+        fixture_path,
+        program_id,
+    })
+}
+
+fn parse_generate_args(mut args: impl Iterator<Item = String>) -> Result<CliArgs> {
     let mut threads: Option<usize> = None;
     let mut debug_assumptions = false;
     let mut forwarder_mode: Option<ForwarderMode> = None;
@@ -754,9 +906,39 @@ fn parse_args() -> Result<CliArgs> {
     })
 }
 
+fn parse_args() -> Result<CliCommand> {
+    let mut args = env::args().skip(1);
+    let Some(first) = args.next() else {
+        return Ok(CliCommand::Generate(parse_generate_args(std::iter::empty())?));
+    };
+
+    match first.as_str() {
+        "-h" | "--help" => {
+            print_usage();
+            std::process::exit(0);
+        }
+        "--validate" => parse_validate_args(args),
+        _ => {
+            let generate_args = std::iter::once(first).chain(args);
+            Ok(CliCommand::Generate(parse_generate_args(generate_args)?))
+        }
+    }
+}
+
 fn main() -> Result<()> {
-    let total_start = Instant::now();
-    let CliArgs {
+    let command = parse_args()?;
+
+    if let CliCommand::Validate {
+        fixture_path,
+        program_id,
+    } = command
+    {
+        validate_fixture_file(&fixture_path, program_id)?;
+        eprintln!("fixture validation OK: {}", fixture_path.display());
+        return Ok(());
+    }
+
+    let CliCommand::Generate(CliArgs {
         threads,
         debug_assumptions,
         forwarder_mode,
@@ -764,7 +946,12 @@ fn main() -> Result<()> {
         multi_external_call,
         error_variants_dir,
         out_path,
-    } = parse_args()?;
+    }) = command
+    else {
+        unreachable!();
+    };
+
+    let total_start = Instant::now();
 
     // Configure rayon parallelism deterministically (helps avoid pegging/overheating/OOM).
     // Must happen before any proving work starts.
@@ -853,7 +1040,7 @@ fn main() -> Result<()> {
     })?;
 
     let fixture = Fixture {
-        format: "arm-risc0:Transaction(bincode)",
+        format: FIXTURE_FORMAT,
         aggregation_strategy: "batch",
         aggregation_proof_type: "groth16",
         selector,

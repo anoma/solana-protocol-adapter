@@ -412,7 +412,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     assert.equal(info!.data.length, 0, "Root marker should be 0 bytes (existence-only)");
   });
 
-  it("initializes with depth 1 (variable-depth tree)", async () => {
+  it("maintains coherent variable-depth tree metadata", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.isAtLeast(
       state.currentDepth,

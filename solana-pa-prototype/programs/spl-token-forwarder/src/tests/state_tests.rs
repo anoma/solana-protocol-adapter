@@ -1,11 +1,10 @@
 //! Tests for state types and PDA derivation
 
 use crate::state::{
-    WrapMessage, WrapInput, UnwrapInput,
-    derive_config_pda, derive_escrow_pda, derive_nonce_bitmap_pda,
-    nonce_to_word_and_bit, is_nonce_used, set_nonce_used,
-    is_pa_emergency_stopped, PA_PAUSED_OFFSET,
-    NONCES_PER_WORD, NONCE_BITMAP_SIZE,
+    derive_config_pda, derive_escrow_pda, derive_nonce_bitmap_pda, is_nonce_used,
+    is_pa_emergency_stopped, nonce_to_word_and_bit, set_nonce_used, UnwrapInput, WrapInput,
+    WrapMessage, CONFIG_SEED, ESCROW_SEED, NONCES_PER_WORD, NONCE_BITMAP_SEED, NONCE_BITMAP_SIZE,
+    PA_PAUSED_OFFSET,
 };
 use anchor_lang::prelude::Pubkey;
 
@@ -30,16 +29,10 @@ fn test_wrap_message_serialization() {
     assert_eq!(&bytes[32..64], &[1u8; 32]);
 
     // Verify amount
-    assert_eq!(
-        u64::from_le_bytes(bytes[64..72].try_into().unwrap()),
-        1000
-    );
+    assert_eq!(u64::from_le_bytes(bytes[64..72].try_into().unwrap()), 1000);
 
     // Verify nonce
-    assert_eq!(
-        u64::from_le_bytes(bytes[72..80].try_into().unwrap()),
-        42
-    );
+    assert_eq!(u64::from_le_bytes(bytes[72..80].try_into().unwrap()), 42);
 
     // Verify deadline
     assert_eq!(
@@ -144,18 +137,31 @@ fn test_pda_derivation() {
 
     // Config PDA
     let (config_pda, config_bump) = derive_config_pda(&program_id);
-    assert!(config_bump <= 255);
+    let expected_config_pda =
+        Pubkey::create_program_address(&[CONFIG_SEED, &[config_bump]], &program_id).unwrap();
+    assert_eq!(config_pda, expected_config_pda);
     assert_ne!(config_pda, Pubkey::default());
 
     // Escrow PDA
     let (escrow_pda, escrow_bump) = derive_escrow_pda(&program_id, &token_mint);
-    assert!(escrow_bump <= 255);
+    let expected_escrow_pda = Pubkey::create_program_address(
+        &[ESCROW_SEED, token_mint.as_ref(), &[escrow_bump]],
+        &program_id,
+    )
+    .unwrap();
+    assert_eq!(escrow_pda, expected_escrow_pda);
     assert_ne!(escrow_pda, Pubkey::default());
 
     // Nonce Bitmap PDA (Permit2-style)
     // Nonces 0-255 map to word_index 0
     let (bitmap_pda_0, bitmap_bump_0) = derive_nonce_bitmap_pda(&program_id, &user, 0);
-    assert!(bitmap_bump_0 <= 255);
+    let word_0 = 0u64.to_le_bytes();
+    let expected_bitmap_pda_0 = Pubkey::create_program_address(
+        &[NONCE_BITMAP_SEED, user.as_ref(), &word_0, &[bitmap_bump_0]],
+        &program_id,
+    )
+    .unwrap();
+    assert_eq!(bitmap_pda_0, expected_bitmap_pda_0);
     assert_ne!(bitmap_pda_0, Pubkey::default());
 
     // Nonces 256-511 map to word_index 1 (different PDA)

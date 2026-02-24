@@ -33,26 +33,56 @@ build_with_filtered_output() {
   "$@" 2>&1 | grep -v '^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report' | cat -s
 }
 
-fixture_matches_program_id() {
+fixture_matches_requirements() {
   local fixture_path="$1"
   local program_id="$2"
 
-  node -e '
-    const fs = require("fs");
-    const bs58 = require("bs58").default || require("bs58");
+  cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml -- \
+    --validate "$fixture_path" \
+    --program-id "$program_id" \
+    >/dev/null 2>&1
+}
 
-    const fixturePath = process.argv[1];
-    const programId = process.argv[2];
+print_fixture_validation_error() {
+  local fixture_path="$1"
+  local program_id="$2"
 
-    const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf-8"));
-    if (!fixture.selector || !fixture.tx_b64) {
-      process.exit(1);
-    }
+  cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml -- \
+    --validate "$fixture_path" \
+    --program-id "$program_id"
+}
 
-    const txBytes = Buffer.from(fixture.tx_b64, "base64");
-    const programIdBytes = Buffer.from(bs58.decode(programId));
-    process.exit(txBytes.includes(programIdBytes) ? 0 : 1);
-  ' "$fixture_path" "$program_id"
+regenerate_fixture() {
+  local fixture_path="$1"
+  shift
+
+  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
+    echo "Docker is required to regenerate stale fixtures."
+    echo "Ensure Docker is installed/running, then rerun ./scripts/dev.sh anchor-test."
+    exit 1
+  fi
+
+  local threads="${FIXTURE_THREADS:-6}"
+  echo "    Regenerating fixture: ${fixture_path}"
+  cargo run --release --locked --manifest-path tools/fixture-gen/Cargo.toml -- --threads "$threads" "$@" "$fixture_path"
+}
+
+ensure_fixture_matches_program() {
+  local fixture_path="$1"
+  local program_id="$2"
+  local label="$3"
+  shift 3
+
+  if [[ ! -f "$fixture_path" ]] || ! fixture_matches_requirements "$fixture_path" "$program_id"; then
+    echo "    ${label} fixture is missing or stale."
+    regenerate_fixture "$fixture_path" "$@"
+  fi
+
+  if ! fixture_matches_requirements "$fixture_path" "$program_id"; then
+    echo "    ${label} fixture does not match program ID ${program_id}: ${fixture_path}"
+    print_fixture_validation_error "$fixture_path" "$program_id" || true
+    exit 1
+  fi
 }
 
 wait_for_validator() {
@@ -147,6 +177,17 @@ TF_ID="$(sync_program_id "test_forwarder" \
   "programs/test-forwarder/src/lib.rs" \
   "test_forwarder")"
 
+STF_ID="$(read_declare_id "programs/spl-token-forwarder/src/lib.rs")"
+if [[ -z "$STF_ID" ]]; then
+  echo "    Failed to read spl_token_forwarder declare_id"
+  exit 1
+fi
+if ! grep -qE "^spl_token_forwarder = \"\${STF_ID}\"$" Anchor.toml; then
+  echo "    Syncing spl_token_forwarder program ID in Anchor.toml to ${STF_ID}"
+  sed -i -E "s/^spl_token_forwarder = \"[^\"]+\"$/spl_token_forwarder = \"${STF_ID}\"/" Anchor.toml
+fi
+echo "    spl_token_forwarder program ID: $STF_ID"
+
 # TF ID also appears in fixture-gen and integration tests
 if [[ "$TF_OLD" != "$TF_ID" ]]; then
   sed -i -E "s/decode_base58_32\(\"${TF_OLD}\"\)/decode_base58_32(\"${TF_ID}\")/" tools/fixture-gen/src/main.rs
@@ -160,21 +201,20 @@ rm -rf target/debug/
 echo "    Building programs..."
 build_with_filtered_output anchor build
 
+echo "    Building spl_token_forwarder..."
+build_with_filtered_output anchor build -p spl-token-forwarder
+
 REQUIRED_FIXTURE="tests/fixtures/batch_groth16.json"
 OPTIONAL_MISMATCH_FIXTURE="tests/fixtures/batch_groth16_mismatch.json"
-
-if [[ ! -f "$REQUIRED_FIXTURE" ]] || ! fixture_matches_program_id "$REQUIRED_FIXTURE" "$BTF_ID"; then
-  echo "Required fixture is missing or stale: ${REQUIRED_FIXTURE}"
-  echo "Regenerate it with:"
-  echo "  cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- tests/fixtures/batch_groth16.json"
-  exit 1
+ensure_fixture_matches_program "$REQUIRED_FIXTURE" "$BTF_ID" "Batch Groth16"
+if [[ -f "$OPTIONAL_MISMATCH_FIXTURE" ]]; then
+  ensure_fixture_matches_program "$OPTIONAL_MISMATCH_FIXTURE" "$BTF_ID" "Batch Groth16 mismatch" "--output-mismatch"
 fi
 
-if [[ -f "$OPTIONAL_MISMATCH_FIXTURE" ]] && ! fixture_matches_program_id "$OPTIONAL_MISMATCH_FIXTURE" "$BTF_ID"; then
-  echo "Warning: ${OPTIONAL_MISMATCH_FIXTURE} is stale for block_time_forwarder ID ${BTF_ID}."
-  echo "Regenerate it with:"
-  echo "  cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json"
-fi
+SPL_WRAP_FIXTURE="tests/fixtures/spl_token_wrap.json"
+SPL_UNWRAP_FIXTURE="tests/fixtures/spl_token_unwrap.json"
+ensure_fixture_matches_program "$SPL_WRAP_FIXTURE" "$STF_ID" "SPL wrap" "--spl-token-wrap"
+ensure_fixture_matches_program "$SPL_UNWRAP_FIXTURE" "$STF_ID" "SPL unwrap" "--spl-token-unwrap"
 
 echo "==> (2/3) Starting validator"
 
@@ -198,6 +238,7 @@ solana-test-validator \
   --faucet-port 9900 \
   --bind-address 127.0.0.1 \
   --url devnet \
+  --bpf-program "$STF_ID" "target/deploy/spl_token_forwarder.so" \
   --clone-upgradeable-program "$VERIFIER_ROUTER" \
   --clone-upgradeable-program "$GROTH16_VERIFIER" \
   --clone "$ROUTER_PDA" \
@@ -213,10 +254,19 @@ if ! wait_for_validator "$CLUSTER_URL"; then
 fi
 
 echo "==> (3/3) Deploying and running tests"
-anchor deploy --provider.cluster "$CLUSTER_URL"
+anchor deploy --provider.cluster "$CLUSTER_URL" --program-name solana_pa_prototype
+anchor deploy --provider.cluster "$CLUSTER_URL" --program-name block_time_forwarder
 
 ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
 ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
   yarn run ts-mocha -p ./tsconfig.json -t 1000000 'tests/**/*.ts'
+
+# Anchor's SBF toolchain can leave incompatible host debug artifacts in target/.
+# Clean host packages so subsequent nix cargo commands always rebuild with nix rustc.
+cargo clean \
+  --package block-time-forwarder \
+  --package solana-pa-prototype \
+  --package spl-token-forwarder \
+  >/dev/null 2>&1 || true
 
 echo "==> All tests passed"

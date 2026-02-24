@@ -100,7 +100,9 @@ impl From<Ed25519ParseError> for ErrorCode {
 ///
 /// # Returns
 /// Parsed offsets or an error if the data is malformed.
-pub fn parse_ed25519_offsets(ix_data: &[u8]) -> core::result::Result<Ed25519Offsets, Ed25519ParseError> {
+pub fn parse_ed25519_offsets(
+    ix_data: &[u8],
+) -> core::result::Result<Ed25519Offsets, Ed25519ParseError> {
     // Minimum size: 2 bytes header + 14 bytes per signature
     if ix_data.len() < ED25519_MIN_INSTRUCTION_SIZE {
         return Err(Ed25519ParseError::InstructionTooShort);
@@ -113,34 +115,20 @@ pub fn parse_ed25519_offsets(ix_data: &[u8]) -> core::result::Result<Ed25519Offs
 
     // Parse offsets for first signature (starting at byte 2)
     let offsets_start = 2;
-    let signature_offset = u16::from_le_bytes([
-        ix_data[offsets_start],
-        ix_data[offsets_start + 1],
-    ]) as usize;
-    let signature_ix_index = u16::from_le_bytes([
-        ix_data[offsets_start + 2],
-        ix_data[offsets_start + 3],
-    ]);
-    let pubkey_offset = u16::from_le_bytes([
-        ix_data[offsets_start + 4],
-        ix_data[offsets_start + 5],
-    ]) as usize;
-    let pubkey_ix_index = u16::from_le_bytes([
-        ix_data[offsets_start + 6],
-        ix_data[offsets_start + 7],
-    ]);
-    let message_offset = u16::from_le_bytes([
-        ix_data[offsets_start + 8],
-        ix_data[offsets_start + 9],
-    ]) as usize;
-    let message_size = u16::from_le_bytes([
-        ix_data[offsets_start + 10],
-        ix_data[offsets_start + 11],
-    ]) as usize;
-    let message_ix_index = u16::from_le_bytes([
-        ix_data[offsets_start + 12],
-        ix_data[offsets_start + 13],
-    ]);
+    let signature_offset =
+        u16::from_le_bytes([ix_data[offsets_start], ix_data[offsets_start + 1]]) as usize;
+    let signature_ix_index =
+        u16::from_le_bytes([ix_data[offsets_start + 2], ix_data[offsets_start + 3]]);
+    let pubkey_offset =
+        u16::from_le_bytes([ix_data[offsets_start + 4], ix_data[offsets_start + 5]]) as usize;
+    let pubkey_ix_index =
+        u16::from_le_bytes([ix_data[offsets_start + 6], ix_data[offsets_start + 7]]);
+    let message_offset =
+        u16::from_le_bytes([ix_data[offsets_start + 8], ix_data[offsets_start + 9]]) as usize;
+    let message_size =
+        u16::from_le_bytes([ix_data[offsets_start + 10], ix_data[offsets_start + 11]]) as usize;
+    let message_ix_index =
+        u16::from_le_bytes([ix_data[offsets_start + 12], ix_data[offsets_start + 13]]);
 
     // Validate instruction indices: 0xFFFF means data is in the current instruction.
     // We require all data to be in the Ed25519 instruction itself, not elsewhere.
@@ -255,34 +243,39 @@ pub fn verify_ed25519_instruction(
 
     // Parse the Ed25519 instruction data
     let ix_data = &ix.data;
-    let offsets = parse_ed25519_offsets(ix_data)
-        .map_err(|e| -> ErrorCode { e.into() })?;
+    let offsets = parse_ed25519_offsets(ix_data).map_err(|e| -> ErrorCode { e.into() })?;
 
     msg!("Ed25519 instruction parsed:");
     msg!("  signature_offset: {}", offsets.signature_offset);
     msg!("  pubkey_offset: {}", offsets.pubkey_offset);
-    msg!("  message_offset: {}, size: {}", offsets.message_offset, offsets.message_size);
+    msg!(
+        "  message_offset: {}, size: {}",
+        offsets.message_offset,
+        offsets.message_size
+    );
 
     // Validate pubkey and message
-    validate_ed25519_data(ix_data, &offsets, expected_pubkey, expected_message)
-        .map_err(|e| {
-            match e {
-                Ed25519ParseError::PubkeyMismatch => {
-                    msg!("Pubkey mismatch!");
-                    msg!("  expected: {:?}", &expected_pubkey[..8]);
-                }
-                Ed25519ParseError::MessageMismatch => {
-                    msg!("Message mismatch!");
-                    msg!("  expected: {:?}", &expected_message[..8]);
-                }
-                Ed25519ParseError::InvalidMessageSize => {
-                    msg!("Message size mismatch: expected 32, got {}", offsets.message_size);
-                }
-                _ => {}
+    validate_ed25519_data(ix_data, &offsets, expected_pubkey, expected_message).map_err(|e| {
+        match e {
+            Ed25519ParseError::PubkeyMismatch => {
+                msg!("Pubkey mismatch!");
+                msg!("  expected: {:?}", &expected_pubkey[..8]);
             }
-            let code: ErrorCode = e.into();
-            code
-        })?;
+            Ed25519ParseError::MessageMismatch => {
+                msg!("Message mismatch!");
+                msg!("  expected: {:?}", &expected_message[..8]);
+            }
+            Ed25519ParseError::InvalidMessageSize => {
+                msg!(
+                    "Message size mismatch: expected 32, got {}",
+                    offsets.message_size
+                );
+            }
+            _ => {}
+        }
+        let code: ErrorCode = e.into();
+        code
+    })?;
 
     msg!("  pubkey verified");
     msg!("  message verified");
