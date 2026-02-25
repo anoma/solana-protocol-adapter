@@ -54,6 +54,9 @@ struct Fixture {
     selector: String,
     tx_b64: String,
     tx_tampered_b64: String,
+    /// A properly-serialized Transaction with Delta::Witness instead of Delta::Proof.
+    /// Used to test that the on-chain program rejects witness-bearing transactions.
+    tx_witness_b64: String,
     consumed_nullifiers_b64: Vec<String>,
 }
 
@@ -191,7 +194,7 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
     })
 }
 
-fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Result<Transaction> {
+fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Result<(Transaction, DeltaWitness)> {
     // Inner proofs must be Succinct for aggregation.
     let base_proof_type = ProofType::Succinct;
 
@@ -292,12 +295,13 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
     // Delta witness is derived from compliance witness RCVs.
     let delta_witness =
         DeltaWitness::from_bytes_vec(&[compliance_witness.rcv]).context("build delta witness")?;
+    let delta_witness_retained = delta_witness.clone();
 
     let tx = Transaction::create(vec![action], Delta::Witness(delta_witness));
     let balanced_tx = tx.generate_delta_proof().context("generate delta proof")?;
     balanced_tx.clone().verify().context("verify tx")?;
 
-    Ok(balanced_tx)
+    Ok((balanced_tx, delta_witness_retained))
 }
 
 fn fmt_duration(d: Duration) -> String {
@@ -408,7 +412,7 @@ fn main() -> Result<()> {
 
     eprintln!("phase: generate_test_transaction");
     let start = Instant::now();
-    let mut tx = generate_test_transaction_with_external_payload(output_mismatch)?;
+    let (mut tx, delta_witness) = generate_test_transaction_with_external_payload(output_mismatch)?;
     eprintln!(
         "phase done: generate_test_transaction ({})",
         fmt_duration(start.elapsed())
@@ -480,6 +484,17 @@ fn main() -> Result<()> {
         tx_tampered_bytes.len()
     );
 
+    eprintln!("phase: build_witness_variant_and_serialize");
+    let start = Instant::now();
+    let mut tx_witness = tx.clone();
+    tx_witness.delta_proof = Delta::Witness(delta_witness);
+    let tx_witness_bytes = bincode::serialize(&tx_witness).context("serialize witness tx")?;
+    eprintln!(
+        "phase done: build_witness_variant_and_serialize ({}, {} bytes)",
+        fmt_duration(start.elapsed()),
+        tx_witness_bytes.len()
+    );
+
     eprintln!("phase: extract_selector");
     let start = Instant::now();
     let selector = extract_selector(&tx).context("extract selector from proof")?;
@@ -496,6 +511,7 @@ fn main() -> Result<()> {
         selector,
         tx_b64: BASE64.encode(tx_bytes),
         tx_tampered_b64: BASE64.encode(tx_tampered_bytes),
+        tx_witness_b64: BASE64.encode(tx_witness_bytes),
         consumed_nullifiers_b64,
     };
 
