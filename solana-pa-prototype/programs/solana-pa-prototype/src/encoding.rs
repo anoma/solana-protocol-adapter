@@ -6,12 +6,12 @@ use crate::error::PAError;
 use crate::merkle::{hash_two, PADDING_LEAF};
 use crate::types::{Digest, LogicVerifierInputs, Transaction};
 
-pub use anoma_rm_risc0::constants::COMPLIANCE_VK_BYTES;
-pub use anoma_rm_risc0::utils::bytes_to_words;
+pub use arm_core::constants::COMPLIANCE_VK_BYTES;
+pub use arm_core::utils::bytes_to_words;
 
 /// Convert words to bytes (Vec variant for callers that need owned bytes).
 pub fn words_to_bytes(words: &[u32]) -> Vec<u8> {
-    anoma_rm_risc0::utils::words_to_bytes(words).to_vec()
+    arm_core::utils::words_to_bytes(words).to_vec()
 }
 
 fn next_power_of_two(n: usize) -> Result<usize, PAError> {
@@ -82,7 +82,7 @@ pub fn find_logic_input<'a>(
 /// Then hashes the serialized bytes.
 pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Digest, PAError> {
     use anchor_lang::solana_program::hash::hash;
-    use anoma_rm_risc0::compliance::ComplianceInstanceWords;
+    use arm_core::compliance::ComplianceInstanceWords;
 
     // 1) Build Vec<ComplianceInstanceWords>
     let mut compliance_instances: Vec<ComplianceInstanceWords> = Vec::new();
@@ -148,8 +148,8 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
 /// Convert a ComplianceInstance to ComplianceInstanceWords (matching circuit format).
 fn compliance_instance_to_words(
     instance: &crate::types::ComplianceInstance,
-) -> anoma_rm_risc0::compliance::ComplianceInstanceWords {
-    use anoma_rm_risc0::compliance::ComplianceInstanceWords;
+) -> arm_core::compliance::ComplianceInstanceWords {
+    use arm_core::compliance::ComplianceInstanceWords;
 
     // Layout: consumed_nullifier(8) + consumed_logic_ref(8) + consumed_commitment_tree_root(8) +
     //         created_commitment(8) + created_logic_ref(8) + delta_x(8) + delta_y(8) = 56 words

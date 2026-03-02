@@ -3,7 +3,7 @@
 use crate::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
 use crate::tests::utils::create_compliance_instance;
 use crate::types::{Action, ComplianceUnit, Delta, DeltaWitness, LogicVerifierInputs, Transaction};
-use anoma_rm_risc0::error::ArmError;
+use arm_solana::SolanaArmError;
 
 /// Convert big-endian bytes to [u32; 8] words using arm-risc0's encoding.
 ///
@@ -97,7 +97,7 @@ fn test_zero_point_rejected() {
 
     assert!(result.is_err(), "(0, 0) should be rejected as invalid");
     assert!(
-        matches!(result.err(), Some(ArmError::DeltaPointNotOnCurve)),
+        matches!(result.err(), Some(SolanaArmError::DeltaPointNotOnCurve)),
         "Should return DeltaPointNotOnCurve error"
     );
 }
@@ -113,7 +113,7 @@ fn test_wrong_y_coordinate_rejected() {
 
     assert!(result.is_err(), "Valid x with wrong y should be rejected");
     assert!(
-        matches!(result.err(), Some(ArmError::DeltaPointNotOnCurve)),
+        matches!(result.err(), Some(SolanaArmError::DeltaPointNotOnCurve)),
         "Should return DeltaPointNotOnCurve error"
     );
 }

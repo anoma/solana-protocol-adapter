@@ -9,7 +9,7 @@ use anchor_lang::prelude::AnchorDeserialize;
 pub use groth_16_verifier::Proof;
 pub use verifier_router::{Seal, Selector};
 
-pub use anoma_rm_risc0::constants::BATCH_AGGREGATION_VK_BYTES as BATCH_AGGREGATION_IMAGE_ID;
+pub use arm_core::constants::BATCH_AGGREGATION_VK_BYTES as BATCH_AGGREGATION_IMAGE_ID;
 
 /// Prepared proof data for risc0-solana verification.
 #[derive(Clone)]

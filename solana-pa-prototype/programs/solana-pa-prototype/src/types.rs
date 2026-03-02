@@ -2,14 +2,14 @@
 
 use serde::{Deserialize, Serialize};
 
-pub use anoma_rm_risc0::action::Action;
-pub use anoma_rm_risc0::compliance::ComplianceInstance;
-pub use anoma_rm_risc0::compliance_unit::ComplianceUnit;
-pub use anoma_rm_risc0::delta_types::DeltaWitness;
-pub use anoma_rm_risc0::logic_instance::LogicVerifierInputs;
-pub use anoma_rm_risc0::logic_instance::{AppData, ExpirableBlob};
-pub use anoma_rm_risc0::transaction::{Delta, Transaction};
-pub use anoma_rm_risc0::{Digest, DIGEST_WORDS};
+pub use arm_core::action::Action;
+pub use arm_core::compliance::ComplianceInstance;
+pub use arm_core::compliance_unit::ComplianceUnit;
+pub use arm_core::delta_types::DeltaWitness;
+pub use arm_core::logic_instance::LogicVerifierInputs;
+pub use arm_core::logic_instance::{AppData, ExpirableBlob};
+pub use arm_core::transaction::{Delta, Transaction};
+pub use arm_core::{Digest, DIGEST_WORDS};
 
 /// Solana-specific external call structure.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
