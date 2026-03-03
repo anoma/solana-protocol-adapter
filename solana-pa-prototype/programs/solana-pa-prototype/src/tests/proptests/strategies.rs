@@ -52,22 +52,11 @@ pub fn arb_compliance_instance() -> impl Strategy<Value = ComplianceInstance> {
 /// NOTE: (0, 0) is NOT a valid secp256k1 curve point - the identity point has no affine
 /// representation. This strategy is useful for testing error handling.
 pub fn arb_compliance_instance_zero_delta() -> impl Strategy<Value = ComplianceInstance> {
-    (
-        arb_digest(),
-        arb_digest(),
-        arb_digest(),
-        arb_digest(),
-        arb_digest(),
-    )
-        .prop_map(|(nf, clr, ctr, cm, clr2)| ComplianceInstance {
-            consumed_nullifier: nf,
-            consumed_logic_ref: clr,
-            consumed_commitment_tree_root: ctr,
-            created_commitment: cm,
-            created_logic_ref: clr2,
-            delta_x: [0u32; 8],
-            delta_y: [0u32; 8],
-        })
+    arb_compliance_instance().prop_map(|mut inst| {
+        inst.delta_x = [0u32; 8];
+        inst.delta_y = [0u32; 8];
+        inst
+    })
 }
 
 /// Strategy for ExpirableBlob.
@@ -79,7 +68,7 @@ pub fn arb_expirable_blob(max_words: usize) -> impl Strategy<Value = ExpirableBl
 }
 
 /// Strategy for OutputMode.
-pub fn arb_output_mode() -> impl Strategy<Value = OutputMode> {
+fn arb_output_mode() -> impl Strategy<Value = OutputMode> {
     prop_oneof![
         Just(OutputMode::ReturnData),
         (any::<u8>(), any::<u32>(), 1u32..=4096u32).prop_map(|(idx, off, len)| {
