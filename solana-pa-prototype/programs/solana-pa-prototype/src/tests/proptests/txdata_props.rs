@@ -1,10 +1,8 @@
 //! Property tests for TxData expiration logic.
 
 use crate::error::PAError;
-use crate::merkle::INITIAL_TREE_DEPTH;
-use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
+use crate::state::{MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS, SEVEN_DAYS_SLOTS};
 use crate::txdata::TxData;
-use anchor_lang::prelude::Pubkey;
 use proptest::prelude::*;
 
 proptest! {
@@ -101,72 +99,6 @@ proptest! {
 
         // expires_slot should be greater than max_valid
         prop_assert!(expires_slot > max_valid);
-    }
-
-    // =========================================================================
-    // CONFIGURABLE EXPIRY BOUNDS TESTS
-    // =========================================================================
-
-    /// Property: PAStateAccount with zero min_expiry_slots falls back to compile-time constant.
-    #[test]
-    fn prop_zero_min_expiry_slots_fallback(
-        bump in 0u8..=255u8,
-    ) {
-        let state = PAStateAccount {
-            bump,
-            authority: Pubkey::default(),
-            paused: false,
-            root: [0u8; 32],
-            next_index: 0,
-            current_depth: INITIAL_TREE_DEPTH as u8,
-            frontier: vec![[0u8; 32]],
-            min_expiry_slots: 0,  // Zero triggers fallback
-            max_expiry_slots: MAX_EXPIRY_SLOTS,
-        };
-
-        prop_assert_eq!(state.get_min_expiry_slots(), MIN_EXPIRY_SLOTS);
-    }
-
-    /// Property: PAStateAccount with zero max_expiry_slots falls back to compile-time constant.
-    #[test]
-    fn prop_zero_max_expiry_slots_fallback(
-        bump in 0u8..=255u8,
-    ) {
-        let state = PAStateAccount {
-            bump,
-            authority: Pubkey::default(),
-            paused: false,
-            root: [0u8; 32],
-            next_index: 0,
-            current_depth: INITIAL_TREE_DEPTH as u8,
-            frontier: vec![[0u8; 32]],
-            min_expiry_slots: MIN_EXPIRY_SLOTS,
-            max_expiry_slots: 0,  // Zero triggers fallback
-        };
-
-        prop_assert_eq!(state.get_max_expiry_slots(), MAX_EXPIRY_SLOTS);
-    }
-
-    /// Property: Non-zero expiry values are returned directly.
-    #[test]
-    fn prop_nonzero_expiry_slots_direct(
-        min_expiry in 1u64..u64::MAX,
-        max_expiry in 1u64..u64::MAX,
-    ) {
-        let state = PAStateAccount {
-            bump: 255,
-            authority: Pubkey::default(),
-            paused: false,
-            root: [0u8; 32],
-            next_index: 0,
-            current_depth: INITIAL_TREE_DEPTH as u8,
-            frontier: vec![[0u8; 32]],
-            min_expiry_slots: min_expiry,
-            max_expiry_slots: max_expiry,
-        };
-
-        prop_assert_eq!(state.get_min_expiry_slots(), min_expiry);
-        prop_assert_eq!(state.get_max_expiry_slots(), max_expiry);
     }
 
     // =========================================================================
@@ -281,7 +213,6 @@ proptest! {
     fn prop_config_max_at_most_7_days(
         max in 0u64..3_000_000,
     ) {
-        const SEVEN_DAYS_SLOTS: u64 = 7 * 24 * 60 * 60 * 1000 / 400;  // ~1.5M slots
         let is_valid = max <= SEVEN_DAYS_SLOTS;
         prop_assert_eq!(is_valid, max <= SEVEN_DAYS_SLOTS);
     }

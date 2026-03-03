@@ -2,12 +2,11 @@
 //!
 //! This module provides common test utilities used across multiple test modules.
 
-#![allow(dead_code)] // Test utilities may be used in future tests
-#![allow(unused_imports)] // Keep imports for future test utilities
-
 use anchor_lang::prelude::{AnchorSerialize, Pubkey};
 
-use crate::groth16::{Proof, Seal, Selector};
+use crate::groth16::Seal;
+use groth_16_verifier::Proof;
+use verifier_router::Selector;
 use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
 use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::types::*;
@@ -37,7 +36,6 @@ pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
 /// Contains one action with one compliance unit and two LogicVerifierInputs
 /// (consumed and created resources).
 pub fn create_minimal_transaction() -> Transaction {
-    let empty_tree_root = EMPTY_TREE_ROOT_INITIAL;
     let consumed_nullifier = Digest::from_bytes([1u8; 32]);
     let created_commitment = Digest::from_bytes([2u8; 32]);
     let consumed_logic_ref = Digest::from_bytes([3u8; 32]);
@@ -46,7 +44,7 @@ pub fn create_minimal_transaction() -> Transaction {
     let instance = ComplianceInstance {
         consumed_nullifier,
         consumed_logic_ref,
-        consumed_commitment_tree_root: empty_tree_root,
+        consumed_commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
         created_commitment,
         created_logic_ref,
         delta_x: [0u32; 8],
@@ -83,57 +81,14 @@ pub fn create_minimal_transaction() -> Transaction {
 
 /// Create a compliance instance with specified nullifier and commitment.
 pub fn create_compliance_instance(nullifier: Digest, commitment: Digest) -> ComplianceInstance {
-    let empty_tree_root = EMPTY_TREE_ROOT_INITIAL;
     ComplianceInstance {
         consumed_nullifier: nullifier,
         consumed_logic_ref: Digest::default(),
-        consumed_commitment_tree_root: empty_tree_root,
+        consumed_commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
         created_commitment: commitment,
         created_logic_ref: Digest::default(),
         delta_x: [0u32; 8],
         delta_y: [0u32; 8],
-    }
-}
-
-/// Create a transaction with the given compliance instances.
-pub fn create_transaction_with_compliance_instances(
-    instances: Vec<ComplianceInstance>,
-) -> Transaction {
-    // Build logic_verifier_inputs first (before consuming instances)
-    let mut logic_verifier_inputs: Vec<LogicVerifierInputs> = Vec::new();
-    for inst in &instances {
-        logic_verifier_inputs.push(LogicVerifierInputs {
-            tag: inst.consumed_nullifier,
-            verifying_key: inst.consumed_logic_ref,
-            app_data: AppData::default(),
-            proof: None,
-            instance_journal: Vec::new(),
-        });
-        logic_verifier_inputs.push(LogicVerifierInputs {
-            tag: inst.created_commitment,
-            verifying_key: inst.created_logic_ref,
-            app_data: AppData::default(),
-            proof: None,
-            instance_journal: Vec::new(),
-        });
-    }
-
-    let compliance_units: Vec<ComplianceUnit> = instances
-        .into_iter()
-        .map(|instance| ComplianceUnit {
-            instance,
-            proof: None,
-        })
-        .collect();
-
-    Transaction {
-        actions: vec![Action {
-            compliance_units,
-            logic_verifier_inputs,
-        }],
-        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
-        expected_balance: None,
-        aggregation_proof: None,
     }
 }
 
@@ -170,11 +125,10 @@ pub fn create_transaction_with_external_payload_and_logic_ref(
 pub fn create_transaction_with_multiple_lvi_external_payloads(
     payloads_per_lvi: Vec<Vec<ExpirableBlob>>,
 ) -> Transaction {
-    let empty_tree_root = EMPTY_TREE_ROOT_INITIAL;
     let instance = ComplianceInstance {
         consumed_nullifier: Digest::default(),
         consumed_logic_ref: Digest::default(),
-        consumed_commitment_tree_root: empty_tree_root,
+        consumed_commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
         created_commitment: Digest::default(),
         created_logic_ref: Digest::default(),
         delta_x: [0u32; 8],
@@ -186,12 +140,10 @@ pub fn create_transaction_with_multiple_lvi_external_payloads(
         .enumerate()
         .map(|(i, payloads)| LogicVerifierInputs {
             tag: Digest::default(),
-            verifying_key: Digest::from_bytes([i as u8; 32]), // Different verifying_key for each
+            verifying_key: Digest::from_bytes([i as u8; 32]),
             app_data: AppData {
-                resource_payload: vec![],
-                discovery_payload: vec![],
                 external_payload: payloads,
-                application_payload: vec![],
+                ..AppData::default()
             },
             proof: None,
             instance_journal: Vec::new(),
@@ -223,21 +175,6 @@ pub fn create_test_pa_state() -> PAStateAccount {
         next_index: 0,
         current_depth: INITIAL_TREE_DEPTH as u8,
         frontier: vec![ZEROS[0].to_bytes()], // Single entry for depth 1
-        min_expiry_slots: MIN_EXPIRY_SLOTS,
-        max_expiry_slots: MAX_EXPIRY_SLOTS,
-    }
-}
-
-/// Create a PAStateAccount at a specific depth for testing.
-pub fn create_test_pa_state_at_depth(depth: u8) -> PAStateAccount {
-    PAStateAccount {
-        bump: 0,
-        authority: Pubkey::default(),
-        paused: false,
-        root: ZEROS[depth as usize - 1].to_bytes(),
-        next_index: 0,
-        current_depth: depth,
-        frontier: vec![[0u8; 32]; depth as usize],
         min_expiry_slots: MIN_EXPIRY_SLOTS,
         max_expiry_slots: MAX_EXPIRY_SLOTS,
     }

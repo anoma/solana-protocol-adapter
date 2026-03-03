@@ -2,7 +2,9 @@
 
 use crate::encoding::{bytes_to_words, words_to_bytes};
 use crate::error::PAError;
-use crate::types::{ExpirableBlob, OutputMode, SolanaExternalCall};
+use crate::types::{ExpirableBlob, SolanaExternalCall};
+#[cfg(not(test))]
+use crate::types::OutputMode;
 
 /// Encode an external call into an ExpirableBlob.
 /// Serializes using bincode and converts to word array.
@@ -22,10 +24,7 @@ pub fn decode_external_call(blob: &ExpirableBlob) -> Result<SolanaExternalCall, 
 }
 
 /// Verify that actual output matches expected output.
-pub fn verify_output(expected: &[u8], actual: &[u8], _mode: &OutputMode) -> Result<(), PAError> {
-    if expected.len() != actual.len() {
-        return Err(PAError::ExternalCallOutputMismatch);
-    }
+pub fn verify_output(expected: &[u8], actual: &[u8]) -> Result<(), PAError> {
     if expected != actual {
         return Err(PAError::ExternalCallOutputMismatch);
     }
@@ -210,7 +209,7 @@ fn execute_forwarder_call<'info>(
 
     let actual_output = read_forwarder_output(&call.output_mode, &program_id, remaining_accounts)?;
 
-    verify_output(&call.expected_output, &actual_output, &call.output_mode)?;
+    verify_output(&call.expected_output, &actual_output)?;
 
     anchor_lang::prelude::emit!(crate::ForwarderCallExecutedEvent {
         forwarder: program_id,

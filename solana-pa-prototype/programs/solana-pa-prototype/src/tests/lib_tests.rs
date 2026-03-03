@@ -1,5 +1,7 @@
 //! Unit tests for lib module (main program tests).
 
+use anchor_lang::prelude::Pubkey;
+
 use crate::external_calls::{
     build_forwarder_instruction_data, encode_external_call, FORWARD_CALL_DISCRIMINATOR,
 };
@@ -11,7 +13,6 @@ use crate::{
     ApplicationPayloadEvent, DiscoveryPayloadEvent, ExternalPayloadEvent, ResourcePayloadEvent,
     DELETION_CRITERION_NEVER,
 };
-use anchor_lang::prelude::Pubkey;
 
 // =========================================================================
 // SERIALIZATION FORMAT TESTS (ARM-RISC0 COMPATIBILITY)
@@ -85,29 +86,22 @@ mod fixture_tests {
 mod integration_tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_external_call_transaction_structure() {
+    #[test]
+    fn test_external_call_transaction_structure() {
         use block_time_forwarder::RESULT_LT;
 
-        // Create an external call for BlockTimeForwarder
-        // Input: timestamp far in the past (0) -> should return RESULT_LT (0)
-        let forwarder_program_id = [0x11; 32]; // Placeholder - use actual deployed ID
-
+        let forwarder_program_id = [0x11; 32];
         let expected_time: i64 = 0; // Unix epoch - far in past
         let call = SolanaExternalCall {
             program_id: forwarder_program_id,
             instruction_data: expected_time.to_le_bytes().to_vec(),
-            expected_output: vec![RESULT_LT], // 0 = LT (past < current)
+            expected_output: vec![RESULT_LT],
             output_mode: OutputMode::ReturnData,
         };
 
-        // Encode the call
         let blob = encode_external_call(&call);
-
-        // Create transaction with this external call
         let tx = create_transaction_with_external_payload(vec![blob]);
 
-        // Verify extraction works
         let extracted = settle::extract_external_calls(&tx).unwrap();
         assert_eq!(extracted.len(), 1, "Should have 1 external call");
 
@@ -119,22 +113,13 @@ mod integration_tests {
         );
         assert_eq!(extracted_call.expected_output, vec![RESULT_LT]);
 
-        // Verify instruction data building
         let logic_ref_bytes = logic_ref.to_bytes();
         let ix_data =
             build_forwarder_instruction_data(&logic_ref_bytes, &extracted_call.instruction_data);
 
-        // Verify format: discriminator (8) + logic_ref (32) + len (4) + data (8) = 52 bytes
+        // discriminator (8) + logic_ref (32) + len (4) + data (8) = 52 bytes
         assert_eq!(ix_data.len(), 52);
-
-        // Verify discriminator
         assert_eq!(&ix_data[0..8], &FORWARD_CALL_DISCRIMINATOR);
-
-        println!("External call transaction structure validated");
-        println!("  - Program ID: {:?}", &forwarder_program_id[..4]);
-        println!("  - Input (timestamp): {}", expected_time);
-        println!("  - Expected output: {:?}", vec![RESULT_LT]);
-        println!("  - Instruction data length: {} bytes", ix_data.len());
     }
 }
 
@@ -178,59 +163,35 @@ mod governance_tests {
 
     #[test]
     fn test_paused_state_blocks_settlement_check() {
-        // This tests the logic of the paused check (not the full instruction)
         let authority = Pubkey::new_unique();
         let state = create_mock_pa_state(authority, true);
-
-        // The check `require!(!state.paused, PAError::Paused)` should fail
         assert!(state.paused, "State should be paused");
-        // In the actual instruction, this would return Err(PAError::Paused)
     }
 
     #[test]
     fn test_unpaused_state_allows_settlement_check() {
         let authority = Pubkey::new_unique();
         let state = create_mock_pa_state(authority, false);
-
-        // The check `require!(!state.paused, PAError::Paused)` should pass
         assert!(!state.paused, "State should not be paused");
     }
 
     #[test]
     fn test_emergency_stop_sets_paused_true() {
-        // Simulating the emergency_stop logic
         let authority = Pubkey::new_unique();
         let mut state = create_mock_pa_state(authority, false);
-
         assert!(!state.paused, "State should start unpaused");
 
-        // Simulate emergency_stop
         state.paused = true;
-
         assert!(state.paused, "State should be paused after emergency_stop");
     }
 
     #[test]
     fn test_cannot_emergency_stop_when_already_paused() {
-        // The require!(!state.paused, PAError::AlreadyPaused) should fail
         let authority = Pubkey::new_unique();
         let state = create_mock_pa_state(authority, true);
-
-        // Trying to pause again should fail
         assert!(state.paused, "Already paused - should error in instruction");
     }
 
-    #[test]
-    fn test_authority_field_is_32_bytes() {
-        // Pubkey is always 32 bytes
-        assert_eq!(std::mem::size_of::<Pubkey>(), 32);
-    }
-
-    #[test]
-    fn test_paused_field_is_1_byte() {
-        // bool is 1 byte in Solana/Anchor
-        assert_eq!(std::mem::size_of::<bool>(), 1);
-    }
 }
 
 // =========================================================================
@@ -345,27 +306,17 @@ mod event_tests {
         };
 
         // Count payloads that would be emitted (deletion_criterion == NEVER)
-        let mut would_emit = 0;
-        for p in &app_data.resource_payload {
-            if p.deletion_criterion == DELETION_CRITERION_NEVER {
-                would_emit += 1;
-            }
-        }
-        for p in &app_data.discovery_payload {
-            if p.deletion_criterion == DELETION_CRITERION_NEVER {
-                would_emit += 1;
-            }
-        }
-        for p in &app_data.external_payload {
-            if p.deletion_criterion == DELETION_CRITERION_NEVER {
-                would_emit += 1;
-            }
-        }
-        for p in &app_data.application_payload {
-            if p.deletion_criterion == DELETION_CRITERION_NEVER {
-                would_emit += 1;
-            }
-        }
+        let all_payloads = [
+            &app_data.resource_payload,
+            &app_data.discovery_payload,
+            &app_data.external_payload,
+            &app_data.application_payload,
+        ];
+        let would_emit = all_payloads
+            .iter()
+            .flat_map(|payloads| payloads.iter())
+            .filter(|p| p.deletion_criterion == DELETION_CRITERION_NEVER)
+            .count();
 
         // Should emit 2 payloads: resource[0] and discovery[0]
         assert_eq!(would_emit, 2);

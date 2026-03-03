@@ -2,6 +2,8 @@
 //!
 //! Must match arm-risc0's hash_two function exactly.
 
+use arm_core::constants::EMPTY_HASH_WORDS;
+
 use crate::types::Digest;
 use anchor_lang::solana_program::hash::hashv;
 
@@ -12,8 +14,6 @@ pub const INITIAL_TREE_DEPTH: usize = 1;
 /// Maximum tree depth for the commitment tree.
 /// Supports up to 2^32 = 4,294,967,296 leaves.
 pub const MAX_TREE_DEPTH: usize = 32;
-
-use arm_core::constants::EMPTY_HASH_WORDS;
 
 /// Padding leaf used for empty tree slots.
 pub const PADDING_LEAF: Digest = Digest(EMPTY_HASH_WORDS);
@@ -184,10 +184,6 @@ pub const ZEROS: [Digest; MAX_TREE_DEPTH] = [
         0x6a97b8a9,
     ]),
 ];
-
-/// Precomputed empty tree root at maximum depth = ZEROS[MAX_TREE_DEPTH - 1].
-/// For variable-depth trees, empty root at depth d = ZEROS[d - 1].
-pub const EMPTY_TREE_ROOT_MAX: Digest = ZEROS[MAX_TREE_DEPTH - 1];
 
 /// Empty tree root at initial depth (depth 1) = ZEROS[0] = PADDING_LEAF.
 pub const EMPTY_TREE_ROOT_INITIAL: Digest = ZEROS[INITIAL_TREE_DEPTH - 1];

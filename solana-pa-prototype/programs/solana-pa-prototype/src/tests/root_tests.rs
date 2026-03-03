@@ -1,10 +1,18 @@
 //! Unit tests for root module.
 
-use crate::merkle::{INITIAL_TREE_DEPTH, PADDING_LEAF};
+use crate::merkle::PADDING_LEAF;
 use crate::root::{derive_root_marker_pda, is_root_valid, ROOT_MARKER_SEED};
-use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
+use crate::state::PAStateAccount;
+use crate::tests::utils::create_mock_pa_state;
 use crate::types::Digest;
 use anchor_lang::prelude::Pubkey;
+
+/// Create a PAStateAccount with a specific root for root-validation tests.
+fn state_with_root(root: [u8; 32]) -> PAStateAccount {
+    let mut state = create_mock_pa_state(Pubkey::new_unique(), false);
+    state.root = root;
+    state
+}
 
 // =========================================================================
 // ROOT VALIDATION TESTS
@@ -12,17 +20,7 @@ use anchor_lang::prelude::Pubkey;
 
 #[test]
 fn test_is_root_valid_current_root() {
-    let state = PAStateAccount {
-        bump: 0,
-        authority: Pubkey::new_unique(),
-        paused: false,
-        root: [0xAA; 32],
-        next_index: 0,
-        current_depth: INITIAL_TREE_DEPTH as u8,
-        frontier: vec![[0; 32]],
-        min_expiry_slots: MIN_EXPIRY_SLOTS,
-        max_expiry_slots: MAX_EXPIRY_SLOTS,
-    };
+    let state = state_with_root([0xAA; 32]);
     let pa_state_key = Pubkey::new_unique();
     let root = Digest::from_bytes([0xAA; 32]);
 
@@ -31,17 +29,7 @@ fn test_is_root_valid_current_root() {
 
 #[test]
 fn test_is_root_valid_padding_leaf() {
-    let state = PAStateAccount {
-        bump: 0,
-        authority: Pubkey::new_unique(),
-        paused: false,
-        root: [0xBB; 32],
-        next_index: 0,
-        current_depth: INITIAL_TREE_DEPTH as u8,
-        frontier: vec![[0; 32]],
-        min_expiry_slots: MIN_EXPIRY_SLOTS,
-        max_expiry_slots: MAX_EXPIRY_SLOTS,
-    };
+    let state = state_with_root([0xBB; 32]);
     let pa_state_key = Pubkey::new_unique();
 
     assert!(is_root_valid(&state, &pa_state_key, &PADDING_LEAF, &[]));
@@ -49,17 +37,7 @@ fn test_is_root_valid_padding_leaf() {
 
 #[test]
 fn test_is_root_valid_non_current_without_marker() {
-    let state = PAStateAccount {
-        bump: 0,
-        authority: Pubkey::new_unique(),
-        paused: false,
-        root: [0xAA; 32],
-        next_index: 0,
-        current_depth: INITIAL_TREE_DEPTH as u8,
-        frontier: vec![[0; 32]],
-        min_expiry_slots: MIN_EXPIRY_SLOTS,
-        max_expiry_slots: MAX_EXPIRY_SLOTS,
-    };
+    let state = state_with_root([0xAA; 32]);
     let pa_state_key = Pubkey::new_unique();
     let old_root = Digest::from_bytes([0xBB; 32]);
 

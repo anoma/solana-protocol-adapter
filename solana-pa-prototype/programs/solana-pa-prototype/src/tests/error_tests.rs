@@ -5,14 +5,14 @@ use crate::external_calls::{decode_external_call, verify_output};
 use crate::groth16::prepare_proof_for_verification;
 use crate::tests::utils::create_minimal_transaction;
 use crate::txdata::TxData;
-use crate::types::{ExpirableBlob, OutputMode};
+use crate::types::ExpirableBlob;
 
 #[test]
 fn test_error_external_call_output_mismatch() {
     let expected = vec![1, 2, 3];
     let actual = vec![4, 5, 6];
 
-    let result = verify_output(&expected, &actual, &OutputMode::ReturnData);
+    let result = verify_output(&expected, &actual);
     assert!(result.is_err());
 
     match result {
@@ -51,7 +51,7 @@ fn test_error_invalid_aggregation_proof_bytes() {
 
     let result = prepare_proof_for_verification(&tx);
     match result {
-        Err(PAError::InvalidProof) | Err(PAError::UnsupportedProofType) => {}
-        _ => panic!("Expected InvalidProof or UnsupportedProofType error"),
+        Err(PAError::InvalidProof) => {}
+        _ => panic!("Expected InvalidProof error"),
     }
 }

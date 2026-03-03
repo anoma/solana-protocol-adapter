@@ -38,11 +38,9 @@ pub struct PAStateAccount {
     pub frontier: Vec<[u8; 32]>,
 
     /// Minimum slots in the future for TxData expiration.
-    /// Default: MIN_EXPIRY_SLOTS (100). Zero means use compile-time constant.
     pub min_expiry_slots: u64,
 
     /// Maximum slots in the future for TxData expiration.
-    /// Default: MAX_EXPIRY_SLOTS (216_000). Zero means use compile-time constant.
     pub max_expiry_slots: u64,
 }
 
@@ -56,15 +54,15 @@ impl PAStateAccount {
     pub const VEC_OVERHEAD: usize = 4;
 
     /// Calculate space required for a given tree depth.
-    pub fn space_for_depth(depth: usize) -> usize {
+    pub const fn space_for_depth(depth: usize) -> usize {
         Self::BASE_SPACE + Self::VEC_OVERHEAD + (32 * depth)
     }
 
     /// Initial space for depth 1 tree (135 bytes).
-    pub const INITIAL_SPACE: usize = 99 + 4 + 32;
+    pub const INITIAL_SPACE: usize = Self::space_for_depth(1);
 
     /// Maximum space for depth 32 tree (1127 bytes).
-    pub const MAX_SPACE: usize = 99 + 4 + (32 * MAX_TREE_DEPTH);
+    pub const MAX_SPACE: usize = Self::BASE_SPACE + Self::VEC_OVERHEAD + (32 * MAX_TREE_DEPTH);
 
     /// Get current tree depth.
     pub fn depth(&self) -> usize {
@@ -96,11 +94,6 @@ impl PAStateAccount {
         new_level
     }
 
-    /// Get the current root as a Digest.
-    pub fn get_root(&self) -> Digest {
-        Digest::from_bytes(self.root)
-    }
-
     /// Get frontier entry at level as a Digest.
     pub fn get_frontier(&self, level: usize) -> Digest {
         Digest::from_bytes(self.frontier[level])
@@ -111,28 +104,6 @@ impl PAStateAccount {
         self.frontier[level] = digest.to_bytes();
     }
 
-    /// Set root.
-    pub fn set_root(&mut self, digest: Digest) {
-        self.root = digest.to_bytes();
-    }
-
-    /// Get min_expiry_slots with fallback for migration (0 = use compile-time constant).
-    pub fn get_min_expiry_slots(&self) -> u64 {
-        if self.min_expiry_slots == 0 {
-            MIN_EXPIRY_SLOTS
-        } else {
-            self.min_expiry_slots
-        }
-    }
-
-    /// Get max_expiry_slots with fallback for migration (0 = use compile-time constant).
-    pub fn get_max_expiry_slots(&self) -> u64 {
-        if self.max_expiry_slots == 0 {
-            MAX_EXPIRY_SLOTS
-        } else {
-            self.max_expiry_slots
-        }
-    }
 }
 
 /// Seeds for PAState PDA derivation.
@@ -179,3 +150,6 @@ pub const MIN_EXPIRY_SLOTS: u64 = 100;
 
 /// Maximum slots in the future for TxData expiration (~24 hours at 400ms/slot).
 pub const MAX_EXPIRY_SLOTS: u64 = 216_000;
+
+/// Maximum expiry config value (~7 days at 400ms/slot).
+pub const SEVEN_DAYS_SLOTS: u64 = 7 * 24 * 60 * 60 * 1000 / 400;

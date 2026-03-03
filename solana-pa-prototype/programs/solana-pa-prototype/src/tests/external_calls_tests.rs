@@ -1,6 +1,5 @@
 //! Unit tests for external_calls module.
 
-use crate::error::PAError;
 use crate::external_calls::encode_external_call;
 use crate::settle;
 use crate::tests::utils::{
@@ -8,14 +7,7 @@ use crate::tests::utils::{
     create_transaction_with_external_payload_and_logic_ref,
     create_transaction_with_multiple_lvi_external_payloads,
 };
-use crate::types::{Digest, ExpirableBlob, OutputMode, SolanaExternalCall, Transaction};
-
-/// Dry-run external call execution for unit testing.
-/// Returns the count of external calls that would be executed.
-fn execute_external_calls_dry_run(tx: &Transaction) -> Result<usize, PAError> {
-    let calls = settle::extract_external_calls(tx)?;
-    Ok(calls.len())
-}
+use crate::types::{Digest, ExpirableBlob, OutputMode, SolanaExternalCall};
 
 // =========================================================================
 // EXTRACTION TESTS
@@ -123,58 +115,3 @@ fn test_extract_external_calls_logic_ref_association() {
     );
 }
 
-// =========================================================================
-// EXECUTION TESTS
-// =========================================================================
-
-#[test]
-fn test_execute_external_calls_no_calls() {
-    let tx = create_minimal_transaction();
-    let result = execute_external_calls_dry_run(&tx);
-    assert!(
-        result.is_ok(),
-        "Transaction with no external calls should succeed"
-    );
-    assert_eq!(result.unwrap(), 0, "Should return 0 calls executed");
-}
-
-#[test]
-fn test_execute_external_calls_count() {
-    let call = SolanaExternalCall {
-        program_id: [0xAA; 32],
-        instruction_data: vec![1, 2, 3, 4, 5, 6, 7, 8],
-        expected_output: vec![0x00],
-        output_mode: OutputMode::ReturnData,
-    };
-    let blob = encode_external_call(&call);
-    let tx = create_transaction_with_external_payload(vec![blob]);
-
-    let result = execute_external_calls_dry_run(&tx);
-    assert!(result.is_ok(), "Should succeed in dry run");
-    assert_eq!(result.unwrap(), 1, "Should return 1 call to execute");
-}
-
-#[test]
-fn test_execute_external_calls_multiple_count() {
-    let call1 = SolanaExternalCall {
-        program_id: [0x11; 32],
-        instruction_data: vec![1, 2],
-        expected_output: vec![0x00],
-        output_mode: OutputMode::ReturnData,
-    };
-    let call2 = SolanaExternalCall {
-        program_id: [0x22; 32],
-        instruction_data: vec![3, 4],
-        expected_output: vec![0x01],
-        output_mode: OutputMode::ReturnData,
-    };
-
-    let tx = create_transaction_with_multiple_lvi_external_payloads(vec![
-        vec![encode_external_call(&call1)],
-        vec![encode_external_call(&call2)],
-    ]);
-
-    let result = execute_external_calls_dry_run(&tx);
-    assert!(result.is_ok(), "Should succeed in dry run");
-    assert_eq!(result.unwrap(), 2, "Should return 2 calls to execute");
-}

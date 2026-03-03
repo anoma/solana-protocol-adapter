@@ -3,7 +3,8 @@
 use super::strategies::{
     arb_compliance_instance, arb_compliance_instance_zero_delta, build_tx_from_instances,
 };
-use crate::delta::{accumulate_deltas, collect_tags, compute_verifying_key, verify_delta_proof};
+use arm_solana::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
+use crate::delta::verify_delta_proof;
 use crate::types::{Delta, DeltaWitness};
 use proptest::prelude::*;
 

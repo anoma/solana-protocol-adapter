@@ -5,7 +5,6 @@
 
 pub mod utils;
 
-// Unit tests (added incrementally as we migrate)
 mod delta_tests;
 mod encoding_tests;
 mod error_tests;

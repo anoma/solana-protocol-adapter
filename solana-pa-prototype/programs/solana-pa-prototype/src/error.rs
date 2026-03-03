@@ -20,9 +20,6 @@ pub enum PAError {
     NonExistingRoot,
     #[msg("Root marker PDA pubkey mismatch")]
     RootPdaMismatch,
-    #[msg("Root marker already exists")]
-    RootAlreadyExists,
-
     // =========================================================================
     // TxData errors
     // =========================================================================
@@ -52,10 +49,6 @@ pub enum PAError {
     // =========================================================================
     #[msg("Invalid proof")]
     InvalidProof,
-    #[msg("Unsupported proof type (expected Groth16 receipt)")]
-    UnsupportedProofType,
-    #[msg("Proof verification failed")]
-    ProofVerificationFailed,
     #[msg("Verifier router call failed (verifier may be estopped)")]
     VerifierRouterFailed,
     #[msg("Aggregation required: non-aggregated proofs not enabled")]
@@ -92,10 +85,6 @@ pub enum PAError {
     // =========================================================================
     #[msg("Logic verifier input not found for tag")]
     TagNotFound,
-    #[msg("Logic reference mismatch: verifying key does not match compliance instance")]
-    LogicRefMismatch,
-    #[msg("Tag count mismatch: logic_verifier_inputs.len() != 2 * compliance_units.len()")]
-    TagCountMismatch,
 
     // =========================================================================
     // Protocol state errors

@@ -95,14 +95,3 @@ pub fn check_and_create_nullifier_marker<'info>(
     Ok(())
 }
 
-/// Check if a nullifier marker exists (i.e., nullifier is spent).
-///
-/// # Arguments
-/// * `program_id` - The PA program ID
-/// * `marker` - The nullifier marker account
-///
-/// # Returns
-/// `true` if the marker exists and is owned by the program (nullifier spent)
-pub fn is_nullifier_spent(program_id: &Pubkey, marker: &AccountInfo) -> bool {
-    marker.owner == program_id
-}

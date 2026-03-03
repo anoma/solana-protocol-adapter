@@ -1,6 +1,6 @@
 //! Property tests for external call encoding/decoding.
 
-use super::strategies::{arb_byte_vec, arb_output_mode, arb_solana_external_call};
+use super::strategies::{arb_byte_vec, arb_solana_external_call};
 use crate::external_calls::{
     build_forwarder_instruction_data, decode_external_call, encode_external_call, verify_output,
     FORWARD_CALL_DISCRIMINATOR,
@@ -22,9 +22,8 @@ proptest! {
     #[test]
     fn prop_verify_output_equal_succeeds(
         data in arb_byte_vec(512),
-        mode in arb_output_mode(),
     ) {
-        let result = verify_output(&data, &data, &mode);
+        let result = verify_output(&data, &data);
         prop_assert!(result.is_ok(), "verify_output should succeed when expected == actual");
     }
 
@@ -32,13 +31,11 @@ proptest! {
     #[test]
     fn prop_verify_output_mismatch_fails(
         expected in arb_byte_vec(512).prop_filter("non-empty", |v| !v.is_empty()),
-        mode in arb_output_mode(),
     ) {
-        // Create actual that differs from expected by flipping first byte
         let mut actual = expected.clone();
         actual[0] = actual[0].wrapping_add(1);
 
-        let result = verify_output(&expected, &actual, &mode);
+        let result = verify_output(&expected, &actual);
         prop_assert!(result.is_err(), "verify_output should fail when expected != actual");
     }
 
@@ -47,13 +44,11 @@ proptest! {
     fn prop_verify_output_length_mismatch_fails(
         expected in arb_byte_vec(512),
         extra_byte in any::<u8>(),
-        mode in arb_output_mode(),
     ) {
-        // Create actual with one extra byte
         let mut actual = expected.clone();
         actual.push(extra_byte);
 
-        let result = verify_output(&expected, &actual, &mode);
+        let result = verify_output(&expected, &actual);
         prop_assert!(result.is_err(), "verify_output should fail when lengths differ");
     }
 

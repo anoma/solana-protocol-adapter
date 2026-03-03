@@ -5,8 +5,6 @@ use crate::types::Transaction;
 
 use arm_solana::SolanaArmError;
 
-pub use arm_solana::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
-
 /// Map arm-solana delta errors to PA error codes.
 fn map_arm_error(e: SolanaArmError) -> PAError {
     match e {

@@ -1,9 +1,12 @@
 //! Unit tests for delta proof verification and curve point validation.
 
-use crate::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
-use crate::tests::utils::create_compliance_instance;
-use crate::types::{Action, ComplianceUnit, Delta, DeltaWitness, LogicVerifierInputs, Transaction};
 use arm_solana::SolanaArmError;
+
+use arm_solana::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
+use crate::tests::utils::create_compliance_instance;
+use crate::types::{
+    Action, ComplianceUnit, Delta, DeltaWitness, LogicVerifierInputs, Transaction,
+};
 
 /// Convert big-endian bytes to [u32; 8] words using arm-risc0's encoding.
 ///

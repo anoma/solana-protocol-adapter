@@ -363,21 +363,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "anoma-rm-risc0"
-version = "1.1.0"
-source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-support#36475d310cd538be0fff5c054fa63e57cba169b0"
+name = "anoma-rm-core"
+version = "1.0.0"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#d3e73ae5f4b25d509ba79d8c07b81d428f5007c2"
 dependencies = [
  "bincode",
  "borsh 1.6.0",
  "bytemuck",
- "dashu",
  "hex",
  "hex-literal",
- "rand 0.8.5",
  "serde",
  "serde_with",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "anoma-rm-solana"
+version = "1.0.0"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#d3e73ae5f4b25d509ba79d8c07b81d428f5007c2"
+dependencies = [
+ "anoma-rm-core",
+ "bytemuck",
+ "dashu",
  "sha2 0.10.9",
- "sha3",
  "solana-program",
  "solana-secp256k1",
  "thiserror 2.0.18",
@@ -5999,7 +6007,8 @@ name = "solana-pa-prototype"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
- "anoma-rm-risc0",
+ "anoma-rm-core",
+ "anoma-rm-solana",
  "base64ct",
  "bincode",
  "block-time-forwarder",

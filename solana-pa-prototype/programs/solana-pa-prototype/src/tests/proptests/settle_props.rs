@@ -16,7 +16,7 @@ proptest! {
     ) {
         let instances = vec![inst1.clone(), inst2.clone(), inst3.clone()];
         let tx = build_tx_from_instances(&instances);
-        let nullifiers = extract_nullifiers(&tx).expect("extract_nullifiers should succeed");
+        let nullifiers = extract_nullifiers(&tx);
 
         prop_assert_eq!(nullifiers.len(), 3, "should extract 3 nullifiers");
         prop_assert_eq!(nullifiers[0], inst1.consumed_nullifier, "first nullifier should match");
@@ -33,7 +33,7 @@ proptest! {
     ) {
         let instances = vec![inst1.clone(), inst2.clone(), inst3.clone()];
         let tx = build_tx_from_instances(&instances);
-        let commitments = extract_commitments(&tx).expect("extract_commitments should succeed");
+        let commitments = extract_commitments(&tx);
 
         prop_assert_eq!(commitments.len(), 3, "should extract 3 commitments");
         prop_assert_eq!(commitments[0], inst1.created_commitment, "first commitment should match");
@@ -47,8 +47,8 @@ proptest! {
         instances in prop::collection::vec(arb_compliance_instance(), 1..10),
     ) {
         let tx = build_tx_from_instances(&instances);
-        let nullifiers = extract_nullifiers(&tx).expect("extract_nullifiers should succeed");
-        let commitments = extract_commitments(&tx).expect("extract_commitments should succeed");
+        let nullifiers = extract_nullifiers(&tx);
+        let commitments = extract_commitments(&tx);
 
         prop_assert_eq!(
             nullifiers.len(),

@@ -125,10 +125,8 @@ pub fn is_root_valid(
     }
 
     // Check for root marker PDA in remaining_accounts
-    let (expected_pda, _bump) = Pubkey::find_program_address(
-        &[ROOT_MARKER_SEED, pa_state_key.as_ref(), &root.to_bytes()],
-        &crate::ID,
-    );
+    let (expected_pda, _bump) =
+        derive_root_marker_pda(&crate::ID, pa_state_key, &root.to_bytes());
 
     remaining_accounts
         .iter()

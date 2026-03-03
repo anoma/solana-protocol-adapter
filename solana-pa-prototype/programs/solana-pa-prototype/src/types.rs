@@ -9,7 +9,7 @@ pub use arm_core::delta_types::DeltaWitness;
 pub use arm_core::logic_instance::LogicVerifierInputs;
 pub use arm_core::logic_instance::{AppData, ExpirableBlob};
 pub use arm_core::transaction::{Delta, Transaction};
-pub use arm_core::{Digest, DIGEST_WORDS};
+pub use arm_core::Digest;
 
 /// Solana-specific external call structure.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

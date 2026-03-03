@@ -15,17 +15,6 @@ fn test_prepare_proof_accepts_batch_discriminant() {
 }
 
 #[test]
-fn test_prepare_proof_ignores_strategy_discriminant_like_evm_pa() {
-    // If a sequential aggregation proof is submitted, the PA does not explicitly reject it.
-    // It attempts verification as "batch" and the verifier should reject it later.
-    let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = Some(fake_aggregation_proof_bytes());
-
-    let prepared = prepare_proof_for_verification(&tx).unwrap();
-    assert_eq!(prepared.image_id, BATCH_AGGREGATION_IMAGE_ID);
-}
-
-#[test]
 fn test_prepare_proof_no_proof() {
     let mut tx = create_minimal_transaction();
     tx.aggregation_proof = None;
