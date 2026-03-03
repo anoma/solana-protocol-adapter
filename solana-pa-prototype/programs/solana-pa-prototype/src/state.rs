@@ -103,7 +103,6 @@ impl PAStateAccount {
     pub fn set_frontier(&mut self, level: usize, digest: Digest) {
         self.frontier[level] = digest.to_bytes();
     }
-
 }
 
 /// Seeds for PAState PDA derivation.

@@ -1,10 +1,10 @@
 //! Property tests for delta accumulation and verification.
 
 use super::strategies::{arb_compliance_instance, arb_compliance_instance_zero_delta};
-use crate::tests::utils::build_tx_from_instances;
-use arm_solana::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
 use crate::delta::verify_delta_proof;
+use crate::tests::utils::build_tx_from_instances;
 use crate::types::{Delta, DeltaWitness};
+use arm_solana::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
 use proptest::prelude::*;
 
 proptest! {

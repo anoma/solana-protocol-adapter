@@ -130,7 +130,6 @@ mod governance_tests {
         assert_eq!(PAStateAccount::space_for_depth(2), 167);
         assert_eq!(PAStateAccount::space_for_depth(32), 1127);
     }
-
 }
 
 // =========================================================================

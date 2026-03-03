@@ -6,7 +6,7 @@
 use anchor_lang::prelude::Pubkey;
 
 use crate::error::PAError;
-use crate::state::{TxDataAccount, MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
+use crate::state::{TxDataAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 
 /// Create a TxDataAccount for testing with given capacity and expiry.
 fn make_txdata(capacity: usize, expires_slot: u64) -> TxDataAccount {

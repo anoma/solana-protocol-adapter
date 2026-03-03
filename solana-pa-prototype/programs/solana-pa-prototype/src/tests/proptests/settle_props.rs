@@ -1,8 +1,8 @@
 //! Property tests for settlement extraction.
 
 use super::strategies::arb_compliance_instance;
-use crate::tests::utils::build_tx_from_instances;
 use crate::settle::{extract_commitments, extract_nullifiers};
+use crate::tests::utils::build_tx_from_instances;
 use proptest::prelude::*;
 
 proptest! {

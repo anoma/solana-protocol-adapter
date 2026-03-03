@@ -96,4 +96,3 @@ pub fn arb_solana_external_call(max_data_len: usize) -> impl Strategy<Value = So
             output_mode: mode,
         })
 }
-

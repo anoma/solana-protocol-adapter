@@ -18,7 +18,8 @@ fn assert_pda_recreatable(nullifier: &[u8; 32]) {
     .expect("PDA should be recreatable with bump");
 
     assert_eq!(
-        pda, recreated,
+        pda,
+        recreated,
         "Recreated PDA should match for nullifier {:02x?}",
         &nullifier[..4]
     );
@@ -101,4 +102,3 @@ fn test_derive_nullifier_pda_all_zeros() {
 fn test_derive_nullifier_pda_all_ones() {
     assert_pda_recreatable(&[0xFF; 32]);
 }
-

@@ -2,10 +2,10 @@
 
 use arm_solana::SolanaArmError;
 
-use arm_solana::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
 use crate::encoding::bytes_to_words;
 use crate::tests::utils::{build_tx_from_instances, create_compliance_instance};
 use crate::types::{Digest, Transaction};
+use arm_solana::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
 
 /// secp256k1 generator point G (big-endian SEC1 format).
 const G_X_BE: [u8; 32] =
@@ -35,17 +35,13 @@ fn build_tx_with_two_deltas(
     delta2_x: [u32; 8],
     delta2_y: [u32; 8],
 ) -> Transaction {
-    let mut i1 = create_compliance_instance(
-        Digest::from_bytes([1u8; 32]),
-        Digest::from_bytes([2u8; 32]),
-    );
+    let mut i1 =
+        create_compliance_instance(Digest::from_bytes([1u8; 32]), Digest::from_bytes([2u8; 32]));
     i1.delta_x = delta1_x;
     i1.delta_y = delta1_y;
 
-    let mut i2 = create_compliance_instance(
-        Digest::from_bytes([3u8; 32]),
-        Digest::from_bytes([4u8; 32]),
-    );
+    let mut i2 =
+        create_compliance_instance(Digest::from_bytes([3u8; 32]), Digest::from_bytes([4u8; 32]));
     i2.delta_x = delta2_x;
     i2.delta_y = delta2_y;
 
@@ -69,7 +65,10 @@ fn compute_neg_g() -> ([u32; 8], [u32; 8]) {
     let neg_gy_vec = neg_gy.to_bytes_be();
     neg_gy_bytes[32 - neg_gy_vec.len()..].copy_from_slice(&neg_gy_vec);
 
-    (be_bytes_to_word_array(&G_X_BE), be_bytes_to_word_array(&neg_gy_bytes))
+    (
+        be_bytes_to_word_array(&G_X_BE),
+        be_bytes_to_word_array(&neg_gy_bytes),
+    )
 }
 
 #[test]
@@ -201,7 +200,10 @@ fn test_point_doubling_g_plus_g() {
 #[test]
 fn test_inverse_points_g_plus_neg_g_equals_identity() {
     // G + (-G) = identity (inverse points case in safe_point_add)
-    let (g_x, g_y) = (be_bytes_to_word_array(&G_X_BE), be_bytes_to_word_array(&G_Y_BE));
+    let (g_x, g_y) = (
+        be_bytes_to_word_array(&G_X_BE),
+        be_bytes_to_word_array(&G_Y_BE),
+    );
     let (neg_g_x, neg_g_y) = compute_neg_g();
 
     let tx = build_tx_with_two_deltas(g_x, g_y, neg_g_x, neg_g_y);

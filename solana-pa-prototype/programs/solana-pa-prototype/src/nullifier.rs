@@ -94,4 +94,3 @@ pub fn check_and_create_nullifier_marker<'info>(
 
     Ok(())
 }
-

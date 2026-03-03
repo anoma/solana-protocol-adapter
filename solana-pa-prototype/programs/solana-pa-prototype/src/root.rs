@@ -33,10 +33,7 @@ pub fn derive_root_pda(
     pa_state: &Pubkey,
     root_bytes: &[u8; 32],
 ) -> (Pubkey, u8) {
-    Pubkey::find_program_address(
-        &[ROOT_SEED, pa_state.as_ref(), root_bytes],
-        program_id,
-    )
+    Pubkey::find_program_address(&[ROOT_SEED, pa_state.as_ref(), root_bytes], program_id)
 }
 
 /// Create a root marker PDA if it doesn't already exist.
@@ -133,8 +130,7 @@ pub fn is_root_valid(
     }
 
     // Check for root marker PDA in remaining_accounts
-    let (expected_pda, _bump) =
-        derive_root_pda(program_id, pa_state_key, &root.to_bytes());
+    let (expected_pda, _bump) = derive_root_pda(program_id, pa_state_key, &root.to_bytes());
 
     remaining_accounts
         .iter()

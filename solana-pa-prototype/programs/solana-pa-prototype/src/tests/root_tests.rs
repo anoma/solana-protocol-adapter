@@ -25,7 +25,13 @@ fn test_is_root_valid_current_root() {
     let pa_state_key = Pubkey::new_unique();
     let root = Digest::from_bytes([0xAA; 32]);
 
-    assert!(is_root_valid(&state, &program_id, &pa_state_key, &root, &[]));
+    assert!(is_root_valid(
+        &state,
+        &program_id,
+        &pa_state_key,
+        &root,
+        &[]
+    ));
 }
 
 #[test]
@@ -34,7 +40,13 @@ fn test_is_root_valid_padding_leaf() {
     let program_id = Pubkey::new_unique();
     let pa_state_key = Pubkey::new_unique();
 
-    assert!(is_root_valid(&state, &program_id, &pa_state_key, &PADDING_LEAF, &[]));
+    assert!(is_root_valid(
+        &state,
+        &program_id,
+        &pa_state_key,
+        &PADDING_LEAF,
+        &[]
+    ));
 }
 
 #[test]
@@ -44,7 +56,13 @@ fn test_is_root_valid_non_current_without_marker() {
     let pa_state_key = Pubkey::new_unique();
     let old_root = Digest::from_bytes([0xBB; 32]);
 
-    assert!(!is_root_valid(&state, &program_id, &pa_state_key, &old_root, &[]));
+    assert!(!is_root_valid(
+        &state,
+        &program_id,
+        &pa_state_key,
+        &old_root,
+        &[]
+    ));
 }
 
 // =========================================================================
@@ -108,4 +126,3 @@ fn test_derive_root_pda_off_curve() {
     assert!(recreated.is_ok(), "PDA should be recreatable with bump");
     assert_eq!(pda, recreated.unwrap(), "Recreated PDA should match");
 }
-

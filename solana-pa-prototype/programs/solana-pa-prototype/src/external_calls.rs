@@ -3,9 +3,9 @@
 #[cfg(test)]
 use crate::encoding::bytes_to_words;
 use crate::error::PAError;
-use crate::types::{ExpirableBlob, SolanaExternalCall};
 #[cfg(not(test))]
 use crate::types::OutputMode;
+use crate::types::{ExpirableBlob, SolanaExternalCall};
 
 /// Encode an external call into an ExpirableBlob.
 /// Serializes using bincode and converts to word array.

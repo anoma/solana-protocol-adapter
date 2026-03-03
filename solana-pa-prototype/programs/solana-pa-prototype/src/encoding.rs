@@ -44,9 +44,7 @@ pub fn compute_action_tree_root(tags: &[Digest]) -> Result<Digest, PAError> {
 /// Returns (tags, logic_refs) where:
 /// - tags[2i] = consumed_nullifier, tags[2i+1] = created_commitment
 /// - logic_refs[2i] = consumed_logic_ref, logic_refs[2i+1] = created_logic_ref
-pub fn extract_tags_and_logic_refs(
-    action: &crate::types::Action,
-) -> (Vec<Digest>, Vec<Digest>) {
+pub fn extract_tags_and_logic_refs(action: &crate::types::Action) -> (Vec<Digest>, Vec<Digest>) {
     let mut tags = Vec::new();
     let mut logic_refs = Vec::new();
 

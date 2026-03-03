@@ -114,4 +114,3 @@ fn test_extract_external_calls_logic_ref_association() {
         "Logic ref should match verifying_key from LVI"
     );
 }
-

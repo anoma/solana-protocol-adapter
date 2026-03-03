@@ -92,4 +92,3 @@ pub enum ErrorCode {
     #[msg("Invalid input: expected 8 bytes for timestamp")]
     InvalidInput,
 }
-

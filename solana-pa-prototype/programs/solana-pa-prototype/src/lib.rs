@@ -562,8 +562,7 @@ fn execute_settlement<'info>(
     require!(tx.aggregation_proof.is_some(), PAError::AggregationRequired);
 
     msg!("Preparing aggregated proof for verification");
-    let prepared =
-        prepare_proof_for_verification(tx).map_err(|_| error!(PAError::InvalidProof))?;
+    let prepared = prepare_proof_for_verification(tx).map_err(|_| error!(PAError::InvalidProof))?;
 
     msg!("Verifying aggregated proof via verifier_router");
     call_verifier_router(
@@ -584,7 +583,11 @@ fn execute_settlement<'info>(
     delta::verify_delta_proof(tx)?;
 
     // 3.6) Emit app data events and EVM parity events for indexing
-    let total_lvi: usize = tx.actions.iter().map(|a| a.logic_verifier_inputs.len()).sum();
+    let total_lvi: usize = tx
+        .actions
+        .iter()
+        .map(|a| a.logic_verifier_inputs.len())
+        .sum();
     let mut all_tags: Vec<[u8; 32]> = Vec::with_capacity(total_lvi);
     let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_lvi);
 
