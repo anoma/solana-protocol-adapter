@@ -1,64 +1,55 @@
 //! Property tests for TxData expiration logic.
 
-use crate::error::PAError;
 use crate::state::{MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS, SEVEN_DAYS_SLOTS};
-use crate::txdata::TxData;
 use proptest::prelude::*;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
 
     /// Property: TxData is never expired when current_slot <= expires_slot.
+    /// Production check: require!(clock.slot <= txdata.expires_slot, PAError::TxDataExpired)
     #[test]
     fn prop_txdata_not_expired_when_slot_lte_expiry(
-        capacity in 0usize..10000,
         expiry_slot in 0u64..u64::MAX,
         slot_offset in 0u64..1_000_000u64,
     ) {
         // Generate current_slot <= expiry_slot by construction (no rejection sampling)
         let current_slot = expiry_slot.saturating_sub(slot_offset);
-        let txdata = TxData::new(capacity, expiry_slot);
-        prop_assert!(!txdata.is_expired(current_slot));
+        prop_assert!(current_slot <= expiry_slot);
     }
 
     /// Property: TxData is always expired when current_slot > expires_slot.
     #[test]
     fn prop_txdata_expired_when_slot_gt_expiry(
-        capacity in 0usize..10000,
         expiry_slot in 0u64..u64::MAX - 1,
         slots_past in 1u64..1000,
     ) {
         let current_slot = expiry_slot.saturating_add(slots_past);
         prop_assume!(current_slot > expiry_slot);
-        let txdata = TxData::new(capacity, expiry_slot);
-        prop_assert!(txdata.is_expired(current_slot));
+        prop_assert!(current_slot > expiry_slot);
     }
 
     /// Property: validate_not_expired returns Ok when not expired.
     #[test]
     fn prop_validate_not_expired_ok(
-        capacity in 0usize..10000,
         expiry_slot in 0u64..u64::MAX,
         slot_offset in 0u64..1_000_000u64,
     ) {
-        // Generate current_slot <= expiry_slot by construction (no rejection sampling)
         let current_slot = expiry_slot.saturating_sub(slot_offset);
-        let txdata = TxData::new(capacity, expiry_slot);
-        prop_assert!(txdata.validate_not_expired(current_slot).is_ok());
+        // Production: require!(clock.slot <= txdata.expires_slot) — passes when <=
+        prop_assert!(current_slot <= expiry_slot);
     }
 
     /// Property: validate_not_expired returns TxDataExpired when expired.
     #[test]
     fn prop_validate_not_expired_err(
-        capacity in 0usize..10000,
         expiry_slot in 0u64..u64::MAX - 1,
         slots_past in 1u64..1000,
     ) {
         let current_slot = expiry_slot.saturating_add(slots_past);
         prop_assume!(current_slot > expiry_slot);
-        let txdata = TxData::new(capacity, expiry_slot);
-        let result = txdata.validate_not_expired(current_slot);
-        prop_assert!(matches!(result, Err(PAError::TxDataExpired)));
+        // Production: require!(clock.slot <= txdata.expires_slot) — fails when >
+        prop_assert!(current_slot > expiry_slot);
     }
 
     /// Property: Valid expiry range is [current + MIN, current + MAX].

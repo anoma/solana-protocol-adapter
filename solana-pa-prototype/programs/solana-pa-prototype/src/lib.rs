@@ -24,7 +24,6 @@ pub mod settle;
 pub mod state;
 #[cfg(test)]
 mod tests;
-pub mod txdata;
 pub mod types;
 
 pub use error::PAError;

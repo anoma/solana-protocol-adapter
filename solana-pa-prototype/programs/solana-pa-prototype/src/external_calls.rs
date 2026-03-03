@@ -1,6 +1,6 @@
 //! External call encoding, decoding, and CPI execution.
 
-use crate::encoding::{bytes_to_words, words_to_bytes};
+use crate::encoding::bytes_to_words;
 use crate::error::PAError;
 use crate::types::{ExpirableBlob, SolanaExternalCall};
 #[cfg(not(test))]
@@ -19,8 +19,8 @@ pub fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
 /// Decode an external call from an ExpirableBlob.
 /// Converts from word array and deserializes using bincode.
 pub fn decode_external_call(blob: &ExpirableBlob) -> Result<SolanaExternalCall, PAError> {
-    let bytes = words_to_bytes(&blob.blob);
-    bincode::deserialize(&bytes).map_err(|_| PAError::InvalidExternalCallBlob)
+    let bytes = arm_core::utils::words_to_bytes(&blob.blob);
+    bincode::deserialize(bytes).map_err(|_| PAError::InvalidExternalCallBlob)
 }
 
 /// Verify that actual output matches expected output.

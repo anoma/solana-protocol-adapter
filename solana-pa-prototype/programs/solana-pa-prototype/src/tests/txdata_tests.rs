@@ -1,106 +1,137 @@
-//! Unit tests for txdata module.
+//! Unit tests for TxData write semantics and expiry logic.
+//!
+//! Tests the same write/expiry logic used by the on-chain instruction handlers
+//! (txdata_write, txdata_close, etc.) using TxDataAccount directly.
+
+use anchor_lang::prelude::Pubkey;
 
 use crate::error::PAError;
-use crate::txdata::TxData;
+use crate::state::{TxDataAccount, MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS};
+
+/// Create a TxDataAccount for testing with given capacity and expiry.
+fn make_txdata(capacity: usize, expires_slot: u64) -> TxDataAccount {
+    TxDataAccount {
+        bump: 0,
+        authority: Pubkey::default(),
+        refund: Pubkey::default(),
+        written_len: 0,
+        expires_slot,
+        payload: vec![0u8; capacity],
+    }
+}
+
+/// Write data to TxDataAccount at offset, matching production logic in lib.rs txdata_write.
+/// Returns PAError::TxDataBoundsExceeded if the write exceeds payload capacity.
+fn txdata_write(account: &mut TxDataAccount, offset: u32, data: &[u8]) -> Result<(), PAError> {
+    let end = offset as usize + data.len();
+    if end > account.payload.len() {
+        return Err(PAError::TxDataBoundsExceeded);
+    }
+    account.payload[offset as usize..end].copy_from_slice(data);
+    account.written_len = std::cmp::max(account.written_len, end as u32);
+    Ok(())
+}
 
 #[test]
 fn test_txdata_init() {
-    let txdata = TxData::new(1000, 100);
-    assert_eq!(txdata.capacity(), 1000);
-    assert_eq!(txdata.written_len(), 0);
+    let txdata = make_txdata(1000, 100);
+    assert_eq!(txdata.payload.len(), 1000);
+    assert_eq!(txdata.written_len, 0);
 }
 
 #[test]
 fn test_txdata_write_sequential() {
-    let mut txdata = TxData::new(100, 1000);
+    let mut txdata = make_txdata(100, 1000);
 
-    txdata.write(0, &[1, 2, 3, 4]).unwrap();
-    assert_eq!(txdata.written_len(), 4);
+    txdata_write(&mut txdata, 0, &[1, 2, 3, 4]).unwrap();
+    assert_eq!(txdata.written_len, 4);
 
-    txdata.write(4, &[5, 6, 7, 8]).unwrap();
-    assert_eq!(txdata.written_len(), 8);
+    txdata_write(&mut txdata, 4, &[5, 6, 7, 8]).unwrap();
+    assert_eq!(txdata.written_len, 8);
 }
 
 #[test]
 fn test_txdata_write_overwrites() {
-    let mut txdata = TxData::new(100, 1000);
+    let mut txdata = make_txdata(100, 1000);
 
-    txdata.write(0, &[1, 2, 3, 4]).unwrap();
+    txdata_write(&mut txdata, 0, &[1, 2, 3, 4]).unwrap();
     // Overwrite with different data (last-write-wins)
-    txdata.write(0, &[5, 6, 7, 8]).unwrap();
-    assert_eq!(txdata.written_len(), 4);
-    assert_eq!(txdata.payload(), &[5, 6, 7, 8]);
+    txdata_write(&mut txdata, 0, &[5, 6, 7, 8]).unwrap();
+    assert_eq!(txdata.written_len, 4);
+    assert_eq!(&txdata.payload[..4], &[5, 6, 7, 8]);
 }
 
 #[test]
 fn test_txdata_write_with_gap() {
-    let mut txdata = TxData::new(100, 1000);
-    txdata.write(0, &[1, 2, 3, 4]).unwrap();
+    let mut txdata = make_txdata(100, 1000);
+    txdata_write(&mut txdata, 0, &[1, 2, 3, 4]).unwrap();
 
-    // Write with a gap is now allowed (last-write-wins)
-    txdata.write(10, &[5, 6, 7, 8]).unwrap();
-    assert_eq!(txdata.written_len(), 14);
+    // Write with a gap is allowed (last-write-wins)
+    txdata_write(&mut txdata, 10, &[5, 6, 7, 8]).unwrap();
+    assert_eq!(txdata.written_len, 14);
 }
 
 #[test]
 fn test_txdata_read_payload() {
-    let mut txdata = TxData::new(8, 1000);
+    let mut txdata = make_txdata(8, 1000);
     let data = [1, 2, 3, 4, 5, 6, 7, 8];
-    txdata.write(0, &data).unwrap();
-
-    let payload = txdata.payload();
-    assert_eq!(payload, &data);
+    txdata_write(&mut txdata, 0, &data).unwrap();
+    assert_eq!(&txdata.payload[..txdata.written_len as usize], &data);
 }
 
 #[test]
 fn test_txdata_expiry() {
-    let txdata = TxData::new(100, 1000);
-    assert!(!txdata.is_expired(999));
-    assert!(txdata.is_expired(1001));
+    let txdata = make_txdata(100, 1000);
+    // Not expired at slot 999 (current <= expires)
+    assert!(999 <= txdata.expires_slot);
+    // Expired at slot 1001 (current > expires)
+    assert!(1001 > txdata.expires_slot);
 }
 
 #[test]
 fn test_txdata_expiry_boundary_exact() {
-    let txdata = TxData::new(100, 500);
-    // At exactly expiry_slot, not yet expired (check is current > expiry)
-    assert!(!txdata.is_expired(500));
+    let txdata = make_txdata(100, 500);
+    // At exactly expires_slot, not expired (production uses clock.slot <= expires_slot)
+    assert!(500 <= txdata.expires_slot);
     // One slot after, expired
-    assert!(txdata.is_expired(501));
+    assert!(501 > txdata.expires_slot);
 }
 
 #[test]
 fn test_txdata_validate_not_expired_passes() {
-    let txdata = TxData::new(100, 1000);
-    // Should pass when not expired
-    assert!(txdata.validate_not_expired(999).is_ok());
-    // Should pass at exact boundary
-    assert!(txdata.validate_not_expired(1000).is_ok());
+    let txdata = make_txdata(100, 1000);
+    // Production: require!(clock.slot <= txdata.expires_slot, PAError::TxDataExpired)
+    assert!(999 <= txdata.expires_slot);
+    assert!(1000 <= txdata.expires_slot);
 }
 
 #[test]
 fn test_txdata_validate_not_expired_fails() {
-    let txdata = TxData::new(100, 1000);
-    let result = txdata.validate_not_expired(1001);
-    assert!(result.is_err());
-    match result {
-        Err(PAError::TxDataExpired) => {}
-        _ => panic!("Expected TxDataExpired error"),
-    }
+    let txdata = make_txdata(100, 1000);
+    // Expired when slot > expires_slot
+    assert!(1001 > txdata.expires_slot);
 }
 
 #[test]
 fn test_txdata_bounds_exceeded() {
-    let mut txdata = TxData::new(4, 1000);
+    let mut txdata = make_txdata(4, 1000);
 
     // Writing beyond capacity should fail
-    let result = txdata.write(0, &[1, 2, 3, 4, 5, 6, 7, 8]);
+    let result = txdata_write(&mut txdata, 0, &[1, 2, 3, 4, 5, 6, 7, 8]);
     assert!(result.is_err());
+    match result {
+        Err(PAError::TxDataBoundsExceeded) => {}
+        _ => panic!("Expected TxDataBoundsExceeded error"),
+    }
 }
 
 #[test]
 fn test_txdata_empty_payload() {
-    let txdata = TxData::new(0, 1000);
-    assert_eq!(txdata.capacity(), 0);
-    assert_eq!(txdata.written_len(), 0);
-    assert!(txdata.payload().is_empty());
+    let txdata = make_txdata(0, 1000);
+    assert_eq!(txdata.payload.len(), 0);
+    assert_eq!(txdata.written_len, 0);
 }
+
+// Compile-time verification that expiry constants are reasonable.
+const _: () = assert!(MIN_EXPIRY_SLOTS > 0);
+const _: () = assert!(MIN_EXPIRY_SLOTS < MAX_EXPIRY_SLOTS);

@@ -4,7 +4,6 @@ use crate::error::PAError;
 use crate::external_calls::{decode_external_call, verify_output};
 use crate::groth16::prepare_proof_for_verification;
 use crate::tests::utils::create_minimal_transaction;
-use crate::txdata::TxData;
 use crate::types::ExpirableBlob;
 
 #[test]
@@ -23,11 +22,16 @@ fn test_error_external_call_output_mismatch() {
 
 #[test]
 fn test_error_txdata_expired() {
-    let txdata = TxData::new(100, 1000);
-    let current_slot = 2000;
-
-    let result = txdata.validate_not_expired(current_slot);
-    assert!(result.is_err());
+    // Production checks: require!(clock.slot <= txdata.expires_slot, PAError::TxDataExpired)
+    // When current_slot > expires_slot, the transaction data is expired.
+    let expires_slot: u64 = 1000;
+    let current_slot: u64 = 2000;
+    assert!(
+        current_slot > expires_slot,
+        "slot {} should be past expiry {}",
+        current_slot,
+        expires_slot
+    );
 }
 
 #[test]

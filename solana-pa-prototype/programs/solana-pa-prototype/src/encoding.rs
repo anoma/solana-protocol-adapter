@@ -4,7 +4,7 @@ use crate::error::PAError;
 use crate::merkle::{hash_two, PADDING_LEAF};
 use crate::types::{Digest, LogicVerifierInputs, Transaction};
 
-pub use arm_core::constants::COMPLIANCE_VK_BYTES;
+use arm_core::constants::COMPLIANCE_VK_BYTES;
 pub use arm_core::utils::bytes_to_words;
 
 /// Convert words to bytes (Vec variant for callers that need owned bytes).
@@ -29,12 +29,12 @@ pub fn compute_action_tree_root(tags: &[Digest]) -> Result<Digest, PAError> {
     let mut layer: Vec<Digest> = tags.to_vec();
     layer.resize(len, PADDING_LEAF);
 
-    while layer.len() > 1 {
-        let mut next = Vec::with_capacity(layer.len() / 2);
-        for pair in layer.chunks_exact(2) {
-            next.push(hash_two(&pair[0], &pair[1]));
+    let mut size = len;
+    while size > 1 {
+        for i in 0..size / 2 {
+            layer[i] = hash_two(&layer[2 * i], &layer[2 * i + 1]);
         }
-        layer = next;
+        size /= 2;
     }
 
     Ok(layer[0])
