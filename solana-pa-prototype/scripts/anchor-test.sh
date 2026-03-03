@@ -129,6 +129,10 @@ else
   echo "    block_time_forwarder program ID already synced: $BTF_ID"
 fi
 
+# anchor build uses cargo +nightly for IDL generation, which is incompatible
+# with debug artifacts compiled by the stable toolchain (e.g. from cargo test).
+rm -rf target/debug/
+
 echo "    Building PA..."
 build_with_filtered_output anchor build -p solana-pa-prototype
 
