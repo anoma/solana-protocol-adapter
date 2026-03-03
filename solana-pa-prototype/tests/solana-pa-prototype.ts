@@ -884,7 +884,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       assert.match(
         haystack,
         /AccountNotInitialized/,
-        `Expected AccountNotInitialized (account doesn't exist), got: ${msg}`
+        `Expected AccountNotInitialized (account doesn't exist), got: ${haystack}`
       );
     }
   });
@@ -940,7 +940,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       assert.match(
         haystack,
         /ConstraintSeeds|seeds constraint was violated/i,
-        `Expected ConstraintSeeds (PDA mismatch), got: ${msg}`
+        `Expected ConstraintSeeds (PDA mismatch), got: ${haystack}`
       );
     }
   });
@@ -1073,8 +1073,8 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const txdataCloseExpiredIx = idl.instructions.find((ix: any) => ix.name === "txdata_close_expired");
     assert.ok(txdataCloseExpiredIx, "txdata_close_expired instruction should exist in IDL");
     // Verify it has authority argument (to derive PDA)
-    const authorityArg = txdataCloseExpiredIx.args?.find((arg: any) => arg.name === "authority");
-    assert.ok(authorityArg, "txdata_close_expired should have authority argument");
+    const authorityArg = txdataCloseExpiredIx.args?.find((arg: any) => arg.name === "_authority");
+    assert.ok(authorityArg, "txdata_close_expired should have _authority argument (used for PDA derivation)");
   });
 
   it("rejects txdata_close_expired for non-expired TxData", async () => {
