@@ -1,19 +1,22 @@
 use anchor_lang::prelude::AnchorDeserialize;
 use anyhow::{anyhow, Context, Result};
-use arm::action::Action;
+use arm::action::{Action, ActionExt};
 use arm::action_tree::MerkleTree;
-use arm::compliance::{initial_root, ComplianceInstance, ComplianceWitness};
-use arm::compliance_unit::ComplianceUnit;
+use arm::compliance::{
+    initial_root, ComplianceInstance, ComplianceInstanceJournalExt, ComplianceWitness,
+};
+use arm::compliance_unit::create_compliance_unit;
 use arm::delta_proof::DeltaWitness;
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
-use arm::logic_proof::LogicVerifier;
+use arm::logic_proof::{LogicVerifier, LogicVerifierInputsExt};
 use arm::merkle_path::MerklePath;
-use arm::nullifier_key::NullifierKey;
+use arm::nullifier_key::{NullifierKey, NullifierKeyExt};
 use arm::proving_system::{encode_seal, ProofType};
 use arm::resource::Resource;
-use arm::transaction::{Delta, Transaction};
-use arm::utils::bytes_to_words;
+use arm::CoreDeltaWitness;
+use arm::transaction::{Delta, Transaction, TransactionExt};
+use arm::utils::{bytes_to_words, core_to_risc0_digest};
 use arm::Digest;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -29,6 +32,11 @@ use std::time::{Duration, Instant};
 use verifier_router::Seal;
 
 use passthrough_logic_methods::{PASSTHROUGH_LOGIC_GUEST_ELF, PASSTHROUGH_LOGIC_GUEST_ID};
+
+fn hash_delta_msg(msg: &[u8]) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(msg).into()
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 struct SolanaExternalCall {
@@ -197,7 +205,7 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
 
     // Use the passthrough logic circuit for both consumed and created resources.
     // This allows us to bind arbitrary `app_data.external_payload` into real proofs.
-    let passthrough_vk: Digest = PASSTHROUGH_LOGIC_GUEST_ID.into();
+    let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
 
     let nf_key = NullifierKey::default();
     let nf_key_cm = nf_key.commit();
@@ -234,7 +242,7 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
         ephemeral_root: initial_root(),
     };
     let compliance_receipt =
-        ComplianceUnit::create(&compliance_witness, base_proof_type).context("prove compliance")?;
+        create_compliance_unit(&compliance_witness, base_proof_type).context("prove compliance")?;
 
     let tags = vec![consumed_nf, created_cm];
     let action_tree = MerkleTree::from(tags.clone());
@@ -293,9 +301,14 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
     let delta_witness =
         DeltaWitness::from_bytes_vec(&[compliance_witness.rcv]).context("build delta witness")?;
 
-    let tx = Transaction::create(vec![action], Delta::Witness(delta_witness));
-    let balanced_tx = tx.generate_delta_proof().context("generate delta proof")?;
-    balanced_tx.clone().verify().context("verify tx")?;
+    let tx = Transaction::create(vec![action], Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())));
+    let balanced_tx = tx
+        .generate_delta_proof(hash_delta_msg)
+        .context("generate delta proof")?;
+    balanced_tx
+        .clone()
+        .verify(hash_delta_msg)
+        .context("verify tx")?;
 
     Ok(balanced_tx)
 }
@@ -548,7 +561,7 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
             let padded_bytes = arm::utils::words_to_bytes(&words);
             let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
             let expected_claim = ReceiptClaim::ok(
-                *arm::constants::COMPLIANCE_VK,
+                core_to_risc0_digest(&arm::constants::COMPLIANCE_VK),
                 MaybePruned::Pruned(journal_digest),
             );
             let expected_claim_digest = expected_claim.digest();
@@ -572,11 +585,11 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
             .map(|cu| cu.instance.clone())
             .collect();
 
-        let tags: Vec<risc0_zkvm::Digest> = compliance_instances
+        let tags: Vec<Digest> = compliance_instances
             .iter()
             .flat_map(|instance| vec![instance.consumed_nullifier, instance.created_commitment])
             .collect();
-        let logics: Vec<risc0_zkvm::Digest> = compliance_instances
+        let logics: Vec<Digest> = compliance_instances
             .iter()
             .flat_map(|instance| vec![instance.consumed_logic_ref, instance.created_logic_ref])
             .collect();
@@ -624,8 +637,10 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
             let words = arm::utils::bytes_to_words(&verifier.instance);
             let padded_bytes = arm::utils::words_to_bytes(&words);
             let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
-            let expected_claim =
-                ReceiptClaim::ok(verifier.verifying_key, MaybePruned::Pruned(journal_digest));
+            let expected_claim = ReceiptClaim::ok(
+                core_to_risc0_digest(&verifier.verifying_key),
+                MaybePruned::Pruned(journal_digest),
+            );
             let expected_claim_digest = expected_claim.digest();
 
             eprintln!(
