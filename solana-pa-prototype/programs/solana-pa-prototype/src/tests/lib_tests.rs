@@ -65,17 +65,11 @@ mod fixture_tests {
 
     #[test]
     fn test_transaction_bincode_roundtrip() {
-        // Full transaction roundtrip test
         let tx = create_minimal_transaction();
         let serialized = bincode::serialize(&tx).unwrap();
         let deserialized: Transaction = bincode::deserialize(&serialized).unwrap();
 
-        // Verify key fields
-        assert_eq!(tx.actions.len(), deserialized.actions.len());
-        assert_eq!(
-            tx.actions[0].compliance_units.len(),
-            deserialized.actions[0].compliance_units.len()
-        );
+        assert_eq!(tx, deserialized);
     }
 }
 
@@ -159,37 +153,6 @@ mod governance_tests {
 
         let state_paused = create_mock_pa_state(authority, true);
         assert!(state_paused.paused);
-    }
-
-    #[test]
-    fn test_paused_state_blocks_settlement_check() {
-        let authority = Pubkey::new_unique();
-        let state = create_mock_pa_state(authority, true);
-        assert!(state.paused, "State should be paused");
-    }
-
-    #[test]
-    fn test_unpaused_state_allows_settlement_check() {
-        let authority = Pubkey::new_unique();
-        let state = create_mock_pa_state(authority, false);
-        assert!(!state.paused, "State should not be paused");
-    }
-
-    #[test]
-    fn test_emergency_stop_sets_paused_true() {
-        let authority = Pubkey::new_unique();
-        let mut state = create_mock_pa_state(authority, false);
-        assert!(!state.paused, "State should start unpaused");
-
-        state.paused = true;
-        assert!(state.paused, "State should be paused after emergency_stop");
-    }
-
-    #[test]
-    fn test_cannot_emergency_stop_when_already_paused() {
-        let authority = Pubkey::new_unique();
-        let state = create_mock_pa_state(authority, true);
-        assert!(state.paused, "Already paused - should error in instruction");
     }
 
 }

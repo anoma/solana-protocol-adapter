@@ -3,19 +3,12 @@
 //! These strategies generate random inputs for property-based testing,
 //! mirroring the `bound()` approach used in the EVM Protocol Adapter's Foundry tests.
 
-#![allow(dead_code)] // Strategies may be used in future tests
-
 use crate::types::*;
 use proptest::prelude::*;
 
 /// Strategy for generating arbitrary 32-byte Digests.
 pub fn arb_digest() -> impl Strategy<Value = Digest> {
     prop::array::uniform32(any::<u8>()).prop_map(Digest::from_bytes)
-}
-
-/// Strategy for non-zero Digests (excludes all-zeros).
-pub fn arb_nonzero_digest() -> impl Strategy<Value = Digest> {
-    prop::array::uniform32(1u8..=255u8).prop_map(Digest::from_bytes)
 }
 
 /// Strategy for byte vectors of bounded length.
@@ -85,22 +78,6 @@ pub fn arb_expirable_blob(max_words: usize) -> impl Strategy<Value = ExpirableBl
     })
 }
 
-/// Strategy for AppData.
-pub fn arb_app_data(max_blobs: usize, max_words: usize) -> impl Strategy<Value = AppData> {
-    (
-        prop::collection::vec(arb_expirable_blob(max_words), 0..=max_blobs),
-        prop::collection::vec(arb_expirable_blob(max_words), 0..=max_blobs),
-        prop::collection::vec(arb_expirable_blob(max_words), 0..=max_blobs),
-        prop::collection::vec(arb_expirable_blob(max_words), 0..=max_blobs),
-    )
-        .prop_map(|(rp, dp, ep, ap)| AppData {
-            resource_payload: rp,
-            discovery_payload: dp,
-            external_payload: ep,
-            application_payload: ap,
-        })
-}
-
 /// Strategy for OutputMode.
 pub fn arb_output_mode() -> impl Strategy<Value = OutputMode> {
     prop_oneof![
@@ -129,96 +106,6 @@ pub fn arb_solana_external_call(max_data_len: usize) -> impl Strategy<Value = So
             expected_output: output,
             output_mode: mode,
         })
-}
-
-/// Strategy for LogicVerifierInputs.
-pub fn arb_logic_verifier_inputs() -> impl Strategy<Value = LogicVerifierInputs> {
-    (arb_digest(), arb_digest(), arb_app_data(2, 8)).prop_map(|(tag, vk, app_data)| {
-        LogicVerifierInputs {
-            tag,
-            verifying_key: vk,
-            app_data,
-            proof: None,
-            instance_journal: Vec::new(),
-        }
-    })
-}
-
-/// Strategy for minimal valid Transaction (1 action, 1 CU).
-pub fn arb_minimal_transaction() -> impl Strategy<Value = Transaction> {
-    arb_compliance_instance_zero_delta().prop_map(|instance| {
-        let nf = instance.consumed_nullifier;
-        let cm = instance.created_commitment;
-        let clr = instance.consumed_logic_ref;
-        let clr2 = instance.created_logic_ref;
-
-        Transaction {
-            actions: vec![Action {
-                compliance_units: vec![ComplianceUnit {
-                    instance,
-                    proof: None,
-                }],
-                logic_verifier_inputs: vec![
-                    LogicVerifierInputs {
-                        tag: nf,
-                        verifying_key: clr,
-                        app_data: AppData::default(),
-                        proof: None,
-                        instance_journal: Vec::new(),
-                    },
-                    LogicVerifierInputs {
-                        tag: cm,
-                        verifying_key: clr2,
-                        app_data: AppData::default(),
-                        proof: None,
-                        instance_journal: Vec::new(),
-                    },
-                ],
-            }],
-            delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
-            expected_balance: None,
-            aggregation_proof: None,
-        }
-    })
-}
-
-/// Strategy for Transaction with N compliance units.
-pub fn arb_transaction_with_n_cus(n: usize) -> impl Strategy<Value = Transaction> {
-    prop::collection::vec(arb_compliance_instance_zero_delta(), n).prop_map(|instances| {
-        let mut cus = Vec::with_capacity(instances.len());
-        let mut lvis = Vec::with_capacity(instances.len() * 2);
-
-        for inst in &instances {
-            cus.push(ComplianceUnit {
-                instance: inst.clone(),
-                proof: None,
-            });
-            lvis.push(LogicVerifierInputs {
-                tag: inst.consumed_nullifier,
-                verifying_key: inst.consumed_logic_ref,
-                app_data: AppData::default(),
-                proof: None,
-                instance_journal: Vec::new(),
-            });
-            lvis.push(LogicVerifierInputs {
-                tag: inst.created_commitment,
-                verifying_key: inst.created_logic_ref,
-                app_data: AppData::default(),
-                proof: None,
-                instance_journal: Vec::new(),
-            });
-        }
-
-        Transaction {
-            actions: vec![Action {
-                compliance_units: cus,
-                logic_verifier_inputs: lvis,
-            }],
-            delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
-            expected_balance: None,
-            aggregation_proof: None,
-        }
-    })
 }
 
 /// Helper to create a Transaction from a slice of ComplianceInstances.

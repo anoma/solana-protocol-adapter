@@ -21,20 +21,6 @@ fn test_error_external_call_output_mismatch() {
 }
 
 #[test]
-fn test_error_txdata_expired() {
-    // Production checks: require!(clock.slot <= txdata.expires_slot, PAError::TxDataExpired)
-    // When current_slot > expires_slot, the transaction data is expired.
-    let expires_slot: u64 = 1000;
-    let current_slot: u64 = 2000;
-    assert!(
-        current_slot > expires_slot,
-        "slot {} should be past expiry {}",
-        current_slot,
-        expires_slot
-    );
-}
-
-#[test]
 fn test_error_invalid_external_call_blob() {
     let blob = ExpirableBlob {
         blob: vec![0xDEAD, 0xBEEF], // Garbage
