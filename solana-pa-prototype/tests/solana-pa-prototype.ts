@@ -49,11 +49,14 @@ const PADDING_LEAF = Buffer.from(
 // Empty tree root for depth-1 tree = ZEROS[0] = PADDING_LEAF
 const EMPTY_TREE_ROOT_INITIAL = PADDING_LEAF;
 
-// Empty tree root for depth-32 tree = ZEROS[31]
-const EMPTY_TREE_ROOT_MAX = Buffer.from(
-  "254f102fd2a0b5db3926704ac4f559a767f60854fc157b2de5d5853da9b8976a",
-  "hex"
-);
+// PDA seed constants (shared across all describe blocks)
+const PA_STATE_SEED = Buffer.from("pa_state");
+const NULLIFIER_SEED = Buffer.from("nullifier");
+const TX_DATA_SEED = Buffer.from("tx_data");
+const ROOT_SEED = Buffer.from("root");
+
+// IDL path (shared across all IDL-inspection tests)
+const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
 
 // Parse selector from fixture (e.g., "0x73c457ba" -> Buffer)
 function parseSelectorFromFixture(selectorHex: string): Buffer {
@@ -64,14 +67,19 @@ function parseSelectorFromFixture(selectorHex: string): Buffer {
   return Buffer.from(hex, "hex");
 }
 
-// Derive router and verifier entry PDAs using local utilities.
-function deriveRouterAccounts(
-  verifierRouterId: PublicKey,
-  selector: Buffer
-): { routerPda: PublicKey; verifierEntryPda: PublicKey } {
-  const [routerPda] = getRouterPda(verifierRouterId);
-  const [verifierEntryPda] = getVerifierEntryPda(selector, verifierRouterId);
-  return { routerPda, verifierEntryPda };
+// Generate a fresh upload ID and its little-endian encoding for TxData PDA derivation
+function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
+  const uploadId = new anchor.BN(Date.now());
+  const uploadIdLe = Buffer.alloc(8);
+  uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+  return { uploadId, uploadIdLe };
+}
+
+// Extract error message + logs from an Anchor error for assertion matching
+function errorHaystack(e: any): string {
+  const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
+  const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+  return [msg, ...logs].join("\n");
 }
 
 describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
@@ -97,21 +105,12 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   let routerPda: PublicKey;
   let verifierEntryPda: PublicKey;
 
-  const PA_STATE_SEED = Buffer.from("pa_state");
-  const NULLIFIER_SEED = Buffer.from("nullifier");
-  const TX_DATA_SEED = Buffer.from("tx_data");
-  const ROOT_SEED = Buffer.from("root");
-
   // Helper to derive root PDA
   function deriveRootPda(root: Buffer): PublicKey {
     return PublicKey.findProgramAddressSync(
       [ROOT_SEED, paState.toBuffer(), root],
       program.programId
     )[0];
-  }
-
-  function computeGenesisRoot(): Buffer {
-    return EMPTY_TREE_ROOT_INITIAL;
   }
 
   const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
@@ -129,33 +128,30 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
   const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
 
-  // Helper to settle with optional new root marker PDA
+  // Helper to settle with optional overrides for nullifier accounts and root markers
   async function settleViaTxData(
     authority: Keypair,
     payload: Buffer,
     options?: {
+      nullifierAccounts?: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[];
       newRootMarkerPda?: PublicKey;
       additionalHistoricalRootMarkers?: PublicKey[];
     }
   ) {
     await airdrop(provider, authority.publicKey, 2);
 
-    // Use timestamp as upload_id for unique PDA per upload
-    const uploadId = new anchor.BN(Date.now());
-    const uploadIdLe = Buffer.alloc(8);
-    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const { uploadId, uploadIdLe } = freshUploadId();
 
     const [txData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
       program.programId
     );
 
-    const capacity = payload.length;
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 10_000);
 
     await program.methods
-      .txdataInit(uploadId, capacity, expiresSlot)
+      .txdataInit(uploadId, payload.length, expiresSlot)
       .accounts({
         paState,
         txData,
@@ -169,7 +165,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     for (let offset = 0; offset < payload.length; offset += chunkSize) {
       const chunk = payload.subarray(offset, Math.min(payload.length, offset + chunkSize));
       await program.methods
-        .txdataWrite(uploadId, offset, Buffer.from(chunk))
+        .txdataWrite(uploadId, offset, chunk)
         .accounts({
           txData,
           authority: authority.publicKey,
@@ -181,20 +177,17 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     // Build remaining accounts:
     // [nullifier PDAs..., external call accounts..., historical root markers..., new root marker PDA]
     const allRemainingAccounts = [
-      ...remainingAccounts,
-      // External call segment for the block-time-forwarder:
+      ...(options?.nullifierAccounts ?? remainingAccounts),
       { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
       { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
     ];
 
-    // Add any additional historical root markers (for parallel tx construction tests)
     if (options?.additionalHistoricalRootMarkers) {
       for (const marker of options.additionalHistoricalRootMarkers) {
         allRemainingAccounts.push({ pubkey: marker, isWritable: false, isSigner: false });
       }
     }
 
-    // New root marker MUST be at the LAST position
     if (options?.newRootMarkerPda) {
       allRemainingAccounts.push({
         pubkey: options.newRootMarkerPda,
@@ -228,17 +221,10 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   let genesisRootMarkerPda: PublicKey;
 
   before(async () => {
-    // Derive PDAs using utility function
-    const accounts = deriveRouterAccounts(verifierRouterId, GROTH16_SELECTOR);
-    routerPda = accounts.routerPda;
-    verifierEntryPda = accounts.verifierEntryPda;
+    [routerPda] = getRouterPda(verifierRouterId);
+    [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, verifierRouterId);
 
-    // Router initialization is handled by deploy-groth16-verifier.sh using
-    // risc0-solana's typed infrastructure. Tests assume router is ready.
-
-    // Initialize PA state if needed
-    const genesisRoot = computeGenesisRoot();
-    genesisRootMarkerPda = deriveRootPda(genesisRoot);
+    genesisRootMarkerPda = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
 
     try {
       await program.account.paStateAccount.fetch(paState);
@@ -350,9 +336,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       await settleViaTxData(Keypair.generate(), txWitness);
       assert.fail("expected settle to fail");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       assert.match(haystack, /ExpectedDeltaProof|Expected delta proof|Invalid transaction data/i);
     }
   });
@@ -362,9 +346,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       await settleViaTxData(Keypair.generate(), txTampered);
       assert.fail("expected settle to fail");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       assert.match(haystack, /Proof verification failed|ProofVerificationFailed|Verification error/);
     }
   });
@@ -420,142 +402,28 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json"
     );
 
-    let mismatchFixture: Fixture;
-    try {
-      mismatchFixture = readJson<Fixture>(mismatchFixturePath);
-    } catch (e) {
-      // Skip test if fixture doesn't exist yet
-      console.log("Skipping: batch_groth16_mismatch.json not found. Generate with: cargo run --manifest-path tools/fixture-gen/Cargo.toml -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json");
-      return;
-    }
-
+    const mismatchFixture = readJson<Fixture>(mismatchFixturePath);
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
-    // Derive nullifier PDAs for this fixture
-    const mismatchNullifierPdas = mismatchFixture.consumed_nullifiers_b64.map((nfB64) => {
+    const mismatchNullifierAccounts = mismatchFixture.consumed_nullifiers_b64.map((nfB64) => {
       const nf = Buffer.from(nfB64, "base64");
-      return PublicKey.findProgramAddressSync([NULLIFIER_SEED, paState.toBuffer(), nf], program.programId)[0];
+      const pubkey = PublicKey.findProgramAddressSync([NULLIFIER_SEED, paState.toBuffer(), nf], program.programId)[0];
+      return { pubkey, isWritable: true, isSigner: false };
     });
 
-    const mismatchRemainingAccounts = mismatchNullifierPdas.map((pubkey) => ({
-      pubkey,
-      isWritable: true,
-      isSigner: false,
-    }));
-
     try {
-      // Attempt settlement - should fail with ExternalCallOutputMismatch
-      const authority = Keypair.generate();
-      await airdrop(provider, authority.publicKey, 2);
-
-      const uploadId = new anchor.BN(Date.now());
-      const uploadIdLe = Buffer.alloc(8);
-      uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
-
-      const [txData] = PublicKey.findProgramAddressSync(
-        [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-        program.programId
-      );
-
-      const capacity = mismatchTx.length;
-      const slot = await provider.connection.getSlot("confirmed");
-      const expiresSlot = new anchor.BN(slot + 10_000);
-
-      await program.methods
-        .txdataInit(uploadId, capacity, expiresSlot)
-        .accounts({
-          paState,
-          txData,
-          authority: authority.publicKey,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([authority])
-        .rpc();
-
-      const chunkSize = 700;
-      for (let offset = 0; offset < mismatchTx.length; offset += chunkSize) {
-        const chunk = mismatchTx.subarray(offset, Math.min(mismatchTx.length, offset + chunkSize));
-        await program.methods
-          .txdataWrite(uploadId, offset, Buffer.from(chunk))
-          .accounts({
-            txData,
-            authority: authority.publicKey,
-          })
-          .signers([authority])
-          .rpc();
-      }
-
-      const allRemainingAccounts = [
-        ...mismatchRemainingAccounts,
-        { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
-        { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
-      ];
-
-      await program.methods
-        .settleFromTxdata(uploadId)
-        .accounts({
-          paState,
-          txData,
-          authority: authority.publicKey,
-          systemProgram: SystemProgram.programId,
-          verifierRouterProgram: verifierRouterId,
-          router: routerPda,
-          verifierEntry: verifierEntryPda,
-          verifierProgram: groth16VerifierId,
-        })
-        .remainingAccounts(allRemainingAccounts)
-        .preInstructions([
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-        ])
-        .signers([authority])
-        .rpc();
-
+      await settleViaTxData(Keypair.generate(), mismatchTx, {
+        nullifierAccounts: mismatchNullifierAccounts,
+      });
       assert.fail("expected settle to fail with ExternalCallOutputMismatch");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       assert.match(
         haystack,
         /ExternalCallOutputMismatch|external call output mismatch/i,
         "Should fail with ExternalCallOutputMismatch error"
       );
     }
-  });
-
-  // ==========================================================================
-  // Issue #4: Historical Root Validation Tests
-  // ==========================================================================
-
-  it("validates current root without needing marker PDA", async () => {
-    // Transactions anchored to the current root should always be valid
-    // (tested implicitly by the previous test - it didn't need historical markers)
-    const state = await program.account.paStateAccount.fetch(paState);
-    assert.ok(state.root, "State should have a root");
-  });
-
-  it("validates PADDING_LEAF for ephemeral resources", async () => {
-    // PADDING_LEAF is always valid (for ephemeral resources that don't anchor to real state)
-    // This is tested implicitly - the fixture tx uses consumed_commitment_tree_root
-    // that may be PADDING_LEAF for newly created resources
-    const state = await program.account.paStateAccount.fetch(paState);
-    assert.ok(state, "State should exist");
-  });
-
-  it("verifies action tree root is computed correctly", async () => {
-    // The action tree root computation is tested by the successful settlement
-    // If it were wrong, the aggregation proof verification would fail
-    const state = await program.account.paStateAccount.fetch(paState);
-    assert.ok(state.root, "State should have valid root after settlement");
-  });
-
-  it("verifies logic-ref consistency check is enforced", async () => {
-    // The logic-ref consistency check happens during journal digest computation
-    // A mismatch would cause proof verification to fail
-    // Tested implicitly by successful settlement
-    const state = await program.account.paStateAccount.fetch(paState);
-    assert.ok(state, "Settlement succeeded, meaning logic-refs were consistent");
   });
 });
 
@@ -571,7 +439,6 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
   const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
 
-  const PA_STATE_SEED = Buffer.from("pa_state");
   const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
   it("stores authority on PAStateAccount after initialize", async () => {
@@ -603,9 +470,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
         .rpc();
       assert.fail("expected emergency_stop to fail for non-authority");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       // Anchor's has_one constraint produces "A has one constraint was violated"
       // or our custom error "Unauthorized"
       assert.match(
@@ -632,9 +497,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
         .rpc();
       assert.fail("expected transfer_authority to fail for non-authority");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       assert.match(
         haystack,
         /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
@@ -714,9 +577,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
         .rpc();
       assert.fail("expected emergency_stop to fail for old authority");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       assert.match(
         haystack,
         /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
@@ -745,9 +606,6 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop - Destructive)", () => {
 
   const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
 
-  // Use a different seed to create a separate PAState for destructive tests
-  const PA_STATE_SEED_2 = Buffer.from("pa_state_2");
-
   // We can't easily create a second PAState without modifying the program seeds.
   // Instead, we'll test the emergency_stop behavior conceptually by:
   // 1. Skipping the actual pause test (would break other tests)
@@ -755,16 +613,14 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop - Destructive)", () => {
 
   it("verifies emergency_stop instruction exists in IDL", async () => {
     // Read IDL directly from file (more reliable than program.idl)
-    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-    const idl = readJson<any>(idlPath);
+    const idl = readJson<any>(IDL_PATH);
     // IDL uses snake_case: emergency_stop
     const emergencyStopIx = idl.instructions.find((ix: any) => ix.name === "emergency_stop");
     assert.ok(emergencyStopIx, "emergency_stop instruction should exist in IDL");
   });
 
   it("verifies transfer_authority instruction exists in IDL", async () => {
-    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-    const idl = readJson<any>(idlPath);
+    const idl = readJson<any>(IDL_PATH);
     const transferAuthorityIx = idl.instructions.find((ix: any) => ix.name === "transfer_authority");
     assert.ok(transferAuthorityIx, "transfer_authority instruction should exist in IDL");
     // Verify it has the new_authority argument
@@ -774,23 +630,20 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop - Destructive)", () => {
 
   it("verifies paused check exists in settle instructions", async () => {
     // Read IDL directly from file
-    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-    const idl = readJson<any>(idlPath);
+    const idl = readJson<any>(IDL_PATH);
     const pausedError = idl.errors?.find((e: any) => e.name === "Paused");
     assert.ok(pausedError, "Paused error should exist in IDL");
     assert.match(pausedError.msg, /paused/i, "Error message should mention paused");
   });
 
   it("verifies AlreadyPaused error exists", async () => {
-    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-    const idl = readJson<any>(idlPath);
+    const idl = readJson<any>(IDL_PATH);
     const alreadyPausedError = idl.errors?.find((e: any) => e.name === "AlreadyPaused");
     assert.ok(alreadyPausedError, "AlreadyPaused error should exist in IDL");
   });
 
   it("verifies Unauthorized error exists", async () => {
-    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-    const idl = readJson<any>(idlPath);
+    const idl = readJson<any>(IDL_PATH);
     const unauthorizedError = idl.errors?.find((e: any) => e.name === "Unauthorized");
     assert.ok(unauthorizedError, "Unauthorized error should exist in IDL");
   });
@@ -806,8 +659,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
   const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
 
-  const TX_DATA_SEED = Buffer.from("tx_data");
-  const PA_STATE_SEED = Buffer.from("pa_state");
   const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
   // Constants matching Rust (from state.rs)
@@ -818,9 +669,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 1);
 
-    const uploadId = new anchor.BN(Date.now());
-    const uploadIdLe = Buffer.alloc(8);
-    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const { uploadId, uploadIdLe } = freshUploadId();
 
     const [txData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
@@ -844,9 +693,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         .rpc();
       assert.fail("expected txdata_init to fail with TxDataExpiryTooSoon");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       assert.match(haystack, /TxDataExpiryTooSoon|expires_slot is below minimum/i);
     }
   });
@@ -855,9 +702,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 1);
 
-    const uploadId = new anchor.BN(Date.now());
-    const uploadIdLe = Buffer.alloc(8);
-    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const { uploadId, uploadIdLe } = freshUploadId();
 
     const [txData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
@@ -881,9 +726,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         .rpc();
       assert.fail("expected txdata_init to fail with TxDataExpiryTooLate");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       assert.match(haystack, /TxDataExpiryTooLate|expires_slot exceeds maximum/i);
     }
   });
@@ -892,9 +735,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 1);
 
-    const uploadId = new anchor.BN(Date.now());
-    const uploadIdLe = Buffer.alloc(8);
-    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const { uploadId, uploadIdLe } = freshUploadId();
 
     const [txData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
@@ -928,9 +769,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const uploadId = new anchor.BN(Date.now());
-    const uploadIdLe = Buffer.alloc(8);
-    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const { uploadId, uploadIdLe } = freshUploadId();
 
     const [txData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
@@ -999,9 +838,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     await airdrop(provider, authority.publicKey, 2);
     await airdrop(provider, attacker.publicKey, 1);
 
-    const uploadId = new anchor.BN(Date.now());
-    const uploadIdLe = Buffer.alloc(8);
-    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const { uploadId, uploadIdLe } = freshUploadId();
 
     const [authorityTxData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
@@ -1042,9 +879,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         .rpc();
       assert.fail("should have failed - attackerTxData doesn't exist");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       // MUST be AccountNotInitialized - any other error indicates a different bug
       assert.match(
         haystack,
@@ -1064,9 +899,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     await airdrop(provider, authority.publicKey, 2);
     await airdrop(provider, attacker.publicKey, 1);
 
-    const uploadId = new anchor.BN(Date.now());
-    const uploadIdLe = Buffer.alloc(8);
-    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const { uploadId, uploadIdLe } = freshUploadId();
 
     const [authorityTxData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
@@ -1102,9 +935,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         .rpc();
       assert.fail("should have failed - seed constraint should reject");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       // MUST be ConstraintSeeds - Anchor computes PDA from signer, doesn't match passed account
       assert.match(
         haystack,
@@ -1115,8 +946,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
   });
 
   it("verifies new error types exist in IDL", async () => {
-    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-    const idl = readJson<any>(idlPath);
+    const idl = readJson<any>(IDL_PATH);
 
     const expiryTooSoonError = idl.errors?.find((e: any) => e.name === "TxDataExpiryTooSoon");
     assert.ok(expiryTooSoonError, "TxDataExpiryTooSoon error should exist in IDL");
@@ -1130,8 +960,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
   // ===========================================================================
 
   it("verifies txdata_extend instruction exists in IDL", async () => {
-    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-    const idl = readJson<any>(idlPath);
+    const idl = readJson<any>(IDL_PATH);
     const txdataExtendIx = idl.instructions.find((ix: any) => ix.name === "txdata_extend");
     assert.ok(txdataExtendIx, "txdata_extend instruction should exist in IDL");
     // Verify it has new_expires_slot argument
@@ -1143,9 +972,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const uploadId = new anchor.BN(Date.now());
-    const uploadIdLe = Buffer.alloc(8);
-    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const { uploadId, uploadIdLe } = freshUploadId();
 
     const [txData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
@@ -1194,9 +1021,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const uploadId = new anchor.BN(Date.now());
-    const uploadIdLe = Buffer.alloc(8);
-    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const { uploadId, uploadIdLe } = freshUploadId();
 
     const [txData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
@@ -1234,9 +1059,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         .rpc();
       assert.fail("expected txdata_extend to fail with TxDataExtendMustIncrease");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       assert.match(haystack, /TxDataExtendMustIncrease|extension must increase/i);
     }
   });
@@ -1246,8 +1069,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
   // ===========================================================================
 
   it("verifies txdata_close_expired instruction exists in IDL", async () => {
-    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-    const idl = readJson<any>(idlPath);
+    const idl = readJson<any>(IDL_PATH);
     const txdataCloseExpiredIx = idl.instructions.find((ix: any) => ix.name === "txdata_close_expired");
     assert.ok(txdataCloseExpiredIx, "txdata_close_expired instruction should exist in IDL");
     // Verify it has authority argument (to derive PDA)
@@ -1261,9 +1083,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     await airdrop(provider, authority.publicKey, 2);
     await airdrop(provider, cleaner.publicKey, 1);
 
-    const uploadId = new anchor.BN(Date.now());
-    const uploadIdLe = Buffer.alloc(8);
-    uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
+    const { uploadId, uploadIdLe } = freshUploadId();
 
     const [txData] = PublicKey.findProgramAddressSync(
       [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
@@ -1298,9 +1118,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         .rpc();
       assert.fail("expected txdata_close_expired to fail with TxDataNotExpired");
     } catch (e: any) {
-      const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      const haystack = [msg, ...logs].join("\n");
+      const haystack = errorHaystack(e);
       assert.match(haystack, /TxDataNotExpired|has not expired/i);
     }
   });
@@ -1310,8 +1128,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
   // ===========================================================================
 
   it("verifies update_expiry_config instruction exists in IDL", async () => {
-    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-    const idl = readJson<any>(idlPath);
+    const idl = readJson<any>(IDL_PATH);
     const updateExpiryConfigIx = idl.instructions.find((ix: any) => ix.name === "update_expiry_config");
     assert.ok(updateExpiryConfigIx, "update_expiry_config instruction should exist in IDL");
     // Verify it has the two arguments (IDL uses snake_case)
@@ -1319,8 +1136,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
   });
 
   it("verifies new error types for expiry features exist in IDL", async () => {
-    const idlPath = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-    const idl = readJson<any>(idlPath);
+    const idl = readJson<any>(IDL_PATH);
 
     const extendMustIncreaseError = idl.errors?.find((e: any) => e.name === "TxDataExtendMustIncrease");
     assert.ok(extendMustIncreaseError, "TxDataExtendMustIncrease error should exist in IDL");
