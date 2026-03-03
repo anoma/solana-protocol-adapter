@@ -1,5 +1,6 @@
 //! External call encoding, decoding, and CPI execution.
 
+#[cfg(test)]
 use crate::encoding::bytes_to_words;
 use crate::error::PAError;
 use crate::types::{ExpirableBlob, SolanaExternalCall};
@@ -8,10 +9,13 @@ use crate::types::OutputMode;
 
 /// Encode an external call into an ExpirableBlob.
 /// Serializes using bincode and converts to word array.
-pub fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
+/// Test-only: the on-chain program decodes external calls, never encodes them.
+#[cfg(test)]
+pub(crate) fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
     let bytes = bincode::serialize(call).expect("serialization should not fail");
     ExpirableBlob {
         blob: bytes_to_words(&bytes),
+        // 0 = "Immediately" (ephemeral, not persisted as an event)
         deletion_criterion: 0,
     }
 }
