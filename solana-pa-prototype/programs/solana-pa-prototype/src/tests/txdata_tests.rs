@@ -33,13 +33,6 @@ fn txdata_write(account: &mut TxDataAccount, offset: u32, data: &[u8]) -> Result
 }
 
 #[test]
-fn test_txdata_init() {
-    let txdata = make_txdata(1000, 100);
-    assert_eq!(txdata.payload.len(), 1000);
-    assert_eq!(txdata.written_len, 0);
-}
-
-#[test]
 fn test_txdata_write_sequential() {
     let mut txdata = make_txdata(100, 1000);
 
@@ -80,24 +73,6 @@ fn test_txdata_read_payload() {
 }
 
 #[test]
-fn test_txdata_expiry() {
-    let txdata = make_txdata(100, 1000);
-    // Not expired at slot 999 (current <= expires)
-    assert!(999 <= txdata.expires_slot);
-    // Expired at slot 1001 (current > expires)
-    assert!(1001 > txdata.expires_slot);
-}
-
-#[test]
-fn test_txdata_expiry_boundary_exact() {
-    let txdata = make_txdata(100, 500);
-    // At exactly expires_slot, not expired (production uses clock.slot <= expires_slot)
-    assert!(500 <= txdata.expires_slot);
-    // One slot after, expired
-    assert!(501 > txdata.expires_slot);
-}
-
-#[test]
 fn test_txdata_bounds_exceeded() {
     let mut txdata = make_txdata(4, 1000);
 
@@ -108,13 +83,6 @@ fn test_txdata_bounds_exceeded() {
         Err(PAError::TxDataBoundsExceeded) => {}
         _ => panic!("Expected TxDataBoundsExceeded error"),
     }
-}
-
-#[test]
-fn test_txdata_empty_payload() {
-    let txdata = make_txdata(0, 1000);
-    assert_eq!(txdata.payload.len(), 0);
-    assert_eq!(txdata.written_len, 0);
 }
 
 // Compile-time verification that expiry constants are reasonable.

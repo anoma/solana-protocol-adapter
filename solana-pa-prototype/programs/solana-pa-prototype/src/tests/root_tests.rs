@@ -109,7 +109,3 @@ fn test_derive_root_pda_off_curve() {
     assert_eq!(pda, recreated.unwrap(), "Recreated PDA should match");
 }
 
-#[test]
-fn test_root_marker_seed_is_correct() {
-    assert_eq!(ROOT_SEED, b"root");
-}

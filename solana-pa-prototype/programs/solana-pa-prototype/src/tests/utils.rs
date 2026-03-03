@@ -75,47 +75,16 @@ pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
 /// Contains one action with one compliance unit and two LogicVerifierInputs
 /// (consumed and created resources).
 pub fn create_minimal_transaction() -> Transaction {
-    let consumed_nullifier = Digest::from_bytes([1u8; 32]);
-    let created_commitment = Digest::from_bytes([2u8; 32]);
-    let consumed_logic_ref = Digest::from_bytes([3u8; 32]);
-    let created_logic_ref = Digest::from_bytes([4u8; 32]);
-
     let instance = ComplianceInstance {
-        consumed_nullifier,
-        consumed_logic_ref,
+        consumed_nullifier: Digest::from_bytes([1u8; 32]),
+        consumed_logic_ref: Digest::from_bytes([3u8; 32]),
         consumed_commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
-        created_commitment,
-        created_logic_ref,
+        created_commitment: Digest::from_bytes([2u8; 32]),
+        created_logic_ref: Digest::from_bytes([4u8; 32]),
         delta_x: [0u32; 8],
         delta_y: [0u32; 8],
     };
-    Transaction {
-        actions: vec![Action {
-            compliance_units: vec![ComplianceUnit {
-                instance,
-                proof: None,
-            }],
-            logic_verifier_inputs: vec![
-                LogicVerifierInputs {
-                    tag: consumed_nullifier,
-                    verifying_key: consumed_logic_ref,
-                    app_data: AppData::default(),
-                    proof: None,
-                    instance_journal: Vec::new(),
-                },
-                LogicVerifierInputs {
-                    tag: created_commitment,
-                    verifying_key: created_logic_ref,
-                    app_data: AppData::default(),
-                    proof: None,
-                    instance_journal: Vec::new(),
-                },
-            ],
-        }],
-        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
-        expected_balance: None,
-        aggregation_proof: None,
-    }
+    build_tx_from_instances(&[instance])
 }
 
 /// Create a compliance instance with specified nullifier and commitment.

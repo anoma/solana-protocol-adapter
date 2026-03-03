@@ -42,10 +42,9 @@ fn test_sha256_syscall_matches_sha2_crate() {
 #[test]
 fn test_padding_leaf_matches_arm_risc0() {
     // Verify PADDING_LEAF constant matches arm-risc0's value
-    // Hex: cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06
-    let expected_bytes =
-        hex::decode("cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06").unwrap();
-    let expected = Digest::from_bytes(expected_bytes.try_into().unwrap());
+    let expected_bytes: [u8; 32] =
+        hex_literal::hex!("cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06");
+    let expected = Digest::from_bytes(expected_bytes);
     assert_eq!(PADDING_LEAF, expected, "PADDING_LEAF must match arm-risc0");
 }
 

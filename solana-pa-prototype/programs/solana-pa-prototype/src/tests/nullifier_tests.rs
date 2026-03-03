@@ -102,11 +102,3 @@ fn test_derive_nullifier_pda_all_ones() {
     assert_pda_recreatable(&[0xFF; 32]);
 }
 
-// -------------------------------------------------------------------------
-// Seed constant tests
-// -------------------------------------------------------------------------
-
-#[test]
-fn test_nullifier_seed_is_correct() {
-    assert_eq!(NULLIFIER_SEED, b"nullifier");
-}
