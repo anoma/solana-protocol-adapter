@@ -5,7 +5,7 @@ declare_id!("De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ");
 
 /// Verifier Router program ID (devnet deployment).
 /// The verifier_router crate's ID doesn't match our deployed program, so we hardcode it.
-pub const VERIFIER_ROUTER_ID: Pubkey =
+const VERIFIER_ROUTER_ID: Pubkey =
     anchor_lang::solana_program::pubkey!("BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg");
 
 // =============================================================================
@@ -141,14 +141,8 @@ pub mod solana_pa_prototype {
         capacity: u32,
         expires_slot: u64,
     ) -> Result<()> {
-        // Validate expiry bounds using configurable values from PAState
         let clock = Clock::get()?;
-        let pa_state = &ctx.accounts.pa_state;
-        let min_expires = clock.slot.saturating_add(pa_state.min_expiry_slots);
-        let max_expires = clock.slot.saturating_add(pa_state.max_expiry_slots);
-
-        require!(expires_slot >= min_expires, PAError::TxDataExpiryTooSoon);
-        require!(expires_slot <= max_expires, PAError::TxDataExpiryTooLate);
+        validate_expiry_bounds(&ctx.accounts.pa_state, clock.slot, expires_slot)?;
 
         let txdata = &mut ctx.accounts.tx_data;
         txdata.bump = ctx.bumps.tx_data;
@@ -207,21 +201,9 @@ pub mod solana_pa_prototype {
         new_expires_slot: u64,
     ) -> Result<()> {
         let clock = Clock::get()?;
-        let pa_state = &ctx.accounts.pa_state;
+        validate_expiry_bounds(&ctx.accounts.pa_state, clock.slot, new_expires_slot)?;
+
         let txdata = &mut ctx.accounts.tx_data;
-
-        // Validate new expiry is within bounds from current slot
-        let min_expires = clock.slot.saturating_add(pa_state.min_expiry_slots);
-        let max_expires = clock.slot.saturating_add(pa_state.max_expiry_slots);
-
-        require!(
-            new_expires_slot >= min_expires,
-            PAError::TxDataExpiryTooSoon
-        );
-        require!(
-            new_expires_slot <= max_expires,
-            PAError::TxDataExpiryTooLate
-        );
 
         // New expiry must be strictly greater than current (prevent no-op or shortening)
         require!(
@@ -246,11 +228,10 @@ pub mod solana_pa_prototype {
     /// Anyone can call this for garbage collection of stale accounts.
     /// Rent goes to the `refund` address stored in the account.
     /// Only works if current_slot > expires_slot.
-    #[allow(unused_variables)]
     pub fn txdata_close_expired(
         ctx: Context<TxDataCloseExpired>,
         upload_id: u64,
-        authority: Pubkey,
+        _authority: Pubkey,
     ) -> Result<()> {
         let clock = Clock::get()?;
         let txdata = &ctx.accounts.tx_data;
@@ -309,10 +290,9 @@ pub mod solana_pa_prototype {
     }
 
     /// Execute settlement from a TxData account.
-    #[allow(unused_variables)]
     pub fn settle_from_txdata<'info>(
         ctx: Context<'_, '_, '_, 'info, SettleFromTxData<'info>>,
-        upload_id: u64,
+        _upload_id: u64,
     ) -> Result<()> {
         require!(!ctx.accounts.pa_state.paused, PAError::Paused);
 
@@ -384,6 +364,19 @@ pub mod solana_pa_prototype {
 // =============================================================================
 // Helper Functions (on-chain)
 // =============================================================================
+
+/// Validate that an expiry slot falls within the configurable bounds.
+fn validate_expiry_bounds(
+    pa_state: &PAStateAccount,
+    current_slot: u64,
+    expires_slot: u64,
+) -> Result<()> {
+    let min_expires = current_slot.saturating_add(pa_state.min_expiry_slots);
+    let max_expires = current_slot.saturating_add(pa_state.max_expiry_slots);
+    require!(expires_slot >= min_expires, PAError::TxDataExpiryTooSoon);
+    require!(expires_slot <= max_expires, PAError::TxDataExpiryTooLate);
+    Ok(())
+}
 
 /// Append a single commitment to the tree using frontier-based append.
 /// Grows the tree when capacity is reached.
@@ -591,8 +584,9 @@ fn execute_settlement<'info>(
     delta::verify_delta_proof(tx)?;
 
     // 3.6) Emit app data events and EVM parity events for indexing
-    let mut all_tags: Vec<[u8; 32]> = Vec::new();
-    let mut all_logic_refs: Vec<[u8; 32]> = Vec::new();
+    let total_lvi: usize = tx.actions.iter().map(|a| a.logic_verifier_inputs.len()).sum();
+    let mut all_tags: Vec<[u8; 32]> = Vec::with_capacity(total_lvi);
+    let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_lvi);
 
     for (action_idx, action) in tx.actions.iter().enumerate() {
         msg!("Processing action events: action={}", action_idx);
@@ -614,10 +608,9 @@ fn execute_settlement<'info>(
         all_logic_refs.extend(logic_refs.iter().map(|d| d.to_bytes()));
     }
 
-    // Execute external calls (after proof verification, before state updates)
+    // Execute external calls (after proof verification, before state updates).
+    // Runs before nullifier/commitment state changes so failures don't leave partial state.
     // Uses `logic_verifier_inputs.app_data.external_payload` as the execution source.
-    // On-chain journal decoding/cross-checking is intentionally not performed.
-    // This ensures external call failures don't leave state partially updated
     #[cfg(not(test))]
     external_calls::execute_external_calls(tx, remaining_accounts, nullifiers.len())
         .map_err(anchor_lang::error::Error::from)?;
@@ -775,7 +768,7 @@ pub struct SettleFromTxData<'info> {
     #[account(
         seeds = [TX_DATA_SEED, authority.key().as_ref(), &upload_id.to_le_bytes()],
         bump = tx_data.bump,
-        has_one = authority
+        has_one = authority @ PAError::Unauthorized
     )]
     pub tx_data: Account<'info, TxDataAccount>,
 
@@ -827,7 +820,7 @@ pub struct TxDataWrite<'info> {
         mut,
         seeds = [TX_DATA_SEED, authority.key().as_ref(), &upload_id.to_le_bytes()],
         bump = tx_data.bump,
-        has_one = authority
+        has_one = authority @ PAError::Unauthorized
     )]
     pub tx_data: Account<'info, TxDataAccount>,
 
@@ -841,7 +834,7 @@ pub struct TxDataClose<'info> {
         mut,
         seeds = [TX_DATA_SEED, authority.key().as_ref(), &upload_id.to_le_bytes()],
         bump = tx_data.bump,
-        has_one = authority,
+        has_one = authority @ PAError::Unauthorized,
         close = refund
     )]
     pub tx_data: Account<'info, TxDataAccount>,
@@ -864,7 +857,7 @@ pub struct TxDataExtend<'info> {
         mut,
         seeds = [TX_DATA_SEED, authority.key().as_ref(), &upload_id.to_le_bytes()],
         bump = tx_data.bump,
-        has_one = authority
+        has_one = authority @ PAError::Unauthorized
     )]
     pub tx_data: Account<'info, TxDataAccount>,
 
