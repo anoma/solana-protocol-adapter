@@ -140,28 +140,7 @@ fn test_invalid_x_rejected() {
 #[test]
 fn test_negated_y_is_valid() {
     // The negation of G is also a valid point: (Gx, -Gy mod p)
-    // secp256k1 p = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
-    // -Gy = p - Gy
-
-    // Compute -Gy = p - Gy in big-endian
-    use num_bigint::BigUint;
-    use num_traits::Num;
-
-    let p = BigUint::from_str_radix(
-        "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F",
-        16,
-    )
-    .unwrap();
-    let gy = BigUint::from_bytes_be(&G_Y_BE);
-    let neg_gy = &p - &gy;
-
-    let mut neg_gy_bytes = [0u8; 32];
-    let neg_gy_vec = neg_gy.to_bytes_be();
-    // Pad with leading zeros if needed
-    neg_gy_bytes[32 - neg_gy_vec.len()..].copy_from_slice(&neg_gy_vec);
-
-    let delta_x = bytes_to_words_be(&G_X_BE);
-    let delta_y = bytes_to_words_be(&neg_gy_bytes);
+    let (delta_x, delta_y) = compute_neg_g();
 
     let tx = build_tx_with_delta(delta_x, delta_y);
     let result = accumulate_deltas(&tx);

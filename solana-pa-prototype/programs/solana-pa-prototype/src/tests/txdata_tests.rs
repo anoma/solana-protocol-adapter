@@ -98,21 +98,6 @@ fn test_txdata_expiry_boundary_exact() {
 }
 
 #[test]
-fn test_txdata_validate_not_expired_passes() {
-    let txdata = make_txdata(100, 1000);
-    // Production: require!(clock.slot <= txdata.expires_slot, PAError::TxDataExpired)
-    assert!(999 <= txdata.expires_slot);
-    assert!(1000 <= txdata.expires_slot);
-}
-
-#[test]
-fn test_txdata_validate_not_expired_fails() {
-    let txdata = make_txdata(100, 1000);
-    // Expired when slot > expires_slot
-    assert!(1001 > txdata.expires_slot);
-}
-
-#[test]
 fn test_txdata_bounds_exceeded() {
     let mut txdata = make_txdata(4, 1000);
 
