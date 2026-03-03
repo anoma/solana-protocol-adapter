@@ -186,27 +186,55 @@ fn run_docker_cargo(
 }
 
 fn normalize_output_ownership(docker_root: &Path, target_dir_rel: &str) {
-    let uid = current_id("-u");
-    let gid = current_id("-g");
-    let image = format!("risczero/risc0-guest-builder:{}", docker_tag());
-    let volume = format!("{}:/src", docker_root.display());
-    let chown_cmd = format!("chown -R {uid}:{gid} {target_dir_rel}");
+    let target_dir = docker_root.join(target_dir_rel);
 
-    let status = Command::new("docker")
-        .arg("run")
-        .arg("--rm")
-        .arg("--volume")
-        .arg(&volume)
-        .arg("--workdir")
-        .arg("/src")
-        .arg(&image)
-        .arg("-c")
-        .arg(&chown_cmd)
-        .status()
-        .expect("failed running docker chown for guest output");
-    if !status.success() {
-        panic!("docker chown failed for guest output");
+    if is_podman() {
+        // Rootless Podman runs containers in a user namespace where the container's UID 0
+        // maps to a sub-UID on the host (e.g. 166536). Files written by the container are
+        // owned by that sub-UID. `podman unshare` enters the user namespace where UID 0 maps
+        // back to the real host user, so `chown -R 0:0` restores host-user ownership.
+        let status = Command::new("podman")
+            .arg("unshare")
+            .arg("chown")
+            .arg("-R")
+            .arg("0:0")
+            .arg(&target_dir)
+            .status()
+            .expect("failed running podman unshare chown for guest output");
+        if !status.success() {
+            panic!("podman unshare chown failed for guest output");
+        }
+    } else {
+        let uid = current_id("-u");
+        let gid = current_id("-g");
+        let image = format!("risczero/risc0-guest-builder:{}", docker_tag());
+        let volume = format!("{}:/src", docker_root.display());
+        let chown_cmd = format!("chown -R {uid}:{gid} {target_dir_rel}");
+
+        let status = Command::new("docker")
+            .arg("run")
+            .arg("--rm")
+            .arg("--volume")
+            .arg(&volume)
+            .arg("--workdir")
+            .arg("/src")
+            .arg(&image)
+            .arg("-c")
+            .arg(&chown_cmd)
+            .status()
+            .expect("failed running docker chown for guest output");
+        if !status.success() {
+            panic!("docker chown failed for guest output");
+        }
     }
+}
+
+fn is_podman() -> bool {
+    Command::new("docker")
+        .arg("--version")
+        .output()
+        .map(|out| String::from_utf8_lossy(&out.stdout).to_lowercase().contains("podman"))
+        .unwrap_or(false)
 }
 
 fn ensure_docker_available() {

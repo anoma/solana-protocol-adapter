@@ -197,6 +197,11 @@ EOF
               pkgs.llvm
               pkgs.cmake
               pkgs.protobuf
+              pkgs.podman
+              pkgs.conmon
+              pkgs.crun
+              pkgs.fuse-overlayfs
+              pkgs.slirp4netns
               pkgs.git
               pkgs.curl
               pkgs.jq
@@ -224,6 +229,56 @@ EOF
               # In paths containing spaces, this injected rpath tokenization breaks linking.
               if [[ "''${NIX_LDFLAGS:-}" == *"/outputs/out/lib"* ]]; then
                 unset NIX_LDFLAGS
+              fi
+
+              # Provide "docker" command via podman so risc0's groth16 prover works
+              # without a host Docker installation. Podman runs rootless and daemonless.
+              _nix_cache="$HOME/.cache/solana-pa-nix"
+              mkdir -p "$_nix_cache/bin" "$_nix_cache/containers"
+
+              cat > "$_nix_cache/bin/docker" <<'WRAPPER'
+              #!/usr/bin/env bash
+              exec podman "$@"
+              WRAPPER
+              chmod +x "$_nix_cache/bin/docker"
+              export PATH="$_nix_cache:$_nix_cache/bin:$PATH"
+
+              # Configure podman for rootless container execution (used by risc0 groth16 prover).
+              # newuidmap is a setuid binary that nix cannot provide — it must come from the host.
+              if ! command -v newuidmap >/dev/null 2>&1; then
+                echo ""
+                echo "WARNING: newuidmap not found. Fixture generation (risc0 groth16 prover) will fail."
+                echo "Install it with: sudo apt install uidmap   (Debian/Ubuntu)"
+                echo "                 sudo dnf install shadow-utils  (Fedora/RHEL)"
+                echo ""
+              fi
+
+              export CONTAINERS_CONF="$_nix_cache/containers/containers.conf"
+              export CONTAINERS_STORAGE_CONF="$_nix_cache/containers/storage.conf"
+              export CONTAINERS_REGISTRIES_CONF="$_nix_cache/containers/registries.conf"
+
+              cat > "$CONTAINERS_CONF" <<'CONF'
+              [engine]
+              runtime = "crun"
+              CONF
+
+              cat > "$CONTAINERS_STORAGE_CONF" <<CONF
+              [storage]
+              driver = "overlay"
+              rootless_storage_path = "$_nix_cache/containers/storage"
+              [storage.options.overlay]
+              mount_program = "$(command -v fuse-overlayfs)"
+              CONF
+
+              cat > "$CONTAINERS_REGISTRIES_CONF" <<'CONF'
+              unqualified-search-registries = ["docker.io"]
+              CONF
+
+              mkdir -p "$HOME/.config/containers"
+              if [ ! -f "$HOME/.config/containers/policy.json" ]; then
+                cat > "$HOME/.config/containers/policy.json" <<'POLICY'
+              {"default": [{"type": "insecureAcceptAnything"}]}
+              POLICY
               fi
 
               mkdir -p "$HOME/.config/solana"
