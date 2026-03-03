@@ -3,6 +3,9 @@
 **/*.rs.bk
 node_modules
 test-ledger
+target
+.validator-ledger/
+.validator.log
 .yarn
 
 # Claude Code
