@@ -100,12 +100,12 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   const PA_STATE_SEED = Buffer.from("pa_state");
   const NULLIFIER_SEED = Buffer.from("nullifier");
   const TX_DATA_SEED = Buffer.from("tx_data");
-  const ROOT_MARKER_SEED = Buffer.from("root");
+  const ROOT_SEED = Buffer.from("root");
 
-  // Helper to derive root marker PDA
-  function deriveRootMarkerPda(root: Buffer): PublicKey {
+  // Helper to derive root PDA
+  function deriveRootPda(root: Buffer): PublicKey {
     return PublicKey.findProgramAddressSync(
-      [ROOT_MARKER_SEED, paState.toBuffer(), root],
+      [ROOT_SEED, paState.toBuffer(), root],
       program.programId
     )[0];
   }
@@ -238,7 +238,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
 
     // Initialize PA state if needed
     const genesisRoot = computeGenesisRoot();
-    genesisRootMarkerPda = deriveRootMarkerPda(genesisRoot);
+    genesisRootMarkerPda = deriveRootPda(genesisRoot);
 
     try {
       await program.account.paStateAccount.fetch(paState);

@@ -552,6 +552,7 @@ fn execute_settlement<'info>(
             require!(
                 root::is_root_valid(
                     state,
+                    &crate::ID,
                     pa_state_key,
                     &cu.instance.consumed_commitment_tree_root,
                     remaining_accounts,
@@ -669,7 +670,7 @@ fn execute_settlement<'info>(
 
     // Create root marker for the new root (enables parallel tx construction).
     // The new root marker is always at the LAST position in remaining_accounts.
-    let (expected_pda, _) = root::derive_root_marker_pda(&crate::ID, pa_state_key, &new_root);
+    let (expected_pda, _) = root::derive_root_pda(&crate::ID, pa_state_key, &new_root);
     if let Some(last_account) = remaining_accounts.last() {
         if last_account.key == &expected_pda {
             root::create_root_marker(

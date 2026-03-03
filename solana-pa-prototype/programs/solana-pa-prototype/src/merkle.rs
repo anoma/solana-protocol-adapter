@@ -1,6 +1,6 @@
 //! Merkle tree constants and hash function for the commitment tree.
 //!
-//! Must match arm-risc0's hash_two function exactly.
+//! The hash function and padding leaf must match arm-risc0's implementation exactly.
 
 use arm_core::constants::EMPTY_HASH_WORDS;
 
@@ -194,6 +194,6 @@ pub const EMPTY_TREE_ROOT_INITIAL: Digest = ZEROS[INITIAL_TREE_DEPTH - 1];
 /// Uses Solana's sol_sha256 syscall for efficiency (~100 CU vs ~6k CU for sha2 crate).
 /// See test_sha256_syscall_matches_sha2_crate for equivalence verification.
 pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
-    let result = hashv(&[&left.to_bytes(), &right.to_bytes()]);
+    let result = hashv(&[left.as_bytes(), right.as_bytes()]);
     Digest::from_bytes(result.to_bytes())
 }
