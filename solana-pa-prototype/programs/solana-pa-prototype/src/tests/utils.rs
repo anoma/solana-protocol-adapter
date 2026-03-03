@@ -11,6 +11,45 @@ use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
 use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::types::*;
 
+/// Helper to create a Transaction from a slice of ComplianceInstances.
+pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction {
+    let cus: Vec<ComplianceUnit> = instances
+        .iter()
+        .map(|inst| ComplianceUnit {
+            instance: inst.clone(),
+            proof: None,
+        })
+        .collect();
+
+    let mut lvis = Vec::new();
+    for inst in instances {
+        lvis.push(LogicVerifierInputs {
+            tag: inst.consumed_nullifier,
+            verifying_key: inst.consumed_logic_ref,
+            app_data: AppData::default(),
+            proof: None,
+            instance_journal: Vec::new(),
+        });
+        lvis.push(LogicVerifierInputs {
+            tag: inst.created_commitment,
+            verifying_key: inst.created_logic_ref,
+            app_data: AppData::default(),
+            proof: None,
+            instance_journal: Vec::new(),
+        });
+    }
+
+    Transaction {
+        actions: vec![Action {
+            compliance_units: cus,
+            logic_verifier_inputs: lvis,
+        }],
+        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
+        expected_balance: None,
+        aggregation_proof: None,
+    }
+}
+
 /// Arbitrary selector for unit tests. Used by `fake_aggregation_proof_bytes` to test
 /// that the proof parser correctly extracts the selector from verifier_parameters.
 /// This value is not meaningful - actual selectors are extracted from real proofs.

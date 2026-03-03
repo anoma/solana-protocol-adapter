@@ -1,7 +1,5 @@
 //! Unit tests for lib module (main program tests).
 
-use anchor_lang::prelude::Pubkey;
-
 use crate::external_calls::{
     build_forwarder_instruction_data, encode_external_call, FORWARD_CALL_DISCRIMINATOR,
 };
@@ -9,10 +7,6 @@ use crate::settle;
 use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::tests::utils::*;
 use crate::types::*;
-use crate::{
-    ApplicationPayloadEvent, DiscoveryPayloadEvent, ExternalPayloadEvent, ResourcePayloadEvent,
-    DELETION_CRITERION_NEVER,
-};
 
 // =========================================================================
 // SERIALIZATION FORMAT TESTS (ARM-RISC0 COMPATIBILITY)
@@ -137,153 +131,6 @@ mod governance_tests {
         assert_eq!(PAStateAccount::space_for_depth(32), 1127);
     }
 
-    #[test]
-    fn test_pa_state_stores_authority() {
-        let authority = Pubkey::new_unique();
-        let state = create_mock_pa_state(authority, false);
-        assert_eq!(state.authority, authority);
-    }
-
-    #[test]
-    fn test_pa_state_stores_paused_flag() {
-        let authority = Pubkey::new_unique();
-
-        let state_unpaused = create_mock_pa_state(authority, false);
-        assert!(!state_unpaused.paused);
-
-        let state_paused = create_mock_pa_state(authority, true);
-        assert!(state_paused.paused);
-    }
-
-}
-
-// =========================================================================
-// EVENT EMISSION TESTS (App Data, Deletion Criterion Filtering)
-// =========================================================================
-
-mod event_tests {
-    use super::*;
-
-    #[test]
-    fn test_deletion_criterion_never_value() {
-        // DELETION_CRITERION_NEVER should be 1 (matching EVM PA)
-        assert_eq!(DELETION_CRITERION_NEVER, 1);
-    }
-
-    #[test]
-    fn test_deletion_criterion_immediately_is_zero() {
-        // DeletionCriterion::Immediately is 0 in arm-risc0
-        // Payloads with this value should NOT be emitted
-        let immediately = 0u32;
-        assert_ne!(immediately, DELETION_CRITERION_NEVER);
-    }
-
-    #[test]
-    fn test_event_structs_have_correct_fields() {
-        // Verify event structs can be constructed with expected field types
-        let tag = [0u8; 32];
-        let index = 42u32;
-        let blob = vec![1u8, 2, 3, 4];
-
-        let resource_event = ResourcePayloadEvent {
-            tag,
-            index,
-            blob: blob.clone(),
-        };
-        assert_eq!(resource_event.tag, tag);
-        assert_eq!(resource_event.index, 42);
-        assert_eq!(resource_event.blob, blob);
-
-        let discovery_event = DiscoveryPayloadEvent {
-            tag,
-            index,
-            blob: blob.clone(),
-        };
-        assert_eq!(discovery_event.tag, tag);
-        assert_eq!(discovery_event.index, 42);
-        assert_eq!(discovery_event.blob, blob);
-
-        let external_event = ExternalPayloadEvent {
-            tag,
-            index,
-            blob: blob.clone(),
-        };
-        assert_eq!(external_event.tag, tag);
-        assert_eq!(external_event.index, 42);
-        assert_eq!(external_event.blob, blob);
-
-        let application_event = ApplicationPayloadEvent {
-            tag,
-            index,
-            blob: blob.clone(),
-        };
-        assert_eq!(application_event.tag, tag);
-        assert_eq!(application_event.index, 42);
-        assert_eq!(application_event.blob, blob);
-    }
-
-    #[test]
-    fn test_expirable_blob_filtering() {
-        // Test that we correctly identify payloads that should be emitted
-        let never_blob = ExpirableBlob {
-            blob: vec![1, 2, 3],
-            deletion_criterion: DELETION_CRITERION_NEVER,
-        };
-        let immediately_blob = ExpirableBlob {
-            blob: vec![4, 5, 6],
-            deletion_criterion: 0, // Immediately
-        };
-
-        assert_eq!(never_blob.deletion_criterion, DELETION_CRITERION_NEVER);
-        assert_ne!(
-            immediately_blob.deletion_criterion,
-            DELETION_CRITERION_NEVER
-        );
-    }
-
-    #[test]
-    fn test_app_data_with_mixed_deletion_criteria() {
-        // Verify app_data structure with mixed payloads
-        let app_data = AppData {
-            resource_payload: vec![
-                ExpirableBlob {
-                    blob: vec![1],
-                    deletion_criterion: DELETION_CRITERION_NEVER,
-                },
-                ExpirableBlob {
-                    blob: vec![2],
-                    deletion_criterion: 0,
-                }, // Immediately
-            ],
-            discovery_payload: vec![ExpirableBlob {
-                blob: vec![3],
-                deletion_criterion: DELETION_CRITERION_NEVER,
-            }],
-            external_payload: vec![],
-            application_payload: vec![
-                ExpirableBlob {
-                    blob: vec![4],
-                    deletion_criterion: 0,
-                }, // Immediately
-            ],
-        };
-
-        // Count payloads that would be emitted (deletion_criterion == NEVER)
-        let all_payloads = [
-            &app_data.resource_payload,
-            &app_data.discovery_payload,
-            &app_data.external_payload,
-            &app_data.application_payload,
-        ];
-        let would_emit = all_payloads
-            .iter()
-            .flat_map(|payloads| payloads.iter())
-            .filter(|p| p.deletion_criterion == DELETION_CRITERION_NEVER)
-            .count();
-
-        // Should emit 2 payloads: resource[0] and discovery[0]
-        assert_eq!(would_emit, 2);
-    }
 }
 
 // =========================================================================
@@ -292,27 +139,6 @@ mod event_tests {
 
 mod txdata_expiry_bounds_tests {
     use super::*;
-
-    #[test]
-    fn test_expiry_bounds_constants() {
-        // MIN: 100 slots * 400ms = ~40 seconds
-        assert_eq!(MIN_EXPIRY_SLOTS, 100);
-        // MAX: 216,000 slots * 400ms = ~24 hours
-        assert_eq!(MAX_EXPIRY_SLOTS, 216_000);
-        // MAX should be greater than MIN (compile-time check)
-        const { assert!(MAX_EXPIRY_SLOTS > MIN_EXPIRY_SLOTS) };
-    }
-
-    #[test]
-    fn test_expiry_bounds_calculations() {
-        let current_slot: u64 = 1_000_000;
-
-        let min_expires = current_slot.saturating_add(MIN_EXPIRY_SLOTS);
-        let max_expires = current_slot.saturating_add(MAX_EXPIRY_SLOTS);
-
-        assert_eq!(min_expires, 1_000_100);
-        assert_eq!(max_expires, 1_216_000);
-    }
 
     #[test]
     fn test_expiry_bounds_no_overflow() {

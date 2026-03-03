@@ -3,28 +3,9 @@
 use arm_solana::SolanaArmError;
 
 use arm_solana::delta::{accumulate_deltas, collect_tags, compute_verifying_key};
-use crate::tests::utils::create_compliance_instance;
-use crate::types::{
-    Action, ComplianceUnit, Delta, DeltaWitness, LogicVerifierInputs, Transaction,
-};
-
-/// Convert big-endian bytes to [u32; 8] words using arm-risc0's encoding.
-///
-/// This matches arm-risc0/arm/src/utils.rs bytes_to_words:
-/// - Takes big-endian bytes
-/// - Builds each word from 4 bytes in big-endian order
-/// - Stores as u32::from_be(word) which on little-endian gives native storage
-fn bytes_to_words_be(bytes: &[u8; 32]) -> [u32; 8] {
-    let mut words = [0u32; 8];
-    for (i, chunk) in bytes.chunks_exact(4).enumerate() {
-        let word = ((chunk[0] as u32) << 24)
-            | ((chunk[1] as u32) << 16)
-            | ((chunk[2] as u32) << 8)
-            | (chunk[3] as u32);
-        words[i] = u32::from_be(word);
-    }
-    words
-}
+use crate::encoding::bytes_to_words;
+use crate::tests::utils::{build_tx_from_instances, create_compliance_instance};
+use crate::types::{Digest, Transaction};
 
 /// secp256k1 generator point G (big-endian SEC1 format).
 const G_X_BE: [u8; 32] =
@@ -32,49 +13,70 @@ const G_X_BE: [u8; 32] =
 const G_Y_BE: [u8; 32] =
     hex_literal::hex!("483ADA7726A3C4655DA4FBFC0E1108A8FD17B448A68554199C47D08FFB10D4B8");
 
-/// Build a transaction from a single compliance instance for testing.
+/// Convert big-endian bytes to [u32; 8] words, using the shared `bytes_to_words`.
+fn be_bytes_to_word_array(bytes: &[u8; 32]) -> [u32; 8] {
+    bytes_to_words(bytes).try_into().unwrap()
+}
+
+/// Build a transaction with given delta values for testing.
 fn build_tx_with_delta(delta_x: [u32; 8], delta_y: [u32; 8]) -> Transaction {
-    use crate::types::Digest;
     let nf = Digest::from_bytes([1u8; 32]);
     let cm = Digest::from_bytes([2u8; 32]);
     let mut instance = create_compliance_instance(nf, cm);
     instance.delta_x = delta_x;
     instance.delta_y = delta_y;
+    build_tx_from_instances(&[instance])
+}
 
-    Transaction {
-        actions: vec![Action {
-            compliance_units: vec![ComplianceUnit {
-                instance: instance.clone(),
-                proof: None,
-            }],
-            logic_verifier_inputs: vec![
-                LogicVerifierInputs {
-                    tag: instance.consumed_nullifier,
-                    verifying_key: instance.consumed_logic_ref,
-                    app_data: Default::default(),
-                    proof: None,
-                    instance_journal: Vec::new(),
-                },
-                LogicVerifierInputs {
-                    tag: instance.created_commitment,
-                    verifying_key: instance.created_logic_ref,
-                    app_data: Default::default(),
-                    proof: None,
-                    instance_journal: Vec::new(),
-                },
-            ],
-        }],
-        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
-        expected_balance: None,
-        aggregation_proof: None,
-    }
+/// Build a transaction with two compliance units having given deltas.
+fn build_tx_with_two_deltas(
+    delta1_x: [u32; 8],
+    delta1_y: [u32; 8],
+    delta2_x: [u32; 8],
+    delta2_y: [u32; 8],
+) -> Transaction {
+    let mut i1 = create_compliance_instance(
+        Digest::from_bytes([1u8; 32]),
+        Digest::from_bytes([2u8; 32]),
+    );
+    i1.delta_x = delta1_x;
+    i1.delta_y = delta1_y;
+
+    let mut i2 = create_compliance_instance(
+        Digest::from_bytes([3u8; 32]),
+        Digest::from_bytes([4u8; 32]),
+    );
+    i2.delta_x = delta2_x;
+    i2.delta_y = delta2_y;
+
+    build_tx_from_instances(&[i1, i2])
+}
+
+/// Compute -G (negation of generator point).
+fn compute_neg_g() -> ([u32; 8], [u32; 8]) {
+    use num_bigint::BigUint;
+    use num_traits::Num;
+
+    let p = BigUint::from_str_radix(
+        "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F",
+        16,
+    )
+    .unwrap();
+    let gy = BigUint::from_bytes_be(&G_Y_BE);
+    let neg_gy = &p - &gy;
+
+    let mut neg_gy_bytes = [0u8; 32];
+    let neg_gy_vec = neg_gy.to_bytes_be();
+    neg_gy_bytes[32 - neg_gy_vec.len()..].copy_from_slice(&neg_gy_vec);
+
+    (be_bytes_to_word_array(&G_X_BE), be_bytes_to_word_array(&neg_gy_bytes))
 }
 
 #[test]
 fn test_valid_generator_point_passes_validation() {
     // Use the secp256k1 generator point G - a known valid curve point
-    let delta_x = bytes_to_words_be(&G_X_BE);
-    let delta_y = bytes_to_words_be(&G_Y_BE);
+    let delta_x = be_bytes_to_word_array(&G_X_BE);
+    let delta_y = be_bytes_to_word_array(&G_Y_BE);
 
     let tx = build_tx_with_delta(delta_x, delta_y);
     let result = accumulate_deltas(&tx);
@@ -108,7 +110,7 @@ fn test_zero_point_rejected() {
 #[test]
 fn test_wrong_y_coordinate_rejected() {
     // Valid x (generator), but wrong y (all zeros instead of actual y)
-    let delta_x = bytes_to_words_be(&G_X_BE);
+    let delta_x = be_bytes_to_word_array(&G_X_BE);
     let delta_y = [0u32; 8]; // Wrong y - should be G_Y
 
     let tx = build_tx_with_delta(delta_x, delta_y);
@@ -154,9 +156,8 @@ fn test_negated_y_is_valid() {
 
 #[test]
 fn test_collect_tags_with_valid_delta() {
-    // collect_tags doesn't validate deltas, so this should work
-    let delta_x = bytes_to_words_be(&G_X_BE);
-    let delta_y = bytes_to_words_be(&G_Y_BE);
+    let delta_x = be_bytes_to_word_array(&G_X_BE);
+    let delta_y = be_bytes_to_word_array(&G_Y_BE);
 
     let tx = build_tx_with_delta(delta_x, delta_y);
     let tags = collect_tags(&tx);
@@ -166,8 +167,8 @@ fn test_collect_tags_with_valid_delta() {
 
 #[test]
 fn test_verifying_key_deterministic() {
-    let delta_x = bytes_to_words_be(&G_X_BE);
-    let delta_y = bytes_to_words_be(&G_Y_BE);
+    let delta_x = be_bytes_to_word_array(&G_X_BE);
+    let delta_y = be_bytes_to_word_array(&G_Y_BE);
 
     let tx = build_tx_with_delta(delta_x, delta_y);
     let tags = collect_tags(&tx);
@@ -178,85 +179,11 @@ fn test_verifying_key_deterministic() {
     assert_eq!(vk1, vk2, "Same tags should produce same verifying key");
 }
 
-/// Build a transaction with two compliance units having given deltas.
-fn build_tx_with_two_deltas(
-    delta1_x: [u32; 8],
-    delta1_y: [u32; 8],
-    delta2_x: [u32; 8],
-    delta2_y: [u32; 8],
-) -> Transaction {
-    use crate::types::{ComplianceInstance, Digest};
-
-    let nf1 = Digest::from_bytes([1u8; 32]);
-    let cm1 = Digest::from_bytes([2u8; 32]);
-    let nf2 = Digest::from_bytes([3u8; 32]);
-    let cm2 = Digest::from_bytes([4u8; 32]);
-
-    let instance1 = ComplianceInstance {
-        consumed_nullifier: nf1,
-        consumed_logic_ref: Digest::default(),
-        consumed_commitment_tree_root: Digest::default(),
-        created_commitment: cm1,
-        created_logic_ref: Digest::default(),
-        delta_x: delta1_x,
-        delta_y: delta1_y,
-    };
-
-    let instance2 = ComplianceInstance {
-        consumed_nullifier: nf2,
-        consumed_logic_ref: Digest::default(),
-        consumed_commitment_tree_root: Digest::default(),
-        created_commitment: cm2,
-        created_logic_ref: Digest::default(),
-        delta_x: delta2_x,
-        delta_y: delta2_y,
-    };
-
-    Transaction {
-        actions: vec![Action {
-            compliance_units: vec![
-                ComplianceUnit {
-                    instance: instance1,
-                    proof: None,
-                },
-                ComplianceUnit {
-                    instance: instance2,
-                    proof: None,
-                },
-            ],
-            logic_verifier_inputs: vec![],
-        }],
-        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
-        expected_balance: None,
-        aggregation_proof: None,
-    }
-}
-
-/// Compute -G (negation of generator point).
-fn compute_neg_g() -> ([u32; 8], [u32; 8]) {
-    use num_bigint::BigUint;
-    use num_traits::Num;
-
-    let p = BigUint::from_str_radix(
-        "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F",
-        16,
-    )
-    .unwrap();
-    let gy = BigUint::from_bytes_be(&G_Y_BE);
-    let neg_gy = &p - &gy;
-
-    let mut neg_gy_bytes = [0u8; 32];
-    let neg_gy_vec = neg_gy.to_bytes_be();
-    neg_gy_bytes[32 - neg_gy_vec.len()..].copy_from_slice(&neg_gy_vec);
-
-    (bytes_to_words_be(&G_X_BE), bytes_to_words_be(&neg_gy_bytes))
-}
-
 #[test]
 fn test_point_doubling_g_plus_g() {
     // G + G = 2G (point doubling case in safe_point_add)
-    let delta_x = bytes_to_words_be(&G_X_BE);
-    let delta_y = bytes_to_words_be(&G_Y_BE);
+    let delta_x = be_bytes_to_word_array(&G_X_BE);
+    let delta_y = be_bytes_to_word_array(&G_Y_BE);
 
     let tx = build_tx_with_two_deltas(delta_x, delta_y, delta_x, delta_y);
     let result = accumulate_deltas(&tx);
@@ -274,7 +201,7 @@ fn test_point_doubling_g_plus_g() {
 #[test]
 fn test_inverse_points_g_plus_neg_g_equals_identity() {
     // G + (-G) = identity (inverse points case in safe_point_add)
-    let (g_x, g_y) = (bytes_to_words_be(&G_X_BE), bytes_to_words_be(&G_Y_BE));
+    let (g_x, g_y) = (be_bytes_to_word_array(&G_X_BE), be_bytes_to_word_array(&G_Y_BE));
     let (neg_g_x, neg_g_y) = compute_neg_g();
 
     let tx = build_tx_with_two_deltas(g_x, g_y, neg_g_x, neg_g_y);
