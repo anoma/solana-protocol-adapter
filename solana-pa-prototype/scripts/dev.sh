@@ -57,6 +57,11 @@ case "${1:-}" in
     run_in_project "solana-test-validator --reset --url devnet --rpc-port 8899 --faucet-port 9900 --bind-address 127.0.0.1 --log"
     ;;
 
+  gen-fixtures)
+    shift
+    run_in_project "cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- $*"
+    ;;
+
   update-deps)
     run_in_project "rm -f yarn.lock package-lock.json && yarn install"
     ;;
@@ -73,6 +78,7 @@ case "${1:-}" in
     echo "  test         Run Rust tests"
     echo "  anchor-build Build Anchor programs"
     echo "  anchor-test  Run deterministic Anchor integration tests"
+    echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
     echo "  validator    Start a local Solana validator"
     echo "  update-deps  Regenerate yarn.lock"
     echo "  clean        Remove local validator/test artifacts"

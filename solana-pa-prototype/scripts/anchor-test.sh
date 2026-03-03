@@ -141,14 +141,14 @@ OPTIONAL_MISMATCH_FIXTURE="tests/fixtures/batch_groth16_mismatch.json"
 if [[ ! -f "$REQUIRED_FIXTURE" ]] || ! fixture_matches_program_id "$REQUIRED_FIXTURE" "$BTF_ID"; then
   echo "Required fixture is missing or stale: ${REQUIRED_FIXTURE}"
   echo "Regenerate it with:"
-  echo "  cargo run --manifest-path tools/fixture-gen/Cargo.toml -- tests/fixtures/batch_groth16.json"
+  echo "  cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- tests/fixtures/batch_groth16.json"
   exit 1
 fi
 
 if [[ -f "$OPTIONAL_MISMATCH_FIXTURE" ]] && ! fixture_matches_program_id "$OPTIONAL_MISMATCH_FIXTURE" "$BTF_ID"; then
   echo "Warning: ${OPTIONAL_MISMATCH_FIXTURE} is stale for block_time_forwarder ID ${BTF_ID}."
   echo "Regenerate it with:"
-  echo "  cargo run --manifest-path tools/fixture-gen/Cargo.toml -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json"
+  echo "  cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json"
 fi
 
 echo "==> (2/3) Starting validator"
