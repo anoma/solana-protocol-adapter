@@ -173,7 +173,7 @@ solana-test-validator \
   >"$VALIDATOR_LOG" 2>&1 &
 VALIDATOR_PID=$!
 
-if ! wait_for_validator "http://127.0.0.1:8899"; then
+if ! wait_for_validator "$CLUSTER_URL"; then
   echo "Validator failed to start. Last lines from ${VALIDATOR_LOG}:"
   tail -n 50 "$VALIDATOR_LOG" || true
   exit 1

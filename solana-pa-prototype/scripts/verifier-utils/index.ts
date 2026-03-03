@@ -31,7 +31,7 @@ export function getVerifierEntryPda(
   routerProgramId: PublicKey = VERIFIER_ROUTER_ID
 ): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("verifier"), Buffer.from(selector)],
+    [Buffer.from("verifier"), selector],
     routerProgramId
   );
 }
