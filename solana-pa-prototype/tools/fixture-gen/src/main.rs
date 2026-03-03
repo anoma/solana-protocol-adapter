@@ -88,17 +88,14 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
         .get_mut(0)
         .ok_or_else(|| anyhow!("tx has no compliance units"))?;
 
-    let instance = cu.instance.clone();
-    let old_created_commitment = instance.created_commitment;
+    let old_created_commitment = cu.instance.created_commitment;
 
     let mut new_bytes = [0u8; 32];
     new_bytes.copy_from_slice(old_created_commitment.as_bytes());
     new_bytes[0] ^= 1;
     let new_created_commitment = Digest::from_bytes(new_bytes);
 
-    let mut new_instance = instance.clone();
-    new_instance.created_commitment = new_created_commitment;
-    cu.instance = new_instance;
+    cu.instance.created_commitment = new_created_commitment;
 
     // Update the corresponding created logic verifier input tag so decoding and
     // digest computation still succeeds (proof must then fail).
@@ -238,14 +235,14 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
         created_resource,
         merkle_path: MerklePath::empty(),
         rcv: Scalar::ONE.to_bytes().to_vec(),
-        nf_key: nf_key.clone(),
+        nf_key,
         ephemeral_root: initial_root(),
     };
     let compliance_receipt =
         create_compliance_unit(&compliance_witness, base_proof_type).context("prove compliance")?;
 
     let tags = vec![consumed_nf, created_cm];
-    let action_tree = MerkleTree::from(tags.clone());
+    let action_tree = MerkleTree::from(tags);
     let root = action_tree.root().context("compute action tree root")?;
 
     // Create app_data with a real external payload for the consumed logic instance only.
@@ -329,11 +326,10 @@ fn fmt_duration(d: Duration) -> String {
     format!("{hours}h{rem_mins:02}m{rem:02}.{millis:03}s")
 }
 
-fn print_usage_and_exit() -> Result<()> {
+fn print_usage() {
     eprintln!(
         "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n"
     );
-    Ok(())
 }
 
 fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
@@ -346,7 +342,7 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-h" | "--help" => {
-                print_usage_and_exit()?;
+                print_usage();
                 std::process::exit(0);
             }
             "--threads" => {
@@ -473,8 +469,7 @@ fn main() -> Result<()> {
     let mut consumed_nullifiers_b64 = Vec::new();
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let instance = cu.instance.clone();
-            consumed_nullifiers_b64.push(BASE64.encode(instance.consumed_nullifier.as_bytes()));
+            consumed_nullifiers_b64.push(BASE64.encode(cu.instance.consumed_nullifier.as_bytes()));
         }
     }
     eprintln!(

@@ -55,9 +55,8 @@ fn main() {
 
     let methods_rs = format!(
         "pub const PASSTHROUGH_LOGIC_GUEST_ELF: &[u8] = include_bytes!({:?});\n\
-         pub const PASSTHROUGH_LOGIC_GUEST_PATH: &str = {:?};\n\
          pub const PASSTHROUGH_LOGIC_GUEST_ID: [u32; 8] = {:?};\n",
-        combined_path, combined_path, image_id_words
+        combined_path, image_id_words
     );
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is not set for build script"));
