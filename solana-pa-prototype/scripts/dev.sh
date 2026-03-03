@@ -62,6 +62,10 @@ case "${1:-}" in
     run_in_project "cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- $*"
     ;;
 
+  fixture-test)
+    run_in_project "RISC0_SKIP_BUILD=1 cargo test --manifest-path tools/fixture-gen/Cargo.toml"
+    ;;
+
   update-deps)
     run_in_project "rm -f yarn.lock package-lock.json && yarn install"
     ;;
@@ -70,18 +74,35 @@ case "${1:-}" in
     run_in_project "rm -rf .validator-ledger .validator.log test-ledger"
     ;;
 
+  fmt)
+    run_in_project "cargo fmt -p solana-pa-prototype -p block-time-forwarder -- --check"
+    ;;
+
+  clippy)
+    run_in_project "cargo clippy -p solana-pa-prototype -p block-time-forwarder --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
+    ;;
+
+  run)
+    shift
+    run_in_project "$*"
+    ;;
+
   "")
     echo "Usage: $0 <command>"
     echo ""
     echo "Commands:"
     echo "  shell        Enter the Nix development shell"
     echo "  test         Run Rust tests"
+    echo "  fmt          Check Rust formatting"
+    echo "  clippy       Run clippy lints"
     echo "  anchor-build Build Anchor programs"
     echo "  anchor-test  Run deterministic Anchor integration tests"
     echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
+    echo "  fixture-test Run fixture-gen tests"
     echo "  validator    Start a local Solana validator"
     echo "  update-deps  Regenerate yarn.lock"
     echo "  clean        Remove local validator/test artifacts"
+    echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
     exit 1
     ;;
 

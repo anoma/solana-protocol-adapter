@@ -17,7 +17,7 @@ no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
 
 [dependencies]
-anchor-lang = "0.31.1"
+anchor-lang = { workspace = true }
 solana-system-interface = "1.0"
 
 # Serialization - must match arm-risc0 exactly

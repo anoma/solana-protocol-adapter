@@ -84,7 +84,7 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
     let mut compliance_instances: Vec<ComplianceInstanceWords> = Vec::new();
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            compliance_instances.push(compliance_instance_to_words(&cu.instance));
+            compliance_instances.push(ComplianceInstanceWords::from(&cu.instance));
         }
     }
 
@@ -129,24 +129,4 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
 
     // 5) Hash the journal bytes
     Ok(Digest::from_bytes(hash(&journal_bytes).to_bytes()))
-}
-
-/// Convert a ComplianceInstance to ComplianceInstanceWords (matching circuit format).
-fn compliance_instance_to_words(
-    instance: &crate::types::ComplianceInstance,
-) -> arm_core::compliance::ComplianceInstanceWords {
-    use arm_core::compliance::ComplianceInstanceWords;
-
-    // Layout: consumed_nullifier(8) + consumed_logic_ref(8) + consumed_commitment_tree_root(8) +
-    //         created_commitment(8) + created_logic_ref(8) + delta_x(8) + delta_y(8) = 56 words
-    let mut words = [0u32; 56];
-    words[0..8].copy_from_slice(&instance.consumed_nullifier.0);
-    words[8..16].copy_from_slice(&instance.consumed_logic_ref.0);
-    words[16..24].copy_from_slice(&instance.consumed_commitment_tree_root.0);
-    words[24..32].copy_from_slice(&instance.created_commitment.0);
-    words[32..40].copy_from_slice(&instance.created_logic_ref.0);
-    words[40..48].copy_from_slice(&instance.delta_x);
-    words[48..56].copy_from_slice(&instance.delta_y);
-
-    ComplianceInstanceWords { u32_words: words }
 }

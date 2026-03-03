@@ -109,7 +109,7 @@ pub mod solana_pa_prototype {
 
         let pa_state_key = ctx.accounts.pa_state.key();
         let pa_state_info = ctx.accounts.pa_state.to_account_info();
-        let payer = ctx.accounts.authority.to_account_info();
+        let payer = ctx.accounts.payer.to_account_info();
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
@@ -741,7 +741,7 @@ pub struct Settle<'info> {
     pub pa_state: Account<'info, PAStateAccount>,
 
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
 
     /// CHECK: Verified via address constraint.

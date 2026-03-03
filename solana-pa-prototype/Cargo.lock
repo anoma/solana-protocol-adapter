@@ -365,7 +365,7 @@ dependencies = [
 [[package]]
 name = "anoma-rm-core"
 version = "1.0.0"
-source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#d3e73ae5f4b25d509ba79d8c07b81d428f5007c2"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#f68112634ae4c09e23927ff595f9bdd59c0ec746"
 dependencies = [
  "bincode",
  "borsh 1.6.0",
@@ -380,7 +380,7 @@ dependencies = [
 [[package]]
 name = "anoma-rm-solana"
 version = "1.0.0"
-source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#d3e73ae5f4b25d509ba79d8c07b81d428f5007c2"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#f68112634ae4c09e23927ff595f9bdd59c0ec746"
 dependencies = [
  "anoma-rm-core",
  "bytemuck",

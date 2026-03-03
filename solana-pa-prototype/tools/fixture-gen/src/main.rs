@@ -1,5 +1,5 @@
-use anchor_lang::prelude::AnchorDeserialize;
 use anyhow::{anyhow, Context, Result};
+use anchor_lang::prelude::AnchorDeserialize as BorshDeserialize;
 use arm::action::{Action, ActionExt};
 use arm::action_tree::MerkleTree;
 use arm::compliance::{
@@ -24,7 +24,7 @@ use k256::Scalar;
 use rayon::ThreadPoolBuilder;
 use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
 use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -38,19 +38,7 @@ fn hash_delta_msg(msg: &[u8]) -> [u8; 32] {
     sha2::Sha256::digest(msg).into()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-struct SolanaExternalCall {
-    pub program_id: [u8; 32],
-    pub instruction_data: Vec<u8>,
-    pub expected_output: Vec<u8>,
-    pub output_mode: OutputMode,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-enum OutputMode {
-    ReturnData,
-    OutputAccount { index: u8, offset: u32, len: u32 },
-}
+use solana_pa::types::{OutputMode, SolanaExternalCall};
 
 #[derive(Serialize)]
 struct Fixture {
@@ -652,4 +640,121 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 
     eprintln!("debug_assumptions: end");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // =========================================================================
+    // b58_value tests
+    // =========================================================================
+
+    #[test]
+    fn b58_value_digits() {
+        // '1' -> 0, '9' -> 8
+        assert_eq!(b58_value(b'1'), Some(0));
+        assert_eq!(b58_value(b'9'), Some(8));
+    }
+
+    #[test]
+    fn b58_value_uppercase() {
+        // 'A' -> 9, 'H' -> 16, 'J' -> 17 (skips I), 'N' -> 21, 'P' -> 22 (skips O), 'Z' -> 32
+        assert_eq!(b58_value(b'A'), Some(9));
+        assert_eq!(b58_value(b'H'), Some(16));
+        assert_eq!(b58_value(b'J'), Some(17));
+        assert_eq!(b58_value(b'N'), Some(21));
+        assert_eq!(b58_value(b'P'), Some(22));
+        assert_eq!(b58_value(b'Z'), Some(32));
+    }
+
+    #[test]
+    fn b58_value_lowercase() {
+        // 'a' -> 33, 'k' -> 43, 'm' -> 44 (skips l), 'z' -> 57
+        assert_eq!(b58_value(b'a'), Some(33));
+        assert_eq!(b58_value(b'k'), Some(43));
+        assert_eq!(b58_value(b'm'), Some(44));
+        assert_eq!(b58_value(b'z'), Some(57));
+    }
+
+    #[test]
+    fn b58_value_excluded_chars() {
+        // '0', 'I', 'O', 'l' are excluded from base58
+        assert_eq!(b58_value(b'0'), None);
+        assert_eq!(b58_value(b'I'), None);
+        assert_eq!(b58_value(b'O'), None);
+        assert_eq!(b58_value(b'l'), None);
+    }
+
+    // =========================================================================
+    // decode_base58 tests
+    // =========================================================================
+
+    #[test]
+    fn decode_base58_leading_ones_are_zero_bytes() {
+        // Leading '1' chars encode leading zero bytes in base58
+        let result = decode_base58("111").unwrap();
+        assert_eq!(result, vec![0, 0, 0]);
+    }
+
+    #[test]
+    fn decode_base58_invalid_char_returns_error() {
+        assert!(decode_base58("0abc").is_err(), "'0' is not in base58 alphabet");
+        assert!(decode_base58("Idef").is_err(), "'I' is not in base58 alphabet");
+    }
+
+    // =========================================================================
+    // decode_base58_32 tests
+    // =========================================================================
+
+    #[test]
+    fn decode_base58_32_system_program() {
+        // Solana system program: "11111111111111111111111111111111" (32 '1's) = 32 zero bytes
+        let result = decode_base58_32("11111111111111111111111111111111").unwrap();
+        assert_eq!(result, [0u8; 32]);
+    }
+
+    #[test]
+    fn decode_base58_32_wrong_length_returns_error() {
+        // A short base58 string that doesn't decode to 32 bytes
+        assert!(decode_base58_32("1").is_err());
+    }
+
+    #[test]
+    fn decode_base58_32_known_pubkey() {
+        // Block-time-forwarder program ID used in the fixture-gen:
+        // "J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6"
+        // Verify it decodes to exactly 32 bytes and is deterministic
+        let result = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6").unwrap();
+        assert_eq!(result.len(), 32);
+        // Decode again to verify determinism
+        let result2 = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6").unwrap();
+        assert_eq!(result, result2);
+    }
+
+    // =========================================================================
+    // bytes_to_words / words_to_bytes roundtrip
+    // =========================================================================
+
+    #[test]
+    fn bytes_to_words_roundtrip() {
+        let original = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let words = bytes_to_words(&original);
+        let recovered = arm::utils::words_to_bytes(&words);
+        // words_to_bytes returns a &[u8], may include padding if input wasn't 4-aligned
+        assert_eq!(&recovered[..original.len()], &original[..]);
+    }
+
+    #[test]
+    fn bytes_to_words_roundtrip_with_padding() {
+        // 5 bytes: not a multiple of 4, so words_to_bytes will have 3 padding zeros
+        let original = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
+        let words = bytes_to_words(&original);
+        let recovered = arm::utils::words_to_bytes(&words);
+        assert_eq!(&recovered[..original.len()], &original[..]);
+        // Padding bytes should be zero
+        for &b in &recovered[original.len()..] {
+            assert_eq!(b, 0, "padding bytes should be zero");
+        }
+    }
 }

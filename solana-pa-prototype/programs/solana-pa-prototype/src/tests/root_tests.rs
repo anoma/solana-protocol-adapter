@@ -112,6 +112,22 @@ fn test_derive_root_pda_different_pa_states_different_pdas() {
 }
 
 #[test]
+fn test_derive_root_pda_different_programs_different_pdas() {
+    let program_id1 = Pubkey::new_unique();
+    let program_id2 = Pubkey::new_unique();
+    let pa_state = Pubkey::new_unique();
+    let root = [0xAA; 32];
+
+    let (pda1, _) = derive_root_pda(&program_id1, &pa_state, &root);
+    let (pda2, _) = derive_root_pda(&program_id2, &pa_state, &root);
+
+    assert_ne!(
+        pda1, pda2,
+        "Same root under different programs should have different PDAs"
+    );
+}
+
+#[test]
 fn test_derive_root_pda_off_curve() {
     let program_id = Pubkey::new_unique();
     let pa_state = Pubkey::new_unique();

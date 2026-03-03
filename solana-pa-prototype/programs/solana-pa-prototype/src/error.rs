@@ -104,7 +104,8 @@ pub enum PAError {
 }
 
 impl From<anchor_lang::solana_program::program_error::ProgramError> for PAError {
-    fn from(_: anchor_lang::solana_program::program_error::ProgramError) -> Self {
+    fn from(e: anchor_lang::solana_program::program_error::ProgramError) -> Self {
+        anchor_lang::prelude::msg!("CPI failed: {:?}", e);
         PAError::ExternalCallCpiFailed
     }
 }
