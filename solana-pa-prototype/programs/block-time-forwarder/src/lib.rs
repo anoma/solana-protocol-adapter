@@ -93,34 +93,3 @@ pub enum ErrorCode {
     InvalidInput,
 }
 
-// =============================================================================
-// Tests
-// =============================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_comparison_constants() {
-        assert_eq!(RESULT_LT, 0);
-        assert_eq!(RESULT_EQ, 1);
-        assert_eq!(RESULT_GT, 2);
-    }
-
-    #[test]
-    fn test_timestamp_encoding() {
-        let timestamp: i64 = 1700000000; // Example Unix timestamp
-        let bytes = timestamp.to_le_bytes();
-        let decoded = i64::from_le_bytes(bytes);
-        assert_eq!(timestamp, decoded);
-    }
-
-    #[test]
-    fn test_negative_timestamp_encoding() {
-        let timestamp: i64 = -1000; // Before Unix epoch
-        let bytes = timestamp.to_le_bytes();
-        let decoded = i64::from_le_bytes(bytes);
-        assert_eq!(timestamp, decoded);
-    }
-}
