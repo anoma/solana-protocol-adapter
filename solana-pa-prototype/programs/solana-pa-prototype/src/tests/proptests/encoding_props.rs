@@ -50,13 +50,6 @@ proptest! {
         prop_assert_eq!(root1, root2, "same tags should produce same root");
     }
 
-    /// Property: empty tags returns error.
-    #[test]
-    fn prop_action_tree_root_empty_fails(_dummy in any::<u8>()) {
-        let result = compute_action_tree_root(&[]);
-        prop_assert!(result.is_err(), "empty tags should return error");
-    }
-
     /// Property: different tags produce different roots.
     #[test]
     fn prop_action_tree_root_sensitive_to_tags(
@@ -64,12 +57,15 @@ proptest! {
         tag2 in arb_digest(),
         tag3 in arb_digest(),
     ) {
-        // Only test when tags are actually different
-        prop_assume!(tag1 != tag2 || tag2 != tag3);
+        prop_assume!(tag2 != tag3);
         let root_a = compute_action_tree_root(&[tag1, tag2]).expect("should compute root");
         let root_b = compute_action_tree_root(&[tag1, tag3]).expect("should compute root");
-        if tag2 != tag3 {
-            prop_assert_ne!(root_a, root_b, "different tags should produce different roots");
-        }
+        prop_assert_ne!(root_a, root_b, "different tags should produce different roots");
     }
+}
+
+#[test]
+fn test_action_tree_root_empty_fails() {
+    let result = compute_action_tree_root(&[]);
+    assert!(result.is_err(), "empty tags should return error");
 }

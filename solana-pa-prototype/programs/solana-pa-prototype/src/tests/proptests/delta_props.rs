@@ -57,7 +57,7 @@ proptest! {
 
     /// Property: witness delta_proof is rejected by verify_delta_proof.
     #[test]
-    fn prop_witness_rejected(inst in arb_compliance_instance_zero_delta()) {
+    fn prop_witness_rejected(inst in arb_compliance_instance()) {
         let mut tx = build_tx_from_instances(&[inst]);
         tx.delta_proof = Delta::Witness(DeltaWitness([1u8; 32]));
 
