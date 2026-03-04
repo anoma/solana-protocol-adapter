@@ -176,6 +176,14 @@ fn test_forwarder_program_id() -> Result<[u8; 32]> {
     decode_base58_32("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD")
 }
 
+fn wrap_external_call(call: SolanaExternalCall) -> Result<ExpirableBlob> {
+    let call_bytes = bincode::serialize(&call).context("serialize SolanaExternalCall")?;
+    Ok(ExpirableBlob {
+        blob: bytes_to_words(&call_bytes),
+        deletion_criterion: 0,
+    })
+}
+
 fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
     // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
     let program_id = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6")?;
@@ -192,47 +200,29 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
         vec![0x00] // RESULT_LT - correct
     };
 
-    let call = SolanaExternalCall {
+    wrap_external_call(SolanaExternalCall {
         program_id,
         instruction_data: input,
         expected_output,
         output_mode: OutputMode::ReturnData,
-    };
-
-    let call_bytes = bincode::serialize(&call).context("serialize SolanaExternalCall")?;
-    Ok(ExpirableBlob {
-        blob: bytes_to_words(&call_bytes),
-        deletion_criterion: 0,
     })
 }
 
 fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
-    let call = SolanaExternalCall {
+    wrap_external_call(SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
         instruction_data: vec![0x00],
         expected_output: vec![],
         output_mode: OutputMode::ReturnData,
-    };
-
-    let call_bytes = bincode::serialize(&call).context("serialize SolanaExternalCall")?;
-    Ok(ExpirableBlob {
-        blob: bytes_to_words(&call_bytes),
-        deletion_criterion: 0,
     })
 }
 
 fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
-    let call = SolanaExternalCall {
+    wrap_external_call(SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
         instruction_data: vec![0x00],
         expected_output: vec![0x01],
         output_mode: OutputMode::ReturnData,
-    };
-
-    let call_bytes = bincode::serialize(&call).context("serialize SolanaExternalCall")?;
-    Ok(ExpirableBlob {
-        blob: bytes_to_words(&call_bytes),
-        deletion_criterion: 0,
     })
 }
 
@@ -240,7 +230,7 @@ fn test_forwarder_output_account_payload_blob(
     expected_bytes: &[u8],
     account_index: u8,
 ) -> Result<ExpirableBlob> {
-    let call = SolanaExternalCall {
+    wrap_external_call(SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
         instruction_data: expected_bytes.to_vec(),
         expected_output: expected_bytes.to_vec(),
@@ -249,12 +239,6 @@ fn test_forwarder_output_account_payload_blob(
             offset: 0,
             len: expected_bytes.len() as u32,
         },
-    };
-
-    let call_bytes = bincode::serialize(&call).context("serialize SolanaExternalCall")?;
-    Ok(ExpirableBlob {
-        blob: bytes_to_words(&call_bytes),
-        deletion_criterion: 0,
     })
 }
 
