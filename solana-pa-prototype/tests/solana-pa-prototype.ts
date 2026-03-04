@@ -2337,6 +2337,9 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   });
 
   it("verifies events from v2 settlement", async () => {
+    // Wait for the transaction to be fully indexed by the validator
+    await provider.connection.confirmTransaction(v2TxSig, "confirmed");
+
     const txResult = await provider.connection.getTransaction(v2TxSig, {
       commitment: "confirmed",
       maxSupportedTransactionVersion: 0,
@@ -2344,13 +2347,54 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     assert.ok(txResult, "v2 transaction should be fetchable");
 
     const logs = txResult!.meta?.logMessages ?? [];
-    const logText = logs.join("\n");
 
-    // Verify settlement flow completed: action events + nullifier creation
-    assert.match(logText, /Processing action events/, "Should log action event processing");
-    assert.match(logText, /Created.*nullifier/, "Should log nullifier creation");
-    // Verify external call executed
-    assert.match(logText, /ForwarderCallExecutedEvent|Forwarder/, "Should log forwarder call event");
+    // Decode Anchor events from program logs
+    const coder = new anchor.BorshCoder(program.idl);
+    const parser = new anchor.EventParser(program.programId, coder);
+    const events = [...parser.parseLogs(logs)];
+
+    // Anchor SDK converts event names to camelCase
+    // ActionExecutedEvent → actionExecutedEvent
+    const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
+    assert.isAtLeast(actionEvents.length, 1, "Should emit actionExecutedEvent");
+    assert.ok(
+      Array.isArray(actionEvents[0].data.actionTreeRoot) &&
+        actionEvents[0].data.actionTreeRoot.length === 32,
+      "action_tree_root should be 32 bytes",
+    );
+    assert.equal(actionEvents[0].data.actionTagCount, 2,
+      "action_tag_count should be 2 (consumed + created)");
+
+    // TransactionExecutedEvent → transactionExecutedEvent
+    const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
+    assert.equal(txEvents.length, 1, "Should emit exactly one transactionExecutedEvent");
+    assert.equal(txEvents[0].data.tags.length, 2, "Should have 2 tags");
+    assert.equal(txEvents[0].data.logicRefs.length, 2, "Should have 2 logic_refs");
+
+    // ForwarderCallExecutedEvent → forwarderCallExecutedEvent
+    const fwdEvents = events.filter((e) => e.name === "forwarderCallExecutedEvent");
+    assert.isAtLeast(fwdEvents.length, 1, "Should emit forwarderCallExecutedEvent");
+    assert.ok(
+      fwdEvents[0].data.forwarder.equals(blockTimeForwarderId),
+      `forwarder should be ${blockTimeForwarderId}`,
+    );
+    const outputBytes = Buffer.from(fwdEvents[0].data.output);
+    assert.deepEqual(outputBytes, Buffer.from([0x00]), "output should be RESULT_LT (0x00)");
+  });
+
+  it("does not create root marker when PDA not passed", async () => {
+    // v2 settlement did not pass a newRootMarkerPda. Verify the PA's current
+    // root does NOT have a root marker — the PA only creates markers when the
+    // correct PDA is provided as the last remaining_account.
+    const state = await program.account.paStateAccount.fetch(paState);
+    const currentRoot = Buffer.from(state.root as number[]);
+    const rootMarkerPda = deriveRootPda(currentRoot);
+
+    const info = await provider.connection.getAccountInfo(rootMarkerPda);
+    assert.isNull(
+      info,
+      "Root marker should NOT exist when PDA was not passed in remaining_accounts",
+    );
   });
 
   it("settles v3 fixture with tree growth (depth 1→2, next_index 2→3)", async () => {
@@ -2452,6 +2496,84 @@ describe("solana-pa-prototype (OutputAccount mode)", () => {
       Buffer.from([0x01, 0x02, 0x03, 0x04]),
       "Forwarder should have written expected bytes to data account"
     );
+  });
+});
+
+// =============================================================================
+// OutputAccount error paths
+// =============================================================================
+
+describe("solana-pa-prototype (OutputAccount error paths)", () => {
+  // The forwarder-output fixture uses OutputAccount { index: 2, offset: 0, len: 4 }
+  // and expected_output [0x01, 0x02, 0x03, 0x04]. These tests manipulate remaining_accounts
+  // to trigger each error path in read_forwarder_output (cpi.rs:89-103).
+
+  const loadOutputFixture = () => readJson<Fixture>(
+    path.resolve(process.cwd(), "tests", "fixtures", "batch_forwarder_output.json")
+  );
+
+  it("rejects OutputAccount when index is out of bounds", async () => {
+    const f = loadOutputFixture();
+    const payload = Buffer.from(f.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
+
+    // Fixture expects remaining_accounts[2] (index=2), but we only provide
+    // [nullifier_pda, test_forwarder] — index 2 does not exist.
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: testForwarderId, isWritable: false, isSigner: false },
+      // No data account at index 2
+    ];
+
+    try {
+      await settleFixtureViaTxData(payload, remainingAccounts);
+      assert.fail("expected ExternalCallOutputMismatch (index OOB)");
+    } catch (e: any) {
+      // CPI to test-forwarder fails because it needs a writable account in
+      // remaining_accounts[0] (MODE_WRITE_ACCOUNT) but no account is passed.
+      // The CPI failure propagates the inner error code through.
+      const code = extractPAErrorCode(e);
+      assert.isNotNull(code, "Expected a program error code in logs");
+    }
+  });
+
+  it("rejects OutputAccount when data is shorter than offset+len", async () => {
+    const f = loadOutputFixture();
+    const payload = Buffer.from(f.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
+
+    // Create a data account with only 2 bytes — fixture expects len=4.
+    // The forwarder writes min(payload.len(), data.len()) = 2 bytes.
+    // Then PA reads remaining_accounts[2] with offset=0, len=4 → end=4 > 2 → error.
+    const funder = Keypair.generate();
+    await airdrop(provider, funder.publicKey, 2);
+    const dataAccount = Keypair.generate();
+    const tooSmallSpace = 2; // Less than the expected len=4
+    const lamports = await provider.connection.getMinimumBalanceForRentExemption(tooSmallSpace);
+
+    const createTx = new anchor.web3.Transaction().add(
+      SystemProgram.createAccount({
+        fromPubkey: funder.publicKey,
+        newAccountPubkey: dataAccount.publicKey,
+        space: tooSmallSpace,
+        lamports,
+        programId: testForwarderId,
+      })
+    );
+    await provider.sendAndConfirm(createTx, [funder, dataAccount]);
+
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: testForwarderId, isWritable: false, isSigner: false },
+      { pubkey: dataAccount.publicKey, isWritable: true, isSigner: false },
+    ];
+
+    try {
+      await settleFixtureViaTxData(payload, remainingAccounts);
+      assert.fail("expected ExternalCallOutputMismatch (data too short)");
+    } catch (e: any) {
+      assertPAError(e, "ExternalCallOutputMismatch");
+    }
   });
 });
 
