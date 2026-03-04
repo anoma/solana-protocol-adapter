@@ -540,7 +540,7 @@ fn parse_args() -> Result<CliArgs> {
                 error_variants_dir = Some(PathBuf::from(value));
             }
             _ if arg.starts_with("--threads=") => {
-                let value = arg.split_once('=').map(|(_, v)| v).unwrap_or_default();
+                let (_, value) = arg.split_once('=').unwrap();
                 let parsed = value
                     .parse::<usize>()
                     .with_context(|| format!("invalid --threads value: {value}"))?;
@@ -550,14 +550,14 @@ fn parse_args() -> Result<CliArgs> {
                 threads = Some(parsed);
             }
             _ if arg.starts_with("--nonce-seed=") => {
-                let value = arg.split_once('=').map(|(_, v)| v).unwrap_or_default();
+                let (_, value) = arg.split_once('=').unwrap();
                 let parsed = value
                     .parse::<u8>()
                     .with_context(|| format!("invalid --nonce-seed value: {value}"))?;
                 nonce_seed = Some(parsed);
             }
             _ if arg.starts_with("--error-variants=") => {
-                let value = arg.split_once('=').map(|(_, v)| v).unwrap_or_default();
+                let (_, value) = arg.split_once('=').unwrap();
                 if value.is_empty() {
                     return Err(anyhow!(
                         "--error-variants requires a non-empty directory path"
@@ -930,10 +930,6 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 mod tests {
     use super::*;
 
-    // =========================================================================
-    // b58_value tests
-    // =========================================================================
-
     #[test]
     fn b58_value_digits() {
         // '1' -> 0, '9' -> 8
@@ -970,10 +966,6 @@ mod tests {
         assert_eq!(b58_value(b'l'), None);
     }
 
-    // =========================================================================
-    // decode_base58 tests
-    // =========================================================================
-
     #[test]
     fn decode_base58_leading_ones_are_zero_bytes() {
         // Leading '1' chars encode leading zero bytes in base58
@@ -993,10 +985,6 @@ mod tests {
         );
     }
 
-    // =========================================================================
-    // decode_base58_32 tests
-    // =========================================================================
-
     #[test]
     fn decode_base58_32_system_program() {
         // Solana system program: "11111111111111111111111111111111" (32 '1's) = 32 zero bytes
@@ -1006,7 +994,6 @@ mod tests {
 
     #[test]
     fn decode_base58_32_wrong_length_returns_error() {
-        // A short base58 string that doesn't decode to 32 bytes
         assert!(decode_base58_32("1").is_err());
     }
 
@@ -1017,21 +1004,15 @@ mod tests {
         // Verify it decodes to exactly 32 bytes and is deterministic
         let result = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6").unwrap();
         assert_eq!(result.len(), 32);
-        // Decode again to verify determinism
         let result2 = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6").unwrap();
         assert_eq!(result, result2);
     }
-
-    // =========================================================================
-    // bytes_to_words / words_to_bytes roundtrip
-    // =========================================================================
 
     #[test]
     fn bytes_to_words_roundtrip() {
         let original = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
         let words = bytes_to_words(&original);
         let recovered = arm::utils::words_to_bytes(&words);
-        // words_to_bytes returns a &[u8], may include padding if input wasn't 4-aligned
         assert_eq!(&recovered[..original.len()], &original[..]);
     }
 
@@ -1042,7 +1023,6 @@ mod tests {
         let words = bytes_to_words(&original);
         let recovered = arm::utils::words_to_bytes(&words);
         assert_eq!(&recovered[..original.len()], &original[..]);
-        // Padding bytes should be zero
         for &b in &recovered[original.len()..] {
             assert_eq!(b, 0, "padding bytes should be zero");
         }
