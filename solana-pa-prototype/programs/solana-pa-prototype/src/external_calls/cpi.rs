@@ -40,7 +40,6 @@ fn find_forwarder_segment(
 
 /// Invoke a forwarder program via CPI.
 fn invoke_forwarder<'info>(
-    program_id: Pubkey,
     logic_ref: &[u8; 32],
     instruction_data: &[u8],
     forwarder_program_info: &AccountInfo<'info>,
@@ -58,7 +57,7 @@ fn invoke_forwarder<'info>(
         .collect();
 
     let ix = Instruction {
-        program_id,
+        program_id: *forwarder_program_info.key,
         accounts: ix_accounts,
         data: ix_data,
     };
@@ -104,14 +103,7 @@ fn read_forwarder_output(
     }
 }
 
-/// Execute a single external call via CPI.
-///
-/// This is the Solana analog to EVM's `_executeForwarderCall`:
-/// 1. Invoke forwarder via CPI
-/// 2. Read and verify output
-/// 3. Emit event
-///
-/// The caller is responsible for finding the segment and slicing accounts.
+/// Solana analog to EVM's `_executeForwarderCall`: invoke, verify output, emit event.
 fn execute_forwarder_call<'info>(
     logic_ref: &crate::types::Digest,
     call: &SolanaExternalCall,
@@ -119,22 +111,20 @@ fn execute_forwarder_call<'info>(
     cpi_accounts: &[AccountInfo<'info>],
     remaining_accounts: &[AccountInfo<'info>],
 ) -> Result<(), PAError> {
-    let program_id = *forwarder_program_info.key;
-
     invoke_forwarder(
-        program_id,
         &logic_ref.to_bytes(),
         &call.instruction_data,
         forwarder_program_info,
         cpi_accounts,
     )?;
 
-    let actual_output = read_forwarder_output(&call.output_mode, &program_id, remaining_accounts)?;
+    let forwarder = *forwarder_program_info.key;
+    let actual_output = read_forwarder_output(&call.output_mode, &forwarder, remaining_accounts)?;
 
     super::verify_output(&call.expected_output, &actual_output)?;
 
     anchor_lang::prelude::emit!(crate::ForwarderCallExecutedEvent {
-        forwarder: program_id,
+        forwarder,
         input: call.instruction_data.clone(),
         output: actual_output,
     });
@@ -163,10 +153,9 @@ pub fn execute_external_calls(
         .collect();
 
     let mut cursor = 0usize;
-    for (logic_ref, call) in calls {
-        let program_id = Pubkey::new_from_array(call.program_id);
+    for (i, (logic_ref, call)) in calls.into_iter().enumerate() {
         let (seg_start, seg_end) =
-            find_forwarder_segment(external_accounts, cursor, &program_id, &call_programs)?;
+            find_forwarder_segment(external_accounts, cursor, &call_programs[i], &call_programs)?;
 
         let forwarder_program_info = &external_accounts[seg_start];
         let cpi_accounts = &external_accounts[(seg_start + 1)..seg_end];

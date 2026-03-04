@@ -1,5 +1,6 @@
 //! External call encoding, decoding, and CPI execution.
 
+// CPI module excluded from test builds — Solana invoke syscalls are unavailable.
 #[cfg(not(test))]
 mod cpi;
 
@@ -10,9 +11,8 @@ use crate::error::PAError;
 use crate::types::{ExpirableBlob, SolanaExternalCall};
 #[cfg(test)]
 use arm_core::utils::bytes_to_words;
+use arm_core::utils::words_to_bytes;
 
-/// Encode an external call into an ExpirableBlob.
-/// Serializes using bincode and converts to word array.
 /// Test-only: the on-chain program decodes external calls, never encodes them.
 #[cfg(test)]
 pub(crate) fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
@@ -24,10 +24,9 @@ pub(crate) fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
     }
 }
 
-/// Decode an external call from an ExpirableBlob.
-/// Converts from word array and deserializes using bincode.
+/// Decode an external call from its word-array blob.
 pub fn decode_external_call(blob: &ExpirableBlob) -> Result<SolanaExternalCall, PAError> {
-    let bytes = arm_core::utils::words_to_bytes(&blob.blob);
+    let bytes = words_to_bytes(&blob.blob);
     bincode::deserialize(bytes).map_err(|_| PAError::InvalidExternalCallBlob)
 }
 
