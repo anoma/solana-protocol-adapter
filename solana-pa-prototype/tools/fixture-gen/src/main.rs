@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Context, Result};
 use anchor_lang::prelude::AnchorDeserialize as BorshDeserialize;
+use anyhow::{anyhow, Context, Result};
 use arm::action::{Action, ActionExt};
 use arm::action_tree::MerkleTree;
 use arm::compliance::{
@@ -14,9 +14,9 @@ use arm::merkle_path::MerklePath;
 use arm::nullifier_key::{NullifierKey, NullifierKeyExt};
 use arm::proving_system::{encode_seal, ProofType};
 use arm::resource::Resource;
-use arm::CoreDeltaWitness;
 use arm::transaction::{Delta, Transaction, TransactionExt};
 use arm::utils::{bytes_to_words, core_to_risc0_digest};
+use arm::CoreDeltaWitness;
 use arm::Digest;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -27,7 +27,7 @@ use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
 use serde::Serialize;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use verifier_router::Seal;
 
@@ -51,6 +51,16 @@ struct Fixture {
     tx_b64: String,
     tx_tampered_b64: String,
     consumed_nullifiers_b64: Vec<String>,
+}
+
+struct CliArgs {
+    threads: Option<usize>,
+    debug_assumptions: bool,
+    output_mismatch: bool,
+    nonce_seed: Option<u8>,
+    multi_external_call: bool,
+    error_variants_dir: Option<PathBuf>,
+    out_path: PathBuf,
 }
 
 /// Extract the Groth16 selector from a transaction's aggregation proof.
@@ -184,7 +194,11 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
     })
 }
 
-fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Result<Transaction> {
+fn generate_test_transaction_with_external_payload(
+    output_mismatch: bool,
+    nonce_seed: Option<u8>,
+    multi_external_call: bool,
+) -> Result<Transaction> {
     // Inner proofs must be Succinct for aggregation.
     let base_proof_type = ProofType::Succinct;
 
@@ -206,7 +220,7 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
     // Stable-ish nonce so the fixture is deterministic.
     // Use different nonce for each fixture variant so they have different nullifiers.
     // This prevents DuplicateNullifier errors when running multiple fixtures in a test suite.
-    let nonce_byte: u8 = if output_mismatch { 2 } else { 0 };
+    let nonce_byte: u8 = nonce_seed.unwrap_or(if output_mismatch { 2 } else { 0 });
     consumed_resource.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
     let consumed_nf = consumed_resource
         .nullifier(&nf_key)
@@ -238,6 +252,11 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
     consumed_app_data
         .external_payload
         .push(block_time_forwarder_external_payload_blob(output_mismatch)?);
+    if multi_external_call {
+        consumed_app_data
+            .external_payload
+            .push(block_time_forwarder_external_payload_blob(false)?);
+    }
 
     let consumed_instance = LogicInstance {
         tag: consumed_nf,
@@ -286,7 +305,10 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
     let delta_witness =
         DeltaWitness::from_bytes_vec(&[compliance_witness.rcv]).context("build delta witness")?;
 
-    let tx = Transaction::create(vec![action], Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())));
+    let tx = Transaction::create(
+        vec![action],
+        Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
+    );
     let balanced_tx = tx
         .generate_delta_proof(hash_delta_msg)
         .context("generate delta proof")?;
@@ -296,6 +318,57 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
         .context("verify tx")?;
 
     Ok(balanced_tx)
+}
+
+fn generate_error_variant_fixtures(
+    tx: &Transaction,
+    selector: &str,
+    nullifiers_b64: &[String],
+    out_dir: &Path,
+) -> Result<()> {
+    fs::create_dir_all(out_dir)
+        .with_context(|| format!("create error variants dir {}", out_dir.display()))?;
+
+    let write_variant = |file_name: &str, variant_tx: &Transaction| -> Result<()> {
+        let tx_bytes = bincode::serialize(variant_tx)
+            .with_context(|| format!("serialize variant tx for {file_name}"))?;
+        let fixture = Fixture {
+            format: "arm-risc0:Transaction(bincode)",
+            aggregation_strategy: "batch",
+            aggregation_proof_type: "groth16",
+            selector: selector.to_owned(),
+            tx_b64: BASE64.encode(tx_bytes),
+            tx_tampered_b64: String::new(),
+            consumed_nullifiers_b64: nullifiers_b64.to_vec(),
+        };
+
+        let out_path = out_dir.join(file_name);
+        fs::write(&out_path, serde_json::to_vec_pretty(&fixture)?)
+            .with_context(|| format!("write error variant fixture to {}", out_path.display()))?;
+        Ok(())
+    };
+
+    let mut wrong_root = tx.clone();
+    let action = wrong_root
+        .actions
+        .get_mut(0)
+        .ok_or_else(|| anyhow!("tx has no actions"))?;
+    let cu = action
+        .compliance_units
+        .get_mut(0)
+        .ok_or_else(|| anyhow!("tx has no compliance units"))?;
+    cu.instance.consumed_commitment_tree_root = Digest::from_bytes([1u8; 32]);
+    write_variant("wrong_root.json", &wrong_root)?;
+
+    let mut no_aggregation = tx.clone();
+    no_aggregation.aggregation_proof = None;
+    write_variant("no_aggregation.json", &no_aggregation)?;
+
+    let mut garbage_proof = tx.clone();
+    garbage_proof.aggregation_proof = Some(vec![0xDE; 64]);
+    write_variant("garbage_proof.json", &garbage_proof)?;
+
+    Ok(())
 }
 
 fn fmt_duration(d: Duration) -> String {
@@ -316,15 +389,18 @@ fn fmt_duration(d: Duration) -> String {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n"
+        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [--nonce-seed N] [--multi-external-call] [--error-variants DIR] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n  fixture-gen --nonce-seed 7 --multi-external-call /tmp/batch_groth16_multi.json\n  fixture-gen --error-variants tests/fixtures/error_variants tests/fixtures/batch_groth16.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n  - `--nonce-seed` overrides the deterministic nonce byte used to derive nullifiers.\n  - `--multi-external-call` appends a second external call blob to the consumed logic app_data.\n  - `--error-variants` writes wrong_root/no_aggregation/garbage_proof fixtures from the final aggregated tx.\n"
     );
 }
 
-fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
+fn parse_args() -> Result<CliArgs> {
     let mut args = env::args().skip(1);
     let mut threads: Option<usize> = None;
     let mut debug_assumptions = false;
     let mut output_mismatch = false;
+    let mut nonce_seed: Option<u8> = None;
+    let mut multi_external_call = false;
+    let mut error_variants_dir: Option<PathBuf> = None;
     let mut out_path: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
@@ -351,6 +427,29 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
             "--output-mismatch" => {
                 output_mismatch = true;
             }
+            "--nonce-seed" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--nonce-seed requires a value"))?;
+                let parsed = value
+                    .parse::<u8>()
+                    .with_context(|| format!("invalid --nonce-seed value: {value}"))?;
+                nonce_seed = Some(parsed);
+            }
+            "--multi-external-call" => {
+                multi_external_call = true;
+            }
+            "--error-variants" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--error-variants requires a value"))?;
+                if value.is_empty() {
+                    return Err(anyhow!(
+                        "--error-variants requires a non-empty directory path"
+                    ));
+                }
+                error_variants_dir = Some(PathBuf::from(value));
+            }
             _ if arg.starts_with("--threads=") => {
                 let value = arg.split_once('=').map(|(_, v)| v).unwrap_or_default();
                 let parsed = value
@@ -360,6 +459,22 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
                     return Err(anyhow!("--threads must be >= 1"));
                 }
                 threads = Some(parsed);
+            }
+            _ if arg.starts_with("--nonce-seed=") => {
+                let value = arg.split_once('=').map(|(_, v)| v).unwrap_or_default();
+                let parsed = value
+                    .parse::<u8>()
+                    .with_context(|| format!("invalid --nonce-seed value: {value}"))?;
+                nonce_seed = Some(parsed);
+            }
+            _ if arg.starts_with("--error-variants=") => {
+                let value = arg.split_once('=').map(|(_, v)| v).unwrap_or_default();
+                if value.is_empty() {
+                    return Err(anyhow!(
+                        "--error-variants requires a non-empty directory path"
+                    ));
+                }
+                error_variants_dir = Some(PathBuf::from(value));
             }
             _ if arg.starts_with('-') => {
                 return Err(anyhow!("unknown flag: {arg}"));
@@ -376,12 +491,28 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
     let out_path = out_path
         .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
 
-    Ok((threads, debug_assumptions, output_mismatch, out_path))
+    Ok(CliArgs {
+        threads,
+        debug_assumptions,
+        output_mismatch,
+        nonce_seed,
+        multi_external_call,
+        error_variants_dir,
+        out_path,
+    })
 }
 
 fn main() -> Result<()> {
     let total_start = Instant::now();
-    let (threads, debug_assumptions, output_mismatch, out_path) = parse_args()?;
+    let CliArgs {
+        threads,
+        debug_assumptions,
+        output_mismatch,
+        nonce_seed,
+        multi_external_call,
+        error_variants_dir,
+        out_path,
+    } = parse_args()?;
 
     // Configure rayon parallelism deterministically (helps avoid pegging/overheating/OOM).
     // Must happen before any proving work starts.
@@ -402,10 +533,23 @@ fn main() -> Result<()> {
             "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
         );
     }
+    if let Some(seed) = nonce_seed {
+        eprintln!("mode: nonce-seed override ({seed})");
+    }
+    if multi_external_call {
+        eprintln!("mode: multi-external-call (two external payload blobs)");
+    }
+    if let Some(dir) = &error_variants_dir {
+        eprintln!("error variants output dir: {}", dir.display());
+    }
 
     eprintln!("phase: generate_test_transaction");
     let start = Instant::now();
-    let mut tx = generate_test_transaction_with_external_payload(output_mismatch)?;
+    let mut tx = generate_test_transaction_with_external_payload(
+        output_mismatch,
+        nonce_seed,
+        multi_external_call,
+    )?;
     eprintln!(
         "phase done: generate_test_transaction ({})",
         fmt_duration(start.elapsed())
@@ -506,6 +650,21 @@ fn main() -> Result<()> {
         "phase done: write_fixture ({})",
         fmt_duration(start.elapsed())
     );
+
+    if let Some(dir) = error_variants_dir.as_deref() {
+        eprintln!("phase: write_error_variants");
+        let start = Instant::now();
+        generate_error_variant_fixtures(
+            &tx,
+            &fixture.selector,
+            &fixture.consumed_nullifiers_b64,
+            dir,
+        )?;
+        eprintln!(
+            "phase done: write_error_variants ({})",
+            fmt_duration(start.elapsed())
+        );
+    }
 
     eprintln!(
         "wrote fixture: {} (total {})",
@@ -699,8 +858,14 @@ mod tests {
 
     #[test]
     fn decode_base58_invalid_char_returns_error() {
-        assert!(decode_base58("0abc").is_err(), "'0' is not in base58 alphabet");
-        assert!(decode_base58("Idef").is_err(), "'I' is not in base58 alphabet");
+        assert!(
+            decode_base58("0abc").is_err(),
+            "'0' is not in base58 alphabet"
+        );
+        assert!(
+            decode_base58("Idef").is_err(),
+            "'I' is not in base58 alphabet"
+        );
     }
 
     // =========================================================================
