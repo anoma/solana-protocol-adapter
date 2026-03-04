@@ -1,16 +1,11 @@
-//! Encoding utilities for word<->byte conversion and journal digest computation.
+//! Journal digest computation and action tree utilities.
 
 use crate::error::PAError;
 use crate::merkle::{hash_two, PADDING_LEAF};
 use crate::types::{Digest, LogicVerifierInputs, Transaction};
 
 use arm_core::constants::COMPLIANCE_VK_BYTES;
-pub use arm_core::utils::bytes_to_words;
-
-/// Convert words to bytes (Vec variant for callers that need owned bytes).
-pub fn words_to_bytes(words: &[u32]) -> Vec<u8> {
-    arm_core::utils::words_to_bytes(words).to_vec()
-}
+use arm_core::utils::bytes_to_words;
 
 fn next_power_of_two(n: usize) -> Result<usize, PAError> {
     n.checked_next_power_of_two()
@@ -45,8 +40,9 @@ pub fn compute_action_tree_root(tags: &[Digest]) -> Result<Digest, PAError> {
 /// - tags[2i] = consumed_nullifier, tags[2i+1] = created_commitment
 /// - logic_refs[2i] = consumed_logic_ref, logic_refs[2i+1] = created_logic_ref
 pub fn extract_tags_and_logic_refs(action: &crate::types::Action) -> (Vec<Digest>, Vec<Digest>) {
-    let mut tags = Vec::new();
-    let mut logic_refs = Vec::new();
+    let cap = 2 * action.compliance_units.len();
+    let mut tags = Vec::with_capacity(cap);
+    let mut logic_refs = Vec::with_capacity(cap);
 
     for cu in &action.compliance_units {
         let instance = &cu.instance;

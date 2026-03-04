@@ -1,28 +1,24 @@
 //! Error types for the Protocol Adapter.
 
 use anchor_lang::prelude::*;
+use arm_solana::SolanaArmError;
 
 /// Protocol Adapter errors.
 #[error_code]
 pub enum PAError {
-    // =========================================================================
     // Nullifier errors
-    // =========================================================================
     #[msg("Duplicate nullifier detected")]
     DuplicateNullifier,
     #[msg("Nullifier PDA pubkey mismatch")]
     NullifierPdaMismatch,
 
-    // =========================================================================
     // Root marker errors
-    // =========================================================================
     #[msg("Commitment tree root does not exist in historical set")]
     NonExistingRoot,
     #[msg("Root marker PDA pubkey mismatch")]
     RootPdaMismatch,
-    // =========================================================================
+
     // TxData errors
-    // =========================================================================
     #[msg("TxData has expired")]
     TxDataExpired,
     #[msg("TxData write exceeds payload capacity")]
@@ -38,15 +34,11 @@ pub enum PAError {
     #[msg("Invalid expiry configuration (min must be < max, within reasonable bounds)")]
     InvalidExpiryConfig,
 
-    // =========================================================================
     // Data parsing errors
-    // =========================================================================
     #[msg("Invalid transaction data")]
     InvalidTransactionData,
 
-    // =========================================================================
     // Proof verification errors
-    // =========================================================================
     #[msg("Invalid proof")]
     InvalidProof,
     #[msg("Verifier router call failed (verifier may be estopped)")]
@@ -54,9 +46,7 @@ pub enum PAError {
     #[msg("Aggregation required: non-aggregated proofs not enabled")]
     AggregationRequired,
 
-    // =========================================================================
     // External call errors
-    // =========================================================================
     #[msg("Invalid external call blob encoding")]
     InvalidExternalCallBlob,
     #[msg("Forwarder is not registered")]
@@ -66,9 +56,7 @@ pub enum PAError {
     #[msg("External call CPI failed")]
     ExternalCallCpiFailed,
 
-    // =========================================================================
     // Delta proof errors
-    // =========================================================================
     #[msg("Delta proof verification failed")]
     DeltaProofVerificationFailed,
     #[msg("Delta mismatch: transaction is not balanced")]
@@ -80,15 +68,11 @@ pub enum PAError {
     #[msg("Expected delta proof, got witness")]
     ExpectedDeltaProof,
 
-    // =========================================================================
     // Logic verification errors
-    // =========================================================================
     #[msg("Logic verifier input not found for tag")]
     TagNotFound,
 
-    // =========================================================================
     // Protocol state errors
-    // =========================================================================
     #[msg("Protocol adapter is paused")]
     Paused,
     #[msg("Unauthorized: caller is not the authority")]
@@ -96,9 +80,7 @@ pub enum PAError {
     #[msg("Already paused")]
     AlreadyPaused,
 
-    // =========================================================================
     // Merkle tree errors
-    // =========================================================================
     #[msg("Tree has reached maximum depth (32 levels)")]
     TreeMaxDepthReached,
 }
@@ -107,5 +89,17 @@ impl From<anchor_lang::solana_program::program_error::ProgramError> for PAError 
     fn from(e: anchor_lang::solana_program::program_error::ProgramError) -> Self {
         anchor_lang::prelude::msg!("CPI failed: {:?}", e);
         PAError::ExternalCallCpiFailed
+    }
+}
+
+impl From<SolanaArmError> for PAError {
+    fn from(e: SolanaArmError) -> Self {
+        match e {
+            SolanaArmError::ExpectedDeltaProof => PAError::ExpectedDeltaProof,
+            SolanaArmError::InvalidDeltaProof => PAError::InvalidDeltaProof,
+            SolanaArmError::DeltaPointNotOnCurve => PAError::DeltaPointNotOnCurve,
+            SolanaArmError::DeltaProofVerificationFailed => PAError::DeltaProofVerificationFailed,
+            SolanaArmError::DeltaMismatch => PAError::DeltaMismatch,
+        }
     }
 }

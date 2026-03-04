@@ -968,7 +968,6 @@ pub struct ForwarderCallExecutedEvent {
 const DELETION_CRITERION_NEVER: u32 = 1;
 
 fn emit_app_data_events(tag: &types::Digest, app_data: &types::AppData) {
-    use encoding::words_to_bytes;
     let tag_bytes = tag.to_bytes();
 
     macro_rules! emit_payloads {
@@ -978,7 +977,7 @@ fn emit_app_data_events(tag: &types::Digest, app_data: &types::AppData) {
                     emit!($Event {
                         tag: tag_bytes,
                         index: i as u32,
-                        blob: words_to_bytes(&payload.blob),
+                        blob: arm_core::utils::words_to_bytes(&payload.blob).to_vec(),
                     });
                 }
             }

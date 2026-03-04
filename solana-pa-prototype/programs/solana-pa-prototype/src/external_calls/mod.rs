@@ -6,10 +6,10 @@ mod cpi;
 #[cfg(not(test))]
 pub use cpi::execute_external_calls;
 
-#[cfg(test)]
-use crate::encoding::bytes_to_words;
 use crate::error::PAError;
 use crate::types::{ExpirableBlob, SolanaExternalCall};
+#[cfg(test)]
+use arm_core::utils::bytes_to_words;
 
 /// Encode an external call into an ExpirableBlob.
 /// Serializes using bincode and converts to word array.

@@ -1,7 +1,8 @@
 //! Property tests for encoding functions.
 
 use super::strategies::{arb_aligned_bytes, arb_digest, arb_words};
-use crate::encoding::{bytes_to_words, compute_action_tree_root, words_to_bytes};
+use crate::encoding::compute_action_tree_root;
+use arm_core::utils::{bytes_to_words, words_to_bytes};
 use proptest::prelude::*;
 
 proptest! {
@@ -19,7 +20,7 @@ proptest! {
     #[test]
     fn prop_aligned_roundtrip_exact(words in arb_words(64)) {
         let bytes = words_to_bytes(&words);
-        let recovered_words = bytes_to_words(&bytes);
+        let recovered_words = bytes_to_words(bytes);
         prop_assert_eq!(words, recovered_words, "word→byte→word should be exact");
     }
 
@@ -33,9 +34,10 @@ proptest! {
     /// Property: little-endian encoding is preserved.
     #[test]
     fn prop_little_endian_encoding(word in any::<u32>()) {
-        let bytes = words_to_bytes(&[word]);
+        let arr = [word];
+        let bytes = words_to_bytes(&arr);
         let expected = word.to_le_bytes();
-        prop_assert_eq!(&bytes[..], &expected[..], "should use little-endian encoding");
+        prop_assert_eq!(bytes, &expected[..], "should use little-endian encoding");
     }
 
     /// Property: action_tree_root is deterministic (same tags → same root).
