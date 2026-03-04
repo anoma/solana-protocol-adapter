@@ -185,11 +185,99 @@ function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
   return { uploadId, uploadIdLe };
 }
 
-// Extract error message + logs from an Anchor error for assertion matching
-function errorHaystack(e: any): string {
-  const msg = e?.error?.errorMessage ?? e?.toString?.() ?? "";
+// PA error codes (from IDL: target/idl/solana_pa_prototype.json).
+// Anchor assigns 6000 + enum_variant_index.
+const PA_ERRORS: Record<string, number> = {
+  DuplicateNullifier: 6000,
+  NullifierPdaMismatch: 6001,
+  NonExistingRoot: 6002,
+  RootPdaMismatch: 6003,
+  TxDataExpired: 6004,
+  TxDataBoundsExceeded: 6005,
+  TxDataExpiryTooSoon: 6006,
+  TxDataExpiryTooLate: 6007,
+  TxDataExtendMustIncrease: 6008,
+  TxDataNotExpired: 6009,
+  InvalidExpiryConfig: 6010,
+  InvalidTransactionData: 6011,
+  InvalidProof: 6012,
+  VerifierRouterFailed: 6013,
+  AggregationRequired: 6014,
+  InvalidExternalCallBlob: 6015,
+  UnregisteredForwarder: 6016,
+  ExternalCallOutputMismatch: 6017,
+  ExternalCallCpiFailed: 6018,
+  DeltaProofVerificationFailed: 6019,
+  DeltaMismatch: 6020,
+  InvalidDeltaProof: 6021,
+  DeltaPointNotOnCurve: 6022,
+  ExpectedDeltaProof: 6023,
+  TagNotFound: 6024,
+  Paused: 6025,
+  Unauthorized: 6026,
+  AlreadyPaused: 6027,
+  TreeMaxDepthReached: 6028,
+};
+
+// Reverse map: code → name (for diagnostics).
+const PA_ERROR_NAMES = new Map(Object.entries(PA_ERRORS).map(([k, v]) => [v, k]));
+
+// Extract the PA's numeric error code from the transaction failure logs.
+//
+// Scans the transaction logs for "Program <PA_ID> failed: custom program
+// error: 0xNNNN". This matches ONLY the PA's own failure line, ignoring
+// inner CPI program failures that have different program IDs.
+//
+// For CPI errors, Solana propagates the inner program's error code through —
+// the PA's From<ProgramError> conversion runs in Rust but the runtime records
+// the inner code. In those cases, the PA's failure line shows the inner code.
+function extractPAErrorCode(e: any): number | null {
   const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-  return [msg, ...logs].join("\n");
+  const paId = program.programId.toBase58();
+  // Find the PA's own failure line (not inner CPI programs)
+  for (let i = logs.length - 1; i >= 0; i--) {
+    if (!logs[i].includes(paId)) continue;
+    const match = logs[i].match(/failed: custom program error: 0x([0-9a-fA-F]+)/);
+    if (match) return parseInt(match[1], 16);
+  }
+  return null;
+}
+
+// Assert that the PA returned a specific error.
+//
+// Checks the numeric error code from the transaction failure logs. Only valid
+// for non-CPI errors where the PA is the failing program. For CPI failures,
+// the inner program's error propagates — use extractPAErrorCode directly.
+function assertPAError(e: any, errorName: string, context?: string): void {
+  const expectedCode = PA_ERRORS[errorName];
+  assert.isDefined(expectedCode, `Unknown PA error name: ${errorName}`);
+
+  const actualCode = extractPAErrorCode(e);
+  const actualName = actualCode !== null ? PA_ERROR_NAMES.get(actualCode) : null;
+  const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+
+  assert.strictEqual(
+    actualCode,
+    expectedCode,
+    `Expected PA error ${errorName} (${expectedCode}), ` +
+      `got ${actualName ?? "unknown"} (${actualCode})` +
+      (context ? `. ${context}` : "") +
+      `\nLogs:\n${logs.slice(-15).join("\n")}`,
+  );
+}
+
+// Flatten an Anchor error into a single searchable string.
+// Used for Anchor framework constraint errors (ConstraintAddress, ConstraintSeeds,
+// ConstraintHasOne, AccountNotInitialized) where the error is reported via Anchor's
+// log format rather than a numeric program error code.
+function errorHaystack(e: any): string {
+  const parts: string[] = [];
+  if (e?.message) parts.push(e.message);
+  if (e?.error?.errorMessage) parts.push(e.error.errorMessage);
+  if (e?.error?.errorCode?.code) parts.push(e.error.errorCode.code);
+  const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+  parts.push(...logs);
+  return parts.join("\n");
 }
 
 // Poll getSlot() until slot exceeds target. Used by TxData expiration tests.
@@ -400,8 +488,18 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       await settleViaTxData(Keypair.generate(), txWitness);
       assert.fail("expected settle to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(haystack, /ExpectedDeltaProof|Expected delta proof|Invalid transaction data/i);
+      // Patching the Delta variant from Proof→Witness corrupts the Borsh layout.
+      // Depending on how the remaining bytes are interpreted, the PA may fail with
+      // ExpectedDeltaProof (reaches the delta check) or InvalidTransactionData
+      // (Borsh deserialization fails first). Both are correct rejections.
+      const code = extractPAErrorCode(e);
+      assert.isNotNull(code, "Expected a program error code in logs");
+      assert.include(
+        [PA_ERRORS["ExpectedDeltaProof"], PA_ERRORS["InvalidTransactionData"]],
+        code!,
+        `Expected ExpectedDeltaProof (${PA_ERRORS["ExpectedDeltaProof"]}) or ` +
+          `InvalidTransactionData (${PA_ERRORS["InvalidTransactionData"]}), got ${code}`,
+      );
     }
   });
 
@@ -410,8 +508,18 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       await settleViaTxData(Keypair.generate(), txTampered);
       assert.fail("expected settle to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(haystack, /Proof verification failed|ProofVerificationFailed|Verification error/);
+      // The PA calls the verifier router via CPI, which calls the groth16 verifier.
+      // The groth16 verifier rejects the tampered proof with VerificationError (6000).
+      // Solana's CPI error propagation records the INNER program's error code in the
+      // PA's failure line — so we see 0x1770 (6000) instead of the PA's VerifierRouterFailed (6013).
+      const code = extractPAErrorCode(e);
+      assert.isNotNull(code, "Expected a program error code in logs");
+      // The inner verifier's error code 6000 propagates through CPI
+      assert.equal(
+        code,
+        6000,
+        "groth16 verifier's VerificationError (6000) should propagate through CPI",
+      );
     }
   });
 
@@ -475,12 +583,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       });
       assert.fail("expected settle to fail with ExternalCallOutputMismatch");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /ExternalCallOutputMismatch|external call output mismatch/i,
-        "Should fail with ExternalCallOutputMismatch error"
-      );
+      assertPAError(e, "ExternalCallOutputMismatch");
     }
   });
 });
@@ -549,12 +652,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
         .rpc();
       assert.fail("expected settle with garbage data to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /InvalidTransactionData|Invalid transaction data/i,
-        `Expected InvalidTransactionData, got: ${haystack}`
-      );
+      assertPAError(e, "InvalidTransactionData");
     }
   });
 
@@ -594,12 +692,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
         .rpc();
       assert.fail("expected duplicate nullifier to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /DuplicateNullifier|duplicate nullifier|already in use/i,
-        `Expected DuplicateNullifier, got: ${haystack}`
-      );
+      assertPAError(e, "DuplicateNullifier");
     }
   });
 });
@@ -681,15 +774,18 @@ describe("solana-pa-prototype (Settle error paths)", () => {
         .rpc();
       assert.fail("expected insufficient remaining_accounts to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
       // With zero nullifier accounts, the program consumes what would be
       // the forwarder/clock slots as nullifier PDAs, then can't find the
-      // forwarder in the remaining accounts. This manifests as
-      // UnregisteredForwarder or NullifierPdaMismatch.
-      assert.match(
-        haystack,
-        /NullifierPdaMismatch|UnregisteredForwarder|InvalidTransactionData|index out of bounds|panicked/i,
-        `Expected remaining_accounts error, got: ${haystack}`
+      // forwarder in the remaining accounts. The exact error depends on
+      // which check fails first.
+      const code = extractPAErrorCode(e);
+      const name = code !== null ? PA_ERROR_NAMES.get(code) : null;
+      const validErrors = ["NullifierPdaMismatch", "UnregisteredForwarder", "InvalidTransactionData"];
+      assert.isNotNull(code, "Expected a PA error code");
+      assert.include(
+        validErrors,
+        name,
+        `Expected one of ${validErrors.join("|")}, got ${name} (${code})`,
       );
     }
   });
@@ -742,12 +838,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
         .rpc();
       assert.fail("expected unregistered forwarder to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /UnregisteredForwarder|not registered/i,
-        `Expected UnregisteredForwarder, got: ${haystack}`
-      );
+      assertPAError(e, "UnregisteredForwarder");
     }
   });
 });
@@ -999,8 +1090,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         .rpc();
       assert.fail("expected txdata_init to fail with TxDataExpiryTooSoon");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(haystack, /TxDataExpiryTooSoon|expires_slot is below minimum/i);
+      assertPAError(e, "TxDataExpiryTooSoon");
     }
   });
 
@@ -1032,8 +1122,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         .rpc();
       assert.fail("expected txdata_init to fail with TxDataExpiryTooLate");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(haystack, /TxDataExpiryTooLate|expires_slot exceeds maximum/i);
+      assertPAError(e, "TxDataExpiryTooLate");
     }
   });
 
@@ -1365,8 +1454,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         .rpc();
       assert.fail("expected txdata_extend to fail with TxDataExtendMustIncrease");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(haystack, /TxDataExtendMustIncrease|extension must increase/i);
+      assertPAError(e, "TxDataExtendMustIncrease");
     }
   });
 
@@ -1424,8 +1512,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         .rpc();
       assert.fail("expected txdata_close_expired to fail with TxDataNotExpired");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(haystack, /TxDataNotExpired|has not expired/i);
+      assertPAError(e, "TxDataNotExpired");
     }
   });
 
@@ -1499,12 +1586,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
         .rpc();
       assert.fail("expected txdata_write to fail with TxDataBoundsExceeded");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /TxDataBoundsExceeded|exceeds payload/i,
-        `Expected TxDataBoundsExceeded, got: ${haystack}`
-      );
+      assertPAError(e, "TxDataBoundsExceeded");
     }
   });
 
@@ -1768,12 +1850,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
         .rpc();
       assert.fail("expected update_expiry_config with min >= max to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /InvalidExpiryConfig|Invalid expiry config/i,
-        `Expected InvalidExpiryConfig, got: ${haystack}`
-      );
+      assertPAError(e, "InvalidExpiryConfig");
     }
   });
 
@@ -1788,12 +1865,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
         .rpc();
       assert.fail("expected update_expiry_config with min < 10 to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /InvalidExpiryConfig|Invalid expiry config/i,
-        `Expected InvalidExpiryConfig, got: ${haystack}`
-      );
+      assertPAError(e, "InvalidExpiryConfig");
     }
   });
 
@@ -1808,12 +1880,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
         .rpc();
       assert.fail("expected update_expiry_config with max > SEVEN_DAYS_SLOTS to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /InvalidExpiryConfig|Invalid expiry config/i,
-        `Expected InvalidExpiryConfig, got: ${haystack}`
-      );
+      assertPAError(e, "InvalidExpiryConfig");
     }
   });
 
@@ -1934,12 +2001,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
         .rpc();
       assert.fail("expected txdata_write on expired TxData to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /TxDataExpired|has expired/i,
-        `Expected TxDataExpired, got: ${haystack}`
-      );
+      assertPAError(e, "TxDataExpired");
     }
   });
 
@@ -1982,12 +2044,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
         .rpc();
       assert.fail("expected settle_from_txdata on expired TxData to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /TxDataExpired|has expired/i,
-        `Expected TxDataExpired, got: ${haystack}`
-      );
+      assertPAError(e, "TxDataExpired");
     }
   });
 
@@ -2098,12 +2155,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
         .rpc();
       assert.fail("expected txdata_extend with expires_slot too soon to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /TxDataExpiryTooSoon|expires_slot is below minimum/i,
-        `Expected TxDataExpiryTooSoon, got: ${haystack}`
-      );
+      assertPAError(e, "TxDataExpiryTooSoon");
     }
   });
 
@@ -2149,12 +2201,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
         .rpc();
       assert.fail("expected txdata_extend with expires_slot too late to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /TxDataExpiryTooLate|expires_slot exceeds maximum/i,
-        `Expected TxDataExpiryTooLate, got: ${haystack}`
-      );
+      assertPAError(e, "TxDataExpiryTooLate");
     }
   });
 });
@@ -2176,8 +2223,7 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
       await settleFixtureViaTxData(payload, remainingAccounts);
       assert.fail("expected NonExistingRoot error");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(haystack, /NonExistingRoot/i, `Expected NonExistingRoot, got: ${haystack}`);
+      assertPAError(e, "NonExistingRoot");
     }
   });
 
@@ -2193,8 +2239,7 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
       await settleFixtureViaTxData(payload, remainingAccounts);
       assert.fail("expected AggregationRequired error");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(haystack, /AggregationRequired/i, `Expected AggregationRequired, got: ${haystack}`);
+      assertPAError(e, "AggregationRequired");
     }
   });
 
@@ -2210,8 +2255,7 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
       await settleFixtureViaTxData(payload, remainingAccounts);
       assert.fail("expected InvalidProof error");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(haystack, /InvalidProof/i, `Expected InvalidProof, got: ${haystack}`);
+      assertPAError(e, "InvalidProof");
     }
   });
 });
@@ -2241,17 +2285,18 @@ describe("solana-pa-prototype (External call error paths)", () => {
       await settleFixtureViaTxData(payload, remainingAccounts);
       assert.fail("expected CPI failure");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      // Inner CPI error propagates: btf rejects the wrong sysvar account
-      assert.match(
-        haystack,
-        /AccountSysvarMismatch|does not match the required sysvar|ExternalCallCpiFailed|failed/i,
-        `Expected CPI failure, got: ${haystack}`
-      );
+      // CPI error propagation: Solana records the INNER program's error code,
+      // not the PA's remapped ExternalCallCpiFailed. The PA's From<ProgramError>
+      // impl runs in Rust but the runtime has already committed the inner code.
+      // btf's AccountSysvarMismatch = Anchor error 3015 (0xBC7).
+      const code = extractPAErrorCode(e);
+      assert.isNotNull(code, "Expected a program error code in logs");
+      assert.notEqual(code, PA_ERRORS["ExternalCallCpiFailed"],
+        "Solana CPI error propagation: inner error code should appear, not PA's remapped code");
     }
   });
 
-  it("rejects ExternalCallCpiFailed when test-forwarder returns error", async () => {
+  it("rejects settlement when test-forwarder returns error", async () => {
     const failFixture = readJson<Fixture>(
       path.resolve(process.cwd(), "tests", "fixtures", "batch_forwarder_fail.json")
     );
@@ -2265,15 +2310,14 @@ describe("solana-pa-prototype (External call error paths)", () => {
 
     try {
       await settleFixtureViaTxData(payload, remainingAccounts);
-      assert.fail("expected ExternalCallCpiFailed error");
+      assert.fail("expected CPI failure from test-forwarder");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      // Inner CPI error propagates: test-forwarder's IntentionalFailure surfaces directly
-      assert.match(
-        haystack,
-        /IntentionalFailure|Intentional failure for testing|ExternalCallCpiFailed|failed/i,
-        `Expected CPI failure from test-forwarder, got: ${haystack}`
-      );
+      // CPI error propagation: test-forwarder's IntentionalFailure (6000)
+      // propagates through instead of PA's ExternalCallCpiFailed (6018).
+      const code = extractPAErrorCode(e);
+      assert.isNotNull(code, "Expected a program error code in logs");
+      assert.equal(code, 6000,
+        "test-forwarder's IntentionalFailure (6000) should propagate through CPI");
     }
   });
 
@@ -2293,8 +2337,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
       await settleFixtureViaTxData(payload, remainingAccounts);
       assert.fail("expected ExternalCallOutputMismatch error");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(haystack, /ExternalCallOutputMismatch/i, `Expected ExternalCallOutputMismatch, got: ${haystack}`);
+      assertPAError(e, "ExternalCallOutputMismatch");
     }
   });
 });
@@ -2474,12 +2517,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
         .rpc();
       assert.fail("expected emergency_stop to fail when already paused");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /AlreadyPaused|already paused/i,
-        `Expected AlreadyPaused, got: ${haystack}`
-      );
+      assertPAError(e, "AlreadyPaused");
     }
   });
 
@@ -2508,12 +2546,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
         .rpc();
       assert.fail("expected settle to fail when paused");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /Paused|paused/i,
-        `Expected Paused error, got: ${haystack}`
-      );
+      assertPAError(e, "Paused");
     }
   });
 
@@ -2551,12 +2584,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
         .rpc();
       assert.fail("expected settle_from_txdata to fail when paused");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        /Paused|paused/i,
-        `Expected Paused error, got: ${haystack}`
-      );
+      assertPAError(e, "Paused");
     }
   });
 });
