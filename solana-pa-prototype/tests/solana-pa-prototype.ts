@@ -13,7 +13,6 @@ import { readFileSync } from "fs";
 import path from "path";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 
-// Import helpers for PDA derivation (local utilities)
 import {
   getRouterPda,
   getVerifierEntryPda,
@@ -40,25 +39,20 @@ async function airdrop(provider: anchor.AnchorProvider, to: PublicKey, sol: numb
   await provider.connection.confirmTransaction(sig, "confirmed");
 }
 
-// PADDING_LEAF = ZEROS[0] from merkle.rs
 const PADDING_LEAF = Buffer.from(
   "cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06",
   "hex"
 );
 
-// Empty tree root for depth-1 tree = ZEROS[0] = PADDING_LEAF
 const EMPTY_TREE_ROOT_INITIAL = PADDING_LEAF;
 
-// PDA seed constants (shared across all describe blocks)
 const PA_STATE_SEED = Buffer.from("pa_state");
 const NULLIFIER_SEED = Buffer.from("nullifier");
 const TX_DATA_SEED = Buffer.from("tx_data");
 const ROOT_SEED = Buffer.from("root");
 
-// IDL path (shared across all IDL-inspection tests)
 const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
 
-// Parse selector from fixture (e.g., "0x73c457ba" -> Buffer)
 function parseSelectorFromFixture(selectorHex: string): Buffer {
   const hex = selectorHex.replace(/^0x/, "");
   if (hex.length !== 8) {
@@ -66,10 +60,6 @@ function parseSelectorFromFixture(selectorHex: string): Buffer {
   }
   return Buffer.from(hex, "hex");
 }
-
-// --------------------------------------------------------------------------
-// Module-level shared state (all describe blocks share one test validator)
-// --------------------------------------------------------------------------
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
@@ -110,7 +100,6 @@ function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; 
   });
 }
 
-// Build the full remaining_accounts array for settle/settle_from_txdata.
 function buildSettleRemainingAccounts(
   nullifierAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
   options?: {
@@ -134,7 +123,6 @@ function buildSettleRemainingAccounts(
   return accounts;
 }
 
-// Upload a payload to a fresh TxData account via txdata_init + chunked txdata_write.
 async function uploadTxData(
   authority: Keypair,
   payload: Buffer,
@@ -177,7 +165,6 @@ async function uploadTxData(
   return { uploadId, uploadIdLe, txData };
 }
 
-// Generate a fresh upload ID and its little-endian encoding for TxData PDA derivation
 function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
   const uploadId = new anchor.BN(Date.now());
   const uploadIdLe = Buffer.alloc(8);
@@ -185,25 +172,16 @@ function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
   return { uploadId, uploadIdLe };
 }
 
-// PA error codes derived from the IDL (single source of truth).
 // Anchor assigns 6000 + enum_variant_index.
 const PA_ERRORS: Record<string, number> = Object.fromEntries(
   (readJson<{ errors?: { name: string; code: number }[] }>(IDL_PATH).errors ?? [])
     .map((e) => [e.name, e.code]),
 );
 
-// Reverse map: code → name (for diagnostics).
 const PA_ERROR_NAMES = new Map(Object.entries(PA_ERRORS).map(([k, v]) => [v, k]));
 
-// Extract the PA's numeric error code from the transaction failure logs.
-//
-// Scans the transaction logs for "Program <PA_ID> failed: custom program
-// error: 0xNNNN". This matches ONLY the PA's own failure line, ignoring
-// inner CPI program failures that have different program IDs.
-//
-// For CPI errors, Solana propagates the inner program's error code through —
-// the PA's From<ProgramError> conversion runs in Rust but the runtime records
-// the inner code. In those cases, the PA's failure line shows the inner code.
+// For CPI errors, Solana propagates the inner program's error code —
+// the PA's failure line shows the inner code, not the PA's own error.
 function extractPAErrorCode(e: any): number | null {
   const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
   const paId = program.programId.toBase58();
@@ -216,11 +194,6 @@ function extractPAErrorCode(e: any): number | null {
   return null;
 }
 
-// Assert that the PA returned a specific error.
-//
-// Checks the numeric error code from the transaction failure logs. Only valid
-// for non-CPI errors where the PA is the failing program. For CPI failures,
-// the inner program's error propagates — use extractPAErrorCode directly.
 function assertPAError(e: any, errorName: string): void {
   const expectedCode = PA_ERRORS[errorName];
   assert.isDefined(expectedCode, `Unknown PA error name: ${errorName}`);
@@ -238,10 +211,8 @@ function assertPAError(e: any, errorName: string): void {
   );
 }
 
-// Flatten an Anchor error into a single searchable string.
-// Used for Anchor framework constraint errors (ConstraintAddress, ConstraintSeeds,
-// ConstraintHasOne, AccountNotInitialized) where the error is reported via Anchor's
-// log format rather than a numeric program error code.
+// For Anchor framework constraint errors where the error is in log format
+// rather than a numeric program error code.
 function errorHaystack(e: any): string {
   const parts: string[] = [];
   if (e?.message) parts.push(e.message);
@@ -252,7 +223,6 @@ function errorHaystack(e: any): string {
   return parts.join("\n");
 }
 
-// Poll getSlot() until slot exceeds target. Used by TxData expiration tests.
 async function waitForSlotPast(
   connection: anchor.web3.Connection,
   targetSlot: number,
@@ -267,7 +237,6 @@ async function waitForSlotPast(
   throw new Error(`Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`);
 }
 
-// Create a data account owned by a specific program. Used by OutputAccount tests.
 async function createDataAccount(
   space: number,
   owner: PublicKey = testForwarderId,
@@ -289,15 +258,12 @@ async function createDataAccount(
   return account;
 }
 
-// Parse Anchor events from transaction logs using the PA's IDL.
 function parseAnchorEvents(logs: string[]) {
   const coder = new anchor.BorshCoder(program.idl);
   const parser = new anchor.EventParser(program.programId, coder);
   return [...parser.parseLogs(logs)];
 }
 
-// Module-level settle helper for fixture-based tests.
-// Creates a fresh authority, airdrops SOL, uploads the payload, and settles.
 async function settleFixtureViaTxData(
   payload: Buffer,
   remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
@@ -333,7 +299,6 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   const remainingAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
   const nullifierPdas = remainingAccounts.map((a) => a.pubkey);
 
-  // Helper to settle with optional overrides for nullifier accounts and root markers
   async function settleViaTxData(
     authority: Keypair,
     payload: Buffer,
@@ -373,7 +338,6 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       .rpc();
   }
 
-  // Track the genesis root marker PDA for testing
   let genesisRootMarkerPda: PublicKey;
 
   before(async () => {
@@ -397,25 +361,15 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     }
   });
 
-  // ==========================================================================
-  // Issue #4: Historical Root Marker Tests
-  // ==========================================================================
-
   it("creates genesis root marker on initialize", async () => {
-    // The genesis root marker should have been created during before() hook
     const info = await provider.connection.getAccountInfo(genesisRootMarkerPda);
     assert.ok(info, "Genesis root marker PDA should exist after initialize");
     assert.ok(
       info!.owner.equals(program.programId),
       "Genesis root marker should be owned by PA program"
     );
-    // Root markers are 0-byte accounts (existence = membership)
     assert.equal(info!.data.length, 0, "Root marker should be 0 bytes (existence-only)");
   });
-
-  // ==========================================================================
-  // Variable-Depth Merkle Tree Tests
-  // ==========================================================================
 
   it("initializes with depth 1 (variable-depth tree)", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
@@ -424,13 +378,11 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       1,
       "Initial tree depth should be 1 (capacity = 2 leaves)"
     );
-    // Frontier is a Vec with length = currentDepth
     assert.equal(
       state.frontier.length,
       1,
       "Initial frontier should have 1 element (depth 1)"
     );
-    // Initial root should be ZEROS[0] = PADDING_LEAF
     const rootBytes = Buffer.from(state.root as number[]);
     assert.deepEqual(
       rootBytes,
@@ -561,11 +513,6 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     );
   });
 
-  // ==========================================================================
-  // External Call Output Mismatch Test
-  // Mirrors EVM PA: testFuzz_execute_reverts_on_unexpected_forwarder_call_output
-  // ==========================================================================
-
   it("reverts on unexpected forwarder call output (ExternalCallOutputMismatch)", async () => {
     // This test uses a fixture where:
     // - timestamp = -1 (past time, forwarder will return RESULT_LT = 0x00)
@@ -588,10 +535,6 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     }
   });
 });
-
-// =============================================================================
-// Re-initialization guard
-// =============================================================================
 
 describe("solana-pa-prototype (Re-initialization guard)", () => {
   it("rejects re-initialization of PAState", async () => {
@@ -623,10 +566,6 @@ describe("solana-pa-prototype (Re-initialization guard)", () => {
     }
   });
 });
-
-// =============================================================================
-// Direct settle instruction and duplicate nullifier
-// =============================================================================
 
 describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
   it("rejects garbage transaction_data via settle", async () => {
@@ -697,10 +636,6 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     }
   });
 });
-
-// =============================================================================
-// Settle error paths
-// =============================================================================
 
 describe("solana-pa-prototype (Settle error paths)", () => {
   it("rejects wrong verifier_router_program address", async () => {
@@ -844,17 +779,10 @@ describe("solana-pa-prototype (Settle error paths)", () => {
   });
 });
 
-// =============================================================================
-// Issue #6: Emergency Stop / Pausable Tests
-// =============================================================================
-// These tests verify the one-way emergency stop mechanism (EVM parity).
-// Once paused, recovery requires a program upgrade.
-
 describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
   it("stores authority on PAStateAccount after initialize", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.ok(state.authority, "State should have authority field");
-    // Authority should be a valid pubkey (not all zeros)
     const authorityBytes = state.authority.toBytes();
     const isZero = authorityBytes.every((b: number) => b === 0);
     assert.ok(!isZero, "Authority should not be all zeros");
