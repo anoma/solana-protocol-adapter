@@ -70,6 +70,11 @@ enum ForwarderMode {
     TestForwarderOutputAccount,
 }
 
+/// Test-forwarder mode bytes — must match programs/test-forwarder/src/lib.rs.
+const TF_MODE_FAIL: u8 = 0x00;
+const TF_MODE_SILENT: u8 = 0x01;
+const TF_MODE_WRITE_ACCOUNT: u8 = 0x02;
+
 /// Extract the Groth16 selector from a transaction's aggregation proof.
 /// The selector is the first 4 bytes of the verifier_parameters digest,
 /// which is the last 32 bytes of the serialized proof.
@@ -211,7 +216,7 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
 fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
     wrap_external_call(SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
-        instruction_data: vec![0x00],
+        instruction_data: vec![TF_MODE_FAIL],
         expected_output: vec![],
         output_mode: OutputMode::ReturnData,
     })
@@ -220,8 +225,8 @@ fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
 fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
     wrap_external_call(SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
-        instruction_data: vec![0x01], // MODE_SILENT
-        expected_output: vec![],      // irrelevant — get_return_data() returns None
+        instruction_data: vec![TF_MODE_SILENT],
+        expected_output: vec![],
         output_mode: OutputMode::ReturnData,
     })
 }
@@ -230,10 +235,9 @@ fn test_forwarder_output_account_payload_blob(
     expected_bytes: &[u8],
     account_index: u8,
 ) -> Result<ExpirableBlob> {
-    // instruction_data = [MODE_WRITE_ACCOUNT] ++ expected_bytes
     // The forwarder strips input[0] (mode byte) and writes input[1..] to the account.
     let mut instruction_data = Vec::with_capacity(1 + expected_bytes.len());
-    instruction_data.push(0x02); // MODE_WRITE_ACCOUNT
+    instruction_data.push(TF_MODE_WRITE_ACCOUNT);
     instruction_data.extend_from_slice(expected_bytes);
 
     wrap_external_call(SolanaExternalCall {
