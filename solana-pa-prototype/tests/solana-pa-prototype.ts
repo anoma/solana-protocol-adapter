@@ -660,6 +660,63 @@ describe("solana-pa-prototype (Settle error paths)", () => {
       );
     }
   });
+
+  it("rejects unregistered forwarder program in remaining_accounts", async () => {
+    // Pass correct nullifier PDAs but replace the forwarder program ID with
+    // a random pubkey. The program searches external_accounts (everything
+    // after the nullifier slots) for the forwarder and fails with
+    // UnregisteredForwarder when it can't find it.
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const mismatchFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json")
+    );
+    const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
+
+    const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
+
+    const nullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
+
+    // Build remaining_accounts manually with a FAKE forwarder instead of
+    // the real blockTimeForwarderId
+    const fakeForwarder = Keypair.generate().publicKey;
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: fakeForwarder, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+
+    try {
+      await program.methods
+        .settleFromTxdata(uploadId)
+        .accounts({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: GROTH16_VERIFIER_ID,
+        })
+        .remainingAccounts(remainingAccounts)
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+        ])
+        .signers([authority])
+        .rpc();
+      assert.fail("expected unregistered forwarder to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /UnregisteredForwarder|not registered/i,
+        `Expected UnregisteredForwarder, got: ${haystack}`
+      );
+    }
+  });
 });
 
 // =============================================================================
