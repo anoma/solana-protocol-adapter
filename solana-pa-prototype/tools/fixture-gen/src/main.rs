@@ -220,8 +220,8 @@ fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
 fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
     wrap_external_call(SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
-        instruction_data: vec![0x00],
-        expected_output: vec![0x01],
+        instruction_data: vec![0x01], // MODE_SILENT
+        expected_output: vec![],      // irrelevant — get_return_data() returns None
         output_mode: OutputMode::ReturnData,
     })
 }
@@ -230,9 +230,15 @@ fn test_forwarder_output_account_payload_blob(
     expected_bytes: &[u8],
     account_index: u8,
 ) -> Result<ExpirableBlob> {
+    // instruction_data = [MODE_WRITE_ACCOUNT] ++ expected_bytes
+    // The forwarder strips input[0] (mode byte) and writes input[1..] to the account.
+    let mut instruction_data = Vec::with_capacity(1 + expected_bytes.len());
+    instruction_data.push(0x02); // MODE_WRITE_ACCOUNT
+    instruction_data.extend_from_slice(expected_bytes);
+
     wrap_external_call(SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
-        instruction_data: expected_bytes.to_vec(),
+        instruction_data,
         expected_output: expected_bytes.to_vec(),
         output_mode: OutputMode::OutputAccount {
             index: account_index,
