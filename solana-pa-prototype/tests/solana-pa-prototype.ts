@@ -185,39 +185,12 @@ function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
   return { uploadId, uploadIdLe };
 }
 
-// PA error codes (from IDL: target/idl/solana_pa_prototype.json).
+// PA error codes derived from the IDL (single source of truth).
 // Anchor assigns 6000 + enum_variant_index.
-const PA_ERRORS: Record<string, number> = {
-  DuplicateNullifier: 6000,
-  NullifierPdaMismatch: 6001,
-  NonExistingRoot: 6002,
-  RootPdaMismatch: 6003,
-  TxDataExpired: 6004,
-  TxDataBoundsExceeded: 6005,
-  TxDataExpiryTooSoon: 6006,
-  TxDataExpiryTooLate: 6007,
-  TxDataExtendMustIncrease: 6008,
-  TxDataNotExpired: 6009,
-  InvalidExpiryConfig: 6010,
-  InvalidTransactionData: 6011,
-  InvalidProof: 6012,
-  VerifierRouterFailed: 6013,
-  AggregationRequired: 6014,
-  InvalidExternalCallBlob: 6015,
-  UnregisteredForwarder: 6016,
-  ExternalCallOutputMismatch: 6017,
-  ExternalCallCpiFailed: 6018,
-  DeltaProofVerificationFailed: 6019,
-  DeltaMismatch: 6020,
-  InvalidDeltaProof: 6021,
-  DeltaPointNotOnCurve: 6022,
-  ExpectedDeltaProof: 6023,
-  TagNotFound: 6024,
-  Paused: 6025,
-  Unauthorized: 6026,
-  AlreadyPaused: 6027,
-  TreeMaxDepthReached: 6028,
-};
+const PA_ERRORS: Record<string, number> = Object.fromEntries(
+  (readJson<{ errors?: { name: string; code: number }[] }>(IDL_PATH).errors ?? [])
+    .map((e) => [e.name, e.code]),
+);
 
 // Reverse map: code → name (for diagnostics).
 const PA_ERROR_NAMES = new Map(Object.entries(PA_ERRORS).map(([k, v]) => [v, k]));
@@ -248,7 +221,7 @@ function extractPAErrorCode(e: any): number | null {
 // Checks the numeric error code from the transaction failure logs. Only valid
 // for non-CPI errors where the PA is the failing program. For CPI failures,
 // the inner program's error propagates — use extractPAErrorCode directly.
-function assertPAError(e: any, errorName: string, context?: string): void {
+function assertPAError(e: any, errorName: string): void {
   const expectedCode = PA_ERRORS[errorName];
   assert.isDefined(expectedCode, `Unknown PA error name: ${errorName}`);
 
@@ -261,7 +234,6 @@ function assertPAError(e: any, errorName: string, context?: string): void {
     expectedCode,
     `Expected PA error ${errorName} (${expectedCode}), ` +
       `got ${actualName ?? "unknown"} (${actualCode})` +
-      (context ? `. ${context}` : "") +
       `\nLogs:\n${logs.slice(-15).join("\n")}`,
   );
 }
