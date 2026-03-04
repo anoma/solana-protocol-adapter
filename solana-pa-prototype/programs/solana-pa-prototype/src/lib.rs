@@ -8,10 +8,6 @@ declare_id!("De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ");
 const VERIFIER_ROUTER_ID: Pubkey =
     anchor_lang::solana_program::pubkey!("BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg");
 
-// =============================================================================
-// Modules
-// =============================================================================
-
 pub mod delta;
 pub mod encoding;
 pub mod error;
@@ -26,6 +22,7 @@ pub mod state;
 mod tests;
 pub mod types;
 
+use encoding::{compute_action_tree_root, extract_tags_and_logic_refs};
 pub use error::PAError;
 use groth16::prepare_proof_for_verification;
 use merkle::{
@@ -33,10 +30,6 @@ use merkle::{
 };
 use state::*;
 use types::{Digest, Transaction};
-
-// =============================================================================
-// Program Instructions
-// =============================================================================
 
 #[program]
 pub mod solana_pa_prototype {
@@ -55,7 +48,6 @@ pub mod solana_pa_prototype {
             PAError::InvalidTransactionData
         );
 
-        // Get key before taking mutable reference
         let pa_state_key = ctx.accounts.pa_state.key();
 
         let state = &mut ctx.accounts.pa_state;
@@ -63,16 +55,10 @@ pub mod solana_pa_prototype {
         state.authority = ctx.accounts.payer.key();
         state.paused = false;
 
-        // Initialize variable-depth tree at depth 1 (capacity = 2 leaves)
         state.current_depth = INITIAL_TREE_DEPTH as u8;
-        state.frontier = vec![PADDING_LEAF.to_bytes()]; // Single entry for depth 1
-
-        // Initialize commitment tree with empty state at depth 1
-        // Empty root at depth 1 = ZEROS[0] = PADDING_LEAF
+        state.frontier = vec![PADDING_LEAF.to_bytes()];
         state.root = EMPTY_TREE_ROOT_INITIAL.to_bytes();
         state.next_index = 0;
-
-        // Initialize expiry config with compile-time defaults
         state.min_expiry_slots = MIN_EXPIRY_SLOTS;
         state.max_expiry_slots = MAX_EXPIRY_SLOTS;
 
@@ -95,11 +81,6 @@ pub mod solana_pa_prototype {
     }
 
     /// Settle a transaction: verify proofs, update commitment tree, mark nullifiers.
-    ///
-    /// This is the main entry point for transaction execution.
-    ///
-    /// # Arguments
-    /// * `transaction_data` - Bincode-serialized arm-risc0 Transaction
     pub fn settle<'info>(
         ctx: Context<'_, '_, '_, 'info, Settle<'info>>,
         transaction_data: Vec<u8>,
@@ -132,11 +113,6 @@ pub mod solana_pa_prototype {
     }
 
     /// Initialize a TxData account for chunked upload.
-    ///
-    /// # Arguments
-    /// * `upload_id` - Unique identifier for this upload (client-provided, e.g. timestamp)
-    /// * `capacity` - Size of payload buffer to allocate
-    /// * `expires_slot` - Slot after which this TxData expires
     pub fn txdata_init(
         ctx: Context<TxDataInit>,
         upload_id: u64,
@@ -186,17 +162,12 @@ pub mod solana_pa_prototype {
     }
 
     /// Close a TxData account and reclaim rent.
-    /// Authority can close at any time (not just after expiration).
     pub fn txdata_close(_ctx: Context<TxDataClose>, upload_id: u64) -> Result<()> {
-        // Account closure is handled by Anchor's close constraint
         msg!("TxData closed: upload_id={}", upload_id);
         Ok(())
     }
 
     /// Extend the expiration deadline of a TxData account.
-    ///
-    /// Allows the authority to extend expiration even after the original deadline passed.
-    /// New expiry must be within [current_slot + min, current_slot + max] bounds.
     pub fn txdata_extend(
         ctx: Context<TxDataExtend>,
         upload_id: u64,
@@ -225,11 +196,7 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Close an EXPIRED TxData account and reclaim rent.
-    ///
-    /// Anyone can call this for garbage collection of stale accounts.
-    /// Rent goes to the `refund` address stored in the account.
-    /// Only works if current_slot > expires_slot.
+    /// Close an expired TxData account. Anyone can call; rent goes to `refund`.
     pub fn txdata_close_expired(
         ctx: Context<TxDataCloseExpired>,
         upload_id: u64,
@@ -238,10 +205,8 @@ pub mod solana_pa_prototype {
         let clock = Clock::get()?;
         let txdata = &ctx.accounts.tx_data;
 
-        // CRITICAL: Only allow close if expired
         require!(clock.slot > txdata.expires_slot, PAError::TxDataNotExpired);
 
-        // Account closure is handled by Anchor's close constraint
         msg!(
             "Expired TxData closed: upload_id={}, expires_slot={}, current_slot={}",
             upload_id,
@@ -251,24 +216,20 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Update TxData expiry configuration.
-    ///
-    /// Only the protocol authority can call this.
+    /// Update TxData expiry configuration (authority only).
     pub fn update_expiry_config(
         ctx: Context<UpdateExpiryConfig>,
         new_min_expiry_slots: u64,
         new_max_expiry_slots: u64,
     ) -> Result<()> {
-        // Validate: min < max
         require!(
             new_min_expiry_slots < new_max_expiry_slots,
             PAError::InvalidExpiryConfig
         );
-
-        // Validate: reasonable minimum (at least 10 slots ~4 seconds)
-        require!(new_min_expiry_slots >= 10, PAError::InvalidExpiryConfig);
-
-        // Validate: reasonable maximum (no more than ~7 days)
+        require!(
+            new_min_expiry_slots >= MIN_ALLOWED_EXPIRY,
+            PAError::InvalidExpiryConfig
+        );
         require!(
             new_max_expiry_slots <= SEVEN_DAYS_SLOTS,
             PAError::InvalidExpiryConfig
@@ -328,10 +289,7 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Emergency stop - permanently pause the protocol.
-    ///
-    /// Once paused, the protocol cannot be unpaused without a program upgrade.
-    /// This matches EVM Protocol Adapter behavior (one-way emergency stop).
+    /// Emergency stop — permanently pause the protocol (requires upgrade to unpause).
     pub fn emergency_stop(ctx: Context<EmergencyStop>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         require!(!state.paused, PAError::AlreadyPaused);
@@ -343,10 +301,7 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Transfer authority to a new account.
-    ///
-    /// This is equivalent to EVM Protocol Adapter's `transferOwnership()`.
-    /// Single-step transfer (no pending/accept pattern) for EVM parity.
+    /// Transfer authority to a new account (single-step, no pending/accept).
     pub fn transfer_authority(
         ctx: Context<TransferAuthority>,
         new_authority: Pubkey,
@@ -363,10 +318,6 @@ pub mod solana_pa_prototype {
     }
 }
 
-// =============================================================================
-// Helper Functions (on-chain)
-// =============================================================================
-
 /// Validate that an expiry slot falls within the configurable bounds.
 fn validate_expiry_bounds(
     pa_state: &PAStateAccount,
@@ -380,8 +331,7 @@ fn validate_expiry_bounds(
     Ok(())
 }
 
-/// Append a single commitment to the tree using frontier-based append.
-/// Grows the tree when capacity is reached.
+/// Append a single commitment to the tree, growing it if at capacity.
 fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
     if state.needs_growth() {
         require!(state.can_grow(), PAError::TreeMaxDepthReached);
@@ -411,9 +361,7 @@ fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
     Ok(())
 }
 
-/// Compute the current root from the frontier.
-/// Uses precomputed ZEROS array to avoid expensive on-chain hash computation.
-/// Operates over the current tree depth (variable, 1-32).
+/// Compute the current root from the frontier using precomputed ZEROS.
 pub fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
     let depth = state.depth();
 
@@ -436,8 +384,7 @@ pub fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
     current
 }
 
-/// Calculate minimum tree depth required for final_next_index leaves.
-/// Returns depth such that 2^depth >= final_next_index.
+/// Minimum tree depth such that 2^depth >= final_next_index.
 pub fn required_depth_for_leaves(final_next_index: u64) -> usize {
     if final_next_index == 0 {
         return INITIAL_TREE_DEPTH;
@@ -447,8 +394,7 @@ pub fn required_depth_for_leaves(final_next_index: u64) -> usize {
     (bits as usize).max(INITIAL_TREE_DEPTH)
 }
 
-/// Conditionally reallocate PAState if tree growth is needed.
-/// Only transfers lamports and resizes when required_depth > current_depth.
+/// Reallocate PAState if tree growth is needed for the incoming commitments.
 fn maybe_grow_account<'info>(
     pa_state_info: &AccountInfo<'info>,
     state: &PAStateAccount,
@@ -497,29 +443,6 @@ fn maybe_grow_account<'info>(
     Ok(())
 }
 
-/// Call verifier_router::verify via typed CPI.
-/// Uses Anchor's generated CPI interface for type safety.
-#[allow(clippy::too_many_arguments)]
-fn call_verifier_router<'info>(
-    verifier_router_program: &AccountInfo<'info>,
-    router: &AccountInfo<'info>,
-    verifier_entry: &AccountInfo<'info>,
-    verifier_program: &AccountInfo<'info>,
-    system_program: &AccountInfo<'info>,
-    seal: verifier_router::Seal,
-    image_id: [u8; 32],
-    journal_digest: [u8; 32],
-) -> Result<()> {
-    let cpi_accounts = verifier_router::cpi::accounts::Verify {
-        router: router.clone(),
-        verifier_entry: verifier_entry.clone(),
-        verifier_program: verifier_program.clone(),
-        system_program: system_program.clone(),
-    };
-    let cpi_ctx = CpiContext::new(verifier_router_program.clone(), cpi_accounts);
-    verifier_router::cpi::verify(cpi_ctx, seal, image_id, journal_digest)
-}
-
 /// Shared settlement logic for both settle and settle_from_txdata.
 #[allow(clippy::too_many_arguments)]
 fn execute_settlement<'info>(
@@ -535,8 +458,7 @@ fn execute_settlement<'info>(
     verifier_entry: &AccountInfo<'info>,
     verifier_program: &AccountInfo<'info>,
 ) -> Result<()> {
-    use crate::encoding::{compute_action_tree_root, extract_tags_and_logic_refs};
-    // 1) State anchor check (supports historical roots)
+    // Validate consumed roots (supports historical roots via PDA markers)
     for (action_idx, action) in tx.actions.iter().enumerate() {
         for (cu_idx, cu) in action.compliance_units.iter().enumerate() {
             msg!(
@@ -557,34 +479,36 @@ fn execute_settlement<'info>(
         }
     }
 
-    // 2) Extract nullifiers from compliance instances (for PDA creation)
     let nullifiers = settle::extract_nullifiers(tx);
 
-    // 3) Verify aggregated proof
+    // Verify aggregated proof via verifier_router CPI
     require!(tx.aggregation_proof.is_some(), PAError::AggregationRequired);
 
     msg!("Preparing aggregated proof for verification");
     let prepared = prepare_proof_for_verification(tx).map_err(|_| error!(PAError::InvalidProof))?;
 
     msg!("Verifying aggregated proof via verifier_router");
-    call_verifier_router(
-        verifier_router_program,
-        router,
-        verifier_entry,
-        verifier_program,
-        system_program,
-        prepared.seal,
-        prepared.image_id,
-        prepared.journal_digest,
-    )
-    .map_err(|_| error!(PAError::VerifierRouterFailed))?;
+    {
+        let cpi_accounts = verifier_router::cpi::accounts::Verify {
+            router: router.clone(),
+            verifier_entry: verifier_entry.clone(),
+            verifier_program: verifier_program.clone(),
+            system_program: system_program.clone(),
+        };
+        let cpi_ctx = CpiContext::new(verifier_router_program.clone(), cpi_accounts);
+        verifier_router::cpi::verify(
+            cpi_ctx,
+            prepared.seal,
+            prepared.image_id,
+            prepared.journal_digest,
+        )
+        .map_err(|_| error!(PAError::VerifierRouterFailed))?;
+    }
     msg!("Aggregated proof verification passed");
 
-    // 3.5) Verify delta proof (balance conservation)
-    // Uses Solana syscalls (secp256k1_recover, hashv) for optimal CU usage.
     delta::verify_delta_proof(tx)?;
 
-    // 3.6) Emit app data events and EVM parity events for indexing
+    // Emit app data events and EVM parity events for indexing
     let total_lvi: usize = tx
         .actions
         .iter()
@@ -626,17 +550,15 @@ fn execute_settlement<'info>(
         logic_refs: all_logic_refs,
     });
 
-    // 4) Nullifier PDA creation via remaining_accounts
-    // remaining_accounts layout: [nullifier_pda_0, ..., nullifier_pda_n, ...additional CPI accounts...]
+    // Rent for 0-data-byte marker accounts (nullifiers + root marker).
+    // Floor at 1 lamport because 0-lamport accounts can be garbage-collected.
+    let marker_lamports = Rent::get()?.minimum_balance(0).max(1);
+
     if !nullifiers.is_empty() {
         require!(
             remaining_accounts.len() >= nullifiers.len(),
             PAError::InvalidTransactionData
         );
-
-        // Rent for 0-data-byte marker accounts, computed once for all nullifiers.
-        // Floor at 1 lamport because 0-lamport accounts can be garbage-collected.
-        let marker_lamports = Rent::get()?.minimum_balance(0).max(1);
 
         for (i, nullifier) in nullifiers.iter().enumerate() {
             let marker = &remaining_accounts[i];
@@ -676,7 +598,6 @@ fn execute_settlement<'info>(
     let (expected_pda, _) = root::derive_root_pda(&crate::ID, pa_state_key, &new_root);
     if let Some(last_account) = remaining_accounts.last() {
         if last_account.key == &expected_pda {
-            let marker_lamports = Rent::get()?.minimum_balance(0).max(1);
             root::create_root_marker(
                 &crate::ID,
                 pa_state_key,
@@ -692,10 +613,6 @@ fn execute_settlement<'info>(
 
     Ok(())
 }
-
-// =============================================================================
-// Account Contexts
-// =============================================================================
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
@@ -908,10 +825,6 @@ pub struct UpdateExpiryConfig<'info> {
     pub authority: Signer<'info>,
 }
 
-// =============================================================================
-// App Data Events
-// =============================================================================
-
 /// Resource payload event - emitted for resource data blobs.
 #[event]
 pub struct ResourcePayloadEvent {
@@ -943,10 +856,6 @@ pub struct ApplicationPayloadEvent {
     pub index: u32,
     pub blob: Vec<u8>,
 }
-
-// =============================================================================
-// EVM Parity Events
-// =============================================================================
 
 /// Action executed event - emitted after each action is processed.
 /// Matches EVM PA's ActionExecuted event.

@@ -98,9 +98,11 @@ impl TxDataAccount {
 
 pub const TX_DATA_SEED: &[u8] = b"tx_data";
 
-/// ~40 seconds at 400ms/slot.
+/// Hard floor for `min_expiry_slots` configuration (~4 seconds at 400ms/slot).
+pub const MIN_ALLOWED_EXPIRY: u64 = 10;
+/// Default minimum expiry (~40 seconds at 400ms/slot).
 pub const MIN_EXPIRY_SLOTS: u64 = 100;
-/// ~24 hours at 400ms/slot.
+/// Default maximum expiry (~24 hours at 400ms/slot).
 pub const MAX_EXPIRY_SLOTS: u64 = 216_000;
-/// ~7 days at 400ms/slot.
+/// Hard ceiling for `max_expiry_slots` configuration (~7 days at 400ms/slot).
 pub const SEVEN_DAYS_SLOTS: u64 = 7 * 24 * 60 * 60 * 1000 / 400;
