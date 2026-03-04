@@ -267,6 +267,35 @@ async function waitForSlotPast(
   throw new Error(`Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`);
 }
 
+// Create a data account owned by a specific program. Used by OutputAccount tests.
+async function createDataAccount(
+  space: number,
+  owner: PublicKey = testForwarderId,
+): Promise<Keypair> {
+  const funder = Keypair.generate();
+  await airdrop(provider, funder.publicKey, 2);
+  const account = Keypair.generate();
+  const lamports = await provider.connection.getMinimumBalanceForRentExemption(space);
+  const tx = new anchor.web3.Transaction().add(
+    SystemProgram.createAccount({
+      fromPubkey: funder.publicKey,
+      newAccountPubkey: account.publicKey,
+      space,
+      lamports,
+      programId: owner,
+    }),
+  );
+  await provider.sendAndConfirm(tx, [funder, account]);
+  return account;
+}
+
+// Parse Anchor events from transaction logs using the PA's IDL.
+function parseAnchorEvents(logs: string[]) {
+  const coder = new anchor.BorshCoder(program.idl);
+  const parser = new anchor.EventParser(program.programId, coder);
+  return [...parser.parseLogs(logs)];
+}
+
 // Module-level settle helper for fixture-based tests.
 // Creates a fresh authority, airdrops SOL, uploads the payload, and settles.
 async function settleFixtureViaTxData(
@@ -2349,9 +2378,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     const logs = txResult!.meta?.logMessages ?? [];
 
     // Decode Anchor events from program logs
-    const coder = new anchor.BorshCoder(program.idl);
-    const parser = new anchor.EventParser(program.programId, coder);
-    const events = [...parser.parseLogs(logs)];
+    const events = parseAnchorEvents(logs);
 
     // Anchor SDK converts event names to camelCase
     // ActionExecutedEvent → actionExecutedEvent
@@ -2457,22 +2484,7 @@ describe("solana-pa-prototype (OutputAccount mode)", () => {
     const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
 
     // Create a data account owned by test-forwarder for writing output
-    const funder = Keypair.generate();
-    await airdrop(provider, funder.publicKey, 2);
-    const dataAccount = Keypair.generate();
-    const space = 10;
-    const lamports = await provider.connection.getMinimumBalanceForRentExemption(space);
-
-    const createTx = new anchor.web3.Transaction().add(
-      SystemProgram.createAccount({
-        fromPubkey: funder.publicKey,
-        newAccountPubkey: dataAccount.publicKey,
-        space,
-        lamports,
-        programId: testForwarderId,
-      })
-    );
-    await provider.sendAndConfirm(createTx, [funder, dataAccount]);
+    const dataAccount = await createDataAccount(10);
 
     // remaining_accounts: [nullifier_pda, test_forwarder, writable_data_account]
     // Fixture uses OutputAccount { index: 2, offset: 0, len: 4 }
@@ -2508,12 +2520,12 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
   // and expected_output [0x01, 0x02, 0x03, 0x04]. These tests manipulate remaining_accounts
   // to trigger each error path in read_forwarder_output (cpi.rs:89-103).
 
-  const loadOutputFixture = () => readJson<Fixture>(
+  const outputFixture = readJson<Fixture>(
     path.resolve(process.cwd(), "tests", "fixtures", "batch_forwarder_output.json")
   );
 
   it("rejects OutputAccount when index is out of bounds", async () => {
-    const f = loadOutputFixture();
+    const f = outputFixture;
     const payload = Buffer.from(f.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
 
@@ -2538,29 +2550,14 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
   });
 
   it("rejects OutputAccount when data is shorter than offset+len", async () => {
-    const f = loadOutputFixture();
+    const f = outputFixture;
     const payload = Buffer.from(f.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
 
     // Create a data account with only 2 bytes — fixture expects len=4.
     // The forwarder writes min(payload.len(), data.len()) = 2 bytes.
     // Then PA reads remaining_accounts[2] with offset=0, len=4 → end=4 > 2 → error.
-    const funder = Keypair.generate();
-    await airdrop(provider, funder.publicKey, 2);
-    const dataAccount = Keypair.generate();
-    const tooSmallSpace = 2; // Less than the expected len=4
-    const lamports = await provider.connection.getMinimumBalanceForRentExemption(tooSmallSpace);
-
-    const createTx = new anchor.web3.Transaction().add(
-      SystemProgram.createAccount({
-        fromPubkey: funder.publicKey,
-        newAccountPubkey: dataAccount.publicKey,
-        space: tooSmallSpace,
-        lamports,
-        programId: testForwarderId,
-      })
-    );
-    await provider.sendAndConfirm(createTx, [funder, dataAccount]);
+    const dataAccount = await createDataAccount(2);
 
     const remainingAccounts = [
       ...nullifierAccounts,
