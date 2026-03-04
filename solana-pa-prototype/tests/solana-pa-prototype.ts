@@ -845,15 +845,12 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
   });
 
   it("transfers authority when called by current authority", async () => {
-    // Get current authority from state
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const currentAuthority = stateBefore.authority;
 
-    // Create new authority
     const newAuthority = Keypair.generate();
     await airdrop(provider, newAuthority.publicKey, 1);
 
-    // Transfer authority using provider wallet (which should be the current authority)
     await program.methods
       .transferAuthority(newAuthority.publicKey)
       .accounts({
@@ -862,14 +859,12 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       })
       .rpc();
 
-    // Verify authority was updated
     const stateAfter = await program.account.paStateAccount.fetch(paState);
     assert.ok(
       stateAfter.authority.equals(newAuthority.publicKey),
       "Authority should be updated to new authority"
     );
 
-    // Transfer back to original authority for other tests
     await program.methods
       .transferAuthority(currentAuthority)
       .accounts({
@@ -879,7 +874,6 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .signers([newAuthority])
       .rpc();
 
-    // Verify authority was restored
     const stateRestored = await program.account.paStateAccount.fetch(paState);
     assert.ok(
       stateRestored.authority.equals(currentAuthority),
@@ -891,11 +885,9 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const originalAuthority = stateBefore.authority;
 
-    // Create new authority
     const newAuthority = Keypair.generate();
     await airdrop(provider, newAuthority.publicKey, 1);
 
-    // Transfer authority
     await program.methods
       .transferAuthority(newAuthority.publicKey)
       .accounts({
@@ -904,7 +896,6 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       })
       .rpc();
 
-    // Old authority should not be able to call emergency_stop
     try {
       await program.methods
         .emergencyStop()
@@ -923,7 +914,6 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       );
     }
 
-    // Restore original authority
     await program.methods
       .transferAuthority(originalAuthority)
       .accounts({
@@ -956,13 +946,11 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop - Destructive)", () => {
     const idl = readJson<any>(IDL_PATH);
     const transferAuthorityIx = idl.instructions.find((ix: any) => ix.name === "transfer_authority");
     assert.ok(transferAuthorityIx, "transfer_authority instruction should exist in IDL");
-    // Verify it has the new_authority argument
     const newAuthorityArg = transferAuthorityIx.args?.find((arg: any) => arg.name === "new_authority" || arg.name === "newAuthority");
     assert.ok(newAuthorityArg, "transfer_authority should have new_authority argument");
   });
 
   it("verifies paused check exists in settle instructions", async () => {
-    // Read IDL directly from file
     const idl = readJson<any>(IDL_PATH);
     const pausedError = idl.errors?.find((e: any) => e.name === "Paused");
     assert.ok(pausedError, "Paused error should exist in IDL");
@@ -981,10 +969,6 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop - Destructive)", () => {
     assert.ok(unauthorizedError, "Unauthorized error should exist in IDL");
   });
 });
-
-// =============================================================================
-// TxData Expiration Mechanism Tests
-// =============================================================================
 
 describe("solana-pa-prototype (TxData Expiration)", () => {
   // Constants matching Rust defaults (from state.rs)
@@ -1103,7 +1087,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 10_000);
 
-    // Create TxData
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1115,14 +1098,11 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       .signers([authority])
       .rpc();
 
-    // Verify it exists
     const before = await provider.connection.getAccountInfo(txData);
     assert.ok(before, "TxData should exist before close");
 
-    // Get balance before close
     const balanceBefore = await provider.connection.getBalance(authority.publicKey);
 
-    // Close TxData (authority receives rent back)
     await program.methods
       .txdataClose(uploadId)
       .accounts({
@@ -1133,11 +1113,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       .signers([authority])
       .rpc();
 
-    // Verify it's closed
     const after = await provider.connection.getAccountInfo(txData);
     assert.ok(!after, "TxData should not exist after close");
 
-    // Verify rent was refunded
     const balanceAfter = await provider.connection.getBalance(authority.publicKey);
     assert.ok(
       balanceAfter > balanceBefore,
@@ -1145,13 +1123,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     );
   });
 
-  // -------------------------------------------------------------------------
-  // Security tests for txdata_close authorization
-  // -------------------------------------------------------------------------
-  // These tests document the two-layer security model:
-  // 1. PDA derivation includes authority's pubkey in seeds - attacker derives different PDA
-  // 2. Anchor's seeds constraint verifies PDA matches signer - can't pass someone else's PDA
-  // -------------------------------------------------------------------------
+  // Two-layer security model:
+  // 1. PDA derivation includes authority's pubkey in seeds — attacker derives different PDA
+  // 2. Anchor's seeds constraint verifies PDA matches signer — can't pass someone else's PDA
 
   it("rejects txdata_close for non-existent account (attacker's PDA doesn't exist)", async () => {
     // SCENARIO: Attacker derives their OWN PDA (using their pubkey in seeds).
@@ -1172,7 +1146,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 10_000);
 
-    // Authority creates TxData at their PDA
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1233,7 +1206,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 10_000);
 
-    // Authority creates TxData
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1279,15 +1251,10 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     assert.ok(expiryTooLateError, "TxDataExpiryTooLate error should exist in IDL");
   });
 
-  // ===========================================================================
-  // Tests for txdata_extend instruction
-  // ===========================================================================
-
   it("verifies txdata_extend instruction exists in IDL", async () => {
     const idl = readJson<any>(IDL_PATH);
     const txdataExtendIx = idl.instructions.find((ix: any) => ix.name === "txdata_extend");
     assert.ok(txdataExtendIx, "txdata_extend instruction should exist in IDL");
-    // Verify it has new_expires_slot argument
     const newExpiresArg = txdataExtendIx.args?.find((arg: any) => arg.name === "new_expires_slot" || arg.name === "newExpiresSlot");
     assert.ok(newExpiresArg, "txdata_extend should have new_expires_slot argument");
   });
@@ -1306,7 +1273,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const initialExpiry = new anchor.BN(slot + 1000);
 
-    // Create TxData
     await program.methods
       .txdataInit(uploadId, 100, initialExpiry)
       .accounts({
@@ -1318,11 +1284,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       .signers([authority])
       .rpc();
 
-    // Verify initial expiry
     let txDataAccount = await program.account.txDataAccount.fetch(txData);
     assert.equal(txDataAccount.expiresSlot.toNumber(), initialExpiry.toNumber());
 
-    // Extend expiration
     const currentSlot = await provider.connection.getSlot("confirmed");
     const newExpiry = new anchor.BN(currentSlot + 5000);
 
@@ -1336,7 +1300,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       .signers([authority])
       .rpc();
 
-    // Verify new expiry
     txDataAccount = await program.account.txDataAccount.fetch(txData);
     assert.equal(txDataAccount.expiresSlot.toNumber(), newExpiry.toNumber(), "expires_slot should be updated");
   });
@@ -1355,7 +1318,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const initialExpiry = new anchor.BN(slot + 10000);
 
-    // Create TxData with high expiry
     await program.methods
       .txdataInit(uploadId, 100, initialExpiry)
       .accounts({
@@ -1367,7 +1329,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       .signers([authority])
       .rpc();
 
-    // Try to extend to a lower value (should fail)
     const currentSlot = await provider.connection.getSlot("confirmed");
     const lowerExpiry = new anchor.BN(currentSlot + 500); // Less than current expires_slot
 
@@ -1387,15 +1348,10 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     }
   });
 
-  // ===========================================================================
-  // Tests for txdata_close_expired instruction
-  // ===========================================================================
-
   it("verifies txdata_close_expired instruction exists in IDL", async () => {
     const idl = readJson<any>(IDL_PATH);
     const txdataCloseExpiredIx = idl.instructions.find((ix: any) => ix.name === "txdata_close_expired");
     assert.ok(txdataCloseExpiredIx, "txdata_close_expired instruction should exist in IDL");
-    // Verify it has authority argument (to derive PDA)
     const authorityArg = txdataCloseExpiredIx.args?.find((arg: any) => arg.name === "_authority");
     assert.ok(authorityArg, "txdata_close_expired should have _authority argument (used for PDA derivation)");
   });
@@ -1416,7 +1372,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 50000); // Far in the future
 
-    // Create TxData
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1428,7 +1383,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       .signers([authority])
       .rpc();
 
-    // Try to close_expired (should fail - not expired yet)
     try {
       await program.methods
         .txdataCloseExpired(uploadId, authority.publicKey)
@@ -1445,15 +1399,10 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     }
   });
 
-  // ===========================================================================
-  // Tests for update_expiry_config instruction
-  // ===========================================================================
-
   it("verifies update_expiry_config instruction exists in IDL", async () => {
     const idl = readJson<any>(IDL_PATH);
     const updateExpiryConfigIx = idl.instructions.find((ix: any) => ix.name === "update_expiry_config");
     assert.ok(updateExpiryConfigIx, "update_expiry_config instruction should exist in IDL");
-    // Verify it has the two arguments (IDL uses snake_case)
     assert.equal(updateExpiryConfigIx.args?.length, 2, "update_expiry_config should have 2 arguments");
   });
 
@@ -1471,10 +1420,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
   });
 });
 
-// =============================================================================
-// TxData authority and bounds checks
-// =============================================================================
-
 describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
 
   it("rejects txdata_write that exceeds payload capacity", async () => {
@@ -1491,7 +1436,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 10_000);
 
-    // Init TxData with capacity=100
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1503,7 +1447,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
       .signers([authority])
       .rpc();
 
-    // Write 200 bytes at offset 0 (exceeds capacity of 100)
     try {
       await program.methods
         .txdataWrite(uploadId, 0, Buffer.alloc(200))
@@ -1535,7 +1478,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 10_000);
 
-    // Init TxData as authority
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1585,7 +1527,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 10_000);
 
-    // Init and write as correct authority
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1606,7 +1547,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
       .signers([authority])
       .rpc();
 
-    // Try settle_from_txdata as wrongAuthority
     try {
       await program.methods
         .settleFromTxdata(uploadId)
@@ -1651,7 +1591,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 10_000);
 
-    // Init TxData (refund defaults to authority.publicKey)
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1663,7 +1602,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
       .signers([authority])
       .rpc();
 
-    // Close with wrong refund address
     try {
       await program.methods
         .txdataClose(uploadId)
@@ -1702,7 +1640,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 50_000);
 
-    // Init TxData
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1714,7 +1651,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
       .signers([authority])
       .rpc();
 
-    // Try close_expired with wrong refund — hits ConstraintAddress before TxDataNotExpired
+    // Hits ConstraintAddress before TxDataNotExpired
     // because Anchor validates account constraints before running the handler body
     try {
       await program.methods
@@ -1737,10 +1674,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     }
   });
 });
-
-// =============================================================================
-// update_expiry_config tests
-// =============================================================================
 
 describe("solana-pa-prototype (update_expiry_config)", () => {
   // 7 days at 400ms/slot — matches SEVEN_DAYS_SLOTS in state.rs
