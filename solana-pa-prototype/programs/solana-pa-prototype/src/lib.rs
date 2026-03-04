@@ -458,7 +458,7 @@ fn execute_settlement<'info>(
     verifier_entry: &AccountInfo<'info>,
     verifier_program: &AccountInfo<'info>,
 ) -> Result<()> {
-    // Validate consumed roots (supports historical roots via PDA markers)
+    // Historical roots are valid if their PDA marker exists.
     for (action_idx, action) in tx.actions.iter().enumerate() {
         for (cu_idx, cu) in action.compliance_units.iter().enumerate() {
             msg!(
@@ -481,7 +481,6 @@ fn execute_settlement<'info>(
 
     let nullifiers = settle::extract_nullifiers(tx);
 
-    // Verify aggregated proof via verifier_router CPI
     require!(tx.aggregation_proof.is_some(), PAError::AggregationRequired);
 
     msg!("Preparing aggregated proof for verification");
@@ -508,14 +507,14 @@ fn execute_settlement<'info>(
 
     delta::verify_delta_proof(tx)?;
 
-    // Emit app data events and EVM parity events for indexing
-    let total_lvi: usize = tx
+    // Events enable off-chain indexers to reconstruct action/transaction data.
+    let total_tag_count: usize = tx
         .actions
         .iter()
         .map(|a| a.logic_verifier_inputs.len())
         .sum();
-    let mut all_tags: Vec<[u8; 32]> = Vec::with_capacity(total_lvi);
-    let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_lvi);
+    let mut all_tags: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
+    let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
 
     for (action_idx, action) in tx.actions.iter().enumerate() {
         msg!("Processing action events: action={}", action_idx);
@@ -537,9 +536,7 @@ fn execute_settlement<'info>(
         all_logic_refs.extend(logic_refs.iter().map(|d| d.to_bytes()));
     }
 
-    // Execute external calls (after proof verification, before state updates).
     // Runs before nullifier/commitment state changes so failures don't leave partial state.
-    // Uses `logic_verifier_inputs.app_data.external_payload` as the execution source.
     #[cfg(not(test))]
     external_calls::execute_external_calls(tx, remaining_accounts, nullifiers.len())
         .map_err(anchor_lang::error::Error::from)?;
@@ -550,7 +547,6 @@ fn execute_settlement<'info>(
         logic_refs: all_logic_refs,
     });
 
-    // Rent for 0-data-byte marker accounts (nullifiers + root marker).
     // Floor at 1 lamport because 0-lamport accounts can be garbage-collected.
     let marker_lamports = Rent::get()?.minimum_balance(0).max(1);
 
@@ -576,7 +572,6 @@ fn execute_settlement<'info>(
         msg!("Created {} nullifier PDAs", nullifiers.len());
     }
 
-    // Append commitments
     let commitments = settle::extract_commitments(tx);
     maybe_grow_account(
         pa_state_info,
@@ -589,12 +584,10 @@ fn execute_settlement<'info>(
         append_to_tree(state, commitment)?;
     }
 
-    // Update root
     let new_root = compute_root_from_frontier(state).to_bytes();
     state.root = new_root;
 
-    // Create root marker for the new root (enables parallel tx construction).
-    // The new root marker is always at the LAST position in remaining_accounts.
+    // Root markers enable parallel transaction construction against historical roots.
     let (expected_pda, _) = root::derive_root_pda(&crate::ID, pa_state_key, &new_root);
     if let Some(last_account) = remaining_accounts.last() {
         if last_account.key == &expected_pda {
@@ -825,7 +818,6 @@ pub struct UpdateExpiryConfig<'info> {
     pub authority: Signer<'info>,
 }
 
-/// Resource payload event - emitted for resource data blobs.
 #[event]
 pub struct ResourcePayloadEvent {
     pub tag: [u8; 32],
@@ -833,7 +825,6 @@ pub struct ResourcePayloadEvent {
     pub blob: Vec<u8>,
 }
 
-/// Discovery payload event - emitted for public key discovery data.
 #[event]
 pub struct DiscoveryPayloadEvent {
     pub tag: [u8; 32],
@@ -841,7 +832,6 @@ pub struct DiscoveryPayloadEvent {
     pub blob: Vec<u8>,
 }
 
-/// External payload event - emitted for external call data.
 #[event]
 pub struct ExternalPayloadEvent {
     pub tag: [u8; 32],
@@ -849,7 +839,6 @@ pub struct ExternalPayloadEvent {
     pub blob: Vec<u8>,
 }
 
-/// Application payload event - emitted for application-specific data.
 #[event]
 pub struct ApplicationPayloadEvent {
     pub tag: [u8; 32],
@@ -857,7 +846,6 @@ pub struct ApplicationPayloadEvent {
     pub blob: Vec<u8>,
 }
 
-/// Action executed event - emitted after each action is processed.
 /// Matches EVM PA's ActionExecuted event.
 #[event]
 pub struct ActionExecutedEvent {
@@ -865,7 +853,6 @@ pub struct ActionExecutedEvent {
     pub action_tag_count: u32,
 }
 
-/// Transaction executed event - emitted after full transaction settlement.
 /// Matches EVM PA's TransactionExecuted event.
 #[event]
 pub struct TransactionExecutedEvent {
@@ -873,7 +860,6 @@ pub struct TransactionExecutedEvent {
     pub logic_refs: Vec<[u8; 32]>,
 }
 
-/// Forwarder call executed event - emitted for each external call.
 /// Matches EVM PA's ForwarderCallExecuted event.
 #[event]
 pub struct ForwarderCallExecutedEvent {
@@ -881,9 +867,6 @@ pub struct ForwarderCallExecutedEvent {
     pub input: Vec<u8>,
     pub output: Vec<u8>,
 }
-
-/// Deletion criterion constant - only emit payloads marked as "Never" delete.
-const DELETION_CRITERION_NEVER: u32 = 1;
 
 fn emit_app_data_events(tag: &types::Digest, app_data: &types::AppData) {
     let tag_bytes = tag.to_bytes();

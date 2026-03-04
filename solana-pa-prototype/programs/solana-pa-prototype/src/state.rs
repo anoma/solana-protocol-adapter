@@ -106,3 +106,7 @@ pub const MIN_EXPIRY_SLOTS: u64 = 100;
 pub const MAX_EXPIRY_SLOTS: u64 = 216_000;
 /// Hard ceiling for `max_expiry_slots` configuration (~7 days at 400ms/slot).
 pub const SEVEN_DAYS_SLOTS: u64 = 7 * 24 * 60 * 60 * 1000 / 400;
+
+/// Anoma protocol deletion criterion value meaning "never delete."
+/// Payloads with this criterion are emitted as on-chain events for permanent indexing.
+pub const DELETION_CRITERION_NEVER: u32 = 1;
