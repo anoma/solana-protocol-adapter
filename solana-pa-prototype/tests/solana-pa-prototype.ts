@@ -82,6 +82,21 @@ function errorHaystack(e: any): string {
   return [msg, ...logs].join("\n");
 }
 
+// Poll getSlot() until slot exceeds target. Used by TxData expiration tests.
+async function waitForSlotPast(
+  connection: anchor.web3.Connection,
+  targetSlot: number,
+  timeoutMs: number = 30000
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const slot = await connection.getSlot("confirmed");
+    if (slot > targetSlot) return;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error(`Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`);
+}
+
 describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -422,6 +437,360 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
         haystack,
         /ExternalCallOutputMismatch|external call output mismatch/i,
         "Should fail with ExternalCallOutputMismatch error"
+      );
+    }
+  });
+});
+
+// =============================================================================
+// Re-initialization guard
+// =============================================================================
+
+describe("solana-pa-prototype (Re-initialization guard)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+
+  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+
+  it("rejects re-initialization of PAState", async () => {
+    // PAState was already initialized in the E2E before() hook.
+    // A second initialize call must fail because the account already exists.
+    const genesisRootMarkerPda = PublicKey.findProgramAddressSync(
+      [ROOT_SEED, paState.toBuffer(), EMPTY_TREE_ROOT_INITIAL],
+      program.programId
+    )[0];
+
+    try {
+      await program.methods
+        .initialize()
+        .accounts({
+          paState,
+          payer: provider.wallet.publicKey,
+          systemProgram: SystemProgram.programId,
+        })
+        .remainingAccounts([
+          { pubkey: genesisRootMarkerPda, isWritable: true, isSigner: false },
+        ])
+        .rpc();
+      assert.fail("expected re-initialization to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      // Anchor's init constraint rejects when the account already exists
+      assert.match(
+        haystack,
+        /already in use|already been initialized|0x0/i,
+        `Expected 'already in use' error, got: ${haystack}`
+      );
+    }
+  });
+});
+
+// =============================================================================
+// Direct settle instruction and duplicate nullifier
+// =============================================================================
+
+describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+
+  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+
+  const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
+  const fixture = readJson<Fixture>(fixturePath);
+
+  const groth16VerifierId = GROTH16_VERIFIER_ID;
+  const verifierRouterId = VERIFIER_ROUTER_ID;
+  const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
+
+  let routerPda: PublicKey;
+  let verifierEntryPda: PublicKey;
+
+  const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
+
+  before(async () => {
+    [routerPda] = getRouterPda(verifierRouterId);
+    [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, verifierRouterId);
+  });
+
+  it("rejects garbage transaction_data via settle", async () => {
+    const payer = Keypair.generate();
+    await airdrop(provider, payer.publicKey, 2);
+
+    try {
+      await program.methods
+        .settle(Buffer.from([0, 1, 2, 3]))
+        .accounts({
+          paState,
+          payer: payer.publicKey,
+          systemProgram: SystemProgram.programId,
+          verifierRouterProgram: verifierRouterId,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: groth16VerifierId,
+        })
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+        ])
+        .signers([payer])
+        .rpc();
+      assert.fail("expected settle with garbage data to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /InvalidTransactionData|Invalid transaction data/i,
+        `Expected InvalidTransactionData, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects duplicate nullifier (double-spend) via settle_from_txdata", async () => {
+    // T-06 already consumed the fixture's nullifiers. Re-uploading the same tx
+    // to a fresh TxData and trying to settle must fail at nullifier creation
+    // because those nullifier PDAs already exist.
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const tx = Buffer.from(fixture.tx_b64, "base64");
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
+
+    // Init TxData
+    await program.methods
+      .txdataInit(uploadId, tx.length, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Write payload in chunks
+    const chunkSize = 700;
+    for (let offset = 0; offset < tx.length; offset += chunkSize) {
+      const chunk = tx.subarray(offset, Math.min(tx.length, offset + chunkSize));
+      await program.methods
+        .txdataWrite(uploadId, offset, chunk)
+        .accounts({
+          txData,
+          authority: authority.publicKey,
+        })
+        .signers([authority])
+        .rpc();
+    }
+
+    // Build remaining accounts with the SAME nullifier PDAs (already created by T-06)
+    const nullifierPdas = fixture.consumed_nullifiers_b64.map((nfB64) => {
+      const nf = Buffer.from(nfB64, "base64");
+      return PublicKey.findProgramAddressSync(
+        [NULLIFIER_SEED, paState.toBuffer(), nf],
+        program.programId
+      )[0];
+    });
+
+    const nullifierAccounts = nullifierPdas.map((pubkey) => ({
+      pubkey,
+      isWritable: true,
+      isSigner: false,
+    }));
+
+    const allRemainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+
+    try {
+      await program.methods
+        .settleFromTxdata(uploadId)
+        .accounts({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          verifierRouterProgram: verifierRouterId,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: groth16VerifierId,
+        })
+        .remainingAccounts(allRemainingAccounts)
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+        ])
+        .signers([authority])
+        .rpc();
+      assert.fail("expected duplicate nullifier to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /DuplicateNullifier|duplicate nullifier|already in use/i,
+        `Expected DuplicateNullifier, got: ${haystack}`
+      );
+    }
+  });
+});
+
+// =============================================================================
+// Settle error paths
+// =============================================================================
+
+describe("solana-pa-prototype (Settle error paths)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+
+  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+
+  const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
+  const fixture = readJson<Fixture>(fixturePath);
+
+  const groth16VerifierId = GROTH16_VERIFIER_ID;
+  const verifierRouterId = VERIFIER_ROUTER_ID;
+  const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
+
+  let routerPda: PublicKey;
+  let verifierEntryPda: PublicKey;
+
+  before(async () => {
+    [routerPda] = getRouterPda(verifierRouterId);
+    [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, verifierRouterId);
+  });
+
+  it("rejects wrong verifier_router_program address", async () => {
+    const payer = Keypair.generate();
+    await airdrop(provider, payer.publicKey, 2);
+
+    const fakeRouter = Keypair.generate().publicKey;
+
+    try {
+      await program.methods
+        .settle(Buffer.from([0, 1, 2, 3]))
+        .accounts({
+          paState,
+          payer: payer.publicKey,
+          systemProgram: SystemProgram.programId,
+          verifierRouterProgram: fakeRouter,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: groth16VerifierId,
+        })
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ])
+        .signers([payer])
+        .rpc();
+      assert.fail("expected wrong verifier_router_program to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /ConstraintAddress|address constraint/i,
+        `Expected ConstraintAddress, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects insufficient remaining_accounts for nullifiers", async () => {
+    // Upload the fixture but pass zero nullifier accounts.
+    // The program expects 1 nullifier PDA in remaining_accounts.
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const mismatchFixturePath = path.resolve(
+      process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json"
+    );
+    const mismatchFixture = readJson<Fixture>(mismatchFixturePath);
+    const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
+
+    const { uploadId, uploadIdLe } = freshUploadId();
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
+
+    await program.methods
+      .txdataInit(uploadId, mismatchTx.length, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    const chunkSize = 700;
+    for (let offset = 0; offset < mismatchTx.length; offset += chunkSize) {
+      const chunk = mismatchTx.subarray(offset, Math.min(mismatchTx.length, offset + chunkSize));
+      await program.methods
+        .txdataWrite(uploadId, offset, chunk)
+        .accounts({
+          txData,
+          authority: authority.publicKey,
+        })
+        .signers([authority])
+        .rpc();
+    }
+
+    const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
+
+    // Pass ZERO nullifier accounts but still include forwarder+clock
+    const allRemainingAccounts = [
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+
+    try {
+      await program.methods
+        .settleFromTxdata(uploadId)
+        .accounts({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          verifierRouterProgram: verifierRouterId,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: groth16VerifierId,
+        })
+        .remainingAccounts(allRemainingAccounts)
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+        ])
+        .signers([authority])
+        .rpc();
+      assert.fail("expected insufficient remaining_accounts to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      // With zero nullifier accounts, the program consumes what would be
+      // the forwarder/clock slots as nullifier PDAs, then can't find the
+      // forwarder in the remaining accounts. This manifests as
+      // UnregisteredForwarder or NullifierPdaMismatch.
+      assert.match(
+        haystack,
+        /NullifierPdaMismatch|UnregisteredForwarder|InvalidTransactionData|index out of bounds|panicked/i,
+        `Expected remaining_accounts error, got: ${haystack}`
       );
     }
   });
@@ -1146,5 +1515,989 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
     const invalidConfigError = idl.errors?.find((e: any) => e.name === "InvalidExpiryConfig");
     assert.ok(invalidConfigError, "InvalidExpiryConfig error should exist in IDL");
+  });
+});
+
+// =============================================================================
+// TxData authority and bounds checks
+// =============================================================================
+
+describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+
+  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+
+  it("rejects txdata_write that exceeds payload capacity", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
+
+    // Init TxData with capacity=100
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Write 200 bytes at offset 0 (exceeds capacity of 100)
+    try {
+      await program.methods
+        .txdataWrite(uploadId, 0, Buffer.alloc(200))
+        .accounts({
+          txData,
+          authority: authority.publicKey,
+        })
+        .signers([authority])
+        .rpc();
+      assert.fail("expected txdata_write to fail with TxDataBoundsExceeded");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /TxDataBoundsExceeded|exceeds payload/i,
+        `Expected TxDataBoundsExceeded, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects txdata_write from wrong authority", async () => {
+    const authority = Keypair.generate();
+    const wrongAuthority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+    await airdrop(provider, wrongAuthority.publicKey, 1);
+
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
+
+    // Init TxData as authority
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Try to write as wrongAuthority — seed derivation uses signer's key,
+    // which produces a different PDA, causing ConstraintSeeds
+    try {
+      await program.methods
+        .txdataWrite(uploadId, 0, Buffer.alloc(10))
+        .accounts({
+          txData,
+          authority: wrongAuthority.publicKey,
+        })
+        .signers([wrongAuthority])
+        .rpc();
+      assert.fail("expected txdata_write from wrong authority to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint/i,
+        `Expected authority constraint error, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects settle_from_txdata from wrong authority", async () => {
+    const authority = Keypair.generate();
+    const wrongAuthority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+    await airdrop(provider, wrongAuthority.publicKey, 2);
+
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
+
+    // Init and write as correct authority
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    await program.methods
+      .txdataWrite(uploadId, 0, Buffer.alloc(50))
+      .accounts({
+        txData,
+        authority: authority.publicKey,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Try settle_from_txdata as wrongAuthority
+    const GROTH16_SELECTOR = parseSelectorFromFixture(
+      readJson<Fixture>(path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json")).selector
+    );
+    const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
+    const [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, VERIFIER_ROUTER_ID);
+
+    try {
+      await program.methods
+        .settleFromTxdata(uploadId)
+        .accounts({
+          paState,
+          txData,
+          authority: wrongAuthority.publicKey,
+          systemProgram: SystemProgram.programId,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: GROTH16_VERIFIER_ID,
+        })
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ])
+        .signers([wrongAuthority])
+        .rpc();
+      assert.fail("expected settle_from_txdata from wrong authority to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint|Unauthorized/i,
+        `Expected authority constraint error, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects txdata_close with wrong refund address", async () => {
+    const authority = Keypair.generate();
+    const otherPubkey = Keypair.generate().publicKey;
+    await airdrop(provider, authority.publicKey, 2);
+
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
+
+    // Init TxData (refund defaults to authority.publicKey)
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Close with wrong refund address
+    try {
+      await program.methods
+        .txdataClose(uploadId)
+        .accounts({
+          txData,
+          authority: authority.publicKey,
+          refund: otherPubkey,
+        })
+        .signers([authority])
+        .rpc();
+      assert.fail("expected txdata_close with wrong refund to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /ConstraintAddress|address constraint/i,
+        `Expected ConstraintAddress, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects txdata_close_expired with wrong refund address", async () => {
+    const authority = Keypair.generate();
+    const cleaner = Keypair.generate();
+    const wrongRefund = Keypair.generate().publicKey;
+    await airdrop(provider, authority.publicKey, 2);
+    await airdrop(provider, cleaner.publicKey, 1);
+
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 50_000);
+
+    // Init TxData
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Try close_expired with wrong refund — hits ConstraintAddress before TxDataNotExpired
+    // because Anchor validates account constraints before running the handler body
+    try {
+      await program.methods
+        .txdataCloseExpired(uploadId, authority.publicKey)
+        .accountsStrict({
+          txData,
+          payer: cleaner.publicKey,
+          refund: wrongRefund,
+        })
+        .signers([cleaner])
+        .rpc();
+      assert.fail("expected txdata_close_expired with wrong refund to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /ConstraintAddress|address constraint/i,
+        `Expected ConstraintAddress, got: ${haystack}`
+      );
+    }
+  });
+});
+
+// =============================================================================
+// update_expiry_config tests
+// =============================================================================
+
+describe("solana-pa-prototype (update_expiry_config)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+
+  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+
+  const SEVEN_DAYS_SLOTS = 7 * 24 * 60 * 60 * 1000 / 400; // 1_512_000
+
+  it("updates expiry config successfully", async () => {
+    await program.methods
+      .updateExpiryConfig(new anchor.BN(50), new anchor.BN(5000))
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.equal(
+      state.minExpirySlots.toNumber(),
+      50,
+      "min_expiry_slots should be 50"
+    );
+    assert.equal(
+      state.maxExpirySlots.toNumber(),
+      5000,
+      "max_expiry_slots should be 5000"
+    );
+  });
+
+  it("rejects min >= max", async () => {
+    try {
+      await program.methods
+        .updateExpiryConfig(new anchor.BN(5000), new anchor.BN(100))
+        .accounts({
+          paState,
+          authority: provider.wallet.publicKey,
+        })
+        .rpc();
+      assert.fail("expected update_expiry_config with min >= max to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /InvalidExpiryConfig|Invalid expiry config/i,
+        `Expected InvalidExpiryConfig, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects min < 10", async () => {
+    try {
+      await program.methods
+        .updateExpiryConfig(new anchor.BN(5), new anchor.BN(1000))
+        .accounts({
+          paState,
+          authority: provider.wallet.publicKey,
+        })
+        .rpc();
+      assert.fail("expected update_expiry_config with min < 10 to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /InvalidExpiryConfig|Invalid expiry config/i,
+        `Expected InvalidExpiryConfig, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects max > SEVEN_DAYS_SLOTS", async () => {
+    try {
+      await program.methods
+        .updateExpiryConfig(new anchor.BN(50), new anchor.BN(SEVEN_DAYS_SLOTS + 1))
+        .accounts({
+          paState,
+          authority: provider.wallet.publicKey,
+        })
+        .rpc();
+      assert.fail("expected update_expiry_config with max > SEVEN_DAYS_SLOTS to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /InvalidExpiryConfig|Invalid expiry config/i,
+        `Expected InvalidExpiryConfig, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects wrong authority", async () => {
+    const nonAuthority = Keypair.generate();
+    await airdrop(provider, nonAuthority.publicKey, 1);
+
+    try {
+      await program.methods
+        .updateExpiryConfig(new anchor.BN(50), new anchor.BN(5000))
+        .accounts({
+          paState,
+          authority: nonAuthority.publicKey,
+        })
+        .signers([nonAuthority])
+        .rpc();
+      assert.fail("expected update_expiry_config from wrong authority to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /ConstraintHasOne|has.?one|Unauthorized/i,
+        `Expected authority constraint error, got: ${haystack}`
+      );
+    }
+  });
+
+  it("restores default config", async () => {
+    await program.methods
+      .updateExpiryConfig(new anchor.BN(100), new anchor.BN(216_000))
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.equal(state.minExpirySlots.toNumber(), 100, "min_expiry_slots should be restored to 100");
+    assert.equal(state.maxExpirySlots.toNumber(), 216_000, "max_expiry_slots should be restored to 216_000");
+  });
+});
+
+// =============================================================================
+// TxData expiration enforcement
+// =============================================================================
+
+describe("solana-pa-prototype (TxData expiration enforcement)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+
+  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+
+  const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
+  const fixture = readJson<Fixture>(fixturePath);
+
+  const groth16VerifierId = GROTH16_VERIFIER_ID;
+  const verifierRouterId = VERIFIER_ROUTER_ID;
+  const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
+
+  let routerPda: PublicKey;
+  let verifierEntryPda: PublicKey;
+
+  const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
+
+  before(async () => {
+    [routerPda] = getRouterPda(verifierRouterId);
+    [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, verifierRouterId);
+
+    // Lower min_expiry_slots to 10 so we can create short-lived TxData
+    await program.methods
+      .updateExpiryConfig(new anchor.BN(10), new anchor.BN(216_000))
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+  });
+
+  after(async () => {
+    // Restore default config
+    await program.methods
+      .updateExpiryConfig(new anchor.BN(100), new anchor.BN(216_000))
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+  });
+
+  it("rejects txdata_write on expired TxData", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 12);
+
+    // Create TxData with short expiry
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Write some data while still valid
+    await program.methods
+      .txdataWrite(uploadId, 0, Buffer.alloc(10))
+      .accounts({
+        txData,
+        authority: authority.publicKey,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Wait for expiry
+    await waitForSlotPast(provider.connection, expiresSlot.toNumber());
+
+    // Try to write again after expiry
+    try {
+      await program.methods
+        .txdataWrite(uploadId, 10, Buffer.alloc(10))
+        .accounts({
+          txData,
+          authority: authority.publicKey,
+        })
+        .signers([authority])
+        .rpc();
+      assert.fail("expected txdata_write on expired TxData to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /TxDataExpired|has expired/i,
+        `Expected TxDataExpired, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects settle_from_txdata on expired TxData", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const tx = Buffer.from(fixture.tx_b64, "base64");
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 12);
+
+    // Create TxData with short expiry and write fixture data
+    await program.methods
+      .txdataInit(uploadId, tx.length, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    const chunkSize = 700;
+    for (let offset = 0; offset < tx.length; offset += chunkSize) {
+      const chunk = tx.subarray(offset, Math.min(tx.length, offset + chunkSize));
+      await program.methods
+        .txdataWrite(uploadId, offset, chunk)
+        .accounts({
+          txData,
+          authority: authority.publicKey,
+        })
+        .signers([authority])
+        .rpc();
+    }
+
+    // Wait for expiry
+    await waitForSlotPast(provider.connection, expiresSlot.toNumber());
+
+    // Try to settle after expiry
+    const nullifierPdas = fixture.consumed_nullifiers_b64.map((nfB64) => {
+      const nf = Buffer.from(nfB64, "base64");
+      return PublicKey.findProgramAddressSync(
+        [NULLIFIER_SEED, paState.toBuffer(), nf],
+        program.programId
+      )[0];
+    });
+
+    const nullifierAccounts = nullifierPdas.map((pubkey) => ({
+      pubkey,
+      isWritable: true,
+      isSigner: false,
+    }));
+
+    const allRemainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+
+    try {
+      await program.methods
+        .settleFromTxdata(uploadId)
+        .accounts({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          verifierRouterProgram: verifierRouterId,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: groth16VerifierId,
+        })
+        .remainingAccounts(allRemainingAccounts)
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+        ])
+        .signers([authority])
+        .rpc();
+      assert.fail("expected settle_from_txdata on expired TxData to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /TxDataExpired|has expired/i,
+        `Expected TxDataExpired, got: ${haystack}`
+      );
+    }
+  });
+
+  it("allows permissionless close of expired TxData", async () => {
+    const authority = Keypair.generate();
+    const cleaner = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+    await airdrop(provider, cleaner.publicKey, 1);
+
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 12);
+
+    // Create TxData with short expiry
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Verify it exists
+    const before = await provider.connection.getAccountInfo(txData);
+    assert.ok(before, "TxData should exist before close");
+
+    // Get refund balance before
+    const refundBalanceBefore = await provider.connection.getBalance(authority.publicKey);
+
+    // Wait for expiry
+    await waitForSlotPast(provider.connection, expiresSlot.toNumber());
+
+    // Third-party (cleaner) calls txdata_close_expired — permissionless
+    await program.methods
+      .txdataCloseExpired(uploadId, authority.publicKey)
+      .accountsStrict({
+        txData,
+        payer: cleaner.publicKey,
+        refund: authority.publicKey,
+      })
+      .signers([cleaner])
+      .rpc();
+
+    // Verify TxData no longer exists
+    const after = await provider.connection.getAccountInfo(txData);
+    assert.ok(!after, "TxData should not exist after close_expired");
+
+    // Verify refund was sent to authority (not cleaner)
+    const refundBalanceAfter = await provider.connection.getBalance(authority.publicKey);
+    assert.ok(
+      refundBalanceAfter > refundBalanceBefore,
+      "Authority balance should increase after expired close (rent refund)"
+    );
+  });
+
+  it("rejects txdata_extend with expires_slot too soon", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 12);
+
+    // Create TxData
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Wait for the original expiry to pass so the extend would need to
+    // satisfy bounds from current slot. Then try extending to current_slot + 5
+    // which is below min_expiry_slots=10.
+    await waitForSlotPast(provider.connection, expiresSlot.toNumber());
+
+    const currentSlot = await provider.connection.getSlot("confirmed");
+    const tooSoonExpiry = new anchor.BN(currentSlot + 5);
+
+    try {
+      await program.methods
+        .txdataExtend(uploadId, tooSoonExpiry)
+        .accountsStrict({
+          paState,
+          txData,
+          authority: authority.publicKey,
+        })
+        .signers([authority])
+        .rpc();
+      assert.fail("expected txdata_extend with expires_slot too soon to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /TxDataExpiryTooSoon|expires_slot is below minimum/i,
+        `Expected TxDataExpiryTooSoon, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects txdata_extend with expires_slot too late", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 1000);
+
+    // Create TxData with valid expiry
+    await program.methods
+      .txdataInit(uploadId, 100, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    // Extend to way beyond max_expiry_slots (216_000)
+    const currentSlot = await provider.connection.getSlot("confirmed");
+    const tooLateExpiry = new anchor.BN(currentSlot + 216_000 + 100_000);
+
+    try {
+      await program.methods
+        .txdataExtend(uploadId, tooLateExpiry)
+        .accountsStrict({
+          paState,
+          txData,
+          authority: authority.publicKey,
+        })
+        .signers([authority])
+        .rpc();
+      assert.fail("expected txdata_extend with expires_slot too late to fail");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /TxDataExpiryTooLate|expires_slot exceeds maximum/i,
+        `Expected TxDataExpiryTooLate, got: ${haystack}`
+      );
+    }
+  });
+});
+
+// =============================================================================
+// Emergency Stop E2E (MUST BE LAST — irreversible)
+// =============================================================================
+// Once emergency_stop is called, PAState is permanently paused. No further
+// settle operations can succeed. This block MUST be the last describe in the file.
+
+describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
+  const provider = anchor.AnchorProvider.env();
+  anchor.setProvider(provider);
+
+  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+
+  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+
+  const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
+  const fixture = readJson<Fixture>(fixturePath);
+
+  const groth16VerifierId = GROTH16_VERIFIER_ID;
+  const verifierRouterId = VERIFIER_ROUTER_ID;
+  const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
+
+  let routerPda: PublicKey;
+  let verifierEntryPda: PublicKey;
+
+  const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
+
+  before(async () => {
+    [routerPda] = getRouterPda(verifierRouterId);
+    [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, verifierRouterId);
+  });
+
+  it("emergency_stop pauses protocol", async () => {
+    const stateBefore = await program.account.paStateAccount.fetch(paState);
+    assert.equal(stateBefore.paused, false, "Should be unpaused before emergency_stop");
+
+    await program.methods
+      .emergencyStop()
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    const stateAfter = await program.account.paStateAccount.fetch(paState);
+    assert.equal(stateAfter.paused, true, "Should be paused after emergency_stop");
+  });
+
+  it("rejects emergency_stop when already paused", async () => {
+    try {
+      await program.methods
+        .emergencyStop()
+        .accounts({
+          paState,
+          authority: provider.wallet.publicKey,
+        })
+        .rpc();
+      assert.fail("expected emergency_stop to fail when already paused");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /AlreadyPaused|already paused/i,
+        `Expected AlreadyPaused, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects settle when paused", async () => {
+    const payer = Keypair.generate();
+    await airdrop(provider, payer.publicKey, 2);
+
+    // Use a small garbage payload — the paused check fires before deserialization,
+    // so any payload suffices. The full fixture is too large for a single settle instruction.
+    try {
+      await program.methods
+        .settle(Buffer.from([0, 1, 2, 3]))
+        .accounts({
+          paState,
+          payer: payer.publicKey,
+          systemProgram: SystemProgram.programId,
+          verifierRouterProgram: verifierRouterId,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: groth16VerifierId,
+        })
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ])
+        .signers([payer])
+        .rpc();
+      assert.fail("expected settle to fail when paused");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /Paused|paused/i,
+        `Expected Paused error, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects settle_from_txdata when paused", async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority.publicKey, 2);
+
+    const tx = Buffer.from(fixture.tx_b64, "base64");
+    const { uploadId, uploadIdLe } = freshUploadId();
+
+    const [txData] = PublicKey.findProgramAddressSync(
+      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+      program.programId
+    );
+
+    const slot = await provider.connection.getSlot("confirmed");
+    const expiresSlot = new anchor.BN(slot + 10_000);
+
+    // Init and write TxData (these don't check paused state)
+    await program.methods
+      .txdataInit(uploadId, tx.length, expiresSlot)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([authority])
+      .rpc();
+
+    const chunkSize = 700;
+    for (let offset = 0; offset < tx.length; offset += chunkSize) {
+      const chunk = tx.subarray(offset, Math.min(tx.length, offset + chunkSize));
+      await program.methods
+        .txdataWrite(uploadId, offset, chunk)
+        .accounts({
+          txData,
+          authority: authority.publicKey,
+        })
+        .signers([authority])
+        .rpc();
+    }
+
+    const nullifierPdas = fixture.consumed_nullifiers_b64.map((nfB64) => {
+      const nf = Buffer.from(nfB64, "base64");
+      return PublicKey.findProgramAddressSync(
+        [NULLIFIER_SEED, paState.toBuffer(), nf],
+        program.programId
+      )[0];
+    });
+
+    const nullifierAccounts = nullifierPdas.map((pubkey) => ({
+      pubkey,
+      isWritable: true,
+      isSigner: false,
+    }));
+
+    const allRemainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+
+    try {
+      await program.methods
+        .settleFromTxdata(uploadId)
+        .accounts({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          verifierRouterProgram: verifierRouterId,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: groth16VerifierId,
+        })
+        .remainingAccounts(allRemainingAccounts)
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+        ])
+        .signers([authority])
+        .rpc();
+      assert.fail("expected settle_from_txdata to fail when paused");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(
+        haystack,
+        /Paused|paused/i,
+        `Expected Paused error, got: ${haystack}`
+      );
+    }
   });
 });
