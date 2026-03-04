@@ -276,6 +276,7 @@ fn test_create_root_marker_pda_mismatch() {
         &payer,
         &marker,
         &system_program,
+        1,
     );
     assert!(
         result.is_err(),
@@ -338,6 +339,7 @@ fn test_create_root_marker_idempotent_existing() {
         &payer,
         &marker,
         &system_program,
+        1,
     );
     assert!(
         result.is_ok(),

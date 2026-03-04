@@ -78,6 +78,7 @@ pub mod solana_pa_prototype {
 
         // Create root marker for genesis root (so historical root check works from start)
         let genesis_root = state.root;
+        let marker_lamports = Rent::get()?.minimum_balance(0).max(1);
         root::create_root_marker(
             &crate::ID,
             &pa_state_key,
@@ -85,6 +86,7 @@ pub mod solana_pa_prototype {
             &ctx.accounts.payer.to_account_info(),
             &ctx.remaining_accounts[0],
             &ctx.accounts.system_program.to_account_info(),
+            marker_lamports,
         )?;
         msg!("Created genesis root marker");
 
@@ -632,6 +634,10 @@ fn execute_settlement<'info>(
             PAError::InvalidTransactionData
         );
 
+        // Rent for 0-data-byte marker accounts, computed once for all nullifiers.
+        // Floor at 1 lamport because 0-lamport accounts can be garbage-collected.
+        let marker_lamports = Rent::get()?.minimum_balance(0).max(1);
+
         for (i, nullifier) in nullifiers.iter().enumerate() {
             let marker = &remaining_accounts[i];
             let nullifier_bytes = nullifier.to_bytes();
@@ -642,6 +648,7 @@ fn execute_settlement<'info>(
                 payer,
                 marker,
                 system_program,
+                marker_lamports,
             )?;
         }
         msg!("Created {} nullifier PDAs", nullifiers.len());
@@ -669,6 +676,7 @@ fn execute_settlement<'info>(
     let (expected_pda, _) = root::derive_root_pda(&crate::ID, pa_state_key, &new_root);
     if let Some(last_account) = remaining_accounts.last() {
         if last_account.key == &expected_pda {
+            let marker_lamports = Rent::get()?.minimum_balance(0).max(1);
             root::create_root_marker(
                 &crate::ID,
                 pa_state_key,
@@ -676,6 +684,7 @@ fn execute_settlement<'info>(
                 payer,
                 last_account,
                 system_program,
+                marker_lamports,
             )?;
             msg!("Created root marker for new root");
         }

@@ -163,6 +163,7 @@ fn test_nullifier_pda_mismatch() {
         &payer,
         &marker,
         &system_program,
+        1,
     );
     assert!(
         result.is_err(),
@@ -226,6 +227,7 @@ fn test_duplicate_nullifier_detected() {
         &payer,
         &marker,
         &system_program,
+        1,
     );
     assert!(
         result.is_err(),

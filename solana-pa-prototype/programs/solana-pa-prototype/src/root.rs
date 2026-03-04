@@ -20,14 +20,6 @@ use solana_system_interface::instruction as system_instruction;
 pub const ROOT_SEED: &[u8] = b"root";
 
 /// Derive the PDA address for a root marker.
-///
-/// # Arguments
-/// * `program_id` - The PA program ID
-/// * `pa_state` - The PA state account pubkey (included in PDA seeds for scoping)
-/// * `root_bytes` - The 32-byte root digest
-///
-/// # Returns
-/// Tuple of (PDA pubkey, bump seed)
 pub fn derive_root_pda(
     program_id: &Pubkey,
     pa_state: &Pubkey,
@@ -38,20 +30,10 @@ pub fn derive_root_pda(
 
 /// Create a root marker PDA if it doesn't already exist.
 ///
-/// # Arguments
-/// * `program_id` - The PA program ID
-/// * `pa_state_key` - The PA state account pubkey (included in PDA seeds)
-/// * `root_bytes` - The 32-byte root digest
-/// * `payer` - Account paying for PDA creation rent
-/// * `marker` - The root marker account (must match derived PDA)
-/// * `system_program` - System program for CPI
-///
-/// # Returns
-/// Ok(()) if marker was created or already exists (idempotent)
+/// Returns Ok(()) if marker was created or already exists (idempotent).
 ///
 /// # Errors
 /// * `PAError::RootPdaMismatch` - Provided marker doesn't match expected PDA
-/// * CPI errors from `invoke_signed` if account creation fails
 pub fn create_root_marker<'info>(
     program_id: &Pubkey,
     pa_state_key: &Pubkey,
@@ -59,6 +41,7 @@ pub fn create_root_marker<'info>(
     payer: &AccountInfo<'info>,
     marker: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
+    lamports: u64,
 ) -> Result<()> {
     let (expected_key, bump) = derive_root_pda(program_id, pa_state_key, root_bytes);
 
@@ -69,11 +52,6 @@ pub fn create_root_marker<'info>(
     if marker.owner == program_id {
         return Ok(());
     }
-
-    // Create the marker PDA with 0 data bytes (existence = valid root).
-    // NOTE: `minimum_balance(0)` returns the rent-exempt minimum for 0 data bytes.
-    // Floor at 1 lamport because a 0-lamport account can be garbage-collected.
-    let lamports = Rent::get()?.minimum_balance(0).max(1);
 
     let ix = system_instruction::create_account(
         payer.key, marker.key, lamports, 0, // 0 bytes - existence alone indicates valid
@@ -98,20 +76,8 @@ pub fn create_root_marker<'info>(
 
 /// Check if a root is valid for transaction construction.
 ///
-/// A root is valid if:
-/// 1. It matches the current root in PAStateAccount, OR
-/// 2. It equals PADDING_LEAF (ephemeral resources), OR
-/// 3. A root marker PDA exists for it in remaining_accounts
-///
-/// # Arguments
-/// * `state` - The PA state account
-/// * `program_id` - The PA program ID (for PDA derivation)
-/// * `pa_state_key` - The PA state account pubkey
-/// * `root` - The root to check
-/// * `remaining_accounts` - Accounts that may contain root marker PDAs
-///
-/// # Returns
-/// `true` if the root is valid
+/// A root is valid if it matches the current root, equals PADDING_LEAF
+/// (ephemeral resources), or has a root marker PDA in remaining_accounts.
 pub fn is_root_valid(
     state: &PAStateAccount,
     program_id: &Pubkey,
