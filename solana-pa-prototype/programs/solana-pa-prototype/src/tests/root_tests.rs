@@ -1,7 +1,7 @@
 //! Unit tests for root module.
 
 use crate::merkle::PADDING_LEAF;
-use crate::root::{derive_root_pda, is_root_valid, ROOT_SEED};
+use crate::root::{create_root_marker, derive_root_pda, is_root_valid, ROOT_SEED};
 use crate::state::PAStateAccount;
 use crate::tests::utils::create_mock_pa_state;
 use crate::types::Digest;
@@ -213,5 +213,134 @@ fn test_is_root_valid_marker_wrong_owner() {
             &[marker],
         ),
         "Marker with wrong owner should be rejected"
+    );
+}
+
+// =========================================================================
+// CREATE ROOT MARKER GUARD PATH TESTS
+// =========================================================================
+
+#[test]
+fn test_create_root_marker_pda_mismatch() {
+    let program_id = Pubkey::new_unique();
+    let pa_state_key = Pubkey::new_unique();
+    let root_bytes = [0xCC; 32];
+    let system_program_id = anchor_lang::solana_program::system_program::ID;
+
+    // Use a wrong key that doesn't match the derived PDA.
+    let wrong_key = Pubkey::new_unique();
+
+    let mut payer_lamports = 1_000_000u64;
+    let mut payer_data = vec![];
+    let payer = AccountInfo::new(
+        &pa_state_key,
+        true,
+        false,
+        &mut payer_lamports,
+        &mut payer_data,
+        &system_program_id,
+        false,
+        0,
+    );
+
+    let mut marker_lamports = 0u64;
+    let mut marker_data = vec![];
+    let marker = AccountInfo::new(
+        &wrong_key,
+        false,
+        true,
+        &mut marker_lamports,
+        &mut marker_data,
+        &system_program_id,
+        false,
+        0,
+    );
+
+    let mut sys_lamports = 0u64;
+    let mut sys_data = vec![];
+    let system_program = AccountInfo::new(
+        &system_program_id,
+        false,
+        false,
+        &mut sys_lamports,
+        &mut sys_data,
+        &system_program_id,
+        true,
+        0,
+    );
+
+    let result = create_root_marker(
+        &program_id,
+        &pa_state_key,
+        &root_bytes,
+        &payer,
+        &marker,
+        &system_program,
+    );
+    assert!(
+        result.is_err(),
+        "Should fail with RootPdaMismatch when marker key doesn't match derived PDA"
+    );
+}
+
+#[test]
+fn test_create_root_marker_idempotent_existing() {
+    let program_id = Pubkey::new_unique();
+    let pa_state_key = Pubkey::new_unique();
+    let root_bytes = [0xDD; 32];
+    let system_program_id = anchor_lang::solana_program::system_program::ID;
+
+    let (expected_pda, _) = derive_root_pda(&program_id, &pa_state_key, &root_bytes);
+
+    let mut payer_lamports = 1_000_000u64;
+    let mut payer_data = vec![];
+    let payer = AccountInfo::new(
+        &pa_state_key,
+        true,
+        false,
+        &mut payer_lamports,
+        &mut payer_data,
+        &system_program_id,
+        false,
+        0,
+    );
+
+    let mut marker_lamports = 1u64;
+    let mut marker_data = vec![];
+    let marker = AccountInfo::new(
+        &expected_pda,
+        false,
+        true,
+        &mut marker_lamports,
+        &mut marker_data,
+        &program_id, // Already owned by program → idempotent success
+        false,
+        0,
+    );
+
+    let mut sys_lamports = 0u64;
+    let mut sys_data = vec![];
+    let system_program = AccountInfo::new(
+        &system_program_id,
+        false,
+        false,
+        &mut sys_lamports,
+        &mut sys_data,
+        &system_program_id,
+        true,
+        0,
+    );
+
+    let result = create_root_marker(
+        &program_id,
+        &pa_state_key,
+        &root_bytes,
+        &payer,
+        &marker,
+        &system_program,
+    );
+    assert!(
+        result.is_ok(),
+        "Should return Ok when marker already exists (idempotent)"
     );
 }

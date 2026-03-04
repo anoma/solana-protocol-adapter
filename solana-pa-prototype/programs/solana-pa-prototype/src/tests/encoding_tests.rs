@@ -105,7 +105,10 @@ fn test_find_logic_input_not_found() {
     let action = &tx.actions[0];
 
     let missing_tag = Digest::from_bytes([0xFF; 32]);
-    assert!(find_logic_input(&action.logic_verifier_inputs, &missing_tag).is_err());
+    match find_logic_input(&action.logic_verifier_inputs, &missing_tag) {
+        Err(PAError::TagNotFound) => {}
+        other => panic!("Expected TagNotFound, got {:?}", other),
+    }
 }
 
 #[test]
