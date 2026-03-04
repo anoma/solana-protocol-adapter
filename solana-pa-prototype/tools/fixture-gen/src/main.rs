@@ -56,11 +56,18 @@ struct Fixture {
 struct CliArgs {
     threads: Option<usize>,
     debug_assumptions: bool,
-    output_mismatch: bool,
+    forwarder_mode: ForwarderMode,
     nonce_seed: Option<u8>,
     multi_external_call: bool,
     error_variants_dir: Option<PathBuf>,
     out_path: PathBuf,
+}
+
+enum ForwarderMode {
+    BlockTimeForwarder { output_mismatch: bool },
+    TestForwarderFail,
+    TestForwarderSilent,
+    TestForwarderOutputAccount,
 }
 
 /// Extract the Groth16 selector from a transaction's aggregation proof.
@@ -165,6 +172,10 @@ fn decode_base58_32(s: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 
+fn test_forwarder_program_id() -> Result<[u8; 32]> {
+    decode_base58_32("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD")
+}
+
 fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
     // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
     let program_id = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6")?;
@@ -195,8 +206,60 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
     })
 }
 
+fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
+    let call = SolanaExternalCall {
+        program_id: test_forwarder_program_id()?,
+        instruction_data: vec![0x00],
+        expected_output: vec![],
+        output_mode: OutputMode::ReturnData,
+    };
+
+    let call_bytes = bincode::serialize(&call).context("serialize SolanaExternalCall")?;
+    Ok(ExpirableBlob {
+        blob: bytes_to_words(&call_bytes),
+        deletion_criterion: 0,
+    })
+}
+
+fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
+    let call = SolanaExternalCall {
+        program_id: test_forwarder_program_id()?,
+        instruction_data: vec![0x00],
+        expected_output: vec![0x01],
+        output_mode: OutputMode::ReturnData,
+    };
+
+    let call_bytes = bincode::serialize(&call).context("serialize SolanaExternalCall")?;
+    Ok(ExpirableBlob {
+        blob: bytes_to_words(&call_bytes),
+        deletion_criterion: 0,
+    })
+}
+
+fn test_forwarder_output_account_payload_blob(
+    expected_bytes: &[u8],
+    account_index: u8,
+) -> Result<ExpirableBlob> {
+    let call = SolanaExternalCall {
+        program_id: test_forwarder_program_id()?,
+        instruction_data: expected_bytes.to_vec(),
+        expected_output: expected_bytes.to_vec(),
+        output_mode: OutputMode::OutputAccount {
+            index: account_index,
+            offset: 0,
+            len: expected_bytes.len() as u32,
+        },
+    };
+
+    let call_bytes = bincode::serialize(&call).context("serialize SolanaExternalCall")?;
+    Ok(ExpirableBlob {
+        blob: bytes_to_words(&call_bytes),
+        deletion_criterion: 0,
+    })
+}
+
 fn generate_test_transaction_with_external_payload(
-    output_mismatch: bool,
+    forwarder_mode: ForwarderMode,
     nonce_seed: Option<u8>,
     multi_external_call: bool,
 ) -> Result<Transaction> {
@@ -221,6 +284,12 @@ fn generate_test_transaction_with_external_payload(
     // Stable-ish nonce so the fixture is deterministic.
     // Use different nonce for each fixture variant so they have different nullifiers.
     // This prevents DuplicateNullifier errors when running multiple fixtures in a test suite.
+    let output_mismatch = matches!(
+        &forwarder_mode,
+        ForwarderMode::BlockTimeForwarder {
+            output_mismatch: true
+        }
+    );
     let nonce_byte: u8 = nonce_seed.unwrap_or(if output_mismatch { 2 } else { 0 });
     consumed_resource.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
     let consumed_nf = consumed_resource
@@ -250,13 +319,23 @@ fn generate_test_transaction_with_external_payload(
 
     // Create app_data with a real external payload for the consumed logic instance only.
     let mut consumed_app_data = AppData::default();
-    consumed_app_data
-        .external_payload
-        .push(block_time_forwarder_external_payload_blob(output_mismatch)?);
+    let external_blob = match &forwarder_mode {
+        ForwarderMode::BlockTimeForwarder { output_mismatch } => {
+            block_time_forwarder_external_payload_blob(*output_mismatch)?
+        }
+        ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob()?,
+        ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
+        ForwarderMode::TestForwarderOutputAccount => {
+            test_forwarder_output_account_payload_blob(b"\x01\x02\x03\x04", 2)?
+        }
+    };
+    consumed_app_data.external_payload.push(external_blob);
     if multi_external_call {
-        consumed_app_data
-            .external_payload
-            .push(block_time_forwarder_external_payload_blob(false)?);
+        if let ForwarderMode::BlockTimeForwarder { .. } = &forwarder_mode {
+            consumed_app_data
+                .external_payload
+                .push(block_time_forwarder_external_payload_blob(false)?);
+        }
     }
 
     let consumed_instance = LogicInstance {
@@ -393,7 +472,7 @@ fn fmt_duration(d: Duration) -> String {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [--nonce-seed N] [--multi-external-call] [--error-variants DIR] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n  fixture-gen --nonce-seed 7 --multi-external-call /tmp/batch_groth16_multi.json\n  fixture-gen --error-variants tests/fixtures/error_variants tests/fixtures/batch_groth16.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n  - `--nonce-seed` overrides the deterministic nonce byte used to derive nullifiers.\n  - `--multi-external-call` appends a second external call blob to the consumed logic app_data.\n  - `--error-variants` writes wrong_root/no_aggregation/garbage_proof fixtures from the final aggregated tx.\n"
+        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [--forwarder-fail] [--forwarder-silent] [--forwarder-output-account] [--nonce-seed N] [--multi-external-call] [--error-variants DIR] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n  fixture-gen --forwarder-fail tests/fixtures/batch_groth16_forwarder_fail.json\n  fixture-gen --forwarder-silent tests/fixtures/batch_groth16_forwarder_silent.json\n  fixture-gen --forwarder-output-account tests/fixtures/batch_groth16_forwarder_output_account.json\n  fixture-gen --nonce-seed 7 --multi-external-call /tmp/batch_groth16_multi.json\n  fixture-gen --error-variants tests/fixtures/error_variants tests/fixtures/batch_groth16.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a block-time-forwarder fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n  - `--forwarder-fail` uses the test-forwarder with an instruction that fails before output checks.\n  - `--forwarder-silent` uses the test-forwarder with no return data so output comparison fails.\n  - `--forwarder-output-account` uses the test-forwarder with OutputAccount mode.\n  - At most one of `--output-mismatch`, `--forwarder-fail`, `--forwarder-silent`, `--forwarder-output-account` may be set.\n  - `--nonce-seed` overrides the deterministic nonce byte used to derive nullifiers.\n  - `--multi-external-call` appends a second block-time-forwarder external call blob when block-time-forwarder mode is selected.\n  - `--error-variants` writes wrong_root/no_aggregation/garbage_proof fixtures from the final aggregated tx.\n"
     );
 }
 
@@ -402,6 +481,9 @@ fn parse_args() -> Result<CliArgs> {
     let mut threads: Option<usize> = None;
     let mut debug_assumptions = false;
     let mut output_mismatch = false;
+    let mut forwarder_fail = false;
+    let mut forwarder_silent = false;
+    let mut forwarder_output_account = false;
     let mut nonce_seed: Option<u8> = None;
     let mut multi_external_call = false;
     let mut error_variants_dir: Option<PathBuf> = None;
@@ -430,6 +512,15 @@ fn parse_args() -> Result<CliArgs> {
             }
             "--output-mismatch" => {
                 output_mismatch = true;
+            }
+            "--forwarder-fail" => {
+                forwarder_fail = true;
+            }
+            "--forwarder-silent" => {
+                forwarder_silent = true;
+            }
+            "--forwarder-output-account" => {
+                forwarder_output_account = true;
             }
             "--nonce-seed" => {
                 let value = args
@@ -495,10 +586,39 @@ fn parse_args() -> Result<CliArgs> {
     let out_path = out_path
         .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
 
+    let mode_flags = [
+        output_mismatch,
+        forwarder_fail,
+        forwarder_silent,
+        forwarder_output_account,
+    ];
+    let mode_count = mode_flags.iter().filter(|&&f| f).count();
+    if mode_count > 1 {
+        return Err(anyhow!(
+            "at most one of --output-mismatch, --forwarder-fail, --forwarder-silent, --forwarder-output-account may be set"
+        ));
+    }
+
+    let forwarder_mode = if output_mismatch {
+        ForwarderMode::BlockTimeForwarder {
+            output_mismatch: true,
+        }
+    } else if forwarder_fail {
+        ForwarderMode::TestForwarderFail
+    } else if forwarder_silent {
+        ForwarderMode::TestForwarderSilent
+    } else if forwarder_output_account {
+        ForwarderMode::TestForwarderOutputAccount
+    } else {
+        ForwarderMode::BlockTimeForwarder {
+            output_mismatch: false,
+        }
+    };
+
     Ok(CliArgs {
         threads,
         debug_assumptions,
-        output_mismatch,
+        forwarder_mode,
         nonce_seed,
         multi_external_call,
         error_variants_dir,
@@ -511,7 +631,7 @@ fn main() -> Result<()> {
     let CliArgs {
         threads,
         debug_assumptions,
-        output_mismatch,
+        forwarder_mode,
         nonce_seed,
         multi_external_call,
         error_variants_dir,
@@ -532,7 +652,10 @@ fn main() -> Result<()> {
 
     eprintln!("fixture output: {}", out_path.display());
     eprintln!("mode: aggregated (batch Groth16)");
-    if output_mismatch {
+    if let ForwarderMode::BlockTimeForwarder {
+        output_mismatch: true,
+    } = &forwarder_mode
+    {
         eprintln!(
             "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
         );
@@ -550,7 +673,7 @@ fn main() -> Result<()> {
     eprintln!("phase: generate_test_transaction");
     let start = Instant::now();
     let mut tx = generate_test_transaction_with_external_payload(
-        output_mismatch,
+        forwarder_mode,
         nonce_seed,
         multi_external_call,
     )?;
