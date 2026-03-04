@@ -1,5 +1,3 @@
-//! Unit tests for external_calls module.
-
 use crate::external_calls::encode_external_call;
 use crate::settle;
 use crate::tests::utils::{
@@ -8,10 +6,6 @@ use crate::tests::utils::{
     create_transaction_with_multiple_lvi_external_payloads,
 };
 use crate::types::{Digest, ExpirableBlob, OutputMode, SolanaExternalCall};
-
-// =========================================================================
-// EXTRACTION TESTS
-// =========================================================================
 
 #[test]
 fn test_extract_external_calls_empty() {

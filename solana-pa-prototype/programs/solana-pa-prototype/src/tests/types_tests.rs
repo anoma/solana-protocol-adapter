@@ -1,5 +1,3 @@
-//! Unit tests for types module.
-
 use crate::types::ExpirableBlob;
 
 #[test]

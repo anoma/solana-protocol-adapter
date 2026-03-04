@@ -110,3 +110,6 @@ pub const SEVEN_DAYS_SLOTS: u64 = 7 * 24 * 60 * 60 * 1000 / 400;
 /// Anoma protocol deletion criterion value meaning "never delete."
 /// Payloads with this criterion are emitted as on-chain events for permanent indexing.
 pub const DELETION_CRITERION_NEVER: u32 = 1;
+
+const _: () = assert!(MIN_EXPIRY_SLOTS > 0);
+const _: () = assert!(MIN_EXPIRY_SLOTS < MAX_EXPIRY_SLOTS);
