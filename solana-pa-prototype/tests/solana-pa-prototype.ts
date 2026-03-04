@@ -67,6 +67,113 @@ function parseSelectorFromFixture(selectorHex: string): Buffer {
   return Buffer.from(hex, "hex");
 }
 
+// --------------------------------------------------------------------------
+// Module-level shared state (all describe blocks share one test validator)
+// --------------------------------------------------------------------------
+
+const provider = anchor.AnchorProvider.env();
+anchor.setProvider(provider);
+
+const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+
+const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+
+const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
+const fixture = readJson<Fixture>(fixturePath);
+
+const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
+
+const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
+const [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, VERIFIER_ROUTER_ID);
+
+// Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
+const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
+
+function deriveRootPda(root: Buffer): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [ROOT_SEED, paState.toBuffer(), root],
+    program.programId
+  )[0];
+}
+
+function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
+  return nullifierB64s.map((nfB64) => {
+    const nf = Buffer.from(nfB64, "base64");
+    const pubkey = PublicKey.findProgramAddressSync(
+      [NULLIFIER_SEED, paState.toBuffer(), nf],
+      program.programId
+    )[0];
+    return { pubkey, isWritable: true, isSigner: false };
+  });
+}
+
+// Build the full remaining_accounts array for settle/settle_from_txdata.
+function buildSettleRemainingAccounts(
+  nullifierAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+  options?: {
+    additionalHistoricalRootMarkers?: PublicKey[];
+    newRootMarkerPda?: PublicKey;
+  }
+): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
+  const accounts = [
+    ...nullifierAccounts,
+    { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+    { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+  ];
+  if (options?.additionalHistoricalRootMarkers) {
+    for (const marker of options.additionalHistoricalRootMarkers) {
+      accounts.push({ pubkey: marker, isWritable: false, isSigner: false });
+    }
+  }
+  if (options?.newRootMarkerPda) {
+    accounts.push({ pubkey: options.newRootMarkerPda, isWritable: true, isSigner: false });
+  }
+  return accounts;
+}
+
+// Upload a payload to a fresh TxData account via txdata_init + chunked txdata_write.
+async function uploadTxData(
+  authority: Keypair,
+  payload: Buffer,
+  expiresSlotOverride?: anchor.BN
+): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey }> {
+  const { uploadId, uploadIdLe } = freshUploadId();
+
+  const [txData] = PublicKey.findProgramAddressSync(
+    [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+    program.programId
+  );
+
+  const slot = await provider.connection.getSlot("confirmed");
+  const expiresSlot = expiresSlotOverride ?? new anchor.BN(slot + 10_000);
+
+  await program.methods
+    .txdataInit(uploadId, payload.length, expiresSlot)
+    .accounts({
+      paState,
+      txData,
+      authority: authority.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([authority])
+    .rpc();
+
+  const chunkSize = 700;
+  for (let offset = 0; offset < payload.length; offset += chunkSize) {
+    const chunk = payload.subarray(offset, Math.min(payload.length, offset + chunkSize));
+    await program.methods
+      .txdataWrite(uploadId, offset, chunk)
+      .accounts({
+        txData,
+        authority: authority.publicKey,
+      })
+      .signers([authority])
+      .rpc();
+  }
+
+  return { uploadId, uploadIdLe, txData };
+}
+
 // Generate a fresh upload ID and its little-endian encoding for TxData PDA derivation
 function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
   const uploadId = new anchor.BN(Date.now());
@@ -98,50 +205,11 @@ async function waitForSlotPast(
 }
 
 describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
-  const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
-  const fixture = readJson<Fixture>(fixturePath);
-
-  // Use devnet program IDs (downloaded from devnet and deployed to localnet)
-  const groth16VerifierId = GROTH16_VERIFIER_ID;
-  const verifierRouterId = VERIFIER_ROUTER_ID;
-
   const tx = Buffer.from(fixture.tx_b64, "base64");
   const txTampered = Buffer.from(fixture.tx_tampered_b64, "base64");
 
-  // Read selector from fixture metadata (generated by fixture-gen)
-  const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
-
-  // Router and verifier entry PDAs - derived using risc0-solana helpers
-  let routerPda: PublicKey;
-  let verifierEntryPda: PublicKey;
-
-  // Helper to derive root PDA
-  function deriveRootPda(root: Buffer): PublicKey {
-    return PublicKey.findProgramAddressSync(
-      [ROOT_SEED, paState.toBuffer(), root],
-      program.programId
-    )[0];
-  }
-
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
-  const nullifierPdas = fixture.consumed_nullifiers_b64.map((nfB64) => {
-    const nf = Buffer.from(nfB64, "base64");
-    return PublicKey.findProgramAddressSync([NULLIFIER_SEED, paState.toBuffer(), nf], program.programId)[0];
-  });
-
-  const remainingAccounts = nullifierPdas.map((pubkey) => ({
-    pubkey,
-    isWritable: true,
-    isSigner: false,
-  }));
-
-  // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-  const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
+  const remainingAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
+  const nullifierPdas = remainingAccounts.map((a) => a.pubkey);
 
   // Helper to settle with optional overrides for nullifier accounts and root markers
   async function settleViaTxData(
@@ -155,61 +223,12 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   ) {
     await airdrop(provider, authority.publicKey, 2);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
+    const { uploadId, txData } = await uploadTxData(authority, payload);
 
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
+    const allRemainingAccounts = buildSettleRemainingAccounts(
+      options?.nullifierAccounts ?? remainingAccounts,
+      options
     );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
-
-    await program.methods
-      .txdataInit(uploadId, payload.length, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
-
-    const chunkSize = 700;
-    for (let offset = 0; offset < payload.length; offset += chunkSize) {
-      const chunk = payload.subarray(offset, Math.min(payload.length, offset + chunkSize));
-      await program.methods
-        .txdataWrite(uploadId, offset, chunk)
-        .accounts({
-          txData,
-          authority: authority.publicKey,
-        })
-        .signers([authority])
-        .rpc();
-    }
-
-    // Build remaining accounts:
-    // [nullifier PDAs..., external call accounts..., historical root markers..., new root marker PDA]
-    const allRemainingAccounts = [
-      ...(options?.nullifierAccounts ?? remainingAccounts),
-      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
-      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
-    ];
-
-    if (options?.additionalHistoricalRootMarkers) {
-      for (const marker of options.additionalHistoricalRootMarkers) {
-        allRemainingAccounts.push({ pubkey: marker, isWritable: false, isSigner: false });
-      }
-    }
-
-    if (options?.newRootMarkerPda) {
-      allRemainingAccounts.push({
-        pubkey: options.newRootMarkerPda,
-        isWritable: true,
-        isSigner: false,
-      });
-    }
 
     return program.methods
       .settleFromTxdata(uploadId)
@@ -218,10 +237,10 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
         txData,
         authority: authority.publicKey,
         systemProgram: SystemProgram.programId,
-        verifierRouterProgram: verifierRouterId,
+        verifierRouterProgram: VERIFIER_ROUTER_ID,
         router: routerPda,
         verifierEntry: verifierEntryPda,
-        verifierProgram: groth16VerifierId,
+        verifierProgram: GROTH16_VERIFIER_ID,
       })
       .remainingAccounts(allRemainingAccounts)
       .preInstructions([
@@ -236,9 +255,6 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   let genesisRootMarkerPda: PublicKey;
 
   before(async () => {
-    [routerPda] = getRouterPda(verifierRouterId);
-    [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, verifierRouterId);
-
     genesisRootMarkerPda = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
 
     try {
@@ -413,18 +429,12 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     // - timestamp = -1 (past time, forwarder will return RESULT_LT = 0x00)
     // - expected_output = 0x02 (RESULT_GT - intentionally WRONG)
     // The PA should revert with ExternalCallOutputMismatch when actual != expected.
-    const mismatchFixturePath = path.resolve(
-      process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json"
+    const mismatchFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json")
     );
-
-    const mismatchFixture = readJson<Fixture>(mismatchFixturePath);
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
-    const mismatchNullifierAccounts = mismatchFixture.consumed_nullifiers_b64.map((nfB64) => {
-      const nf = Buffer.from(nfB64, "base64");
-      const pubkey = PublicKey.findProgramAddressSync([NULLIFIER_SEED, paState.toBuffer(), nf], program.programId)[0];
-      return { pubkey, isWritable: true, isSigner: false };
-    });
+    const mismatchNullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
 
     try {
       await settleViaTxData(Keypair.generate(), mismatchTx, {
@@ -447,20 +457,10 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
 // =============================================================================
 
 describe("solana-pa-prototype (Re-initialization guard)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
-
   it("rejects re-initialization of PAState", async () => {
     // PAState was already initialized in the E2E before() hook.
     // A second initialize call must fail because the account already exists.
-    const genesisRootMarkerPda = PublicKey.findProgramAddressSync(
-      [ROOT_SEED, paState.toBuffer(), EMPTY_TREE_ROOT_INITIAL],
-      program.programId
-    )[0];
+    const genesisRootMarkerPda = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
 
     try {
       await program.methods
@@ -492,30 +492,6 @@ describe("solana-pa-prototype (Re-initialization guard)", () => {
 // =============================================================================
 
 describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
-
-  const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
-  const fixture = readJson<Fixture>(fixturePath);
-
-  const groth16VerifierId = GROTH16_VERIFIER_ID;
-  const verifierRouterId = VERIFIER_ROUTER_ID;
-  const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
-
-  let routerPda: PublicKey;
-  let verifierEntryPda: PublicKey;
-
-  const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
-
-  before(async () => {
-    [routerPda] = getRouterPda(verifierRouterId);
-    [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, verifierRouterId);
-  });
-
   it("rejects garbage transaction_data via settle", async () => {
     const payer = Keypair.generate();
     await airdrop(provider, payer.publicKey, 2);
@@ -527,10 +503,10 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
-          verifierRouterProgram: verifierRouterId,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: groth16VerifierId,
+          verifierProgram: GROTH16_VERIFIER_ID,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -557,62 +533,11 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     await airdrop(provider, authority.publicKey, 2);
 
     const tx = Buffer.from(fixture.tx_b64, "base64");
-    const { uploadId, uploadIdLe } = freshUploadId();
+    const { uploadId, txData } = await uploadTxData(authority, tx);
 
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
-
-    // Init TxData
-    await program.methods
-      .txdataInit(uploadId, tx.length, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
-
-    // Write payload in chunks
-    const chunkSize = 700;
-    for (let offset = 0; offset < tx.length; offset += chunkSize) {
-      const chunk = tx.subarray(offset, Math.min(tx.length, offset + chunkSize));
-      await program.methods
-        .txdataWrite(uploadId, offset, chunk)
-        .accounts({
-          txData,
-          authority: authority.publicKey,
-        })
-        .signers([authority])
-        .rpc();
-    }
-
-    // Build remaining accounts with the SAME nullifier PDAs (already created by T-06)
-    const nullifierPdas = fixture.consumed_nullifiers_b64.map((nfB64) => {
-      const nf = Buffer.from(nfB64, "base64");
-      return PublicKey.findProgramAddressSync(
-        [NULLIFIER_SEED, paState.toBuffer(), nf],
-        program.programId
-      )[0];
-    });
-
-    const nullifierAccounts = nullifierPdas.map((pubkey) => ({
-      pubkey,
-      isWritable: true,
-      isSigner: false,
-    }));
-
-    const allRemainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
-      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
-    ];
+    // The SAME nullifier PDAs (already created by T-06)
+    const nullifierAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
+    const allRemainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     try {
       await program.methods
@@ -622,10 +547,10 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
-          verifierRouterProgram: verifierRouterId,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: groth16VerifierId,
+          verifierProgram: GROTH16_VERIFIER_ID,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
@@ -651,28 +576,6 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
 // =============================================================================
 
 describe("solana-pa-prototype (Settle error paths)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
-
-  const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
-  const fixture = readJson<Fixture>(fixturePath);
-
-  const groth16VerifierId = GROTH16_VERIFIER_ID;
-  const verifierRouterId = VERIFIER_ROUTER_ID;
-  const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
-
-  let routerPda: PublicKey;
-  let verifierEntryPda: PublicKey;
-
-  before(async () => {
-    [routerPda] = getRouterPda(verifierRouterId);
-    [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, verifierRouterId);
-  });
-
   it("rejects wrong verifier_router_program address", async () => {
     const payer = Keypair.generate();
     await airdrop(provider, payer.publicKey, 2);
@@ -689,7 +592,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
           verifierRouterProgram: fakeRouter,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: groth16VerifierId,
+          verifierProgram: GROTH16_VERIFIER_ID,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -713,52 +616,15 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const mismatchFixturePath = path.resolve(
-      process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json"
+    const mismatchFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json")
     );
-    const mismatchFixture = readJson<Fixture>(mismatchFixturePath);
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
-
-    await program.methods
-      .txdataInit(uploadId, mismatchTx.length, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
-
-    const chunkSize = 700;
-    for (let offset = 0; offset < mismatchTx.length; offset += chunkSize) {
-      const chunk = mismatchTx.subarray(offset, Math.min(mismatchTx.length, offset + chunkSize));
-      await program.methods
-        .txdataWrite(uploadId, offset, chunk)
-        .accounts({
-          txData,
-          authority: authority.publicKey,
-        })
-        .signers([authority])
-        .rpc();
-    }
-
-    const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
+    const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
 
     // Pass ZERO nullifier accounts but still include forwarder+clock
-    const allRemainingAccounts = [
-      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
-      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
-    ];
+    const allRemainingAccounts = buildSettleRemainingAccounts([]);
 
     try {
       await program.methods
@@ -768,10 +634,10 @@ describe("solana-pa-prototype (Settle error paths)", () => {
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
-          verifierRouterProgram: verifierRouterId,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: groth16VerifierId,
+          verifierProgram: GROTH16_VERIFIER_ID,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
@@ -803,13 +669,6 @@ describe("solana-pa-prototype (Settle error paths)", () => {
 // Once paused, recovery requires a program upgrade.
 
 describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
-
   it("stores authority on PAStateAccount after initialize", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.ok(state.authority, "State should have authority field");
@@ -970,11 +829,6 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 });
 
 describe("solana-pa-prototype (Issue #6: Emergency Stop - Destructive)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
   // We can't easily create a second PAState without modifying the program seeds.
   // Instead, we'll test the emergency_stop behavior conceptually by:
   // 1. Skipping the actual pause test (would break other tests)
@@ -1023,14 +877,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop - Destructive)", () => {
 // =============================================================================
 
 describe("solana-pa-prototype (TxData Expiration)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
-
-  // Constants matching Rust (from state.rs)
+  // Constants matching Rust defaults (from state.rs)
   const MIN_EXPIRY_SLOTS = 100;
   const MAX_EXPIRY_SLOTS = 216_000;
 
@@ -1523,12 +1370,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 // =============================================================================
 
 describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
   it("rejects txdata_write that exceeds payload capacity", async () => {
     const authority = Keypair.generate();
@@ -1665,12 +1506,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
       .rpc();
 
     // Try settle_from_txdata as wrongAuthority
-    const GROTH16_SELECTOR = parseSelectorFromFixture(
-      readJson<Fixture>(path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json")).selector
-    );
-    const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
-    const [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, VERIFIER_ROUTER_ID);
-
     try {
       await program.methods
         .settleFromTxdata(uploadId)
@@ -1807,14 +1642,8 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
 // =============================================================================
 
 describe("solana-pa-prototype (update_expiry_config)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
-
-  const SEVEN_DAYS_SLOTS = 7 * 24 * 60 * 60 * 1000 / 400; // 1_512_000
+  // 7 days at 400ms/slot — matches SEVEN_DAYS_SLOTS in state.rs
+  const SEVEN_DAYS_SLOTS = 1_512_000;
 
   it("updates expiry config successfully", async () => {
     await program.methods
@@ -1942,29 +1771,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
 // =============================================================================
 
 describe("solana-pa-prototype (TxData expiration enforcement)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
-
-  const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
-  const fixture = readJson<Fixture>(fixturePath);
-
-  const groth16VerifierId = GROTH16_VERIFIER_ID;
-  const verifierRouterId = VERIFIER_ROUTER_ID;
-  const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
-
-  let routerPda: PublicKey;
-  let verifierEntryPda: PublicKey;
-
-  const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
-
   before(async () => {
-    [routerPda] = getRouterPda(verifierRouterId);
-    [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, verifierRouterId);
-
     // Lower min_expiry_slots to 10 so we can create short-lived TxData
     await program.methods
       .updateExpiryConfig(new anchor.BN(10), new anchor.BN(216_000))
@@ -2051,64 +1858,17 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     await airdrop(provider, authority.publicKey, 2);
 
     const tx = Buffer.from(fixture.tx_b64, "base64");
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 12);
 
-    // Create TxData with short expiry and write fixture data
-    await program.methods
-      .txdataInit(uploadId, tx.length, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
-
-    const chunkSize = 700;
-    for (let offset = 0; offset < tx.length; offset += chunkSize) {
-      const chunk = tx.subarray(offset, Math.min(tx.length, offset + chunkSize));
-      await program.methods
-        .txdataWrite(uploadId, offset, chunk)
-        .accounts({
-          txData,
-          authority: authority.publicKey,
-        })
-        .signers([authority])
-        .rpc();
-    }
+    const { uploadId, txData } = await uploadTxData(authority, tx, expiresSlot);
 
     // Wait for expiry
     await waitForSlotPast(provider.connection, expiresSlot.toNumber());
 
     // Try to settle after expiry
-    const nullifierPdas = fixture.consumed_nullifiers_b64.map((nfB64) => {
-      const nf = Buffer.from(nfB64, "base64");
-      return PublicKey.findProgramAddressSync(
-        [NULLIFIER_SEED, paState.toBuffer(), nf],
-        program.programId
-      )[0];
-    });
-
-    const nullifierAccounts = nullifierPdas.map((pubkey) => ({
-      pubkey,
-      isWritable: true,
-      isSigner: false,
-    }));
-
-    const allRemainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
-      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
-    ];
+    const nullifierAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
+    const allRemainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     try {
       await program.methods
@@ -2118,10 +1878,10 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
-          verifierRouterProgram: verifierRouterId,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: groth16VerifierId,
+          verifierProgram: GROTH16_VERIFIER_ID,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
@@ -2316,30 +2076,6 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 // settle operations can succeed. This block MUST be the last describe in the file.
 
 describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
-
-  const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
-  const fixture = readJson<Fixture>(fixturePath);
-
-  const groth16VerifierId = GROTH16_VERIFIER_ID;
-  const verifierRouterId = VERIFIER_ROUTER_ID;
-  const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
-
-  let routerPda: PublicKey;
-  let verifierEntryPda: PublicKey;
-
-  const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
-
-  before(async () => {
-    [routerPda] = getRouterPda(verifierRouterId);
-    [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, verifierRouterId);
-  });
-
   it("emergency_stop pauses protocol", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     assert.equal(stateBefore.paused, false, "Should be unpaused before emergency_stop");
@@ -2389,10 +2125,10 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
-          verifierRouterProgram: verifierRouterId,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: groth16VerifierId,
+          verifierProgram: GROTH16_VERIFIER_ID,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -2415,60 +2151,12 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
     await airdrop(provider, authority.publicKey, 2);
 
     const tx = Buffer.from(fixture.tx_b64, "base64");
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
 
     // Init and write TxData (these don't check paused state)
-    await program.methods
-      .txdataInit(uploadId, tx.length, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await uploadTxData(authority, tx);
 
-    const chunkSize = 700;
-    for (let offset = 0; offset < tx.length; offset += chunkSize) {
-      const chunk = tx.subarray(offset, Math.min(tx.length, offset + chunkSize));
-      await program.methods
-        .txdataWrite(uploadId, offset, chunk)
-        .accounts({
-          txData,
-          authority: authority.publicKey,
-        })
-        .signers([authority])
-        .rpc();
-    }
-
-    const nullifierPdas = fixture.consumed_nullifiers_b64.map((nfB64) => {
-      const nf = Buffer.from(nfB64, "base64");
-      return PublicKey.findProgramAddressSync(
-        [NULLIFIER_SEED, paState.toBuffer(), nf],
-        program.programId
-      )[0];
-    });
-
-    const nullifierAccounts = nullifierPdas.map((pubkey) => ({
-      pubkey,
-      isWritable: true,
-      isSigner: false,
-    }));
-
-    const allRemainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
-      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
-    ];
+    const nullifierAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
+    const allRemainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     try {
       await program.methods
@@ -2478,10 +2166,10 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
-          verifierRouterProgram: verifierRouterId,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: groth16VerifierId,
+          verifierProgram: GROTH16_VERIFIER_ID,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
