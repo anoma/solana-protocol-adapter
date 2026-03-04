@@ -1,7 +1,4 @@
-//! Property-based tests for Solana Protocol Adapter
-//!
-//! These tests use proptest to verify invariants across randomized inputs,
-//! providing fuzzing parity with the EVM Protocol Adapter's Foundry tests.
+//! Fuzzing parity with the EVM Protocol Adapter's Foundry tests.
 
 pub mod strategies;
 

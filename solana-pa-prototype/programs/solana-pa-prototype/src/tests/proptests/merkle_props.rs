@@ -1,5 +1,3 @@
-//! Property tests for Merkle tree operations.
-
 use super::strategies::arb_digest;
 use crate::merkle::{hash_two, INITIAL_TREE_DEPTH};
 use crate::state::PAStateAccount;
@@ -10,7 +8,6 @@ use proptest::prelude::*;
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
 
-    /// Property: hash_two is deterministic (same inputs → same output).
     #[test]
     fn prop_hash_two_deterministic(left in arb_digest(), right in arb_digest()) {
         let h1 = hash_two(&left, &right);
@@ -18,7 +15,6 @@ proptest! {
         prop_assert_eq!(h1, h2, "hash_two should be deterministic");
     }
 
-    /// Property: hash_two is non-commutative (hash(a,b) ≠ hash(b,a) for a ≠ b).
     #[test]
     fn prop_hash_two_non_commutative(left in arb_digest(), right in arb_digest()) {
         prop_assume!(left != right);
@@ -27,7 +23,6 @@ proptest! {
         prop_assert_ne!(h1, h2, "hash_two should not be commutative");
     }
 
-    /// Property: hash_two output differs from both inputs.
     #[test]
     fn prop_hash_two_differs_from_inputs(left in arb_digest(), right in arb_digest()) {
         let h = hash_two(&left, &right);
@@ -35,7 +30,6 @@ proptest! {
         prop_assert_ne!(h, right, "hash should differ from right input");
     }
 
-    /// Property: distinct leaves produce distinct roots.
     #[test]
     fn prop_distinct_leaves_produce_distinct_roots(
         leaf1 in arb_digest(),
@@ -53,7 +47,6 @@ proptest! {
         );
     }
 
-    /// Property: append increments next_index correctly.
     #[test]
     fn prop_append_increments_index(leaves in prop::collection::vec(arb_digest(), 1..10)) {
         let mut state = create_test_pa_state();
@@ -64,11 +57,6 @@ proptest! {
         prop_assert_eq!(state.next_index, leaves.len() as u64, "final next_index should equal leaf count");
     }
 
-    // =========================================================================
-    // REQUIRED DEPTH CALCULATION TESTS
-    // =========================================================================
-
-    /// Property: required_depth returns sufficient capacity for any leaf count.
     #[test]
     fn prop_required_depth_sufficient_capacity(
         final_next_index in 0u64..1_000_000,
@@ -79,7 +67,6 @@ proptest! {
             "depth {} (capacity {}) should hold {} leaves", depth, capacity, final_next_index);
     }
 
-    /// Property: required_depth is minimal (depth-1 would be insufficient).
     #[test]
     fn prop_required_depth_minimal(
         final_next_index in 2u64..1_000_000,
@@ -92,7 +79,6 @@ proptest! {
         }
     }
 
-    /// Property: Account size matches space_for_depth(current_depth).
     #[test]
     fn prop_account_size_matches_depth(
         current_depth in 1usize..=32usize,
@@ -106,7 +92,6 @@ proptest! {
         );
     }
 
-    /// Property: required_depth always returns at least INITIAL_TREE_DEPTH.
     #[test]
     fn prop_required_depth_at_least_initial(
         final_next_index in 0u64..100,

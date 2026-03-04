@@ -1,5 +1,3 @@
-//! Property tests for external call encoding/decoding.
-
 use super::strategies::{arb_byte_vec, arb_solana_external_call};
 use crate::external_calls::{
     build_forwarder_instruction_data, decode_external_call, encode_external_call, verify_output,
@@ -10,7 +8,6 @@ use proptest::prelude::*;
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
 
-    /// Property: encode followed by decode should return the original call (roundtrip identity).
     #[test]
     fn prop_external_call_encode_decode_roundtrip(call in arb_solana_external_call(256)) {
         let blob = encode_external_call(&call);
@@ -18,7 +15,6 @@ proptest! {
         prop_assert_eq!(call, decoded, "roundtrip should preserve external call");
     }
 
-    /// Property: verify_output succeeds when expected equals actual.
     #[test]
     fn prop_verify_output_equal_succeeds(
         data in arb_byte_vec(512),
@@ -27,7 +23,6 @@ proptest! {
         prop_assert!(result.is_ok(), "verify_output should succeed when expected == actual");
     }
 
-    /// Property: verify_output fails when expected differs from actual (same length).
     #[test]
     fn prop_verify_output_mismatch_fails(
         expected in arb_byte_vec(512).prop_filter("non-empty", |v| !v.is_empty()),
@@ -39,7 +34,6 @@ proptest! {
         prop_assert!(result.is_err(), "verify_output should fail when expected != actual");
     }
 
-    /// Property: verify_output fails when expected and actual have different lengths.
     #[test]
     fn prop_verify_output_length_mismatch_fails(
         expected in arb_byte_vec(512),
@@ -52,11 +46,6 @@ proptest! {
         prop_assert!(result.is_err(), "verify_output should fail when lengths differ");
     }
 
-    /// Property: build_forwarder_instruction_data produces correct layout:
-    /// - First 8 bytes: discriminator
-    /// - Next 32 bytes: logic_ref
-    /// - Next 4 bytes: input length (u32 LE)
-    /// - Remaining bytes: input data
     #[test]
     fn prop_forwarder_ix_data_format(
         logic_ref in prop::array::uniform32(any::<u8>()),

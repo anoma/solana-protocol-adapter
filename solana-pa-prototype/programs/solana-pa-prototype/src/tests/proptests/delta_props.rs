@@ -1,5 +1,3 @@
-//! Property tests for delta verification.
-
 use super::strategies::arb_compliance_instance;
 use crate::delta::verify_delta_proof;
 use crate::tests::utils::build_tx_from_instances;
@@ -9,7 +7,6 @@ use proptest::prelude::*;
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
 
-    /// Property: witness delta_proof is rejected by verify_delta_proof.
     #[test]
     fn prop_witness_rejected(inst in arb_compliance_instance()) {
         let mut tx = build_tx_from_instances(&[inst]);

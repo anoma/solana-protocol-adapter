@@ -1,5 +1,3 @@
-//! Property tests for settlement extraction.
-
 use super::strategies::arb_compliance_instance;
 use crate::settle::{extract_commitments, extract_nullifiers};
 use crate::tests::utils::build_tx_from_instances;
@@ -8,7 +6,6 @@ use proptest::prelude::*;
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
 
-    /// Property: extract_nullifiers preserves CU order.
     #[test]
     fn prop_extract_nullifiers_order(
         inst1 in arb_compliance_instance(),
@@ -25,7 +22,6 @@ proptest! {
         prop_assert_eq!(nullifiers[2], inst3.consumed_nullifier, "third nullifier should match");
     }
 
-    /// Property: extract_commitments preserves CU order.
     #[test]
     fn prop_extract_commitments_order(
         inst1 in arb_compliance_instance(),
@@ -42,7 +38,6 @@ proptest! {
         prop_assert_eq!(commitments[2], inst3.created_commitment, "third commitment should match");
     }
 
-    /// Property: nullifier and commitment count matches CU count.
     #[test]
     fn prop_nullifier_commitment_count_matches_cu_count(
         instances in prop::collection::vec(arb_compliance_instance(), 1..10),
