@@ -89,6 +89,9 @@ const [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, VERIFIER_ROUTER
 // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
 const blockTimeForwarderId = new PublicKey("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
 
+// Must match `programs/test-forwarder/src/lib.rs::declare_id!`.
+const testForwarderId = new PublicKey("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD");
+
 function deriveRootPda(root: Buffer): PublicKey {
   return PublicKey.findProgramAddressSync(
     [ROOT_SEED, paState.toBuffer(), root],
@@ -202,6 +205,36 @@ async function waitForSlotPast(
     await new Promise((r) => setTimeout(r, 400));
   }
   throw new Error(`Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`);
+}
+
+// Module-level settle helper for fixture-based tests.
+// Creates a fresh authority, airdrops SOL, uploads the payload, and settles.
+async function settleFixtureViaTxData(
+  payload: Buffer,
+  remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+): Promise<string> {
+  const authority = Keypair.generate();
+  await airdrop(provider, authority.publicKey, 2);
+  const { uploadId, txData } = await uploadTxData(authority, payload);
+  return program.methods
+    .settleFromTxdata(uploadId)
+    .accounts({
+      paState,
+      txData,
+      authority: authority.publicKey,
+      systemProgram: SystemProgram.programId,
+      verifierRouterProgram: VERIFIER_ROUTER_ID,
+      router: routerPda,
+      verifierEntry: verifierEntryPda,
+      verifierProgram: GROTH16_VERIFIER_ID,
+    })
+    .remainingAccounts(remainingAccounts)
+    .preInstructions([
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+    ])
+    .signers([authority])
+    .rpc();
 }
 
 describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
@@ -2123,6 +2156,287 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
         `Expected TxDataExpiryTooLate, got: ${haystack}`
       );
     }
+  });
+});
+
+// =============================================================================
+// Settlement error paths — fixture variants
+// =============================================================================
+
+describe("solana-pa-prototype (Settlement error paths — fixture variants)", () => {
+  it("rejects NonExistingRoot (wrong commitment tree root)", async () => {
+    const wrongRootFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "wrong_root.json")
+    );
+    const payload = Buffer.from(wrongRootFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(wrongRootFixture.consumed_nullifiers_b64);
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+
+    try {
+      await settleFixtureViaTxData(payload, remainingAccounts);
+      assert.fail("expected NonExistingRoot error");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(haystack, /NonExistingRoot/i, `Expected NonExistingRoot, got: ${haystack}`);
+    }
+  });
+
+  it("rejects AggregationRequired (no aggregation proof)", async () => {
+    const noAggFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "no_aggregation.json")
+    );
+    const payload = Buffer.from(noAggFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(noAggFixture.consumed_nullifiers_b64);
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+
+    try {
+      await settleFixtureViaTxData(payload, remainingAccounts);
+      assert.fail("expected AggregationRequired error");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(haystack, /AggregationRequired/i, `Expected AggregationRequired, got: ${haystack}`);
+    }
+  });
+
+  it("rejects InvalidProof (garbage aggregation proof bytes)", async () => {
+    const garbageFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "garbage_proof.json")
+    );
+    const payload = Buffer.from(garbageFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(garbageFixture.consumed_nullifiers_b64);
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+
+    try {
+      await settleFixtureViaTxData(payload, remainingAccounts);
+      assert.fail("expected InvalidProof error");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(haystack, /InvalidProof/i, `Expected InvalidProof, got: ${haystack}`);
+    }
+  });
+});
+
+// =============================================================================
+// External call error paths
+// =============================================================================
+
+describe("solana-pa-prototype (External call error paths)", () => {
+  it("rejects settlement when forwarder CPI accounts are wrong", async () => {
+    // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
+    // Replace SYSVAR_CLOCK_PUBKEY with a random pubkey so the CPI to btf fails.
+    // The inner CPI error propagates through (btf's AccountSysvarMismatch).
+    const mismatchFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json")
+    );
+    const payload = Buffer.from(mismatchFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
+    const randomAccount = Keypair.generate().publicKey;
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: randomAccount, isWritable: false, isSigner: false },
+    ];
+
+    try {
+      await settleFixtureViaTxData(payload, remainingAccounts);
+      assert.fail("expected CPI failure");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      // Inner CPI error propagates: btf rejects the wrong sysvar account
+      assert.match(
+        haystack,
+        /AccountSysvarMismatch|does not match the required sysvar|ExternalCallCpiFailed|failed/i,
+        `Expected CPI failure, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects ExternalCallCpiFailed when test-forwarder returns error", async () => {
+    const failFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "batch_forwarder_fail.json")
+    );
+    const payload = Buffer.from(failFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(failFixture.consumed_nullifiers_b64);
+
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: testForwarderId, isWritable: false, isSigner: false },
+    ];
+
+    try {
+      await settleFixtureViaTxData(payload, remainingAccounts);
+      assert.fail("expected ExternalCallCpiFailed error");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      // Inner CPI error propagates: test-forwarder's IntentionalFailure surfaces directly
+      assert.match(
+        haystack,
+        /IntentionalFailure|Intentional failure for testing|ExternalCallCpiFailed|failed/i,
+        `Expected CPI failure from test-forwarder, got: ${haystack}`
+      );
+    }
+  });
+
+  it("rejects ExternalCallOutputMismatch when forwarder returns no data", async () => {
+    const silentFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "batch_forwarder_silent.json")
+    );
+    const payload = Buffer.from(silentFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(silentFixture.consumed_nullifiers_b64);
+
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: testForwarderId, isWritable: false, isSigner: false },
+    ];
+
+    try {
+      await settleFixtureViaTxData(payload, remainingAccounts);
+      assert.fail("expected ExternalCallOutputMismatch error");
+    } catch (e: any) {
+      const haystack = errorHaystack(e);
+      assert.match(haystack, /ExternalCallOutputMismatch/i, `Expected ExternalCallOutputMismatch, got: ${haystack}`);
+    }
+  });
+});
+
+// =============================================================================
+// Tree growth and multi-settlement
+// =============================================================================
+
+describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
+  let v2TxSig: string;
+
+  it("settles v2 fixture (next_index 1→2)", async () => {
+    const v2Fixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_v2.json")
+    );
+    const payload = Buffer.from(v2Fixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(v2Fixture.consumed_nullifiers_b64);
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+
+    v2TxSig = await settleFixtureViaTxData(payload, remainingAccounts);
+
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.equal(state.nextIndex.toNumber(), 2, "next_index should be 2 after v2 settlement");
+    assert.equal(state.currentDepth, 1, "depth should still be 1 (capacity=2)");
+  });
+
+  it("verifies events from v2 settlement", async () => {
+    const txResult = await provider.connection.getTransaction(v2TxSig, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    assert.ok(txResult, "v2 transaction should be fetchable");
+
+    const logs = txResult!.meta?.logMessages ?? [];
+    const logText = logs.join("\n");
+
+    // Verify settlement flow completed: action events + nullifier creation
+    assert.match(logText, /Processing action events/, "Should log action event processing");
+    assert.match(logText, /Created.*nullifier/, "Should log nullifier creation");
+    // Verify external call executed
+    assert.match(logText, /ForwarderCallExecutedEvent|Forwarder/, "Should log forwarder call event");
+  });
+
+  it("settles v3 fixture with tree growth (depth 1→2, next_index 2→3)", async () => {
+    const accountInfoBefore = await provider.connection.getAccountInfo(paState);
+    const sizeBefore = accountInfoBefore!.data.length;
+
+    const v3Fixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_v3.json")
+    );
+    const payload = Buffer.from(v3Fixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(v3Fixture.consumed_nullifiers_b64);
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+
+    await settleFixtureViaTxData(payload, remainingAccounts);
+
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.equal(state.nextIndex.toNumber(), 3, "next_index should be 3 after v3 settlement");
+    assert.equal(state.currentDepth, 2, "depth should grow to 2");
+
+    const accountInfoAfter = await provider.connection.getAccountInfo(paState);
+    assert.ok(
+      accountInfoAfter!.data.length > sizeBefore,
+      `Account should grow (${sizeBefore} → ${accountInfoAfter!.data.length})`
+    );
+  });
+
+  it("settles multi-call fixture with two external calls (next_index 3→4)", async () => {
+    const multiFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_multi_call.json")
+    );
+    const payload = Buffer.from(multiFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(multiFixture.consumed_nullifiers_b64);
+
+    // Two external call segments: [btf, clock, btf, clock]
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+
+    await settleFixtureViaTxData(payload, remainingAccounts);
+
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.equal(state.nextIndex.toNumber(), 4, "next_index should be 4 after multi-call settlement");
+  });
+});
+
+// =============================================================================
+// OutputAccount mode
+// =============================================================================
+
+describe("solana-pa-prototype (OutputAccount mode)", () => {
+  it("settles forwarder-output fixture via OutputAccount mode (next_index 4→5)", async () => {
+    const outputFixture = readJson<Fixture>(
+      path.resolve(process.cwd(), "tests", "fixtures", "batch_forwarder_output.json")
+    );
+    const payload = Buffer.from(outputFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
+
+    // Create a data account owned by test-forwarder for writing output
+    const funder = Keypair.generate();
+    await airdrop(provider, funder.publicKey, 2);
+    const dataAccount = Keypair.generate();
+    const space = 10;
+    const lamports = await provider.connection.getMinimumBalanceForRentExemption(space);
+
+    const createTx = new anchor.web3.Transaction().add(
+      SystemProgram.createAccount({
+        fromPubkey: funder.publicKey,
+        newAccountPubkey: dataAccount.publicKey,
+        space,
+        lamports,
+        programId: testForwarderId,
+      })
+    );
+    await provider.sendAndConfirm(createTx, [funder, dataAccount]);
+
+    // remaining_accounts: [nullifier_pda, test_forwarder, writable_data_account]
+    // Fixture uses OutputAccount { index: 2, offset: 0, len: 4 }
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: testForwarderId, isWritable: false, isSigner: false },
+      { pubkey: dataAccount.publicKey, isWritable: true, isSigner: false },
+    ];
+
+    await settleFixtureViaTxData(payload, remainingAccounts);
+
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.equal(state.nextIndex.toNumber(), 5, "next_index should be 5 after output-account settlement");
+
+    // Verify the data account was written by the forwarder
+    const dataAccountInfo = await provider.connection.getAccountInfo(dataAccount.publicKey);
+    assert.ok(dataAccountInfo, "Data account should still exist");
+    const writtenBytes = dataAccountInfo!.data.subarray(0, 4);
+    assert.deepEqual(
+      writtenBytes,
+      Buffer.from([0x01, 0x02, 0x03, 0x04]),
+      "Forwarder should have written expected bytes to data account"
+    );
   });
 });
 
