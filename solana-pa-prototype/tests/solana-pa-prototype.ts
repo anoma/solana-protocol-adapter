@@ -1785,10 +1785,6 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
   });
 });
 
-// =============================================================================
-// TxData expiration enforcement
-// =============================================================================
-
 describe("solana-pa-prototype (TxData expiration enforcement)", () => {
   before(async () => {
     // Lower min_expiry_slots to 10 so we can create short-lived TxData
@@ -1802,7 +1798,6 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
   });
 
   after(async () => {
-    // Restore default config
     await program.methods
       .updateExpiryConfig(new anchor.BN(100), new anchor.BN(216_000))
       .accounts({
@@ -1826,7 +1821,6 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 12);
 
-    // Create TxData with short expiry
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1838,7 +1832,6 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
       .signers([authority])
       .rpc();
 
-    // Write some data while still valid
     await program.methods
       .txdataWrite(uploadId, 0, Buffer.alloc(10))
       .accounts({
@@ -1848,10 +1841,8 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
       .signers([authority])
       .rpc();
 
-    // Wait for expiry
     await waitForSlotPast(provider.connection, expiresSlot.toNumber());
 
-    // Try to write again after expiry
     try {
       await program.methods
         .txdataWrite(uploadId, 10, Buffer.alloc(10))
@@ -1877,10 +1868,8 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
     const { uploadId, txData } = await uploadTxData(authority, tx, expiresSlot);
 
-    // Wait for expiry
     await waitForSlotPast(provider.connection, expiresSlot.toNumber());
 
-    // Try to settle after expiry
     const nullifierAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
     const allRemainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
@@ -1926,7 +1915,6 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 12);
 
-    // Create TxData with short expiry
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -1938,14 +1926,11 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
       .signers([authority])
       .rpc();
 
-    // Verify it exists
     const before = await provider.connection.getAccountInfo(txData);
     assert.ok(before, "TxData should exist before close");
 
-    // Get refund balance before
     const refundBalanceBefore = await provider.connection.getBalance(authority.publicKey);
 
-    // Wait for expiry
     await waitForSlotPast(provider.connection, expiresSlot.toNumber());
 
     // Third-party (cleaner) calls txdata_close_expired — permissionless
@@ -1959,11 +1944,9 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
       .signers([cleaner])
       .rpc();
 
-    // Verify TxData no longer exists
     const after = await provider.connection.getAccountInfo(txData);
     assert.ok(!after, "TxData should not exist after close_expired");
 
-    // Verify refund was sent to authority (not cleaner)
     const refundBalanceAfter = await provider.connection.getBalance(authority.publicKey);
     assert.ok(
       refundBalanceAfter > refundBalanceBefore,
@@ -1985,7 +1968,6 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 12);
 
-    // Create TxData
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -2035,7 +2017,6 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 1000);
 
-    // Create TxData with valid expiry
     await program.methods
       .txdataInit(uploadId, 100, expiresSlot)
       .accounts({
@@ -2047,7 +2028,6 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
       .signers([authority])
       .rpc();
 
-    // Extend to way beyond max_expiry_slots (216_000)
     const currentSlot = await provider.connection.getSlot("confirmed");
     const tooLateExpiry = new anchor.BN(currentSlot + 216_000 + 100_000);
 
@@ -2067,10 +2047,6 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     }
   });
 });
-
-// =============================================================================
-// Settlement error paths — fixture variants
-// =============================================================================
 
 describe("solana-pa-prototype (Settlement error paths — fixture variants)", () => {
   it("rejects NonExistingRoot (wrong commitment tree root)", async () => {
@@ -2121,10 +2097,6 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
     }
   });
 });
-
-// =============================================================================
-// External call error paths
-// =============================================================================
 
 describe("solana-pa-prototype (External call error paths)", () => {
   it("rejects settlement when forwarder CPI accounts are wrong", async () => {
@@ -2204,10 +2176,6 @@ describe("solana-pa-prototype (External call error paths)", () => {
   });
 });
 
-// =============================================================================
-// Tree growth and multi-settlement
-// =============================================================================
-
 describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   let v2TxSig: string;
 
@@ -2238,7 +2206,6 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
     const logs = txResult!.meta?.logMessages ?? [];
 
-    // Decode Anchor events from program logs
     const events = parseAnchorEvents(logs);
 
     // Anchor SDK converts event names to camelCase
@@ -2253,13 +2220,11 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     assert.equal(actionEvents[0].data.actionTagCount, 2,
       "action_tag_count should be 2 (consumed + created)");
 
-    // TransactionExecutedEvent → transactionExecutedEvent
     const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
     assert.equal(txEvents.length, 1, "Should emit exactly one transactionExecutedEvent");
     assert.equal(txEvents[0].data.tags.length, 2, "Should have 2 tags");
     assert.equal(txEvents[0].data.logicRefs.length, 2, "Should have 2 logic_refs");
 
-    // ForwarderCallExecutedEvent → forwarderCallExecutedEvent
     const fwdEvents = events.filter((e) => e.name === "forwarderCallExecutedEvent");
     assert.isAtLeast(fwdEvents.length, 1, "Should emit forwarderCallExecutedEvent");
     assert.ok(
@@ -2332,10 +2297,6 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   });
 });
 
-// =============================================================================
-// OutputAccount mode
-// =============================================================================
-
 describe("solana-pa-prototype (OutputAccount mode)", () => {
   it("settles forwarder-output fixture via OutputAccount mode (next_index 4→5)", async () => {
     const outputFixture = readJson<Fixture>(
@@ -2371,10 +2332,6 @@ describe("solana-pa-prototype (OutputAccount mode)", () => {
     );
   });
 });
-
-// =============================================================================
-// OutputAccount error paths
-// =============================================================================
 
 describe("solana-pa-prototype (OutputAccount error paths)", () => {
   // The forwarder-output fixture uses OutputAccount { index: 2, offset: 0, len: 4 }
@@ -2435,12 +2392,8 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
   });
 });
 
-// =============================================================================
-// Emergency Stop E2E (MUST BE LAST — irreversible)
-// =============================================================================
-// Once emergency_stop is called, PAState is permanently paused. No further
-// settle operations can succeed. This block MUST be the last describe in the file.
-
+// MUST BE LAST: emergency_stop permanently pauses PAState. No further
+// settle operations can succeed after this block runs.
 describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
   it("emergency_stop pauses protocol", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
