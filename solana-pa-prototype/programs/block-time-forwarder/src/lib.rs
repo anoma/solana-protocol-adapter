@@ -15,7 +15,6 @@ use anchor_lang::solana_program::program::set_return_data;
 
 declare_id!("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6");
 
-/// Comparison result constants.
 pub const RESULT_LT: u8 = 0; // expected < current
 pub const RESULT_EQ: u8 = 1; // expected == current
 pub const RESULT_GT: u8 = 2; // expected > current
@@ -24,27 +23,16 @@ pub const RESULT_GT: u8 = 2; // expected > current
 pub mod block_time_forwarder {
     use super::*;
 
-    /// Forward a time comparison call.
-    ///
-    /// # Arguments
-    /// * `logic_ref` - The resource's logic verifying key (for access control, not used in this example)
-    /// * `input` - 8 bytes representing the expected unix timestamp (i64, little-endian)
-    ///
-    /// # Returns
-    /// Sets return data to a single byte:
-    /// * 0 = expected_time < current_time (LT)
-    /// * 1 = expected_time == current_time (EQ)
-    /// * 2 = expected_time > current_time (GT)
+    /// Sets return data to a single byte: LT(0), EQ(1), or GT(2) comparing the
+    /// expected unix timestamp (`input` as i64 LE) against the current clock.
     pub fn forward_call(
         ctx: Context<ForwardCall>,
         logic_ref: [u8; 32],
         input: Vec<u8>,
     ) -> Result<()> {
-        // Log the call for debugging
         msg!("BlockTimeForwarder: forward_call invoked");
         msg!("  logic_ref: {:?}", &logic_ref[..8]);
 
-        // Decode expected timestamp from input (8 bytes, little-endian i64)
         if input.len() != 8 {
             msg!("  ERROR: input must be 8 bytes, got {}", input.len());
             return Err(ErrorCode::InvalidInput.into());
@@ -54,11 +42,9 @@ pub mod block_time_forwarder {
             i64::from_le_bytes(input.try_into().map_err(|_| ErrorCode::InvalidInput)?);
         msg!("  expected_time: {}", expected_time);
 
-        // Get current time from Solana clock sysvar
         let current_time = ctx.accounts.clock.unix_timestamp;
         msg!("  current_time: {}", current_time);
 
-        // Compare and determine result
         let result = match expected_time.cmp(&current_time) {
             std::cmp::Ordering::Less => {
                 msg!("  result: LT (expected < current)");
@@ -74,7 +60,6 @@ pub mod block_time_forwarder {
             }
         };
 
-        // Return result via set_return_data
         set_return_data(&[result]);
         msg!("  return_data set: [{}]", result);
 

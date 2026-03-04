@@ -24,8 +24,7 @@ const MODE_WRITE_ACCOUNT: u8 = 0x02;
 pub mod test_forwarder {
     use super::*;
 
-    /// Single entry point matching the PA's `forward_call` discriminator.
-    /// Dispatches behavior based on `input[0]`.
+    /// Matches the PA's `forward_call` discriminator.
     pub fn forward_call(
         ctx: Context<ForwardCallAccounts>,
         _logic_ref: [u8; 32],
