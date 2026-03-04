@@ -1,7 +1,3 @@
-//! Shared test fixtures and helpers for unit tests.
-//!
-//! This module provides common test utilities used across multiple test modules.
-
 use anchor_lang::prelude::{AnchorSerialize, Pubkey};
 
 use crate::groth16::Seal;
@@ -11,7 +7,6 @@ use crate::types::*;
 use groth_16_verifier::Proof;
 use verifier_router::Selector;
 
-/// Helper to create a Transaction from a slice of ComplianceInstances.
 pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction {
     let cus: Vec<ComplianceUnit> = instances
         .iter()
@@ -50,12 +45,9 @@ pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction 
     }
 }
 
-/// Arbitrary selector for unit tests. Used by `fake_aggregation_proof_bytes` to test
-/// that the proof parser correctly extracts the selector from verifier_parameters.
-/// This value is not meaningful - actual selectors are extracted from real proofs.
+/// Arbitrary value; verifies the proof parser extracts the selector correctly.
 pub const FAKE_SELECTOR: Selector = [0x31, 0x0f, 0xe5, 0x98];
 
-/// Generate fake aggregation proof bytes for testing.
 pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
     let proof = Proof {
         pi_a: [0u8; 64],
@@ -70,10 +62,7 @@ pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
     seal.try_to_vec().unwrap()
 }
 
-/// Create a minimal transaction for testing.
-///
-/// Contains one action with one compliance unit and two LogicVerifierInputs
-/// (consumed and created resources).
+/// One action, one CU, two LVIs (consumed + created).
 pub fn create_minimal_transaction() -> Transaction {
     let instance = ComplianceInstance {
         consumed_nullifier: Digest::from_bytes([1u8; 32]),
@@ -87,7 +76,6 @@ pub fn create_minimal_transaction() -> Transaction {
     build_tx_from_instances(&[instance])
 }
 
-/// Create a compliance instance with specified nullifier and commitment.
 pub fn create_compliance_instance(nullifier: Digest, commitment: Digest) -> ComplianceInstance {
     ComplianceInstance {
         consumed_nullifier: nullifier,
@@ -100,36 +88,26 @@ pub fn create_compliance_instance(nullifier: Digest, commitment: Digest) -> Comp
     }
 }
 
-/// Create a transaction with external_payload in a single LogicVerifierInputs.
 pub fn create_transaction_with_external_payload(payloads: Vec<ExpirableBlob>) -> Transaction {
     let mut tx = create_minimal_transaction();
-    // Put payloads on the consumed-resource LVI (tag = consumed_nullifier).
     tx.actions[0].logic_verifier_inputs[0]
         .app_data
         .external_payload = payloads;
     tx
 }
 
-/// Create a transaction with external_payload and a specific verifying_key (logic_ref).
 pub fn create_transaction_with_external_payload_and_logic_ref(
     payloads: Vec<ExpirableBlob>,
     verifying_key: Digest,
 ) -> Transaction {
-    let mut tx = create_minimal_transaction();
-
-    // Update the consumed logic ref in the compliance instance, and align the LVI's verifying_key.
-    let cu = &mut tx.actions[0].compliance_units[0];
-    cu.instance.consumed_logic_ref = verifying_key;
-
+    let mut tx = create_transaction_with_external_payload(payloads);
+    tx.actions[0].compliance_units[0]
+        .instance
+        .consumed_logic_ref = verifying_key;
     tx.actions[0].logic_verifier_inputs[0].verifying_key = verifying_key;
-    tx.actions[0].logic_verifier_inputs[0]
-        .app_data
-        .external_payload = payloads;
-
     tx
 }
 
-/// Create a transaction with multiple LogicVerifierInputs, each with their own external_payloads.
 pub fn create_transaction_with_multiple_lvi_external_payloads(
     payloads_per_lvi: Vec<Vec<ExpirableBlob>>,
 ) -> Transaction {
@@ -172,8 +150,7 @@ pub fn create_transaction_with_multiple_lvi_external_payloads(
     }
 }
 
-/// Create a fresh PAStateAccount for testing merkle operations.
-/// Uses variable-depth tree starting at depth 1 (capacity = 2 leaves).
+/// Variable-depth tree starting at depth 1 (capacity = 2 leaves).
 pub fn create_test_pa_state() -> PAStateAccount {
     PAStateAccount {
         bump: 0,
@@ -188,7 +165,6 @@ pub fn create_test_pa_state() -> PAStateAccount {
     }
 }
 
-/// Create a mock PAStateAccount for testing with specified authority and paused state.
 pub fn create_mock_pa_state(authority: Pubkey, paused: bool) -> PAStateAccount {
     PAStateAccount {
         bump: 255,

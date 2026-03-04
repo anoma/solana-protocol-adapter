@@ -1,7 +1,3 @@
-//! Unit tests for the PA's delta proof verification.
-//!
-//! These tests exercise `crate::delta::verify_delta_proof`, which delegates to
-//! `arm_solana::delta::verify_delta_proof` with error conversion via `From<SolanaArmError>`.
 //! Curve point validation and arithmetic tests belong in arm_solana.
 
 use crate::delta::verify_delta_proof;

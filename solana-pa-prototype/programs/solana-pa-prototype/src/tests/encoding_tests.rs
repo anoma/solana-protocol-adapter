@@ -1,5 +1,3 @@
-//! Unit tests for encoding module.
-
 use crate::encoding::{
     compute_action_tree_root, compute_batch_aggregation_journal_digest, find_logic_input,
 };
@@ -7,10 +5,6 @@ use crate::error::PAError;
 use crate::merkle;
 use crate::tests::utils::create_minimal_transaction;
 use crate::types::*;
-
-// =========================================================================
-// OUTPUT MODE ENCODING TESTS
-// =========================================================================
 
 #[test]
 fn test_output_account_encoding() {
@@ -37,10 +31,6 @@ fn test_output_account_encoding() {
         _ => panic!("Expected OutputAccount"),
     }
 }
-
-// =========================================================================
-// ACTION TREE ROOT TESTS
-// =========================================================================
 
 #[test]
 fn test_action_tree_root_single_cu() {
@@ -82,10 +72,6 @@ fn test_action_tree_root_three_tags_padded() {
     assert_eq!(root, expected);
 }
 
-// =========================================================================
-// TAG EXTRACTION AND LOGIC INPUT TESTS
-// =========================================================================
-
 #[test]
 fn test_find_logic_input_by_tag() {
     let tx = create_minimal_transaction();
@@ -94,9 +80,9 @@ fn test_find_logic_input_by_tag() {
     let cu = &action.compliance_units[0];
     let consumed_tag = cu.instance.consumed_nullifier;
 
-    let found = find_logic_input(&action.logic_verifier_inputs, &consumed_tag);
-    assert!(found.is_ok());
-    assert_eq!(found.unwrap().tag, consumed_tag);
+    let found = find_logic_input(&action.logic_verifier_inputs, &consumed_tag)
+        .expect("should find consumed tag");
+    assert_eq!(found.tag, consumed_tag);
 }
 
 #[test]
@@ -121,40 +107,11 @@ fn test_tag_count_invariant() {
     assert_eq!(actual, expected);
 }
 
-// =========================================================================
-// BATCH JOURNAL DIGEST TESTS
-// =========================================================================
-
 #[test]
 fn test_batch_journal_digest_tag_count_mismatch() {
     // 1 CU produces 2 tags, but we provide only 1 LVI — should be rejected.
-    let instance = ComplianceInstance {
-        consumed_nullifier: Digest::from_bytes([1u8; 32]),
-        consumed_logic_ref: Digest::from_bytes([3u8; 32]),
-        consumed_commitment_tree_root: Digest::default(),
-        created_commitment: Digest::from_bytes([2u8; 32]),
-        created_logic_ref: Digest::from_bytes([4u8; 32]),
-        delta_x: [0u32; 8],
-        delta_y: [0u32; 8],
-    };
-    let tx = Transaction {
-        actions: vec![Action {
-            compliance_units: vec![ComplianceUnit {
-                proof: None,
-                instance,
-            }],
-            logic_verifier_inputs: vec![LogicVerifierInputs {
-                tag: Digest::from_bytes([1u8; 32]),
-                verifying_key: Digest::from_bytes([3u8; 32]),
-                app_data: AppData::default(),
-                proof: None,
-                instance_journal: Vec::new(),
-            }],
-        }],
-        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
-        expected_balance: None,
-        aggregation_proof: None,
-    };
+    let mut tx = create_minimal_transaction();
+    tx.actions[0].logic_verifier_inputs.pop();
 
     match compute_batch_aggregation_journal_digest(&tx) {
         Err(PAError::InvalidTransactionData) => {}
@@ -191,7 +148,6 @@ fn test_batch_journal_digest_deterministic_and_sensitive() {
         "Same transaction must produce identical digest"
     );
 
-    // Mutate a field and verify the digest changes.
     let mut tx_mutated = create_minimal_transaction();
     tx_mutated.actions[0].compliance_units[0]
         .instance

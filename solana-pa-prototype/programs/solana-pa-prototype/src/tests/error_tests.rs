@@ -1,5 +1,3 @@
-//! Unit tests for error module.
-
 use crate::error::PAError;
 use crate::external_calls::{decode_external_call, verify_output};
 use crate::groth16::prepare_proof_for_verification;
@@ -13,8 +11,6 @@ fn test_error_external_call_output_mismatch() {
     let actual = vec![4, 5, 6];
 
     let result = verify_output(&expected, &actual);
-    assert!(result.is_err());
-
     match result {
         Err(PAError::ExternalCallOutputMismatch) => {}
         _ => panic!("Expected ExternalCallOutputMismatch error"),
