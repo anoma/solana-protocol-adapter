@@ -5,6 +5,7 @@ use crate::external_calls::{decode_external_call, verify_output};
 use crate::groth16::prepare_proof_for_verification;
 use crate::tests::utils::create_minimal_transaction;
 use crate::types::ExpirableBlob;
+use anchor_lang::solana_program::program_error::ProgramError;
 
 #[test]
 fn test_error_external_call_output_mismatch() {
@@ -43,5 +44,14 @@ fn test_error_invalid_aggregation_proof_bytes() {
     match result {
         Err(PAError::InvalidProof) => {}
         _ => panic!("Expected InvalidProof error"),
+    }
+}
+
+#[test]
+fn test_program_error_converts_to_cpi_failed() {
+    let pa_error = PAError::from(ProgramError::Custom(42));
+    match pa_error {
+        PAError::ExternalCallCpiFailed => {}
+        other => panic!("Expected ExternalCallCpiFailed, got {:?}", other),
     }
 }

@@ -1,9 +1,12 @@
 //! Unit tests for encoding module.
 
-use crate::encoding::{compute_action_tree_root, find_logic_input};
+use crate::encoding::{
+    compute_action_tree_root, compute_batch_aggregation_journal_digest, find_logic_input,
+};
+use crate::error::PAError;
 use crate::merkle;
 use crate::tests::utils::create_minimal_transaction;
-use crate::types::{Digest, OutputMode, SolanaExternalCall};
+use crate::types::*;
 
 // =========================================================================
 // OUTPUT MODE ENCODING TESTS
@@ -113,4 +116,89 @@ fn test_tag_count_invariant() {
     let expected = action.compliance_units.len() * 2;
     let actual = action.logic_verifier_inputs.len();
     assert_eq!(actual, expected);
+}
+
+// =========================================================================
+// BATCH JOURNAL DIGEST TESTS
+// =========================================================================
+
+#[test]
+fn test_batch_journal_digest_tag_count_mismatch() {
+    // 1 CU produces 2 tags, but we provide only 1 LVI — should be rejected.
+    let instance = ComplianceInstance {
+        consumed_nullifier: Digest::from_bytes([1u8; 32]),
+        consumed_logic_ref: Digest::from_bytes([3u8; 32]),
+        consumed_commitment_tree_root: Digest::default(),
+        created_commitment: Digest::from_bytes([2u8; 32]),
+        created_logic_ref: Digest::from_bytes([4u8; 32]),
+        delta_x: [0u32; 8],
+        delta_y: [0u32; 8],
+    };
+    let tx = Transaction {
+        actions: vec![Action {
+            compliance_units: vec![ComplianceUnit {
+                proof: None,
+                instance,
+            }],
+            logic_verifier_inputs: vec![LogicVerifierInputs {
+                tag: Digest::from_bytes([1u8; 32]),
+                verifying_key: Digest::from_bytes([3u8; 32]),
+                app_data: AppData::default(),
+                proof: None,
+                instance_journal: Vec::new(),
+            }],
+        }],
+        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
+        expected_balance: None,
+        aggregation_proof: None,
+    };
+
+    match compute_batch_aggregation_journal_digest(&tx) {
+        Err(PAError::InvalidTransactionData) => {}
+        other => panic!(
+            "Expected InvalidTransactionData for tag/LVI count mismatch, got {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn test_batch_journal_digest_vk_mismatch() {
+    let mut tx = create_minimal_transaction();
+    // The consumed LVI's verifying_key should match consumed_logic_ref = [3u8; 32].
+    // Set it to something wrong to trigger the VK mismatch check.
+    tx.actions[0].logic_verifier_inputs[0].verifying_key = Digest::from_bytes([0xFF; 32]);
+
+    match compute_batch_aggregation_journal_digest(&tx) {
+        Err(PAError::InvalidTransactionData) => {}
+        other => panic!(
+            "Expected InvalidTransactionData for VK mismatch, got {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn test_batch_journal_digest_deterministic_and_sensitive() {
+    let tx = create_minimal_transaction();
+    let digest1 = compute_batch_aggregation_journal_digest(&tx).unwrap();
+    let digest2 = compute_batch_aggregation_journal_digest(&tx).unwrap();
+    assert_eq!(
+        digest1, digest2,
+        "Same transaction must produce identical digest"
+    );
+
+    // Mutate a field and verify the digest changes.
+    let mut tx_mutated = create_minimal_transaction();
+    tx_mutated.actions[0].compliance_units[0]
+        .instance
+        .consumed_nullifier = Digest::from_bytes([0xFF; 32]);
+    // Update the corresponding LVI tag so find_logic_input still succeeds.
+    tx_mutated.actions[0].logic_verifier_inputs[0].tag = Digest::from_bytes([0xFF; 32]);
+
+    let digest3 = compute_batch_aggregation_journal_digest(&tx_mutated).unwrap();
+    assert_ne!(
+        digest1, digest3,
+        "Different transaction data must produce different digest"
+    );
 }

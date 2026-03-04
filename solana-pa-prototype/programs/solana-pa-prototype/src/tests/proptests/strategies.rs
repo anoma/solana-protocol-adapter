@@ -48,17 +48,6 @@ pub fn arb_compliance_instance() -> impl Strategy<Value = ComplianceInstance> {
         })
 }
 
-/// Strategy for ComplianceInstance with zero deltas (0, 0).
-/// NOTE: (0, 0) is NOT a valid secp256k1 curve point - the identity point has no affine
-/// representation. This strategy is useful for testing error handling.
-pub fn arb_compliance_instance_zero_delta() -> impl Strategy<Value = ComplianceInstance> {
-    arb_compliance_instance().prop_map(|mut inst| {
-        inst.delta_x = [0u32; 8];
-        inst.delta_y = [0u32; 8];
-        inst
-    })
-}
-
 /// Strategy for ExpirableBlob.
 pub fn arb_expirable_blob(max_words: usize) -> impl Strategy<Value = ExpirableBlob> {
     (arb_words(max_words), any::<u32>()).prop_map(|(blob, dc)| ExpirableBlob {

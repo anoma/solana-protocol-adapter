@@ -5,7 +5,7 @@ use crate::root::{derive_root_pda, is_root_valid, ROOT_SEED};
 use crate::state::PAStateAccount;
 use crate::tests::utils::create_mock_pa_state;
 use crate::types::Digest;
-use anchor_lang::prelude::Pubkey;
+use anchor_lang::prelude::{AccountInfo, Pubkey};
 
 /// Create a PAStateAccount with a specific root for root-validation tests.
 fn state_with_root(root: [u8; 32]) -> PAStateAccount {
@@ -141,4 +141,77 @@ fn test_derive_root_pda_off_curve() {
     );
     assert!(recreated.is_ok(), "PDA should be recreatable with bump");
     assert_eq!(pda, recreated.unwrap(), "Recreated PDA should match");
+}
+
+// =========================================================================
+// HISTORICAL ROOT MARKER PDA TESTS
+// =========================================================================
+
+#[test]
+fn test_is_root_valid_with_historical_marker() {
+    let program_id = Pubkey::new_unique();
+    let pa_state_key = Pubkey::new_unique();
+    let state = state_with_root([0xAA; 32]);
+    let old_root = [0xBB; 32];
+
+    let (expected_pda, _) = derive_root_pda(&program_id, &pa_state_key, &old_root);
+
+    let mut lamports = 1u64;
+    let mut data = vec![];
+    let marker = AccountInfo::new(
+        &expected_pda,
+        false,
+        false,
+        &mut lamports,
+        &mut data,
+        &program_id,
+        false,
+        0,
+    );
+
+    assert!(
+        is_root_valid(
+            &state,
+            &program_id,
+            &pa_state_key,
+            &Digest::from_bytes(old_root),
+            &[marker],
+        ),
+        "Historical root with valid marker PDA should be accepted"
+    );
+}
+
+#[test]
+fn test_is_root_valid_marker_wrong_owner() {
+    let program_id = Pubkey::new_unique();
+    let wrong_owner = Pubkey::new_unique();
+    let pa_state_key = Pubkey::new_unique();
+    let state = state_with_root([0xAA; 32]);
+    let old_root = [0xBB; 32];
+
+    let (expected_pda, _) = derive_root_pda(&program_id, &pa_state_key, &old_root);
+
+    let mut lamports = 1u64;
+    let mut data = vec![];
+    let marker = AccountInfo::new(
+        &expected_pda,
+        false,
+        false,
+        &mut lamports,
+        &mut data,
+        &wrong_owner,
+        false,
+        0,
+    );
+
+    assert!(
+        !is_root_valid(
+            &state,
+            &program_id,
+            &pa_state_key,
+            &Digest::from_bytes(old_root),
+            &[marker],
+        ),
+        "Marker with wrong owner should be rejected"
+    );
 }
