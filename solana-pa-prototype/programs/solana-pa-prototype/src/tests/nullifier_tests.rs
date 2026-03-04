@@ -1,10 +1,7 @@
-//! Unit tests for nullifier module.
-
 use crate::nullifier::{check_and_create_nullifier_marker, derive_nullifier_pda, NULLIFIER_SEED};
-use anchor_lang::prelude::{AccountInfo, Pubkey};
+use crate::tests::utils::make_account_info;
+use anchor_lang::prelude::Pubkey;
 
-/// Derive a nullifier PDA and verify it can be recreated from its bump.
-/// This validates both that the PDA is off-curve and that the derivation is correct.
 fn assert_pda_recreatable(nullifier: &[u8; 32]) {
     let program_id = Pubkey::new_unique();
     let pa_state = Pubkey::new_unique();
@@ -24,10 +21,6 @@ fn assert_pda_recreatable(nullifier: &[u8; 32]) {
         &nullifier[..4]
     );
 }
-
-// -------------------------------------------------------------------------
-// derive_nullifier_pda tests
-// -------------------------------------------------------------------------
 
 #[test]
 fn test_derive_nullifier_pda_deterministic() {
@@ -103,58 +96,20 @@ fn test_derive_nullifier_pda_all_ones() {
     assert_pda_recreatable(&[0xFF; 32]);
 }
 
-// -------------------------------------------------------------------------
-// check_and_create_nullifier_marker guard path tests
-// -------------------------------------------------------------------------
-
 #[test]
 fn test_nullifier_pda_mismatch() {
     let program_id = Pubkey::new_unique();
     let pa_state_key = Pubkey::new_unique();
     let nullifier_bytes = [0xAA; 32];
     let system_program_id = anchor_lang::solana_program::system_program::ID;
-
-    // Derive the expected PDA, but provide a marker with a *different* key.
     let wrong_key = Pubkey::new_unique();
 
-    let mut payer_lamports = 1_000_000u64;
-    let mut payer_data = vec![];
-    let payer = AccountInfo::new(
-        &pa_state_key,
-        true,
-        false,
-        &mut payer_lamports,
-        &mut payer_data,
-        &system_program_id,
-        false,
-        0,
-    );
-
-    let mut marker_lamports = 0u64;
-    let mut marker_data = vec![];
-    let marker = AccountInfo::new(
-        &wrong_key, // Wrong key — should trigger NullifierPdaMismatch
-        false,
-        true,
-        &mut marker_lamports,
-        &mut marker_data,
-        &system_program_id,
-        false,
-        0,
-    );
-
-    let mut sys_lamports = 0u64;
-    let mut sys_data = vec![];
-    let system_program = AccountInfo::new(
-        &system_program_id,
-        false,
-        false,
-        &mut sys_lamports,
-        &mut sys_data,
-        &system_program_id,
-        true,
-        0,
-    );
+    make_account_info!(payer, &pa_state_key, owner: &system_program_id,
+        lamports: 1_000_000, signer: true, writable: false, executable: false);
+    make_account_info!(marker, &wrong_key, owner: &system_program_id,
+        lamports: 0, signer: false, writable: true, executable: false);
+    make_account_info!(system_program, &system_program_id, owner: &system_program_id,
+        lamports: 0, signer: false, writable: false, executable: true);
 
     let result = check_and_create_nullifier_marker(
         &program_id,
@@ -177,48 +132,15 @@ fn test_duplicate_nullifier_detected() {
     let pa_state_key = Pubkey::new_unique();
     let nullifier_bytes = [0xBB; 32];
     let system_program_id = anchor_lang::solana_program::system_program::ID;
-
-    // Derive the correct PDA for the marker.
     let (expected_pda, _) = derive_nullifier_pda(&program_id, &pa_state_key, &nullifier_bytes);
 
-    let mut payer_lamports = 1_000_000u64;
-    let mut payer_data = vec![];
-    let payer = AccountInfo::new(
-        &pa_state_key,
-        true,
-        false,
-        &mut payer_lamports,
-        &mut payer_data,
-        &system_program_id,
-        false,
-        0,
-    );
-
-    let mut marker_lamports = 1u64;
-    let mut marker_data = vec![];
-    let marker = AccountInfo::new(
-        &expected_pda,
-        false,
-        true,
-        &mut marker_lamports,
-        &mut marker_data,
-        &program_id, // Owner is program_id → duplicate nullifier
-        false,
-        0,
-    );
-
-    let mut sys_lamports = 0u64;
-    let mut sys_data = vec![];
-    let system_program = AccountInfo::new(
-        &system_program_id,
-        false,
-        false,
-        &mut sys_lamports,
-        &mut sys_data,
-        &system_program_id,
-        true,
-        0,
-    );
+    make_account_info!(payer, &pa_state_key, owner: &system_program_id,
+        lamports: 1_000_000, signer: true, writable: false, executable: false);
+    // Marker already owned by our program signals a duplicate.
+    make_account_info!(marker, &expected_pda, owner: &program_id,
+        lamports: 1, signer: false, writable: true, executable: false);
+    make_account_info!(system_program, &system_program_id, owner: &system_program_id,
+        lamports: 0, signer: false, writable: false, executable: true);
 
     let result = check_and_create_nullifier_marker(
         &program_id,

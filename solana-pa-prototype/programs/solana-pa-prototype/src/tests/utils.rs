@@ -1,5 +1,29 @@
 use anchor_lang::prelude::{AnchorSerialize, Pubkey};
 
+/// Declare an `AccountInfo` with owned backing storage via name-shadowing.
+///
+/// The first binding creates a `(u64, Vec<u8>)` tuple that owns lamports and data.
+/// The second binding shadows it with the `AccountInfo` that borrows from the tuple.
+/// Shadowing keeps the original tuple alive for the scope's duration.
+macro_rules! make_account_info {
+    ($name:ident, $key:expr, owner: $owner:expr, lamports: $lamports:expr,
+     signer: $signer:expr, writable: $writable:expr, executable: $executable:expr) => {
+        #[allow(unused_mut)]
+        let mut $name = ($lamports as u64, Vec::<u8>::new());
+        let $name = ::anchor_lang::prelude::AccountInfo::new(
+            $key,
+            $signer,
+            $writable,
+            &mut $name.0,
+            &mut $name.1,
+            $owner,
+            $executable,
+            0,
+        );
+    };
+}
+pub(crate) use make_account_info;
+
 use crate::groth16::Seal;
 use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
 use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};

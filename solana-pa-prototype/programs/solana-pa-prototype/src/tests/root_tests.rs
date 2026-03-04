@@ -1,22 +1,15 @@
-//! Unit tests for root module.
-
 use crate::merkle::PADDING_LEAF;
 use crate::root::{create_root_marker, derive_root_pda, is_root_valid, ROOT_SEED};
 use crate::state::PAStateAccount;
-use crate::tests::utils::create_mock_pa_state;
+use crate::tests::utils::{create_mock_pa_state, make_account_info};
 use crate::types::Digest;
-use anchor_lang::prelude::{AccountInfo, Pubkey};
+use anchor_lang::prelude::Pubkey;
 
-/// Create a PAStateAccount with a specific root for root-validation tests.
 fn state_with_root(root: [u8; 32]) -> PAStateAccount {
     let mut state = create_mock_pa_state(Pubkey::new_unique(), false);
     state.root = root;
     state
 }
-
-// =========================================================================
-// ROOT VALIDATION TESTS
-// =========================================================================
 
 #[test]
 fn test_is_root_valid_current_root() {
@@ -64,10 +57,6 @@ fn test_is_root_valid_non_current_without_marker() {
         &[]
     ));
 }
-
-// =========================================================================
-// PDA DERIVATION TESTS
-// =========================================================================
 
 #[test]
 fn test_derive_root_pda_deterministic() {
@@ -143,10 +132,6 @@ fn test_derive_root_pda_off_curve() {
     assert_eq!(pda, recreated.unwrap(), "Recreated PDA should match");
 }
 
-// =========================================================================
-// HISTORICAL ROOT MARKER PDA TESTS
-// =========================================================================
-
 #[test]
 fn test_is_root_valid_with_historical_marker() {
     let program_id = Pubkey::new_unique();
@@ -156,18 +141,8 @@ fn test_is_root_valid_with_historical_marker() {
 
     let (expected_pda, _) = derive_root_pda(&program_id, &pa_state_key, &old_root);
 
-    let mut lamports = 1u64;
-    let mut data = vec![];
-    let marker = AccountInfo::new(
-        &expected_pda,
-        false,
-        false,
-        &mut lamports,
-        &mut data,
-        &program_id,
-        false,
-        0,
-    );
+    make_account_info!(marker, &expected_pda, owner: &program_id,
+        lamports: 1, signer: false, writable: false, executable: false);
 
     assert!(
         is_root_valid(
@@ -191,18 +166,8 @@ fn test_is_root_valid_marker_wrong_owner() {
 
     let (expected_pda, _) = derive_root_pda(&program_id, &pa_state_key, &old_root);
 
-    let mut lamports = 1u64;
-    let mut data = vec![];
-    let marker = AccountInfo::new(
-        &expected_pda,
-        false,
-        false,
-        &mut lamports,
-        &mut data,
-        &wrong_owner,
-        false,
-        0,
-    );
+    make_account_info!(marker, &expected_pda, owner: &wrong_owner,
+        lamports: 1, signer: false, writable: false, executable: false);
 
     assert!(
         !is_root_valid(
@@ -216,58 +181,20 @@ fn test_is_root_valid_marker_wrong_owner() {
     );
 }
 
-// =========================================================================
-// CREATE ROOT MARKER GUARD PATH TESTS
-// =========================================================================
-
 #[test]
 fn test_create_root_marker_pda_mismatch() {
     let program_id = Pubkey::new_unique();
     let pa_state_key = Pubkey::new_unique();
     let root_bytes = [0xCC; 32];
     let system_program_id = anchor_lang::solana_program::system_program::ID;
-
-    // Use a wrong key that doesn't match the derived PDA.
     let wrong_key = Pubkey::new_unique();
 
-    let mut payer_lamports = 1_000_000u64;
-    let mut payer_data = vec![];
-    let payer = AccountInfo::new(
-        &pa_state_key,
-        true,
-        false,
-        &mut payer_lamports,
-        &mut payer_data,
-        &system_program_id,
-        false,
-        0,
-    );
-
-    let mut marker_lamports = 0u64;
-    let mut marker_data = vec![];
-    let marker = AccountInfo::new(
-        &wrong_key,
-        false,
-        true,
-        &mut marker_lamports,
-        &mut marker_data,
-        &system_program_id,
-        false,
-        0,
-    );
-
-    let mut sys_lamports = 0u64;
-    let mut sys_data = vec![];
-    let system_program = AccountInfo::new(
-        &system_program_id,
-        false,
-        false,
-        &mut sys_lamports,
-        &mut sys_data,
-        &system_program_id,
-        true,
-        0,
-    );
+    make_account_info!(payer, &pa_state_key, owner: &system_program_id,
+        lamports: 1_000_000, signer: true, writable: false, executable: false);
+    make_account_info!(marker, &wrong_key, owner: &system_program_id,
+        lamports: 0, signer: false, writable: true, executable: false);
+    make_account_info!(system_program, &system_program_id, owner: &system_program_id,
+        lamports: 0, signer: false, writable: false, executable: true);
 
     let result = create_root_marker(
         &program_id,
@@ -293,44 +220,13 @@ fn test_create_root_marker_idempotent_existing() {
 
     let (expected_pda, _) = derive_root_pda(&program_id, &pa_state_key, &root_bytes);
 
-    let mut payer_lamports = 1_000_000u64;
-    let mut payer_data = vec![];
-    let payer = AccountInfo::new(
-        &pa_state_key,
-        true,
-        false,
-        &mut payer_lamports,
-        &mut payer_data,
-        &system_program_id,
-        false,
-        0,
-    );
-
-    let mut marker_lamports = 1u64;
-    let mut marker_data = vec![];
-    let marker = AccountInfo::new(
-        &expected_pda,
-        false,
-        true,
-        &mut marker_lamports,
-        &mut marker_data,
-        &program_id, // Already owned by program → idempotent success
-        false,
-        0,
-    );
-
-    let mut sys_lamports = 0u64;
-    let mut sys_data = vec![];
-    let system_program = AccountInfo::new(
-        &system_program_id,
-        false,
-        false,
-        &mut sys_lamports,
-        &mut sys_data,
-        &system_program_id,
-        true,
-        0,
-    );
+    make_account_info!(payer, &pa_state_key, owner: &system_program_id,
+        lamports: 1_000_000, signer: true, writable: false, executable: false);
+    // Already owned by program → idempotent success
+    make_account_info!(marker, &expected_pda, owner: &program_id,
+        lamports: 1, signer: false, writable: true, executable: false);
+    make_account_info!(system_program, &system_program_id, owner: &system_program_id,
+        lamports: 0, signer: false, writable: false, executable: true);
 
     let result = create_root_marker(
         &program_id,

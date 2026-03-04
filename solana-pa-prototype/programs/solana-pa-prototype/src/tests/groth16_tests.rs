@@ -1,5 +1,3 @@
-//! Unit tests for groth16 module.
-
 use crate::groth16::{prepare_proof_for_verification, BATCH_AGGREGATION_IMAGE_ID};
 use crate::tests::utils::{
     create_minimal_transaction, fake_aggregation_proof_bytes, FAKE_SELECTOR,
@@ -24,7 +22,7 @@ fn test_prepare_proof_no_proof() {
 #[test]
 fn test_prepare_proof_invalid_bytes() {
     let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = Some(vec![0xFF, 0xFF, 0xFF]); // Invalid
+    tx.aggregation_proof = Some(vec![0xFF, 0xFF, 0xFF]);
     assert!(prepare_proof_for_verification(&tx).is_err());
 }
 
