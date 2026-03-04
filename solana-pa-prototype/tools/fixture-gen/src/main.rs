@@ -72,7 +72,8 @@ fn extract_selector(tx: &Transaction) -> Result<String> {
         .as_ref()
         .ok_or_else(|| anyhow!("no aggregation_proof found for selector extraction"))?;
 
-    let seal: Seal = Seal::try_from_slice(agg_proof).unwrap();
+    let seal: Seal =
+        Seal::try_from_slice(agg_proof).context("decode Seal from aggregation_proof bytes")?;
     Ok(format!("0x{}", hex::encode(seal.selector)))
 }
 
@@ -348,25 +349,28 @@ fn generate_error_variant_fixtures(
         Ok(())
     };
 
-    let mut wrong_root = tx.clone();
-    let action = wrong_root
-        .actions
-        .get_mut(0)
-        .ok_or_else(|| anyhow!("tx has no actions"))?;
-    let cu = action
-        .compliance_units
-        .get_mut(0)
-        .ok_or_else(|| anyhow!("tx has no compliance units"))?;
-    cu.instance.consumed_commitment_tree_root = Digest::from_bytes([1u8; 32]);
-    write_variant("wrong_root.json", &wrong_root)?;
+    {
+        let mut wrong_root = tx.clone();
+        let action = wrong_root
+            .actions
+            .get_mut(0)
+            .ok_or_else(|| anyhow!("tx has no actions"))?;
+        let cu = action
+            .compliance_units
+            .get_mut(0)
+            .ok_or_else(|| anyhow!("tx has no compliance units"))?;
+        cu.instance.consumed_commitment_tree_root = Digest::from_bytes([1u8; 32]);
+        write_variant("wrong_root.json", &wrong_root)?;
+    }
 
-    let mut no_aggregation = tx.clone();
-    no_aggregation.aggregation_proof = None;
-    write_variant("no_aggregation.json", &no_aggregation)?;
+    {
+        let mut agg_variant = tx.clone();
+        agg_variant.aggregation_proof = None;
+        write_variant("no_aggregation.json", &agg_variant)?;
 
-    let mut garbage_proof = tx.clone();
-    garbage_proof.aggregation_proof = Some(vec![0xDE; 64]);
-    write_variant("garbage_proof.json", &garbage_proof)?;
+        agg_variant.aggregation_proof = Some(vec![0xDE; 64]);
+        write_variant("garbage_proof.json", &agg_variant)?;
+    }
 
     Ok(())
 }
@@ -696,10 +700,14 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 
             let inner: InnerReceipt =
                 bincode::deserialize(proof_bytes).context("decode compliance InnerReceipt")?;
-            let receipt = Receipt::new(inner, cu.instance.to_journal().unwrap());
+            let journal = cu
+                .instance
+                .to_journal()
+                .context("serialize compliance journal")?;
+            let receipt = Receipt::new(inner, journal.clone());
             let receipt_claim_digest = receipt.claim().context("read compliance claim")?.digest();
 
-            let words = arm::utils::bytes_to_words(&cu.instance.to_journal().unwrap());
+            let words = arm::utils::bytes_to_words(&journal);
             let padded_bytes = arm::utils::words_to_bytes(&words);
             let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
             let expected_claim = ReceiptClaim::ok(
