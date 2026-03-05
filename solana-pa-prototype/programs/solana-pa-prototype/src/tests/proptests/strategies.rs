@@ -21,15 +21,17 @@ pub fn arb_compliance_instance() -> impl Strategy<Value = ComplianceInstance> {
         prop::array::uniform8(any::<u32>()),
         prop::array::uniform8(any::<u32>()),
     )
-        .prop_map(|(nf, clr, ctr, cm, clr2, dx, dy)| ComplianceInstance {
-            consumed_nullifier: nf,
-            consumed_logic_ref: clr,
-            consumed_commitment_tree_root: ctr,
-            created_commitment: cm,
-            created_logic_ref: clr2,
-            delta_x: dx,
-            delta_y: dy,
-        })
+        .prop_map(
+            |(nf, clr, ctr, cm, created_lr, dx, dy)| ComplianceInstance {
+                consumed_nullifier: nf,
+                consumed_logic_ref: clr,
+                consumed_commitment_tree_root: ctr,
+                created_commitment: cm,
+                created_logic_ref: created_lr,
+                delta_x: dx,
+                delta_y: dy,
+            },
+        )
 }
 
 fn arb_output_mode() -> impl Strategy<Value = OutputMode> {

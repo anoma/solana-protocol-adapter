@@ -1,7 +1,5 @@
 use crate::error::PAError;
 use crate::external_calls::{decode_external_call, verify_output};
-use crate::groth16::prepare_proof_for_verification;
-use crate::tests::utils::create_minimal_transaction;
 use arm_core::logic_instance::ExpirableBlob;
 
 #[test]
@@ -22,13 +20,4 @@ fn test_error_invalid_external_call_blob() {
 
     let result = decode_external_call(&blob);
     assert!(matches!(result, Err(PAError::InvalidExternalCallBlob)));
-}
-
-#[test]
-fn test_error_invalid_aggregation_proof_bytes() {
-    let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = Some(vec![0xFF; 10]);
-
-    let result = prepare_proof_for_verification(&tx);
-    assert!(matches!(result, Err(PAError::InvalidProof)));
 }

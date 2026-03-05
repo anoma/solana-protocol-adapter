@@ -712,6 +712,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "block-time-forwarder"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+]
+
+[[package]]
 name = "bonsai-sdk"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1766,6 +1773,8 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "bincode",
+ "block-time-forwarder",
+ "bs58",
  "hex",
  "k256 0.13.3",
  "passthrough-logic-methods",
@@ -1775,6 +1784,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "solana-pa-prototype",
+ "test-forwarder",
  "verifier_router",
 ]
 
@@ -4912,13 +4922,10 @@ dependencies = [
  "base64ct",
  "bincode",
  "borsh 1.5.7",
- "bytemuck",
  "constant_time_eq",
  "groth_16_verifier",
- "hex",
  "hex-literal",
  "serde",
- "serde_bytes",
  "solana-system-interface",
  "time-core",
  "verifier_router",
@@ -5470,6 +5477,13 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "test-forwarder"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
 ]
 
 [[package]]

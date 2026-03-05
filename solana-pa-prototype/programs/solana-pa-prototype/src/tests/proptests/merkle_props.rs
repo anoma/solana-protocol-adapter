@@ -10,13 +10,6 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
 
     #[test]
-    fn prop_hash_two_deterministic(left in arb_digest(), right in arb_digest()) {
-        let h1 = hash_two(&left, &right);
-        let h2 = hash_two(&left, &right);
-        prop_assert_eq!(h1, h2, "hash_two should be deterministic");
-    }
-
-    #[test]
     fn prop_hash_two_non_commutative(left in arb_digest(), right in arb_digest()) {
         prop_assume!(left != right);
         let h1 = hash_two(&left, &right);

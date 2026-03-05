@@ -3,7 +3,7 @@ use crate::external_calls::{
     FORWARD_CALL_DISCRIMINATOR,
 };
 use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
-use crate::tests::utils::*;
+use crate::tests::utils::{create_minimal_transaction, create_transaction_with_external_payload};
 use crate::types::{OutputMode, SolanaExternalCall};
 use arm_core::compliance::ComplianceInstance;
 use arm_core::transaction::Transaction;
@@ -14,20 +14,14 @@ mod fixture_tests {
 
     #[test]
     fn test_compliance_instance_size() {
+        // 5 Digests (5 × 32 = 160) + 2 × [u32; 8] (2 × 32 = 64) = 224 bytes
         let instance = ComplianceInstance::default();
         let serialized = bincode::serialize(&instance).unwrap();
-
-        let instance2 = ComplianceInstance {
-            consumed_nullifier: Digest::from_bytes([1u8; 32]),
-            consumed_logic_ref: Digest::from_bytes([2u8; 32]),
-            consumed_commitment_tree_root: Digest::from_bytes([3u8; 32]),
-            created_commitment: Digest::from_bytes([4u8; 32]),
-            created_logic_ref: Digest::from_bytes([5u8; 32]),
-            delta_x: [6u32; 8],
-            delta_y: [7u32; 8],
-        };
-        let serialized2 = bincode::serialize(&instance2).unwrap();
-        assert_eq!(serialized.len(), serialized2.len());
+        assert_eq!(
+            serialized.len(),
+            224,
+            "ComplianceInstance bincode size must be fixed at 224 bytes"
+        );
     }
 
     #[test]

@@ -2,12 +2,17 @@ use crate::groth16::{prepare_proof_for_verification, BATCH_AGGREGATION_IMAGE_ID}
 use crate::tests::utils::{
     create_minimal_transaction, fake_aggregation_proof_bytes, FAKE_SELECTOR,
 };
+use arm_core::transaction::Transaction;
+
+fn tx_with_fake_aggregation_proof() -> Transaction {
+    let mut tx = create_minimal_transaction();
+    tx.aggregation_proof = Some(fake_aggregation_proof_bytes());
+    tx
+}
 
 #[test]
 fn test_prepare_proof_accepts_batch_discriminant() {
-    let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = Some(fake_aggregation_proof_bytes());
-
+    let tx = tx_with_fake_aggregation_proof();
     let prepared = prepare_proof_for_verification(&tx).unwrap();
     assert_eq!(prepared.image_id, BATCH_AGGREGATION_IMAGE_ID);
 }
@@ -28,9 +33,7 @@ fn test_prepare_proof_invalid_bytes() {
 
 #[test]
 fn test_selector_extraction_from_aggregation_proof() {
-    let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = Some(fake_aggregation_proof_bytes());
-
+    let tx = tx_with_fake_aggregation_proof();
     let prepared = prepare_proof_for_verification(&tx).unwrap();
     assert_eq!(
         prepared.seal.selector, FAKE_SELECTOR,

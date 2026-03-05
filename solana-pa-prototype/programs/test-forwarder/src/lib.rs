@@ -16,9 +16,9 @@ use anchor_lang::prelude::*;
 declare_id!("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD");
 
 /// Mode bytes encoded in `instruction_data[0]` by fixture-gen.
-const MODE_FAIL: u8 = 0x00;
-const MODE_SILENT: u8 = 0x01;
-const MODE_WRITE_ACCOUNT: u8 = 0x02;
+pub const MODE_FAIL: u8 = 0x00;
+pub const MODE_SILENT: u8 = 0x01;
+pub const MODE_WRITE_ACCOUNT: u8 = 0x02;
 
 #[program]
 pub mod test_forwarder {

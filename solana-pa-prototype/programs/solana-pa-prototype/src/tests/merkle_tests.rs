@@ -6,6 +6,7 @@ use arm_core::Digest;
 use sha2::{Digest as Sha2Digest, Sha256};
 
 /// Switching from sha2 crate to syscall must not break arm-risc0 merkle tree compatibility.
+/// The cross-check against ZEROS[1] also confirms the precomputed table uses the same hash impl.
 #[test]
 fn test_sha256_syscall_matches_sha2_crate() {
     let left = PADDING_LEAF.to_bytes();
@@ -23,11 +24,10 @@ fn test_sha256_syscall_matches_sha2_crate() {
         syscall_result.to_bytes(),
         "SHA256 syscall must match sha2 crate output"
     );
-
     assert_eq!(
         sha2_result,
         ZEROS[1].to_bytes(),
-        "Result must match precomputed ZEROS[1]"
+        "ZEROS[1] must match the syscall/sha2 output, proving precomputed table uses the same hash"
     );
 }
 

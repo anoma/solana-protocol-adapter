@@ -15,5 +15,11 @@ pub struct SolanaExternalCall {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum OutputMode {
     ReturnData,
-    OutputAccount { index: u8, offset: u32, len: u32 },
+    /// `index` is relative to the full `remaining_accounts` slice (including nullifier PDAs),
+    /// not relative to the forwarder's account segment.
+    OutputAccount {
+        index: u8,
+        offset: u32,
+        len: u32,
+    },
 }

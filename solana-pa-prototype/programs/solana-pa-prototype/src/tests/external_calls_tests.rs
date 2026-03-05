@@ -1,4 +1,7 @@
-use crate::external_calls::{encode_external_call, extract_external_calls};
+use crate::external_calls::{
+    build_forwarder_instruction_data, encode_external_call, extract_external_calls,
+    FORWARD_CALL_DISCRIMINATOR,
+};
 use crate::tests::utils::{
     create_minimal_transaction, create_transaction_with_external_payload,
     create_transaction_with_multi_lvi_payloads,
@@ -32,7 +35,7 @@ fn test_extract_external_calls_single() {
     let extracted = extract_external_calls(&tx).unwrap();
     assert_eq!(extracted.len(), 1, "Should extract exactly one call");
 
-    let (_logic_ref, extracted_call) = &extracted[0];
+    let (_, extracted_call) = &extracted[0];
     assert_eq!(extracted_call.program_id, call.program_id);
     assert_eq!(extracted_call.instruction_data, call.instruction_data);
     assert_eq!(extracted_call.expected_output, call.expected_output);
@@ -68,9 +71,12 @@ fn test_extract_external_calls_multiple() {
     let extracted = extract_external_calls(&tx).unwrap();
     assert_eq!(extracted.len(), 3, "Should extract all 3 calls");
 
-    assert_eq!(extracted[0].1.program_id, call1.program_id);
-    assert_eq!(extracted[1].1.program_id, call2.program_id);
-    assert_eq!(extracted[2].1.program_id, call3.program_id);
+    let (_, c0) = &extracted[0];
+    let (_, c1) = &extracted[1];
+    let (_, c2) = &extracted[2];
+    assert_eq!(*c0, call1, "call 0 mismatch");
+    assert_eq!(*c1, call2, "call 1 mismatch");
+    assert_eq!(*c2, call3, "call 2 mismatch");
 }
 
 #[test]
@@ -111,4 +117,23 @@ fn test_extract_external_calls_logic_ref_association() {
         *logic_ref, verifying_key,
         "Logic ref should match verifying_key from LVI"
     );
+}
+
+#[test]
+fn test_build_forwarder_instruction_data_byte_layout() {
+    let logic_ref = [0xAA; 32];
+    let input = vec![0x01, 0x02, 0x03];
+
+    let data = build_forwarder_instruction_data(&logic_ref, &input);
+
+    // Format: discriminator (8) + logic_ref (32) + input_len (4) + input (N)
+    assert_eq!(data.len(), 8 + 32 + 4 + input.len());
+    assert_eq!(&data[0..8], &FORWARD_CALL_DISCRIMINATOR, "discriminator");
+    assert_eq!(&data[8..40], &logic_ref, "logic_ref");
+    assert_eq!(
+        &data[40..44],
+        &(input.len() as u32).to_le_bytes(),
+        "input length (Borsh u32 LE)"
+    );
+    assert_eq!(&data[44..], &input, "input payload");
 }

@@ -133,6 +133,9 @@ pub fn create_minimal_transaction() -> Transaction {
     build_tx_from_instances(&[instance])
 }
 
+/// Attaches payloads to the first LVI (index 0) of a minimal transaction.
+/// Preserves CU-consistent LVI tags. For tests needing multiple LVIs or that
+/// don't care about tag consistency, see `create_transaction_with_multi_lvi_payloads`.
 pub fn create_transaction_with_external_payload(payloads: Vec<ExpirableBlob>) -> Transaction {
     let mut tx = create_minimal_transaction();
     tx.actions[0].logic_verifier_inputs[0]
@@ -142,6 +145,10 @@ pub fn create_transaction_with_external_payload(payloads: Vec<ExpirableBlob>) ->
 }
 
 /// One action, one CU, multiple LVIs with per-LVI external payloads.
+///
+/// The LVI list replaces the two LVIs from `create_minimal_transaction`, so LVI tags
+/// do NOT correspond to the CU's nullifier/commitment. Only valid for external call
+/// extraction tests — not for encoding/journal tests that require CU↔LVI consistency.
 pub fn create_transaction_with_multi_lvi_payloads(
     payloads_per_lvi: Vec<Vec<ExpirableBlob>>,
 ) -> Transaction {

@@ -13,7 +13,15 @@ fn test_action_tree_root_empty_fails() {
 }
 
 #[test]
-fn test_action_tree_root_single_cu() {
+fn test_action_tree_root_single_tag() {
+    let tag = Digest::from_bytes([0x11; 32]);
+    let root = compute_action_tree_root(&[tag]).expect("should compute root");
+    // Single tag: next_power_of_two(1) = 1, no hashing needed — root is the tag itself.
+    assert_eq!(root, tag);
+}
+
+#[test]
+fn test_action_tree_root_two_tags() {
     let tag1 = Digest::from_bytes([0x11; 32]);
     let tag2 = Digest::from_bytes([0x22; 32]);
     let tags = vec![tag1, tag2];

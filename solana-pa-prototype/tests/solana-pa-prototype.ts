@@ -53,6 +53,17 @@ const NULLIFIER_SEED = Buffer.from("nullifier");
 const TX_DATA_SEED = Buffer.from("tx_data");
 const ROOT_SEED = Buffer.from("root");
 
+// Protocol constants matching Rust defaults (from state.rs)
+const MIN_EXPIRY_SLOTS = 100;
+const MAX_EXPIRY_SLOTS = 216_000;
+// 7 days at 400ms/slot — matches SEVEN_DAYS_SLOTS in state.rs
+const SEVEN_DAYS_SLOTS = 1_512_000;
+
+// Anchor constraint error patterns for assertion matching
+const AUTHORITY_MISMATCH_PATTERN = /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i;
+const SEED_MISMATCH_PATTERN = /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint|Unauthorized/i;
+const ADDRESS_MISMATCH_PATTERN = /ConstraintAddress|address constraint/i;
+
 const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
 
 function parseSelectorFromFixture(selectorHex: string): Buffer {
@@ -129,26 +140,7 @@ async function uploadTxData(
   payload: Buffer,
   expiresSlotOverride?: anchor.BN
 ): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey }> {
-  const { uploadId, uploadIdLe } = freshUploadId();
-
-  const [txData] = PublicKey.findProgramAddressSync(
-    [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-    program.programId
-  );
-
-  const slot = await provider.connection.getSlot("confirmed");
-  const expiresSlot = expiresSlotOverride ?? new anchor.BN(slot + 10_000);
-
-  await program.methods
-    .txdataInit(uploadId, payload.length, expiresSlot)
-    .accounts({
-      paState,
-      txData,
-      authority: authority.publicKey,
-      systemProgram: SystemProgram.programId,
-    })
-    .signers([authority])
-    .rpc();
+  const { uploadId, uploadIdLe, txData } = await initTxData(authority, payload.length, expiresSlotOverride);
 
   const chunkSize = 700;
   for (let offset = 0; offset < payload.length; offset += chunkSize) {
@@ -171,6 +163,31 @@ function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
   const uploadIdLe = Buffer.alloc(8);
   uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
   return { uploadId, uploadIdLe };
+}
+
+async function initTxData(
+  authority: Keypair,
+  payloadSize: number,
+  expiresSlotOverride?: anchor.BN,
+): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
+  const { uploadId, uploadIdLe } = freshUploadId();
+  const [txData] = PublicKey.findProgramAddressSync(
+    [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
+    program.programId
+  );
+  const expiresSlot = expiresSlotOverride ??
+    new anchor.BN((await provider.connection.getSlot("confirmed")) + 10_000);
+  await program.methods
+    .txdataInit(uploadId, payloadSize, expiresSlot)
+    .accounts({
+      paState,
+      txData,
+      authority: authority.publicKey,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([authority])
+    .rpc();
+  return { uploadId, uploadIdLe, txData, expiresSlot };
 }
 
 // Anchor assigns 6000 + enum_variant_index.
@@ -489,10 +506,6 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const rootBeforeBytes = Buffer.from(stateBefore.root as number[]);
 
-    // We need to predict the new root after settlement to create the marker PDA
-    // For now, we'll settle first without the marker, then verify the new root
-    // In production, the client would compute this off-chain
-
     await settleViaTxData(Keypair.generate(), tx);
 
     // Verify nullifier PDAs exist
@@ -665,7 +678,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
       const haystack = errorHaystack(e);
       assert.match(
         haystack,
-        /ConstraintAddress|address constraint/i,
+        ADDRESS_MISMATCH_PATTERN,
         `Expected ConstraintAddress, got: ${haystack}`
       );
     }
@@ -808,7 +821,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       // or our custom error "Unauthorized"
       assert.match(
         haystack,
-        /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
+        AUTHORITY_MISMATCH_PATTERN,
         "Should fail with Unauthorized or has_one constraint error"
       );
     }
@@ -833,7 +846,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       const haystack = errorHaystack(e);
       assert.match(
         haystack,
-        /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
+        AUTHORITY_MISMATCH_PATTERN,
         "Should fail with Unauthorized or has_one constraint error"
       );
     }
@@ -904,7 +917,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       const haystack = errorHaystack(e);
       assert.match(
         haystack,
-        /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i,
+        AUTHORITY_MISMATCH_PATTERN,
         "Should fail with Unauthorized or has_one constraint error"
       );
     }
@@ -924,10 +937,6 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 });
 
 describe("solana-pa-prototype (TxData Expiration)", () => {
-  // Constants matching Rust defaults (from state.rs)
-  const MIN_EXPIRY_SLOTS = 100;
-  const MAX_EXPIRY_SLOTS = 216_000;
-
   it("rejects txdata_init with expires_slot too soon", async () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 1);
@@ -996,27 +1005,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 1);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
     const slot = await provider.connection.getSlot("confirmed");
-    // Set expiry at midpoint of valid range
     const expiresSlot = new anchor.BN(slot + Math.floor((MIN_EXPIRY_SLOTS + MAX_EXPIRY_SLOTS) / 2));
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { txData } = await initTxData(authority, 100, expiresSlot);
 
     const txDataAccount = await program.account.txDataAccount.fetch(txData);
     assert.equal(
@@ -1030,26 +1021,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100);
 
     const before = await provider.connection.getAccountInfo(txData);
     assert.ok(before, "TxData should exist before close");
@@ -1086,29 +1058,12 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     // This tests Anchor's account existence check.
     const authority = Keypair.generate();
     const attacker = Keypair.generate();
-    await airdrop(provider, authority.publicKey, 2);
-    await airdrop(provider, attacker.publicKey, 1);
+    await Promise.all([
+      airdrop(provider, authority.publicKey, 2),
+      airdrop(provider, attacker.publicKey, 1),
+    ]);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [authorityTxData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData: authorityTxData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, uploadIdLe, txData: authorityTxData } = await initTxData(authority, 100);
 
     // Attacker derives THEIR OWN PDA (different address because attacker.pubkey != authority.pubkey)
     const [attackerTxData] = PublicKey.findProgramAddressSync(
@@ -1146,29 +1101,12 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     // This tests Anchor's PDA seed verification.
     const authority = Keypair.generate();
     const attacker = Keypair.generate();
-    await airdrop(provider, authority.publicKey, 2);
-    await airdrop(provider, attacker.publicKey, 1);
+    await Promise.all([
+      airdrop(provider, authority.publicKey, 2),
+      airdrop(provider, attacker.publicKey, 1),
+    ]);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [authorityTxData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData: authorityTxData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, uploadIdLe, txData: authorityTxData } = await initTxData(authority, 100);
 
     // Attacker tries to close AUTHORITY'S TxData by passing the address directly
     // Anchor will compute seeds with attacker.pubkey → different PDA → constraint fails
@@ -1188,7 +1126,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       // MUST be ConstraintSeeds - Anchor computes PDA from signer, doesn't match passed account
       assert.match(
         haystack,
-        /ConstraintSeeds|seeds constraint was violated/i,
+        SEED_MISMATCH_PATTERN,
         `Expected ConstraintSeeds (PDA mismatch), got: ${haystack}`
       );
     }
@@ -1198,26 +1136,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
     const slot = await provider.connection.getSlot("confirmed");
     const initialExpiry = new anchor.BN(slot + 1000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, initialExpiry)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100, initialExpiry);
 
     let txDataAccount = await program.account.txDataAccount.fetch(txData);
     assert.equal(txDataAccount.expiresSlot.toNumber(), initialExpiry.toNumber());
@@ -1243,26 +1164,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
     const slot = await provider.connection.getSlot("confirmed");
     const initialExpiry = new anchor.BN(slot + 10000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, initialExpiry)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100, initialExpiry);
 
     const currentSlot = await provider.connection.getSlot("confirmed");
     const lowerExpiry = new anchor.BN(currentSlot + 500); // Less than current expires_slot
@@ -1286,29 +1190,13 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
   it("rejects txdata_close_expired for non-expired TxData", async () => {
     const authority = Keypair.generate();
     const cleaner = Keypair.generate();
-    await airdrop(provider, authority.publicKey, 2);
-    await airdrop(provider, cleaner.publicKey, 1);
-
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
+    await Promise.all([
+      airdrop(provider, authority.publicKey, 2),
+      airdrop(provider, cleaner.publicKey, 1),
+    ]);
 
     const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 50000); // Far in the future
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50000));
 
     try {
       await program.methods
@@ -1334,26 +1222,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100);
 
     try {
       await program.methods
@@ -1373,29 +1242,12 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
   it("rejects txdata_write from wrong authority", async () => {
     const authority = Keypair.generate();
     const wrongAuthority = Keypair.generate();
-    await airdrop(provider, authority.publicKey, 2);
-    await airdrop(provider, wrongAuthority.publicKey, 1);
+    await Promise.all([
+      airdrop(provider, authority.publicKey, 2),
+      airdrop(provider, wrongAuthority.publicKey, 1),
+    ]);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100);
 
     // Try to write as wrongAuthority — seed derivation uses signer's key,
     // which produces a different PDA, causing ConstraintSeeds
@@ -1413,7 +1265,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
       const haystack = errorHaystack(e);
       assert.match(
         haystack,
-        /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint/i,
+        SEED_MISMATCH_PATTERN,
         `Expected authority constraint error, got: ${haystack}`
       );
     }
@@ -1422,29 +1274,12 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
   it("rejects settle_from_txdata from wrong authority", async () => {
     const authority = Keypair.generate();
     const wrongAuthority = Keypair.generate();
-    await airdrop(provider, authority.publicKey, 2);
-    await airdrop(provider, wrongAuthority.publicKey, 2);
+    await Promise.all([
+      airdrop(provider, authority.publicKey, 2),
+      airdrop(provider, wrongAuthority.publicKey, 2),
+    ]);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100);
 
     await program.methods
       .txdataWrite(uploadId, 0, Buffer.alloc(50))
@@ -1478,7 +1313,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
       const haystack = errorHaystack(e);
       assert.match(
         haystack,
-        /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint|Unauthorized/i,
+        SEED_MISMATCH_PATTERN,
         `Expected authority constraint error, got: ${haystack}`
       );
     }
@@ -1489,26 +1324,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const otherPubkey = Keypair.generate().publicKey;
     await airdrop(provider, authority.publicKey, 2);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 10_000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100);
 
     try {
       await program.methods
@@ -1525,7 +1341,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
       const haystack = errorHaystack(e);
       assert.match(
         haystack,
-        /ConstraintAddress|address constraint/i,
+        ADDRESS_MISMATCH_PATTERN,
         `Expected ConstraintAddress, got: ${haystack}`
       );
     }
@@ -1535,29 +1351,13 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const authority = Keypair.generate();
     const cleaner = Keypair.generate();
     const wrongRefund = Keypair.generate().publicKey;
-    await airdrop(provider, authority.publicKey, 2);
-    await airdrop(provider, cleaner.publicKey, 1);
-
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
+    await Promise.all([
+      airdrop(provider, authority.publicKey, 2),
+      airdrop(provider, cleaner.publicKey, 1),
+    ]);
 
     const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 50_000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50_000));
 
     // Hits ConstraintAddress before TxDataNotExpired
     // because Anchor validates account constraints before running the handler body
@@ -1576,7 +1376,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
       const haystack = errorHaystack(e);
       assert.match(
         haystack,
-        /ConstraintAddress|address constraint/i,
+        ADDRESS_MISMATCH_PATTERN,
         `Expected ConstraintAddress, got: ${haystack}`
       );
     }
@@ -1584,9 +1384,6 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
 });
 
 describe("solana-pa-prototype (update_expiry_config)", () => {
-  // 7 days at 400ms/slot — matches SEVEN_DAYS_SLOTS in state.rs
-  const SEVEN_DAYS_SLOTS = 1_512_000;
-
   it("updates expiry config successfully", async () => {
     await program.methods
       .updateExpiryConfig(new anchor.BN(50), new anchor.BN(5000))
@@ -1672,7 +1469,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
       const haystack = errorHaystack(e);
       assert.match(
         haystack,
-        /ConstraintHasOne|has.?one|Unauthorized/i,
+        AUTHORITY_MISMATCH_PATTERN,
         `Expected authority constraint error, got: ${haystack}`
       );
     }
@@ -1719,26 +1516,9 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 12);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100, expiresSlot);
 
     await program.methods
       .txdataWrite(uploadId, 0, Buffer.alloc(10))
@@ -1810,29 +1590,14 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
   it("allows permissionless close of expired TxData", async () => {
     const authority = Keypair.generate();
     const cleaner = Keypair.generate();
-    await airdrop(provider, authority.publicKey, 2);
-    await airdrop(provider, cleaner.publicKey, 1);
-
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
+    await Promise.all([
+      airdrop(provider, authority.publicKey, 2),
+      airdrop(provider, cleaner.publicKey, 1),
+    ]);
 
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + 12);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100, expiresSlot);
 
     const before = await provider.connection.getAccountInfo(txData);
     assert.ok(before, "TxData should exist before close");
@@ -1866,26 +1631,9 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 12);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData, expiresSlot } = await initTxData(authority, 100, new anchor.BN(
+      (await provider.connection.getSlot("confirmed")) + 12
+    ));
 
     // Wait for the original expiry to pass so the extend would need to
     // satisfy bounds from current slot. Then try extending to current_slot + 5
@@ -1915,29 +1663,12 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const { uploadId, uploadIdLe } = freshUploadId();
-
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
-
-    const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + 1000);
-
-    await program.methods
-      .txdataInit(uploadId, 100, expiresSlot)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(
+      (await provider.connection.getSlot("confirmed")) + 1000
+    ));
 
     const currentSlot = await provider.connection.getSlot("confirmed");
-    const tooLateExpiry = new anchor.BN(currentSlot + 216_000 + 100_000);
+    const tooLateExpiry = new anchor.BN(currentSlot + MAX_EXPIRY_SLOTS + 100_000);
 
     try {
       await program.methods
@@ -1957,46 +1688,30 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 });
 
 describe("solana-pa-prototype (Settlement error paths — fixture variants)", () => {
-  it("rejects NonExistingRoot (wrong commitment tree root)", async () => {
-    const wrongRootFixture = loadFixture("wrong_root.json");
-    const payload = Buffer.from(wrongRootFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(wrongRootFixture.consumed_nullifiers_b64);
+  async function expectSettleError(fixtureName: string, expectedError: string) {
+    const fx = loadFixture(fixtureName);
+    const payload = Buffer.from(fx.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     try {
       await settleFixtureViaTxData(payload, remainingAccounts);
-      assert.fail("expected NonExistingRoot error");
+      assert.fail(`expected ${expectedError} error`);
     } catch (e: any) {
-      assertPAError(e, "NonExistingRoot");
+      assertPAError(e, expectedError);
     }
+  }
+
+  it("rejects NonExistingRoot (wrong commitment tree root)", async () => {
+    await expectSettleError("wrong_root.json", "NonExistingRoot");
   });
 
   it("rejects AggregationRequired (no aggregation proof)", async () => {
-    const noAggFixture = loadFixture("no_aggregation.json");
-    const payload = Buffer.from(noAggFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(noAggFixture.consumed_nullifiers_b64);
-    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
-
-    try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
-      assert.fail("expected AggregationRequired error");
-    } catch (e: any) {
-      assertPAError(e, "AggregationRequired");
-    }
+    await expectSettleError("no_aggregation.json", "AggregationRequired");
   });
 
   it("rejects InvalidProof (garbage aggregation proof bytes)", async () => {
-    const garbageFixture = loadFixture("garbage_proof.json");
-    const payload = Buffer.from(garbageFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(garbageFixture.consumed_nullifiers_b64);
-    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
-
-    try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
-      assert.fail("expected InvalidProof error");
-    } catch (e: any) {
-      assertPAError(e, "InvalidProof");
-    }
+    await expectSettleError("garbage_proof.json", "InvalidProof");
   });
 });
 
@@ -2229,9 +1944,8 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
   const outputFixture = loadFixture("batch_forwarder_output.json");
 
   it("rejects OutputAccount when index is out of bounds", async () => {
-    const f = outputFixture;
-    const payload = Buffer.from(f.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
+    const payload = Buffer.from(outputFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
 
     // Fixture expects remaining_accounts[2] (index=2), but we only provide
     // [nullifier_pda, test_forwarder] — index 2 does not exist.
@@ -2254,9 +1968,8 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
   });
 
   it("rejects OutputAccount when data is shorter than offset+len", async () => {
-    const f = outputFixture;
-    const payload = Buffer.from(f.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
+    const payload = Buffer.from(outputFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
 
     // Create a data account with only 2 bytes — fixture expects len=4.
     // The forwarder writes min(payload.len(), data.len()) = 2 bytes.
@@ -2345,13 +2058,8 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const tx = Buffer.from(fixture.tx_b64, "base64");
-
-    // Init and write TxData (these don't check paused state)
-    const { uploadId, txData } = await uploadTxData(authority, tx);
-
-    const nullifierAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
-    const allRemainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+    // Paused check fires before deserialization — minimal payload suffices
+    const { uploadId, txData } = await uploadTxData(authority, Buffer.from([0, 1, 2, 3]));
 
     try {
       await program.methods
@@ -2366,7 +2074,6 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
           verifierEntry: verifierEntryPda,
           verifierProgram: GROTH16_VERIFIER_ID,
         })
-        .remainingAccounts(allRemainingAccounts)
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
           ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),

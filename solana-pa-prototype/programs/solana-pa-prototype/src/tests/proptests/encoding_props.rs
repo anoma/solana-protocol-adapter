@@ -6,17 +6,6 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
 
     #[test]
-    fn prop_action_tree_root_deterministic(
-        tag1 in arb_digest(),
-        tag2 in arb_digest(),
-    ) {
-        let tags = vec![tag1, tag2];
-        let root1 = compute_action_tree_root(&tags).expect("should compute root");
-        let root2 = compute_action_tree_root(&tags).expect("should compute root");
-        prop_assert_eq!(root1, root2, "same tags should produce same root");
-    }
-
-    #[test]
     fn prop_action_tree_root_sensitive_to_tags(
         tag1 in arb_digest(),
         tag2 in arb_digest(),

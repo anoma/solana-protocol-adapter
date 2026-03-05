@@ -408,20 +408,23 @@ fn execute_settlement<'info>(
 ) -> Result<()> {
     let pa_state_key = pa_state_info.key;
 
-    // Historical roots are valid if their PDA marker exists.
+    // Deduplicate roots before validation to avoid redundant PDA derivations.
+    // Each `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
+    // so deduplication saves significant compute when CUs share roots.
+    let mut unique_roots: Vec<&arm_core::Digest> = Vec::new();
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            require!(
-                root::is_root_valid(
-                    state,
-                    &crate::ID,
-                    pa_state_key,
-                    &cu.instance.consumed_commitment_tree_root,
-                    remaining_accounts,
-                ),
-                PAError::NonExistingRoot
-            );
+            let root = &cu.instance.consumed_commitment_tree_root;
+            if !unique_roots.iter().any(|r| *r == root) {
+                unique_roots.push(root);
+            }
         }
+    }
+    for root in &unique_roots {
+        require!(
+            root::is_root_valid(state, &crate::ID, pa_state_key, root, remaining_accounts),
+            PAError::NonExistingRoot
+        );
     }
 
     let nullifiers = settle::extract_nullifiers(tx);

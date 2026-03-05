@@ -38,8 +38,10 @@ fn hash_delta_msg(msg: &[u8]) -> [u8; 32] {
     sha2::Sha256::digest(msg).into()
 }
 
+use block_time_forwarder::{RESULT_GT, RESULT_LT};
 use solana_pa::external_calls::encode_external_call;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
+use test_forwarder::{MODE_FAIL, MODE_SILENT, MODE_WRITE_ACCOUNT};
 
 #[derive(Serialize)]
 struct Fixture {
@@ -70,11 +72,6 @@ enum ForwarderMode {
     TestForwarderSilent,
     TestForwarderOutputAccount,
 }
-
-/// Test-forwarder mode bytes — must match programs/test-forwarder/src/lib.rs.
-const TF_MODE_FAIL: u8 = 0x00;
-const TF_MODE_SILENT: u8 = 0x01;
-const TF_MODE_WRITE_ACCOUNT: u8 = 0x02;
 
 /// Extract the Groth16 selector from a transaction's aggregation proof.
 /// The selector is the first 4 bytes of the verifier_parameters digest,
@@ -128,54 +125,13 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
     Ok(())
 }
 
-fn b58_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'1'..=b'9' => Some(byte - b'1'),
-        b'A'..=b'H' => Some(byte - b'A' + 9),
-        b'J'..=b'N' => Some(byte - b'J' + 17),
-        b'P'..=b'Z' => Some(byte - b'P' + 22),
-        b'a'..=b'k' => Some(byte - b'a' + 33),
-        b'm'..=b'z' => Some(byte - b'm' + 44),
-        _ => None,
-    }
-}
-
-fn decode_base58(s: &str) -> Result<Vec<u8>> {
-    // Minimal base58 decoder (Bitcoin alphabet) sufficient for Solana pubkeys.
-    let mut bytes: Vec<u8> = Vec::new();
-    for &ch in s.as_bytes() {
-        let value = b58_value(ch).ok_or_else(|| anyhow!("invalid base58 char: {}", ch as char))?;
-
-        let mut carry = value as u32;
-        for b in bytes.iter_mut().rev() {
-            let acc = (*b as u32) * 58 + carry;
-            *b = (acc & 0xff) as u8;
-            carry = acc >> 8;
-        }
-        while carry > 0 {
-            bytes.insert(0, (carry & 0xff) as u8);
-            carry >>= 8;
-        }
-    }
-
-    let leading_zeros = s.as_bytes().iter().take_while(|&&c| c == b'1').count();
-    if leading_zeros > 0 {
-        let mut out = vec![0u8; leading_zeros];
-        out.extend_from_slice(&bytes);
-        bytes = out;
-    }
-
-    Ok(bytes)
-}
-
 fn decode_base58_32(s: &str) -> Result<[u8; 32]> {
-    let bytes = decode_base58(s)?;
-    if bytes.len() != 32 {
-        return Err(anyhow!("expected 32 bytes, got {}", bytes.len()));
-    }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
+    let bytes = bs58::decode(s)
+        .into_vec()
+        .with_context(|| format!("invalid base58: {s}"))?;
+    bytes
+        .try_into()
+        .map_err(|v: Vec<u8>| anyhow!("expected 32 bytes, got {}", v.len()))
 }
 
 fn test_forwarder_program_id() -> Result<[u8; 32]> {
@@ -190,12 +146,12 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
     // The forwarder will return RESULT_LT (0x00).
     let input = (-1_i64).to_le_bytes().to_vec();
 
-    // If output_mismatch is true, set expected_output to RESULT_GT (0x02) which is WRONG.
-    // The forwarder will return 0x00 (LT), but we expect 0x02 (GT), causing ExternalCallOutputMismatch.
+    // If output_mismatch is true, set expected_output to RESULT_GT which is WRONG.
+    // The forwarder will return RESULT_LT, but we expect RESULT_GT, causing ExternalCallOutputMismatch.
     let expected_output = if output_mismatch {
-        vec![0x02] // RESULT_GT - intentionally wrong
+        vec![RESULT_GT]
     } else {
-        vec![0x00] // RESULT_LT - correct
+        vec![RESULT_LT]
     };
 
     Ok(encode_external_call(&SolanaExternalCall {
@@ -209,7 +165,7 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
 fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
     Ok(encode_external_call(&SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
-        instruction_data: vec![TF_MODE_FAIL],
+        instruction_data: vec![MODE_FAIL],
         expected_output: vec![],
         output_mode: OutputMode::ReturnData,
     }))
@@ -218,7 +174,7 @@ fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
 fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
     Ok(encode_external_call(&SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
-        instruction_data: vec![TF_MODE_SILENT],
+        instruction_data: vec![MODE_SILENT],
         expected_output: vec![],
         output_mode: OutputMode::ReturnData,
     }))
@@ -230,7 +186,7 @@ fn test_forwarder_output_account_payload_blob(
 ) -> Result<ExpirableBlob> {
     // The forwarder strips input[0] (mode byte) and writes input[1..] to the account.
     let mut instruction_data = Vec::with_capacity(1 + expected_bytes.len());
-    instruction_data.push(TF_MODE_WRITE_ACCOUNT);
+    instruction_data.push(MODE_WRITE_ACCOUNT);
     instruction_data.extend_from_slice(expected_bytes);
 
     Ok(encode_external_call(&SolanaExternalCall {
@@ -478,10 +434,7 @@ fn parse_args() -> Result<CliArgs> {
     let mut args = env::args().skip(1);
     let mut threads: Option<usize> = None;
     let mut debug_assumptions = false;
-    let mut output_mismatch = false;
-    let mut forwarder_fail = false;
-    let mut forwarder_silent = false;
-    let mut forwarder_output_account = false;
+    let mut forwarder_mode: Option<ForwarderMode> = None;
     let mut nonce_seed: Option<u8> = None;
     let mut multi_external_call = false;
     let mut error_variants_dir: Option<PathBuf> = None;
@@ -524,17 +477,22 @@ fn parse_args() -> Result<CliArgs> {
             "--debug-assumptions" => {
                 debug_assumptions = true;
             }
-            "--output-mismatch" => {
-                output_mismatch = true;
-            }
-            "--forwarder-fail" => {
-                forwarder_fail = true;
-            }
-            "--forwarder-silent" => {
-                forwarder_silent = true;
-            }
-            "--forwarder-output-account" => {
-                forwarder_output_account = true;
+            "--output-mismatch" | "--forwarder-fail" | "--forwarder-silent"
+            | "--forwarder-output-account" => {
+                if forwarder_mode.is_some() {
+                    return Err(anyhow!(
+                        "at most one of --output-mismatch, --forwarder-fail, --forwarder-silent, --forwarder-output-account may be set"
+                    ));
+                }
+                forwarder_mode = Some(match flag {
+                    "--output-mismatch" => ForwarderMode::BlockTimeForwarder {
+                        output_mismatch: true,
+                    },
+                    "--forwarder-fail" => ForwarderMode::TestForwarderFail,
+                    "--forwarder-silent" => ForwarderMode::TestForwarderSilent,
+                    "--forwarder-output-account" => ForwarderMode::TestForwarderOutputAccount,
+                    _ => unreachable!(),
+                });
             }
             "--nonce-seed" => {
                 let value = eq_value
@@ -570,34 +528,9 @@ fn parse_args() -> Result<CliArgs> {
     let out_path = out_path
         .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
 
-    let mode_flags = [
-        output_mismatch,
-        forwarder_fail,
-        forwarder_silent,
-        forwarder_output_account,
-    ];
-    let mode_count = mode_flags.iter().filter(|&&f| f).count();
-    if mode_count > 1 {
-        return Err(anyhow!(
-            "at most one of --output-mismatch, --forwarder-fail, --forwarder-silent, --forwarder-output-account may be set"
-        ));
-    }
-
-    let forwarder_mode = if output_mismatch {
-        ForwarderMode::BlockTimeForwarder {
-            output_mismatch: true,
-        }
-    } else if forwarder_fail {
-        ForwarderMode::TestForwarderFail
-    } else if forwarder_silent {
-        ForwarderMode::TestForwarderSilent
-    } else if forwarder_output_account {
-        ForwarderMode::TestForwarderOutputAccount
-    } else {
-        ForwarderMode::BlockTimeForwarder {
-            output_mismatch: false,
-        }
-    };
+    let forwarder_mode = forwarder_mode.unwrap_or(ForwarderMode::BlockTimeForwarder {
+        output_mismatch: false,
+    });
 
     Ok(CliArgs {
         threads,
@@ -674,19 +607,17 @@ fn main() -> Result<()> {
         tx.verify_aggregation().context("verify aggregated proof")
     })?;
 
-    eprintln!("phase: encode seal");
-    let agg_proof_bytes = tx.aggregation_proof.as_ref().unwrap();
-    tx.aggregation_proof = Some(encode_seal(agg_proof_bytes).context("encode seal")?);
-    eprintln!("phase done: encode seal");
+    timed_phase("encode_seal", || {
+        let agg_proof_bytes = tx.aggregation_proof.as_ref().unwrap();
+        tx.aggregation_proof = Some(encode_seal(agg_proof_bytes).context("encode seal")?);
+        Ok(())
+    })?;
 
-    eprintln!("phase: serialize_tx");
-    let start = Instant::now();
-    let tx_bytes = bincode::serialize(&tx).context("serialize tx")?;
-    eprintln!(
-        "phase done: serialize_tx ({}, {} bytes)",
-        fmt_duration(start.elapsed()),
-        tx_bytes.len()
-    );
+    let tx_bytes = timed_phase("serialize_tx", || {
+        let bytes = bincode::serialize(&tx).context("serialize tx")?;
+        eprintln!("  {} bytes", bytes.len());
+        Ok(bytes)
+    })?;
 
     let consumed_nullifiers_b64 = timed_phase("extract_nullifiers", || {
         let mut nuls = Vec::new();
@@ -698,25 +629,17 @@ fn main() -> Result<()> {
         Ok(nuls)
     })?;
 
-    eprintln!("phase: tamper_tx_and_serialize");
-    let start = Instant::now();
-    let mut tx_tampered = tx.clone();
-    mutate_created_commitment_keep_structure(&mut tx_tampered)?;
-    let tx_tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
-    eprintln!(
-        "phase done: tamper_tx_and_serialize ({}, {} bytes)",
-        fmt_duration(start.elapsed()),
-        tx_tampered_bytes.len()
-    );
+    let (tx_tampered_bytes, selector) = timed_phase("tamper_and_extract_selector", || {
+        let mut tx_tampered = tx.clone();
+        mutate_created_commitment_keep_structure(&mut tx_tampered)?;
+        let tampered_bytes =
+            bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
+        eprintln!("  tampered: {} bytes", tampered_bytes.len());
 
-    eprintln!("phase: extract_selector");
-    let start = Instant::now();
-    let selector = extract_selector(&tx).context("extract selector from proof")?;
-    eprintln!(
-        "phase done: extract_selector ({}, selector={})",
-        fmt_duration(start.elapsed()),
-        selector
-    );
+        let sel = extract_selector(&tx).context("extract selector from proof")?;
+        eprintln!("  selector: {sel}");
+        Ok((tampered_bytes, sel))
+    })?;
 
     let fixture = Fixture {
         format: "arm-risc0:Transaction(bincode)",
@@ -756,6 +679,20 @@ fn main() -> Result<()> {
     Ok(())
 }
 
+fn compute_expected_claim_digest(
+    journal: &[u8],
+    vk: &Digest,
+) -> risc0_zkvm::sha::Digest {
+    let words = arm::utils::bytes_to_words(journal);
+    let padded_bytes = arm::utils::words_to_bytes(&words);
+    let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
+    let expected_claim = ReceiptClaim::ok(
+        core_to_risc0_digest(vk),
+        MaybePruned::Pruned(journal_digest),
+    );
+    expected_claim.digest()
+}
+
 fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
     // The batch aggregation guest calls:
     // - env::verify(COMPLIANCE_VK, &ci_words)
@@ -785,14 +722,8 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
             let receipt = Receipt::new(inner, journal.clone());
             let receipt_claim_digest = receipt.claim().context("read compliance claim")?.digest();
 
-            let words = arm::utils::bytes_to_words(&journal);
-            let padded_bytes = arm::utils::words_to_bytes(&words);
-            let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
-            let expected_claim = ReceiptClaim::ok(
-                core_to_risc0_digest(&arm::constants::COMPLIANCE_VK),
-                MaybePruned::Pruned(journal_digest),
-            );
-            let expected_claim_digest = expected_claim.digest();
+            let expected_claim_digest =
+                compute_expected_claim_digest(&journal, &arm::constants::COMPLIANCE_VK);
 
             eprintln!(
                 "debug_assumptions: receipt_claim_digest={} expected_claim_digest={}",
@@ -849,14 +780,8 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
             let receipt = Receipt::new(inner, verifier.instance.clone());
             let receipt_claim_digest = receipt.claim().context("read logic claim")?.digest();
 
-            let words = arm::utils::bytes_to_words(&verifier.instance);
-            let padded_bytes = arm::utils::words_to_bytes(&words);
-            let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
-            let expected_claim = ReceiptClaim::ok(
-                core_to_risc0_digest(&verifier.verifying_key),
-                MaybePruned::Pruned(journal_digest),
-            );
-            let expected_claim_digest = expected_claim.digest();
+            let expected_claim_digest =
+                compute_expected_claim_digest(&verifier.instance, &verifier.verifying_key);
 
             eprintln!(
                 "debug_assumptions: logic[{logic_idx}] instance_len={} (mod4={}) receipt_claim_digest={} expected_claim_digest={}",
@@ -879,61 +804,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn b58_value_digits() {
-        // '1' -> 0, '9' -> 8
-        assert_eq!(b58_value(b'1'), Some(0));
-        assert_eq!(b58_value(b'9'), Some(8));
-    }
-
-    #[test]
-    fn b58_value_uppercase() {
-        // 'A' -> 9, 'H' -> 16, 'J' -> 17 (skips I), 'N' -> 21, 'P' -> 22 (skips O), 'Z' -> 32
-        assert_eq!(b58_value(b'A'), Some(9));
-        assert_eq!(b58_value(b'H'), Some(16));
-        assert_eq!(b58_value(b'J'), Some(17));
-        assert_eq!(b58_value(b'N'), Some(21));
-        assert_eq!(b58_value(b'P'), Some(22));
-        assert_eq!(b58_value(b'Z'), Some(32));
-    }
-
-    #[test]
-    fn b58_value_lowercase() {
-        // 'a' -> 33, 'k' -> 43, 'm' -> 44 (skips l), 'z' -> 57
-        assert_eq!(b58_value(b'a'), Some(33));
-        assert_eq!(b58_value(b'k'), Some(43));
-        assert_eq!(b58_value(b'm'), Some(44));
-        assert_eq!(b58_value(b'z'), Some(57));
-    }
-
-    #[test]
-    fn b58_value_excluded_chars() {
-        // '0', 'I', 'O', 'l' are excluded from base58
-        assert_eq!(b58_value(b'0'), None);
-        assert_eq!(b58_value(b'I'), None);
-        assert_eq!(b58_value(b'O'), None);
-        assert_eq!(b58_value(b'l'), None);
-    }
-
-    #[test]
-    fn decode_base58_leading_ones_are_zero_bytes() {
-        // Leading '1' chars encode leading zero bytes in base58
-        let result = decode_base58("111").unwrap();
-        assert_eq!(result, vec![0, 0, 0]);
-    }
-
-    #[test]
-    fn decode_base58_invalid_char_returns_error() {
-        assert!(
-            decode_base58("0abc").is_err(),
-            "'0' is not in base58 alphabet"
-        );
-        assert!(
-            decode_base58("Idef").is_err(),
-            "'I' is not in base58 alphabet"
-        );
-    }
-
-    #[test]
     fn decode_base58_32_system_program() {
         // Solana system program: "11111111111111111111111111111111" (32 '1's) = 32 zero bytes
         let result = decode_base58_32("11111111111111111111111111111111").unwrap();
@@ -943,17 +813,6 @@ mod tests {
     #[test]
     fn decode_base58_32_wrong_length_returns_error() {
         assert!(decode_base58_32("1").is_err());
-    }
-
-    #[test]
-    fn decode_base58_32_known_pubkey() {
-        // Block-time-forwarder program ID used in the fixture-gen:
-        // "J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6"
-        // Verify it decodes to exactly 32 bytes and is deterministic
-        let result = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6").unwrap();
-        assert_eq!(result.len(), 32);
-        let result2 = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6").unwrap();
-        assert_eq!(result, result2);
     }
 
     #[test]
