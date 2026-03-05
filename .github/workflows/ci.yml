@@ -137,4 +137,4 @@ jobs:
 
       - name: Build and test
         working-directory: ./solana-pa-prototype
-        run: anchor test
+        run: ./scripts/anchor-test.sh
