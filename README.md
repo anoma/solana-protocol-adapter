@@ -146,7 +146,7 @@ pub struct ForwardCall<'info> {
    [input: N bytes]
    ```
 
-3. **Output via return data**: Use `set_return_data(&output)`. The PA reads this immediately after CPI and verifies it matches `expected_output` from the proof.
+3. **Output via return data**: Use `set_return_data(&output)`. The PA reads this immediately after CPI and verifies it matches `expected_output` from `LogicVerifierInputs.app_data.external_payload`.
 
 4. **Output account mode**: For outputs >1024 bytes, write to an account and use `OutputMode::OutputAccount` in the external call encoding.
 
@@ -240,7 +240,7 @@ pub fn forward_call(
 }
 ```
 
-The PA's CPI call passes `logic_ref` and `input` extracted from the RM transaction. After the call, it reads return data and compares against `expected_output` embedded in the proof.
+The PA's CPI call passes `logic_ref` and `input` extracted from the RM transaction. After the call, it reads return data and compares against `expected_output` from `LogicVerifierInputs.app_data.external_payload`.
 
 ### How External Calls Are Encoded
 
@@ -256,6 +256,16 @@ pub struct SolanaExternalCall {
 ```
 
 The fixture generator (`tools/fixture-gen`) encodes this structure with the forwarder's program ID, a timestamp, and the expected comparison result.
+
+### Assumption Boundary (EVM Parity)
+
+The Solana PA intentionally mirrors the EVM PA trust model:
+
+1. Aggregation proof verification is bound to `instance_journal` bytes.
+2. External call execution and output checks are driven by `LogicVerifierInputs.app_data.external_payload`.
+3. The PA does **not** deserialize `instance_journal` on-chain to reconstruct or cross-check payload fields.
+
+As a result, transaction construction tooling (fixture generation, relayer/builder pipeline) is responsible for ensuring `app_data` and `instance_journal` are consistent.
 
 ### How the Test Passes Accounts
 
@@ -472,8 +482,7 @@ Fixtures contain pre-generated RM transactions with valid Groth16 proofs. Requir
   "selector": "0x73c457ba",
   "tx_b64": "<base64 encoded RM transaction>",
   "tx_tampered_b64": "<base64 encoded tampered transaction>",
-  "consumed_nullifiers_b64": ["<base64>", ...],
-  "created_commitments_b64": ["<base64>", ...]
+  "consumed_nullifiers_b64": ["<base64>", ...]
 }
 ```
 

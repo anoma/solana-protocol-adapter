@@ -97,47 +97,68 @@ if ! yarn install --frozen-lockfile; then
   yarn install
 fi
 
-if [[ ! -f "target/deploy/solana_pa_prototype-keypair.json" ]] || [[ ! -f "target/deploy/block_time_forwarder-keypair.json" ]]; then
+if [[ ! -f "target/deploy/solana_pa_prototype-keypair.json" ]] || [[ ! -f "target/deploy/block_time_forwarder-keypair.json" ]] || [[ ! -f "target/deploy/test_forwarder-keypair.json" ]]; then
   echo "    Generating missing program keypairs..."
   build_with_filtered_output anchor build --no-idl
 fi
 
-PA_KEYPAIR="target/deploy/solana_pa_prototype-keypair.json"
-PA_ID="$(solana-keygen pubkey "$PA_KEYPAIR")"
-PA_CURRENT="$(read_declare_id "programs/solana-pa-prototype/src/lib.rs")"
+sync_program_id() {
+  local name="$1"
+  local keypair="$2"
+  local lib_rs="$3"
+  local anchor_key="$4"
 
-if [[ "$PA_CURRENT" != "$PA_ID" ]]; then
-  echo "    PA program ID mismatch: $PA_CURRENT -> $PA_ID"
-  sed -i -E "s/^declare_id!\(\"[^\"]+\"\);/declare_id!(\"${PA_ID}\");/" programs/solana-pa-prototype/src/lib.rs
-  sed -i -E "s/^solana_pa_prototype = \"[^\"]+\"$/solana_pa_prototype = \"${PA_ID}\"/" Anchor.toml
-else
-  echo "    PA program ID already synced: $PA_ID"
+  local id
+  id="$(solana-keygen pubkey "$keypair")"
+  local current
+  current="$(read_declare_id "$lib_rs")"
+
+  if [[ "$current" != "$id" ]]; then
+    echo "    ${name} program ID mismatch: $current -> $id" >&2
+    sed -i -E "s/^declare_id!\(\"[^\"]+\"\);/declare_id!(\"${id}\");/" "$lib_rs"
+    sed -i -E "s/^${anchor_key} = \"[^\"]+\"$/${anchor_key} = \"${id}\"/" Anchor.toml
+  else
+    echo "    ${name} program ID already synced: $id" >&2
+  fi
+
+  printf '%s' "$id"
+}
+
+PA_ID="$(sync_program_id "PA" \
+  "target/deploy/solana_pa_prototype-keypair.json" \
+  "programs/solana-pa-prototype/src/lib.rs" \
+  "solana_pa_prototype")"
+
+BTF_OLD="$(read_declare_id "programs/block-time-forwarder/src/lib.rs")"
+BTF_ID="$(sync_program_id "block_time_forwarder" \
+  "target/deploy/block_time_forwarder-keypair.json" \
+  "programs/block-time-forwarder/src/lib.rs" \
+  "block_time_forwarder")"
+
+# BTF ID also appears in fixture-gen and integration tests
+if [[ "$BTF_OLD" != "$BTF_ID" ]]; then
+  sed -i -E "s/decode_base58_32\(\"${BTF_OLD}\"\)/decode_base58_32(\"${BTF_ID}\")/" tools/fixture-gen/src/main.rs
+  sed -i -E "s/blockTimeForwarderId = new PublicKey\(\"[^\"]+\"\)/blockTimeForwarderId = new PublicKey(\"${BTF_ID}\")/" tests/solana-pa-prototype.ts
 fi
 
-BTF_KEYPAIR="target/deploy/block_time_forwarder-keypair.json"
-BTF_ID="$(solana-keygen pubkey "$BTF_KEYPAIR")"
-BTF_CURRENT="$(read_declare_id "programs/block-time-forwarder/src/lib.rs")"
+TF_OLD="$(read_declare_id "programs/test-forwarder/src/lib.rs")"
+TF_ID="$(sync_program_id "test_forwarder" \
+  "target/deploy/test_forwarder-keypair.json" \
+  "programs/test-forwarder/src/lib.rs" \
+  "test_forwarder")"
 
-if [[ "$BTF_CURRENT" != "$BTF_ID" ]]; then
-  echo "    block_time_forwarder program ID mismatch: $BTF_CURRENT -> $BTF_ID"
-
-  sed -i -E "s/^declare_id!\(\"[^\"]+\"\);/declare_id!(\"${BTF_ID}\");/" programs/block-time-forwarder/src/lib.rs
-  sed -i -E "s/^block_time_forwarder = \"[^\"]+\"$/block_time_forwarder = \"${BTF_ID}\"/" Anchor.toml
-  sed -i -E "s/decode_base58_32\(\"[^\"]+\"\)/decode_base58_32(\"${BTF_ID}\")/" tools/fixture-gen/src/main.rs
-  sed -i -E "s/blockTimeForwarderId = new PublicKey\(\"[^\"]+\"\)/blockTimeForwarderId = new PublicKey(\"${BTF_ID}\")/" tests/solana-pa-prototype.ts
-else
-  echo "    block_time_forwarder program ID already synced: $BTF_ID"
+# TF ID also appears in fixture-gen and integration tests
+if [[ "$TF_OLD" != "$TF_ID" ]]; then
+  sed -i -E "s/decode_base58_32\(\"${TF_OLD}\"\)/decode_base58_32(\"${TF_ID}\")/" tools/fixture-gen/src/main.rs
+  sed -i -E "s/testForwarderId = new PublicKey\(\"[^\"]+\"\)/testForwarderId = new PublicKey(\"${TF_ID}\")/" tests/solana-pa-prototype.ts
 fi
 
 # anchor build uses cargo +nightly for IDL generation, which is incompatible
 # with debug artifacts compiled by the stable toolchain (e.g. from cargo test).
 rm -rf target/debug/
 
-echo "    Building PA..."
-build_with_filtered_output anchor build -p solana-pa-prototype
-
-echo "    Building block_time_forwarder..."
-build_with_filtered_output anchor build -p block-time-forwarder
+echo "    Building programs..."
+build_with_filtered_output anchor build
 
 REQUIRED_FIXTURE="tests/fixtures/batch_groth16.json"
 OPTIONAL_MISMATCH_FIXTURE="tests/fixtures/batch_groth16_mismatch.json"
@@ -158,6 +179,12 @@ fi
 echo "==> (2/3) Starting validator"
 mkdir -p "$VALIDATOR_LEDGER"
 
+# RISC0 verifier programs and PDAs cloned from devnet
+VERIFIER_ROUTER="BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"
+GROTH16_VERIFIER="2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"
+ROUTER_PDA="9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"
+VERIFIER_ENTRY_PDA="4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
+
 solana-test-validator \
   --reset \
   --ledger "$VALIDATOR_LEDGER" \
@@ -165,15 +192,15 @@ solana-test-validator \
   --faucet-port 9900 \
   --bind-address 127.0.0.1 \
   --url devnet \
-  --clone-upgradeable-program BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg \
-  --clone-upgradeable-program 2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD \
-  --clone 9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S \
-  --clone 4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey \
+  --clone-upgradeable-program "$VERIFIER_ROUTER" \
+  --clone-upgradeable-program "$GROTH16_VERIFIER" \
+  --clone "$ROUTER_PDA" \
+  --clone "$VERIFIER_ENTRY_PDA" \
   --log \
   >"$VALIDATOR_LOG" 2>&1 &
 VALIDATOR_PID=$!
 
-if ! wait_for_validator "http://127.0.0.1:8899"; then
+if ! wait_for_validator "$CLUSTER_URL"; then
   echo "Validator failed to start. Last lines from ${VALIDATOR_LOG}:"
   tail -n 50 "$VALIDATOR_LOG" || true
   exit 1

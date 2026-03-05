@@ -11,7 +11,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  SOLANA_VERSION: "2.3.9"
+  RUST_VERSION: "1.93.0"
+  SOLANA_VERSION: "3.0.13"
   ANCHOR_VERSION: "0.31.1"
 
 jobs:
@@ -25,8 +26,9 @@ jobs:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           components: rustfmt
 
       - name: Check formatting
@@ -43,8 +45,9 @@ jobs:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.RUST_VERSION }}
           components: clippy
 
       - name: Setup Rust cache
@@ -70,7 +73,9 @@ jobs:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -95,7 +100,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -130,4 +137,4 @@ jobs:
 
       - name: Build and test
         working-directory: ./solana-pa-prototype
-        run: anchor test
+        run: ./scripts/anchor-test.sh

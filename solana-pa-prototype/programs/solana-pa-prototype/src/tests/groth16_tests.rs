@@ -1,26 +1,18 @@
-//! Unit tests for groth16 module.
-
 use crate::groth16::{prepare_proof_for_verification, BATCH_AGGREGATION_IMAGE_ID};
 use crate::tests::utils::{
     create_minimal_transaction, fake_aggregation_proof_bytes, FAKE_SELECTOR,
 };
+use arm_core::transaction::Transaction;
 
-#[test]
-fn test_prepare_proof_accepts_batch_discriminant() {
+fn tx_with_fake_aggregation_proof() -> Transaction {
     let mut tx = create_minimal_transaction();
     tx.aggregation_proof = Some(fake_aggregation_proof_bytes());
-
-    let prepared = prepare_proof_for_verification(&tx).unwrap();
-    assert_eq!(prepared.image_id, BATCH_AGGREGATION_IMAGE_ID);
+    tx
 }
 
 #[test]
-fn test_prepare_proof_ignores_strategy_discriminant_like_evm_pa() {
-    // If a sequential aggregation proof is submitted, the PA does not explicitly reject it.
-    // It attempts verification as "batch" and the verifier should reject it later.
-    let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = Some(fake_aggregation_proof_bytes());
-
+fn test_prepare_proof_accepts_batch_discriminant() {
+    let tx = tx_with_fake_aggregation_proof();
     let prepared = prepare_proof_for_verification(&tx).unwrap();
     assert_eq!(prepared.image_id, BATCH_AGGREGATION_IMAGE_ID);
 }
@@ -35,15 +27,13 @@ fn test_prepare_proof_no_proof() {
 #[test]
 fn test_prepare_proof_invalid_bytes() {
     let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = Some(vec![0xFF, 0xFF, 0xFF]); // Invalid
+    tx.aggregation_proof = Some(vec![0xFF, 0xFF, 0xFF]);
     assert!(prepare_proof_for_verification(&tx).is_err());
 }
 
 #[test]
 fn test_selector_extraction_from_aggregation_proof() {
-    let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = Some(fake_aggregation_proof_bytes());
-
+    let tx = tx_with_fake_aggregation_proof();
     let prepared = prepare_proof_for_verification(&tx).unwrap();
     assert_eq!(
         prepared.seal.selector, FAKE_SELECTOR,

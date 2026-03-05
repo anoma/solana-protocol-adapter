@@ -14,14 +14,6 @@ use solana_system_interface::instruction as system_instruction;
 pub const NULLIFIER_SEED: &[u8] = b"nullifier";
 
 /// Derive the PDA address for a nullifier marker.
-///
-/// # Arguments
-/// * `program_id` - The PA program ID
-/// * `pa_state` - The PA state account pubkey (included in PDA seeds for scoping)
-/// * `nullifier_bytes` - The 32-byte nullifier digest
-///
-/// # Returns
-/// Tuple of (PDA pubkey, bump seed)
 pub fn derive_nullifier_pda(
     program_id: &Pubkey,
     pa_state: &Pubkey,
@@ -40,14 +32,6 @@ pub fn derive_nullifier_pda(
 /// 2. Check the marker isn't already owned by the program (would mean duplicate)
 /// 3. Create the marker PDA via CPI to system program
 ///
-/// # Arguments
-/// * `program_id` - The PA program ID
-/// * `pa_state_key` - The PA state account pubkey (included in PDA seeds)
-/// * `nullifier_bytes` - The 32-byte nullifier digest
-/// * `payer` - Account paying for PDA creation rent
-/// * `marker` - The nullifier marker account (must match derived PDA)
-/// * `system_program` - System program for CPI
-///
 /// # Errors
 /// * `PAError::NullifierPdaMismatch` - Provided marker doesn't match expected PDA
 /// * `PAError::DuplicateNullifier` - Marker already exists (nullifier spent)
@@ -58,6 +42,7 @@ pub fn check_and_create_nullifier_marker<'info>(
     payer: &AccountInfo<'info>,
     marker: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
+    lamports: u64,
 ) -> Result<()> {
     let (expected_key, bump) = derive_nullifier_pda(program_id, pa_state_key, nullifier_bytes);
 
@@ -68,11 +53,6 @@ pub fn check_and_create_nullifier_marker<'info>(
     if marker.owner == program_id {
         return err!(PAError::DuplicateNullifier);
     }
-
-    // Create the marker PDA with 0 data bytes (existence = spent)
-    // NOTE: `minimum_balance(0)` is 0 lamports, but a 0-lamport account is
-    // effectively non-existent (can be reclaimed). Ensure the marker persists.
-    let lamports = Rent::get()?.minimum_balance(0).max(1);
 
     let ix = system_instruction::create_account(
         payer.key, marker.key, lamports, 0, // 0 bytes - existence alone indicates spent
@@ -93,16 +73,4 @@ pub fn check_and_create_nullifier_marker<'info>(
     )?;
 
     Ok(())
-}
-
-/// Check if a nullifier marker exists (i.e., nullifier is spent).
-///
-/// # Arguments
-/// * `program_id` - The PA program ID
-/// * `marker` - The nullifier marker account
-///
-/// # Returns
-/// `true` if the marker exists and is owned by the program (nullifier spent)
-pub fn is_nullifier_spent(program_id: &Pubkey, marker: &AccountInfo) -> bool {
-    marker.owner == program_id
 }

@@ -1,19 +1,16 @@
-[toolchain]
-
 [features]
 resolution = true
 skip-lint = false
 
 [programs.devnet]
-block_time_forwarder = "FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq"
-solana_pa_prototype = "AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt"
+block_time_forwarder = "J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6"
+solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
+test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
 
 [programs.localnet]
-block_time_forwarder = "FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq"
-solana_pa_prototype = "AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt"
-
-[registry]
-url = "https://api.apr.dev"
+block_time_forwarder = "J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6"
+solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
+test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
 
 [provider]
 cluster = "localnet"

@@ -1,12 +1,12 @@
 [package]
-name = "block-time-forwarder"
+name = "test-forwarder"
 version = "0.1.0"
-description = "Example forwarder program for time comparison"
+description = "Test forwarder program for integration test error paths"
 edition = "2021"
 
 [lib]
 crate-type = ["cdylib", "lib"]
-name = "block_time_forwarder"
+name = "test_forwarder"
 
 [features]
 default = []

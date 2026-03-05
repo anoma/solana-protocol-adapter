@@ -55,9 +55,8 @@ fn main() {
 
     let methods_rs = format!(
         "pub const PASSTHROUGH_LOGIC_GUEST_ELF: &[u8] = include_bytes!({:?});\n\
-         pub const PASSTHROUGH_LOGIC_GUEST_PATH: &str = {:?};\n\
          pub const PASSTHROUGH_LOGIC_GUEST_ID: [u32; 8] = {:?};\n",
-        combined_path, combined_path, image_id_words
+        combined_path, image_id_words
     );
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is not set for build script"));
@@ -66,7 +65,7 @@ fn main() {
 }
 
 fn build_guest_in_docker(manifest_dir: &Path, guest_target_dir: &Path) {
-    ensure_docker_available();
+    let use_podman = detect_container_runtime();
     fs::create_dir_all(guest_target_dir).unwrap_or_else(|err| {
         panic!(
             "failed creating guest target dir {}: {err}",
@@ -116,7 +115,7 @@ fn build_guest_in_docker(manifest_dir: &Path, guest_target_dir: &Path) {
         "build",
         &["--release"],
     );
-    normalize_output_ownership(docker_root, &target_dir_rel);
+    normalize_output_ownership(docker_root, &target_dir_rel, use_podman);
 }
 
 fn run_docker_cargo(
@@ -185,10 +184,10 @@ fn run_docker_cargo(
     }
 }
 
-fn normalize_output_ownership(docker_root: &Path, target_dir_rel: &str) {
+fn normalize_output_ownership(docker_root: &Path, target_dir_rel: &str, use_podman: bool) {
     let target_dir = docker_root.join(target_dir_rel);
 
-    if is_podman() {
+    if use_podman {
         // Rootless Podman runs containers in a user namespace where the container's UID 0
         // maps to a sub-UID on the host (e.g. 166536). Files written by the container are
         // owned by that sub-UID. `podman unshare` enters the user namespace where UID 0 maps
@@ -229,22 +228,18 @@ fn normalize_output_ownership(docker_root: &Path, target_dir_rel: &str) {
     }
 }
 
-fn is_podman() -> bool {
-    Command::new("docker")
+/// Validates that a container runtime is available and returns whether it is podman.
+fn detect_container_runtime() -> bool {
+    let output = Command::new("docker")
         .arg("--version")
         .output()
-        .map(|out| String::from_utf8_lossy(&out.stdout).to_lowercase().contains("podman"))
-        .unwrap_or(false)
-}
-
-fn ensure_docker_available() {
-    let status = Command::new("docker")
-        .arg("--version")
-        .status()
-        .expect("failed to run `docker --version`");
-    if !status.success() {
+        .expect("failed to run `docker --version` — is docker or podman installed?");
+    if !output.status.success() {
         panic!("`docker --version` failed");
     }
+    String::from_utf8_lossy(&output.stdout)
+        .to_lowercase()
+        .contains("podman")
 }
 
 fn docker_tag() -> String {

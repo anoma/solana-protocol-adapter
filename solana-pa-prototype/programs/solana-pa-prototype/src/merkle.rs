@@ -1,9 +1,14 @@
-//! Merkle tree constants and hash function for the commitment tree.
+//! Merkle tree constants, hash function, and state operations for the commitment tree.
 //!
-//! Must match arm-risc0's hash_two function exactly.
+//! The hash function and padding leaf must match arm-risc0's implementation exactly.
 
-use crate::types::Digest;
+use anchor_lang::prelude::*;
 use anchor_lang::solana_program::hash::hashv;
+use arm_core::constants::EMPTY_HASH_WORDS;
+use arm_core::Digest;
+
+use crate::error::PAError;
+use crate::state::PAStateAccount;
 
 /// Initial tree depth for new commitment trees (capacity = 2 leaves).
 /// Matches EVM reference implementation which starts at depth 1 and grows.
@@ -13,11 +18,8 @@ pub const INITIAL_TREE_DEPTH: usize = 1;
 /// Supports up to 2^32 = 4,294,967,296 leaves.
 pub const MAX_TREE_DEPTH: usize = 32;
 
-/// Padding leaf used for empty tree slots (from arm-risc0 merkle_path.rs).
-/// Hex: cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06
-pub const PADDING_LEAF: Digest = Digest([
-    0x832f1dcc, 0x7adb4584, 0xf91d43ec, 0x1f878aee, 0x5eaae740, 0x56c04f06, 0xc6f83e63, 0x067bab0f,
-]);
+/// Padding leaf used for empty tree slots.
+pub const PADDING_LEAF: Digest = Digest(EMPTY_HASH_WORDS);
 
 /// Precomputed zero hashes at each level of the tree.
 /// zeros[0] = PADDING_LEAF, zeros[i] = hash(zeros[i-1], zeros[i-1]).
@@ -186,10 +188,6 @@ pub const ZEROS: [Digest; MAX_TREE_DEPTH] = [
     ]),
 ];
 
-/// Precomputed empty tree root at maximum depth = ZEROS[MAX_TREE_DEPTH - 1].
-/// For variable-depth trees, empty root at depth d = ZEROS[d - 1].
-pub const EMPTY_TREE_ROOT_MAX: Digest = ZEROS[MAX_TREE_DEPTH - 1];
-
 /// Empty tree root at initial depth (depth 1) = ZEROS[0] = PADDING_LEAF.
 pub const EMPTY_TREE_ROOT_INITIAL: Digest = ZEROS[INITIAL_TREE_DEPTH - 1];
 
@@ -199,6 +197,78 @@ pub const EMPTY_TREE_ROOT_INITIAL: Digest = ZEROS[INITIAL_TREE_DEPTH - 1];
 /// Uses Solana's sol_sha256 syscall for efficiency (~100 CU vs ~6k CU for sha2 crate).
 /// See test_sha256_syscall_matches_sha2_crate for equivalence verification.
 pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
-    let result = hashv(&[&left.to_bytes(), &right.to_bytes()]);
+    let result = hashv(&[left.as_bytes(), right.as_bytes()]);
     Digest::from_bytes(result.to_bytes())
+}
+
+/// Append a single commitment to the tree, growing it if at capacity.
+pub fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
+    if state.needs_growth() {
+        require!(state.can_grow(), PAError::TreeMaxDepthReached);
+        let current_root = compute_root_from_frontier(state);
+        let new_level = state.grow();
+        state.set_frontier(new_level, current_root);
+    }
+
+    let mut current = leaf;
+    let mut index = state.next_index;
+    let depth = state.depth();
+
+    for level in 0..depth {
+        if index & 1 == 0 {
+            // Left child - store in frontier and return
+            state.set_frontier(level, current);
+            state.next_index += 1;
+            return Ok(());
+        }
+        // Right child - hash with frontier and continue up
+        let left = state.get_frontier(level);
+        current = hash_two(&left, &current);
+        index >>= 1;
+    }
+
+    // Loop completed without early return: tree is full.
+    // `current` holds the root hash. Cache it so compute_root_from_frontier
+    // can return it (the frontier alone can't recover the root of a full tree).
+    state.root = current.to_bytes();
+    state.next_index += 1;
+    Ok(())
+}
+
+/// Compute the current root from the frontier using precomputed ZEROS.
+pub fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
+    let depth = state.depth();
+
+    if state.next_index == 0 {
+        return ZEROS[depth - 1];
+    }
+
+    if state.next_index >= state.capacity() {
+        // Tree is full — the frontier can't recover the root because all bits
+        // in 0..depth are zero. Use the root cached by append_to_tree.
+        return Digest::from_bytes(state.root);
+    }
+
+    let mut current = ZEROS[0];
+    let mut index = state.next_index;
+
+    for (level, zero) in ZEROS.iter().enumerate().take(depth) {
+        if index & 1 == 1 {
+            current = hash_two(&state.get_frontier(level), &current);
+        } else {
+            current = hash_two(&current, zero);
+        }
+        index >>= 1;
+    }
+    current
+}
+
+/// Minimum tree depth such that 2^depth >= final_next_index.
+pub fn required_depth_for_leaves(final_next_index: u64) -> usize {
+    if final_next_index == 0 {
+        return INITIAL_TREE_DEPTH;
+    }
+    // ceil(log2(final_next_index))
+    let bits = 64 - (final_next_index - 1).leading_zeros();
+    (bits as usize).max(INITIAL_TREE_DEPTH)
 }

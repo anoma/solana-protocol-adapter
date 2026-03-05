@@ -24,10 +24,9 @@
           };
           lib = pkgs.lib;
 
-          # Rust 1.84.1: matches the platform-tools rustc version and is
-          # the last release compatible with Anchor 0.31.x (Rust >= 1.85
-          # introduces coherence changes that break the Anchor build).
-          rustToolchain = pkgs.rust-bin.stable."1.84.1".default;
+          # Rust 1.93.0: pinned to match CI exactly. Anchor 0.31.1 builds
+          # fine on 1.85+ after its proc-macro2 fix.
+          rustToolchain = pkgs.rust-bin.stable."1.93.0".default;
 
           # Nightly toolchain needed only for Anchor IDL generation
           # (anchor build calls `cargo +nightly` internally).
@@ -71,7 +70,6 @@
 
           platformToolsMachine = if pkgs.stdenv.isDarwin then "osx" else "linux";
           platformToolsArch = if system == "aarch64-darwin" then "aarch64" else "x86_64";
-          criterionMachine = if pkgs.stdenv.isDarwin then "osx" else "linux";
 
           platformToolsSrc = pkgs.fetchurl {
             url = "https://github.com/anza-xyz/platform-tools/releases/download/v1.51/platform-tools-${platformToolsMachine}-${platformToolsArch}.tar.bz2";
@@ -79,16 +77,18 @@
           };
 
           criterionSrc = pkgs.fetchurl {
-            url = "https://github.com/Snaipe/Criterion/releases/download/${solanaRelease.criterionVersion}/criterion-${solanaRelease.criterionVersion}-${criterionMachine}-x86_64.tar.bz2";
+            url = "https://github.com/Snaipe/Criterion/releases/download/${solanaRelease.criterionVersion}/criterion-${solanaRelease.criterionVersion}-${platformToolsMachine}-x86_64.tar.bz2";
             hash = solanaRelease.criterionHash;
           };
 
+          solanaVersion = "3.0.13";
+
           solanaToolchain = pkgs.stdenvNoCC.mkDerivation {
             pname = "agave-release";
-            version = "3.0.13";
+            version = solanaVersion;
 
             src = pkgs.fetchurl {
-              url = "https://release.anza.xyz/v3.0.13/solana-release-${solanaRelease.target}.tar.bz2";
+              url = "https://release.anza.xyz/v${solanaVersion}/solana-release-${solanaRelease.target}.tar.bz2";
               hash = solanaRelease.releaseHash;
             };
 
@@ -180,7 +180,6 @@ EOF
         in
         {
           packages.default = solanaToolchain;
-          packages.solana-toolchain = solanaToolchain;
 
           devShells.default = pkgs.mkShell {
             packages = [

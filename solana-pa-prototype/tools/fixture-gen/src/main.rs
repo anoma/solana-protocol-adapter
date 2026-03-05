@@ -1,21 +1,22 @@
-use anchor_lang::prelude::AnchorDeserialize;
+use anchor_lang::prelude::AnchorDeserialize as BorshDeserialize;
 use anyhow::{anyhow, Context, Result};
-use arm::action::Action;
+use arm::action::{Action, ActionExt};
 use arm::action_tree::MerkleTree;
-use arm::aggregation::batch::BatchProof;
-use arm::aggregation::{AggregationProof, AggregationStrategy};
-use arm::compliance::{ComplianceInstance, ComplianceWitness, INITIAL_ROOT};
-use arm::compliance_unit::ComplianceUnit;
+use arm::compliance::{
+    initial_root, ComplianceInstanceJournalExt, ComplianceWitness,
+};
+use arm::compliance_unit::create_compliance_unit;
 use arm::delta_proof::DeltaWitness;
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
-use arm::logic_proof::LogicVerifier;
+use arm::logic_proof::{LogicVerifier, LogicVerifierInputsExt};
 use arm::merkle_path::MerklePath;
-use arm::nullifier_key::NullifierKey;
+use arm::nullifier_key::{NullifierKey, NullifierKeyExt};
 use arm::proving_system::{encode_seal, ProofType};
 use arm::resource::Resource;
-use arm::transaction::{Delta, Transaction};
-use arm::utils::bytes_to_words;
+use arm::transaction::{Delta, Transaction, TransactionExt};
+use arm::utils::{bytes_to_words, core_to_risc0_digest};
+use arm::CoreDeltaWitness;
 use arm::Digest;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -23,28 +24,24 @@ use k256::Scalar;
 use rayon::ThreadPoolBuilder;
 use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
 use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use verifier_router::Seal;
 
 use passthrough_logic_methods::{PASSTHROUGH_LOGIC_GUEST_ELF, PASSTHROUGH_LOGIC_GUEST_ID};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-struct SolanaExternalCall {
-    pub program_id: [u8; 32],
-    pub instruction_data: Vec<u8>,
-    pub expected_output: Vec<u8>,
-    pub output_mode: OutputMode,
+fn hash_delta_msg(msg: &[u8]) -> [u8; 32] {
+    use sha2::Digest as _;
+    sha2::Sha256::digest(msg).into()
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-enum OutputMode {
-    ReturnData,
-    OutputAccount { index: u8, offset: u32, len: u32 },
-}
+use block_time_forwarder::{RESULT_GT, RESULT_LT};
+use solana_pa::external_calls::encode_external_call;
+use solana_pa::types::{OutputMode, SolanaExternalCall};
+use test_forwarder::{MODE_FAIL, MODE_SILENT, MODE_WRITE_ACCOUNT};
 
 #[derive(Serialize)]
 struct Fixture {
@@ -59,6 +56,23 @@ struct Fixture {
     consumed_nullifiers_b64: Vec<String>,
 }
 
+struct CliArgs {
+    threads: Option<usize>,
+    debug_assumptions: bool,
+    forwarder_mode: ForwarderMode,
+    nonce_seed: Option<u8>,
+    multi_external_call: bool,
+    error_variants_dir: Option<PathBuf>,
+    out_path: PathBuf,
+}
+
+enum ForwarderMode {
+    BlockTimeForwarder { output_mismatch: bool },
+    TestForwarderFail,
+    TestForwarderSilent,
+    TestForwarderOutputAccount,
+}
+
 /// Extract the Groth16 selector from a transaction's aggregation proof.
 /// The selector is the first 4 bytes of the verifier_parameters digest,
 /// which is the last 32 bytes of the serialized proof.
@@ -68,7 +82,8 @@ fn extract_selector(tx: &Transaction) -> Result<String> {
         .as_ref()
         .ok_or_else(|| anyhow!("no aggregation_proof found for selector extraction"))?;
 
-    let seal: Seal = Seal::try_from_slice(agg_proof).unwrap();
+    let seal: Seal =
+        Seal::try_from_slice(agg_proof).context("decode Seal from aggregation_proof bytes")?;
     Ok(format!("0x{}", hex::encode(seal.selector)))
 }
 
@@ -82,17 +97,14 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
         .get_mut(0)
         .ok_or_else(|| anyhow!("tx has no compliance units"))?;
 
-    let instance = cu.instance.clone();
-    let old_created_commitment = instance.created_commitment;
+    let old_created_commitment = cu.instance.created_commitment;
 
     let mut new_bytes = [0u8; 32];
     new_bytes.copy_from_slice(old_created_commitment.as_bytes());
     new_bytes[0] ^= 1;
     let new_created_commitment = Digest::from_bytes(new_bytes);
 
-    let mut new_instance = instance.clone();
-    new_instance.created_commitment = new_created_commitment;
-    cu.instance = new_instance;
+    cu.instance.created_commitment = new_created_commitment;
 
     // Update the corresponding created logic verifier input tag so decoding and
     // digest computation still succeeds (proof must then fail).
@@ -113,93 +125,93 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
     Ok(())
 }
 
-fn b58_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'1'..=b'9' => Some(byte - b'1'),
-        b'A'..=b'H' => Some(byte - b'A' + 9),
-        b'J'..=b'N' => Some(byte - b'J' + 17),
-        b'P'..=b'Z' => Some(byte - b'P' + 22),
-        b'a'..=b'k' => Some(byte - b'a' + 33),
-        b'm'..=b'z' => Some(byte - b'm' + 44),
-        _ => None,
-    }
-}
-
-fn decode_base58(s: &str) -> Result<Vec<u8>> {
-    // Minimal base58 decoder (Bitcoin alphabet) sufficient for Solana pubkeys.
-    let mut bytes: Vec<u8> = Vec::new();
-    for &ch in s.as_bytes() {
-        let value = b58_value(ch).ok_or_else(|| anyhow!("invalid base58 char: {}", ch as char))?;
-
-        let mut carry = value as u32;
-        for b in bytes.iter_mut().rev() {
-            let acc = (*b as u32) * 58 + carry;
-            *b = (acc & 0xff) as u8;
-            carry = acc >> 8;
-        }
-        while carry > 0 {
-            bytes.insert(0, (carry & 0xff) as u8);
-            carry >>= 8;
-        }
-    }
-
-    let leading_zeros = s.as_bytes().iter().take_while(|&&c| c == b'1').count();
-    if leading_zeros > 0 {
-        let mut out = vec![0u8; leading_zeros];
-        out.extend_from_slice(&bytes);
-        bytes = out;
-    }
-
-    Ok(bytes)
-}
-
 fn decode_base58_32(s: &str) -> Result<[u8; 32]> {
-    let bytes = decode_base58(s)?;
-    if bytes.len() != 32 {
-        return Err(anyhow!("expected 32 bytes, got {}", bytes.len()));
-    }
-    let mut out = [0u8; 32];
-    out.copy_from_slice(&bytes);
-    Ok(out)
+    let bytes = bs58::decode(s)
+        .into_vec()
+        .with_context(|| format!("invalid base58: {s}"))?;
+    bytes
+        .try_into()
+        .map_err(|v: Vec<u8>| anyhow!("expected 32 bytes, got {}", v.len()))
+}
+
+fn test_forwarder_program_id() -> Result<[u8; 32]> {
+    decode_base58_32("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD")
 }
 
 fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
     // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-    let program_id = decode_base58_32("FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq")?;
+    let program_id = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6")?;
 
     // Use -1 so expected_time < current_time for any reasonable cluster clock.
     // The forwarder will return RESULT_LT (0x00).
     let input = (-1_i64).to_le_bytes().to_vec();
 
-    // If output_mismatch is true, set expected_output to RESULT_GT (0x02) which is WRONG.
-    // The forwarder will return 0x00 (LT), but we expect 0x02 (GT), causing ExternalCallOutputMismatch.
+    // If output_mismatch is true, set expected_output to RESULT_GT which is WRONG.
+    // The forwarder will return RESULT_LT, but we expect RESULT_GT, causing ExternalCallOutputMismatch.
     let expected_output = if output_mismatch {
-        vec![0x02] // RESULT_GT - intentionally wrong
+        vec![RESULT_GT]
     } else {
-        vec![0x00] // RESULT_LT - correct
+        vec![RESULT_LT]
     };
 
-    let call = SolanaExternalCall {
+    Ok(encode_external_call(&SolanaExternalCall {
         program_id,
         instruction_data: input,
         expected_output,
         output_mode: OutputMode::ReturnData,
-    };
-
-    let call_bytes = bincode::serialize(&call).context("serialize SolanaExternalCall")?;
-    Ok(ExpirableBlob {
-        blob: bytes_to_words(&call_bytes),
-        deletion_criterion: 0,
-    })
+    }))
 }
 
-fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Result<Transaction> {
+fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
+    Ok(encode_external_call(&SolanaExternalCall {
+        program_id: test_forwarder_program_id()?,
+        instruction_data: vec![MODE_FAIL],
+        expected_output: vec![],
+        output_mode: OutputMode::ReturnData,
+    }))
+}
+
+fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
+    Ok(encode_external_call(&SolanaExternalCall {
+        program_id: test_forwarder_program_id()?,
+        instruction_data: vec![MODE_SILENT],
+        expected_output: vec![],
+        output_mode: OutputMode::ReturnData,
+    }))
+}
+
+fn test_forwarder_output_account_payload_blob(
+    expected_bytes: &[u8],
+    account_index: u8,
+) -> Result<ExpirableBlob> {
+    // The forwarder strips input[0] (mode byte) and writes input[1..] to the account.
+    let mut instruction_data = Vec::with_capacity(1 + expected_bytes.len());
+    instruction_data.push(MODE_WRITE_ACCOUNT);
+    instruction_data.extend_from_slice(expected_bytes);
+
+    Ok(encode_external_call(&SolanaExternalCall {
+        program_id: test_forwarder_program_id()?,
+        instruction_data,
+        expected_output: expected_bytes.to_vec(),
+        output_mode: OutputMode::OutputAccount {
+            index: account_index,
+            offset: 0,
+            len: expected_bytes.len() as u32,
+        },
+    }))
+}
+
+fn generate_test_transaction_with_external_payload(
+    forwarder_mode: ForwarderMode,
+    nonce_seed: Option<u8>,
+    multi_external_call: bool,
+) -> Result<Transaction> {
     // Inner proofs must be Succinct for aggregation.
     let base_proof_type = ProofType::Succinct;
 
     // Use the passthrough logic circuit for both consumed and created resources.
     // This allows us to bind arbitrary `app_data.external_payload` into real proofs.
-    let passthrough_vk: Digest = PASSTHROUGH_LOGIC_GUEST_ID.into();
+    let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
 
     let nf_key = NullifierKey::default();
     let nf_key_cm = nf_key.commit();
@@ -215,7 +227,13 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
     // Stable-ish nonce so the fixture is deterministic.
     // Use different nonce for each fixture variant so they have different nullifiers.
     // This prevents DuplicateNullifier errors when running multiple fixtures in a test suite.
-    let nonce_byte: u8 = if output_mismatch { 2 } else { 0 };
+    let output_mismatch = matches!(
+        &forwarder_mode,
+        ForwarderMode::BlockTimeForwarder {
+            output_mismatch: true
+        }
+    );
+    let nonce_byte: u8 = nonce_seed.unwrap_or(if output_mismatch { 2 } else { 0 });
     consumed_resource.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
     let consumed_nf = consumed_resource
         .nullifier(&nf_key)
@@ -232,21 +250,36 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
         created_resource,
         merkle_path: MerklePath::empty(),
         rcv: Scalar::ONE.to_bytes().to_vec(),
-        nf_key: nf_key.clone(),
-        ephemeral_root: *INITIAL_ROOT,
+        nf_key,
+        ephemeral_root: initial_root(),
     };
     let compliance_receipt =
-        ComplianceUnit::create(&compliance_witness, base_proof_type).context("prove compliance")?;
+        create_compliance_unit(&compliance_witness, base_proof_type).context("prove compliance")?;
 
     let tags = vec![consumed_nf, created_cm];
-    let action_tree = MerkleTree::from(tags.clone());
+    let action_tree = MerkleTree::from(tags);
     let root = action_tree.root().context("compute action tree root")?;
 
     // Create app_data with a real external payload for the consumed logic instance only.
     let mut consumed_app_data = AppData::default();
-    consumed_app_data
-        .external_payload
-        .push(block_time_forwarder_external_payload_blob(output_mismatch)?);
+    let external_blob = match &forwarder_mode {
+        ForwarderMode::BlockTimeForwarder { output_mismatch } => {
+            block_time_forwarder_external_payload_blob(*output_mismatch)?
+        }
+        ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob()?,
+        ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
+        ForwarderMode::TestForwarderOutputAccount => {
+            test_forwarder_output_account_payload_blob(b"\x01\x02\x03\x04", 2)?
+        }
+    };
+    consumed_app_data.external_payload.push(external_blob);
+    if multi_external_call {
+        if let ForwarderMode::BlockTimeForwarder { .. } = &forwarder_mode {
+            consumed_app_data
+                .external_payload
+                .push(block_time_forwarder_external_payload_blob(false)?);
+        }
+    }
 
     let consumed_instance = LogicInstance {
         tag: consumed_nf,
@@ -295,11 +328,73 @@ fn generate_test_transaction_with_external_payload(output_mismatch: bool) -> Res
     let delta_witness =
         DeltaWitness::from_bytes_vec(&[compliance_witness.rcv]).context("build delta witness")?;
 
-    let tx = Transaction::create(vec![action], Delta::Witness(delta_witness));
-    let balanced_tx = tx.generate_delta_proof().context("generate delta proof")?;
-    balanced_tx.clone().verify().context("verify tx")?;
+    let tx = Transaction::create(
+        vec![action],
+        Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
+    );
+    let balanced_tx = tx
+        .generate_delta_proof(hash_delta_msg)
+        .context("generate delta proof")?;
+    balanced_tx
+        .clone()
+        .verify(hash_delta_msg)
+        .context("verify tx")?;
 
     Ok(balanced_tx)
+}
+
+fn generate_error_variant_fixtures(
+    tx: &Transaction,
+    selector: &str,
+    nullifiers_b64: &[String],
+    out_dir: &Path,
+) -> Result<()> {
+    fs::create_dir_all(out_dir)
+        .with_context(|| format!("create error variants dir {}", out_dir.display()))?;
+
+    let write_variant = |file_name: &str, variant_tx: &Transaction| -> Result<()> {
+        let tx_bytes = bincode::serialize(variant_tx)
+            .with_context(|| format!("serialize variant tx for {file_name}"))?;
+        let fixture = Fixture {
+            format: "arm-risc0:Transaction(bincode)",
+            aggregation_strategy: "batch",
+            aggregation_proof_type: "groth16",
+            selector: selector.to_owned(),
+            tx_b64: BASE64.encode(tx_bytes),
+            tx_tampered_b64: String::new(),
+            consumed_nullifiers_b64: nullifiers_b64.to_vec(),
+        };
+
+        let out_path = out_dir.join(file_name);
+        fs::write(&out_path, serde_json::to_vec_pretty(&fixture)?)
+            .with_context(|| format!("write error variant fixture to {}", out_path.display()))?;
+        Ok(())
+    };
+
+    {
+        let mut wrong_root = tx.clone();
+        let action = wrong_root
+            .actions
+            .get_mut(0)
+            .ok_or_else(|| anyhow!("tx has no actions"))?;
+        let cu = action
+            .compliance_units
+            .get_mut(0)
+            .ok_or_else(|| anyhow!("tx has no compliance units"))?;
+        cu.instance.consumed_commitment_tree_root = Digest::from_bytes([1u8; 32]);
+        write_variant("wrong_root.json", &wrong_root)?;
+    }
+
+    {
+        let mut agg_variant = tx.clone();
+        agg_variant.aggregation_proof = None;
+        write_variant("no_aggregation.json", &agg_variant)?;
+
+        agg_variant.aggregation_proof = Some(vec![0xDE; 64]);
+        write_variant("garbage_proof.json", &agg_variant)?;
+    }
+
+    Ok(())
 }
 
 fn fmt_duration(d: Duration) -> String {
@@ -318,29 +413,58 @@ fn fmt_duration(d: Duration) -> String {
     format!("{hours}h{rem_mins:02}m{rem:02}.{millis:03}s")
 }
 
-fn print_usage_and_exit() -> Result<()> {
-    eprintln!(
-        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n"
-    );
-    Ok(())
+fn timed_phase<F, T>(name: &str, f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    eprintln!("phase: {name}");
+    let start = Instant::now();
+    let result = f()?;
+    eprintln!("phase done: {name} ({})", fmt_duration(start.elapsed()));
+    Ok(result)
 }
 
-fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
+fn print_usage() {
+    eprintln!(
+        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [--forwarder-fail] [--forwarder-silent] [--forwarder-output-account] [--nonce-seed N] [--multi-external-call] [--error-variants DIR] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n  fixture-gen --forwarder-fail tests/fixtures/batch_groth16_forwarder_fail.json\n  fixture-gen --forwarder-silent tests/fixtures/batch_groth16_forwarder_silent.json\n  fixture-gen --forwarder-output-account tests/fixtures/batch_groth16_forwarder_output_account.json\n  fixture-gen --nonce-seed 7 --multi-external-call /tmp/batch_groth16_multi.json\n  fixture-gen --error-variants tests/fixtures/error_variants tests/fixtures/batch_groth16.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a block-time-forwarder fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n  - `--forwarder-fail` uses the test-forwarder with an instruction that fails before output checks.\n  - `--forwarder-silent` uses the test-forwarder with no return data so output comparison fails.\n  - `--forwarder-output-account` uses the test-forwarder with OutputAccount mode.\n  - At most one of `--output-mismatch`, `--forwarder-fail`, `--forwarder-silent`, `--forwarder-output-account` may be set.\n  - `--nonce-seed` overrides the deterministic nonce byte used to derive nullifiers.\n  - `--multi-external-call` appends a second block-time-forwarder external call blob when block-time-forwarder mode is selected.\n  - `--error-variants` writes wrong_root/no_aggregation/garbage_proof fixtures from the final aggregated tx.\n"
+    );
+}
+
+fn parse_args() -> Result<CliArgs> {
     let mut args = env::args().skip(1);
     let mut threads: Option<usize> = None;
     let mut debug_assumptions = false;
-    let mut output_mismatch = false;
+    let mut forwarder_mode: Option<ForwarderMode> = None;
+    let mut nonce_seed: Option<u8> = None;
+    let mut multi_external_call = false;
+    let mut error_variants_dir: Option<PathBuf> = None;
     let mut out_path: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
-        match arg.as_str() {
+        // Handle positional arguments before splitting on '='.
+        if !arg.starts_with('-') {
+            if out_path.is_some() {
+                return Err(anyhow!("unexpected extra argument: {arg}"));
+            }
+            out_path = Some(PathBuf::from(arg));
+            continue;
+        }
+
+        // Support both "--flag value" and "--flag=value" uniformly.
+        let (flag, eq_value) = match arg.find('=') {
+            Some(pos) => (&arg[..pos], Some(&arg[pos + 1..])),
+            None => (arg.as_str(), None),
+        };
+
+        match flag {
             "-h" | "--help" => {
-                print_usage_and_exit()?;
+                print_usage();
                 std::process::exit(0);
             }
             "--threads" => {
-                let value = args
-                    .next()
+                let value = eq_value
+                    .map(|s| s.to_string())
+                    .or_else(|| args.next())
                     .ok_or_else(|| anyhow!("--threads requires a value"))?;
                 let parsed = value
                     .parse::<usize>()
@@ -353,27 +477,50 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
             "--debug-assumptions" => {
                 debug_assumptions = true;
             }
-            "--output-mismatch" => {
-                output_mismatch = true;
-            }
-            _ if arg.starts_with("--threads=") => {
-                let value = arg.split_once('=').map(|(_, v)| v).unwrap_or_default();
-                let parsed = value
-                    .parse::<usize>()
-                    .with_context(|| format!("invalid --threads value: {value}"))?;
-                if parsed == 0 {
-                    return Err(anyhow!("--threads must be >= 1"));
+            "--output-mismatch" | "--forwarder-fail" | "--forwarder-silent"
+            | "--forwarder-output-account" => {
+                if forwarder_mode.is_some() {
+                    return Err(anyhow!(
+                        "at most one of --output-mismatch, --forwarder-fail, --forwarder-silent, --forwarder-output-account may be set"
+                    ));
                 }
-                threads = Some(parsed);
+                forwarder_mode = Some(match flag {
+                    "--output-mismatch" => ForwarderMode::BlockTimeForwarder {
+                        output_mismatch: true,
+                    },
+                    "--forwarder-fail" => ForwarderMode::TestForwarderFail,
+                    "--forwarder-silent" => ForwarderMode::TestForwarderSilent,
+                    "--forwarder-output-account" => ForwarderMode::TestForwarderOutputAccount,
+                    _ => unreachable!(),
+                });
             }
-            _ if arg.starts_with('-') => {
-                return Err(anyhow!("unknown flag: {arg}"));
+            "--nonce-seed" => {
+                let value = eq_value
+                    .map(|s| s.to_string())
+                    .or_else(|| args.next())
+                    .ok_or_else(|| anyhow!("--nonce-seed requires a value"))?;
+                let parsed = value
+                    .parse::<u8>()
+                    .with_context(|| format!("invalid --nonce-seed value: {value}"))?;
+                nonce_seed = Some(parsed);
+            }
+            "--multi-external-call" => {
+                multi_external_call = true;
+            }
+            "--error-variants" => {
+                let value = eq_value
+                    .map(|s| s.to_string())
+                    .or_else(|| args.next())
+                    .ok_or_else(|| anyhow!("--error-variants requires a value"))?;
+                if value.is_empty() {
+                    return Err(anyhow!(
+                        "--error-variants requires a non-empty directory path"
+                    ));
+                }
+                error_variants_dir = Some(PathBuf::from(value));
             }
             _ => {
-                if out_path.is_some() {
-                    return Err(anyhow!("unexpected extra argument: {arg}"));
-                }
-                out_path = Some(PathBuf::from(arg));
+                return Err(anyhow!("unknown flag: {arg}"));
             }
         }
     }
@@ -381,12 +528,32 @@ fn parse_args() -> Result<(Option<usize>, bool, bool, PathBuf)> {
     let out_path = out_path
         .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
 
-    Ok((threads, debug_assumptions, output_mismatch, out_path))
+    let forwarder_mode = forwarder_mode.unwrap_or(ForwarderMode::BlockTimeForwarder {
+        output_mismatch: false,
+    });
+
+    Ok(CliArgs {
+        threads,
+        debug_assumptions,
+        forwarder_mode,
+        nonce_seed,
+        multi_external_call,
+        error_variants_dir,
+        out_path,
+    })
 }
 
 fn main() -> Result<()> {
     let total_start = Instant::now();
-    let (threads, debug_assumptions, output_mismatch, out_path) = parse_args()?;
+    let CliArgs {
+        threads,
+        debug_assumptions,
+        forwarder_mode,
+        nonce_seed,
+        multi_external_call,
+        error_variants_dir,
+        out_path,
+    } = parse_args()?;
 
     // Configure rayon parallelism deterministically (helps avoid pegging/overheating/OOM).
     // Must happen before any proving work starts.
@@ -402,101 +569,77 @@ fn main() -> Result<()> {
 
     eprintln!("fixture output: {}", out_path.display());
     eprintln!("mode: aggregated (batch Groth16)");
-    if output_mismatch {
+    if let ForwarderMode::BlockTimeForwarder {
+        output_mismatch: true,
+    } = &forwarder_mode
+    {
         eprintln!(
             "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
         );
     }
+    if let Some(seed) = nonce_seed {
+        eprintln!("mode: nonce-seed override ({seed})");
+    }
+    if multi_external_call {
+        eprintln!("mode: multi-external-call (two external payload blobs)");
+    }
+    if let Some(dir) = &error_variants_dir {
+        eprintln!("error variants output dir: {}", dir.display());
+    }
 
-    eprintln!("phase: generate_test_transaction");
-    let start = Instant::now();
-    let mut tx = generate_test_transaction_with_external_payload(output_mismatch)?;
-    eprintln!(
-        "phase done: generate_test_transaction ({})",
-        fmt_duration(start.elapsed())
-    );
+    let mut tx = timed_phase("generate_test_transaction", || {
+        generate_test_transaction_with_external_payload(forwarder_mode, nonce_seed, multi_external_call)
+    })?;
 
     if debug_assumptions {
-        eprintln!("phase: debug_assumptions (claim digests must match env::verify calls)");
-        let start = Instant::now();
-        debug_batch_assumptions(&tx)?;
-        eprintln!(
-            "phase done: debug_assumptions ({})",
-            fmt_duration(start.elapsed())
-        );
+        timed_phase(
+            "debug_assumptions (claim digests must match env::verify calls)",
+            || debug_batch_assumptions(&tx),
+        )?;
     }
 
-    eprintln!("phase: aggregate_with_strategy(batch, groth16) (this is the expensive step)");
-    let start = Instant::now();
-    tx.aggregate_with_strategy(AggregationStrategy::Batch, ProofType::Groth16)
-        .context("aggregate tx (batch, groth16)")?;
-    eprintln!(
-        "phase done: aggregate_with_strategy(batch, groth16) ({})",
-        fmt_duration(start.elapsed())
-    );
+    timed_phase(
+        "aggregate_with_strategy(batch, groth16) (this is the expensive step)",
+        || tx.aggregate(ProofType::Groth16).context("aggregate tx (batch, groth16)"),
+    )?;
 
-    eprintln!("phase: verify_aggregation");
-    let start = Instant::now();
-    tx.verify_aggregation().context("verify aggregated proof")?;
-    eprintln!(
-        "phase done: verify_aggregation ({})",
-        fmt_duration(start.elapsed())
-    );
+    timed_phase("verify_aggregation", || {
+        tx.verify_aggregation().context("verify aggregated proof")
+    })?;
 
-    eprintln!("phase: encode seal");
-    let agg_proof_bytes = tx.aggregation_proof.as_ref().unwrap();
-    let agg_proof: AggregationProof =
-        bincode::deserialize(agg_proof_bytes).context("deserialize AggregationProof")?;
-    let inner_receipt = match agg_proof {
-        AggregationProof::Batch(BatchProof(inner)) => inner,
-        _ => return Err(anyhow!("expected Batch aggregation proof")),
-    };
-    let inner_bytes = bincode::serialize(&inner_receipt).context("serialize InnerReceipt")?;
-    tx.aggregation_proof = Some(encode_seal(&inner_bytes).context("encode seal")?);
-    eprintln!("phase done: encode seal");
+    timed_phase("encode_seal", || {
+        let agg_proof_bytes = tx.aggregation_proof.as_ref().unwrap();
+        tx.aggregation_proof = Some(encode_seal(agg_proof_bytes).context("encode seal")?);
+        Ok(())
+    })?;
 
-    eprintln!("phase: serialize_tx");
-    let start = Instant::now();
-    let tx_bytes = bincode::serialize(&tx).context("serialize tx")?;
-    eprintln!(
-        "phase done: serialize_tx ({}, {} bytes)",
-        fmt_duration(start.elapsed()),
-        tx_bytes.len()
-    );
+    let tx_bytes = timed_phase("serialize_tx", || {
+        let bytes = bincode::serialize(&tx).context("serialize tx")?;
+        eprintln!("  {} bytes", bytes.len());
+        Ok(bytes)
+    })?;
 
-    eprintln!("phase: extract_nullifiers");
-    let start = Instant::now();
-    let mut consumed_nullifiers_b64 = Vec::new();
-    for action in &tx.actions {
-        for cu in &action.compliance_units {
-            let instance = cu.instance.clone();
-            consumed_nullifiers_b64.push(BASE64.encode(instance.consumed_nullifier.as_bytes()));
+    let consumed_nullifiers_b64 = timed_phase("extract_nullifiers", || {
+        let mut nuls = Vec::new();
+        for action in &tx.actions {
+            for cu in &action.compliance_units {
+                nuls.push(BASE64.encode(cu.instance.consumed_nullifier.as_bytes()));
+            }
         }
-    }
-    eprintln!(
-        "phase done: extract_nullifiers ({})",
-        fmt_duration(start.elapsed())
-    );
+        Ok(nuls)
+    })?;
 
-    eprintln!("phase: tamper_tx_and_serialize");
-    let start = Instant::now();
-    let mut tx_tampered = tx.clone();
-    mutate_created_commitment_keep_structure(&mut tx_tampered)?;
-    let tx_tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
-    eprintln!(
-        "phase done: tamper_tx_and_serialize ({}, {} bytes)",
-        fmt_duration(start.elapsed()),
-        tx_tampered_bytes.len()
-    );
+    let (tx_tampered_bytes, selector) = timed_phase("tamper_and_extract_selector", || {
+        let mut tx_tampered = tx.clone();
+        mutate_created_commitment_keep_structure(&mut tx_tampered)?;
+        let tampered_bytes =
+            bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
+        eprintln!("  tampered: {} bytes", tampered_bytes.len());
 
-    eprintln!("phase: extract_selector");
-    let start = Instant::now();
-    let selector = extract_selector(&tx).context("extract selector from proof")?;
-    eprintln!(
-        "phase done: extract_selector ({}, selector={})",
-        fmt_duration(start.elapsed()),
-        selector
-    );
+        let sel = extract_selector(&tx).context("extract selector from proof")?;
+        eprintln!("  selector: {sel}");
+        Ok((tampered_bytes, sel))
+    })?;
 
     let fixture = Fixture {
         format: "arm-risc0:Transaction(bincode)",
@@ -508,17 +651,25 @@ fn main() -> Result<()> {
         consumed_nullifiers_b64,
     };
 
-    eprintln!("phase: write_fixture");
-    let start = Instant::now();
-    if let Some(parent) = out_path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create dir {parent:?}"))?;
+    timed_phase("write_fixture", || {
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create dir {parent:?}"))?;
+        }
+        fs::write(&out_path, serde_json::to_vec_pretty(&fixture)?)
+            .with_context(|| format!("write fixture to {}", out_path.display()))?;
+        Ok(())
+    })?;
+
+    if let Some(dir) = error_variants_dir.as_deref() {
+        timed_phase("write_error_variants", || {
+            generate_error_variant_fixtures(
+                &tx,
+                &fixture.selector,
+                &fixture.consumed_nullifiers_b64,
+                dir,
+            )
+        })?;
     }
-    fs::write(&out_path, serde_json::to_vec_pretty(&fixture)?)
-        .with_context(|| format!("write fixture to {}", out_path.display()))?;
-    eprintln!(
-        "phase done: write_fixture ({})",
-        fmt_duration(start.elapsed())
-    );
 
     eprintln!(
         "wrote fixture: {} (total {})",
@@ -526,6 +677,20 @@ fn main() -> Result<()> {
         fmt_duration(total_start.elapsed())
     );
     Ok(())
+}
+
+fn compute_expected_claim_digest(
+    journal: &[u8],
+    vk: &Digest,
+) -> risc0_zkvm::sha::Digest {
+    let words = arm::utils::bytes_to_words(journal);
+    let padded_bytes = arm::utils::words_to_bytes(&words);
+    let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
+    let expected_claim = ReceiptClaim::ok(
+        core_to_risc0_digest(vk),
+        MaybePruned::Pruned(journal_digest),
+    );
+    expected_claim.digest()
 }
 
 fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
@@ -550,17 +715,15 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 
             let inner: InnerReceipt =
                 bincode::deserialize(proof_bytes).context("decode compliance InnerReceipt")?;
-            let receipt = Receipt::new(inner, cu.instance.to_journal().unwrap());
+            let journal = cu
+                .instance
+                .to_journal()
+                .context("serialize compliance journal")?;
+            let receipt = Receipt::new(inner, journal.clone());
             let receipt_claim_digest = receipt.claim().context("read compliance claim")?.digest();
 
-            let words = arm::utils::bytes_to_words(&cu.instance.to_journal().unwrap());
-            let padded_bytes = arm::utils::words_to_bytes(&words);
-            let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
-            let expected_claim = ReceiptClaim::ok(
-                *arm::constants::COMPLIANCE_VK,
-                MaybePruned::Pruned(journal_digest),
-            );
-            let expected_claim_digest = expected_claim.digest();
+            let expected_claim_digest =
+                compute_expected_claim_digest(&journal, &arm::constants::COMPLIANCE_VK);
 
             eprintln!(
                 "debug_assumptions: receipt_claim_digest={} expected_claim_digest={}",
@@ -575,20 +738,7 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
     for (action_idx, action) in tx.actions.iter().enumerate() {
         // Mirror `arm::action::Action::get_logic_verifiers` to derive the logic instances that the
         // batch aggregation circuit verifies.
-        let compliance_instances: Vec<ComplianceInstance> = action
-            .compliance_units
-            .iter()
-            .map(|cu| cu.instance.clone())
-            .collect();
-
-        let tags: Vec<risc0_zkvm::Digest> = compliance_instances
-            .iter()
-            .flat_map(|instance| vec![instance.consumed_nullifier, instance.created_commitment])
-            .collect();
-        let logics: Vec<risc0_zkvm::Digest> = compliance_instances
-            .iter()
-            .flat_map(|instance| vec![instance.consumed_logic_ref, instance.created_logic_ref])
-            .collect();
+        let (tags, logics) = solana_pa::encoding::extract_tags_and_logic_refs(action);
 
         let action_tree = arm::action_tree::MerkleTree::from(tags.clone());
         let root = action_tree.root().context("compute action tree root")?;
@@ -630,12 +780,8 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
             let receipt = Receipt::new(inner, verifier.instance.clone());
             let receipt_claim_digest = receipt.claim().context("read logic claim")?.digest();
 
-            let words = arm::utils::bytes_to_words(&verifier.instance);
-            let padded_bytes = arm::utils::words_to_bytes(&words);
-            let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
-            let expected_claim =
-                ReceiptClaim::ok(verifier.verifying_key, MaybePruned::Pruned(journal_digest));
-            let expected_claim_digest = expected_claim.digest();
+            let expected_claim_digest =
+                compute_expected_claim_digest(&verifier.instance, &verifier.verifying_key);
 
             eprintln!(
                 "debug_assumptions: logic[{logic_idx}] instance_len={} (mod4={}) receipt_claim_digest={} expected_claim_digest={}",
@@ -651,4 +797,41 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 
     eprintln!("debug_assumptions: end");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_base58_32_system_program() {
+        // Solana system program: "11111111111111111111111111111111" (32 '1's) = 32 zero bytes
+        let result = decode_base58_32("11111111111111111111111111111111").unwrap();
+        assert_eq!(result, [0u8; 32]);
+    }
+
+    #[test]
+    fn decode_base58_32_wrong_length_returns_error() {
+        assert!(decode_base58_32("1").is_err());
+    }
+
+    #[test]
+    fn bytes_to_words_roundtrip() {
+        let original = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
+        let words = bytes_to_words(&original);
+        let recovered = arm::utils::words_to_bytes(&words);
+        assert_eq!(&recovered[..original.len()], &original[..]);
+    }
+
+    #[test]
+    fn bytes_to_words_roundtrip_with_padding() {
+        // 5 bytes: not a multiple of 4, so words_to_bytes will have 3 padding zeros
+        let original = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
+        let words = bytes_to_words(&original);
+        let recovered = arm::utils::words_to_bytes(&words);
+        assert_eq!(&recovered[..original.len()], &original[..]);
+        for &b in &recovered[original.len()..] {
+            assert_eq!(b, 0, "padding bytes should be zero");
+        }
+    }
 }

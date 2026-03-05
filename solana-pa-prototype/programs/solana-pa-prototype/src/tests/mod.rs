@@ -1,11 +1,5 @@
-//! All tests for solana-pa-prototype.
-//!
-//! Auditors: exclude this entire directory from review.
-//! Production code is in the parent src/ directory.
-
 pub mod utils;
 
-// Unit tests (added incrementally as we migrate)
 mod delta_tests;
 mod encoding_tests;
 mod error_tests;
@@ -16,7 +10,5 @@ mod merkle_tests;
 mod nullifier_tests;
 mod root_tests;
 mod txdata_tests;
-mod types_tests;
 
-// Property-based tests
 pub mod proptests;

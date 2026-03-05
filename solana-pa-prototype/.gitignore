@@ -1,20 +1,12 @@
 .anchor
-.DS_Store
-**/*.rs.bk
 node_modules
 test-ledger
+.validator-ledger/
+.validator.log
 .yarn
-
-# Claude Code
-.claude/
 
 # Compiled output
 dist/
-
-# Generated files
-compiled_rust_sources.txt
-
-# Build artifacts (keypairs exception is in root .gitignore)
 
 # Proptest regression files
 proptest-regressions/

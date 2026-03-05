@@ -2,17 +2,12 @@
   "license": "ISC",
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
-    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
-    "test:verifier": "ts-node test-verifier.ts"
+    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",
-    "@solana/kit": "^2.1.0",
     "@solana/web3.js": "^1.95.0",
-    "bs58": "^6.0.0",
-    "decimal.js": "^10.4.3",
-    "dotenv": "^16.4.7",
-    "tslog": "^4.9.3"
+    "bs58": "^6.0.0"
   },
   "devDependencies": {
     "chai": "^4.3.4",
