@@ -4,7 +4,6 @@ import {
   PublicKey,
   SystemProgram,
   Keypair,
-  LAMPORTS_PER_SOL,
   Ed25519Program,
   Transaction,
 } from "@solana/web3.js";
@@ -20,145 +19,23 @@ import {
 import { assert } from "chai";
 import { createHash } from "crypto";
 import * as nacl from "tweetnacl";
-import { readFileSync, existsSync } from "fs";
+import { existsSync } from "fs";
 import path from "path";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
-
-// Constants
-const SPL_TOKEN_FORWARDER_PROGRAM_ID = new PublicKey("6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1");
-const OP_WRAP = 0;
-const OP_UNWRAP = 1;
-
-// Helper to derive PDAs
-function deriveConfigPda(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("config")], programId);
-}
-
-function deriveEscrowPda(programId: PublicKey, tokenMint: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("escrow"), tokenMint.toBuffer()],
-    programId
-  );
-}
-
-// Derive nonce bitmap PDA (Permit2-style bitmap pattern)
-// Each PDA covers 256 nonces (one u256 word)
-function deriveNonceBitmapPda(programId: PublicKey, user: PublicKey, nonce: bigint): [PublicKey, number] {
-  // Calculate word index (each word covers 256 nonces)
-  const NONCES_PER_WORD = 256n;
-  const wordIndex = nonce / NONCES_PER_WORD;
-  const wordIndexBuffer = Buffer.alloc(8);
-  wordIndexBuffer.writeBigUInt64LE(wordIndex);
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("nonce_bitmap"), user.toBuffer(), wordIndexBuffer],
-    programId
-  );
-}
-
-function derivePaStatePda(paProgram: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("pa_state")], paProgram);
-}
-
-// Helper to create wrap message hash
-// Must match Rust WrapMessage::to_bytes() for Ed25519 signature verification
-function createWrapMessageHash(
-  forwarderId: PublicKey, // Forwarder program ID for domain separation
-  tokenMint: PublicKey,
-  amount: bigint,
-  nonce: bigint,
-  deadline: bigint,
-  actionTreeRoot: Buffer
-): Buffer {
-  // Layout (120 bytes - matches Rust WrapMessage):
-  // | Offset | Size | Field            |
-  // |--------|------|------------------|
-  // | 0      | 32   | forwarder_id     |
-  // | 32     | 32   | token_mint       |
-  // | 64     | 8    | amount (u64 LE)  |
-  // | 72     | 8    | nonce (u64 LE)   |
-  // | 80     | 8    | deadline (i64 LE)|
-  // | 88     | 32   | action_tree_root |
-  const message = Buffer.alloc(120);
-  forwarderId.toBuffer().copy(message, 0);
-  tokenMint.toBuffer().copy(message, 32);
-  message.writeBigUInt64LE(amount, 64);
-  message.writeBigUInt64LE(nonce, 72);
-  message.writeBigInt64LE(deadline, 80);
-  actionTreeRoot.copy(message, 88);
-
-  // SHA-256 hash
-  return createHash("sha256").update(message).digest();
-}
-
-// Helper to encode wrap input
-function encodeWrapInput(
-  tokenMint: PublicKey,
-  amount: bigint,
-  user: PublicKey,
-  nonce: bigint,
-  deadline: bigint,
-  actionTreeRoot: Buffer,
-  signature: Buffer,
-  ed25519IxIndex: number
-): Buffer {
-  // Layout: op(1) + token_mint(32) + amount(8) + user(32) + nonce(8) + deadline(8) + action_tree_root(32) + signature(64) + ed25519_ix_index(1) = 186 bytes
-  const input = Buffer.alloc(186);
-  let offset = 0;
-
-  input.writeUInt8(OP_WRAP, offset);
-  offset += 1;
-
-  tokenMint.toBuffer().copy(input, offset);
-  offset += 32;
-
-  input.writeBigUInt64LE(amount, offset);
-  offset += 8;
-
-  user.toBuffer().copy(input, offset);
-  offset += 32;
-
-  input.writeBigUInt64LE(nonce, offset);
-  offset += 8;
-
-  input.writeBigInt64LE(deadline, offset);
-  offset += 8;
-
-  actionTreeRoot.copy(input, offset);
-  offset += 32;
-
-  signature.copy(input, offset);
-  offset += 64;
-
-  input.writeUInt8(ed25519IxIndex, offset);
-
-  return input;
-}
-
-// Helper to encode unwrap input
-function encodeUnwrapInput(tokenMint: PublicKey, amount: bigint, recipient: PublicKey): Buffer {
-  // Layout: op(1) + token_mint(32) + amount(8) + recipient(32) = 73 bytes
-  const input = Buffer.alloc(73);
-  let offset = 0;
-
-  input.writeUInt8(OP_UNWRAP, offset);
-  offset += 1;
-
-  tokenMint.toBuffer().copy(input, offset);
-  offset += 32;
-
-  input.writeBigUInt64LE(amount, offset);
-  offset += 8;
-
-  recipient.toBuffer().copy(input, offset);
-
-  return input;
-}
-
-async function airdrop(provider: anchor.AnchorProvider, to: PublicKey, sol: number) {
-  const sig = await provider.connection.requestAirdrop(to, sol * LAMPORTS_PER_SOL);
-  await provider.connection.confirmTransaction(sig, "confirmed");
-}
+import {
+  deriveConfigPda,
+  deriveEscrowPda,
+  deriveNonceBitmapPda,
+  derivePaStatePda,
+} from "./utils";
+import {
+  airdrop,
+  createWrapMessageHash,
+  encodeWrapInput,
+  encodeUnwrapInput,
+} from "./utils";
+import { OP_WRAP, OP_UNWRAP } from "./utils";
 
 
 describe("spl-token-forwarder", () => {

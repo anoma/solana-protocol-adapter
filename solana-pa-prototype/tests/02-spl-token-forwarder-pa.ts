@@ -14,7 +14,6 @@ import {
   PublicKey,
   SystemProgram,
   Keypair,
-  LAMPORTS_PER_SOL,
   ComputeBudgetProgram,
   SYSVAR_CLOCK_PUBKEY,
   SYSVAR_INSTRUCTIONS_PUBKEY,
@@ -28,102 +27,35 @@ import {
   approve,
   getAccount,
   TOKEN_PROGRAM_ID,
-  getAssociatedTokenAddressSync,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
-import { readFileSync, existsSync } from "fs";
+import { existsSync } from "fs";
 import path from "path";
 import bs58 from "bs58";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
-  getRouterPda,
-  getVerifierEntryPda,
   VERIFIER_ROUTER_ID,
   GROTH16_VERIFIER_ID,
 } from "../scripts/verifier-utils";
-
-// Fixture types
-type SplTokenWrapMetadata = {
-  user_secret_key_b64: string;
-  user_pubkey_b64: string;
-  mint_seed_b64: string;
-  token_mint_b58: string;
-  amount: number;
-  nonce: number;
-  deadline: number;
-  action_tree_root_b64: string;
-  signature_b64: string;
-  logic_ref_b64: string;
-};
-
-type SplTokenUnwrapMetadata = {
-  mint_seed_b64: string;
-  token_mint_b58: string;
-  amount: number;
-  recipient_seed_b64: string;
-  recipient_b58: string;
-  logic_ref_b64: string;
-};
-
-type Fixture = {
-  format: string;
-  aggregation_strategy: string;
-  aggregation_proof_type: string;
-  selector: string;
-  forwarder_type: string;
-  tx_b64: string;
-  tx_tampered_b64: string;
-  consumed_nullifiers_b64: string[];
-  spl_token_wrap?: SplTokenWrapMetadata;
-  spl_token_unwrap?: SplTokenUnwrapMetadata;
-};
-
-function readJson<T>(filePath: string): T {
-  return JSON.parse(readFileSync(filePath, "utf8")) as T;
-}
-
-async function airdrop(provider: anchor.AnchorProvider, to: PublicKey, sol: number) {
-  const sig = await provider.connection.requestAirdrop(to, sol * LAMPORTS_PER_SOL);
-  await provider.connection.confirmTransaction(sig, "confirmed");
-}
-
-function parseSelectorFromFixture(selectorHex: string): Buffer {
-  const hex = selectorHex.replace(/^0x/, "");
-  if (hex.length !== 8) {
-    throw new Error(`Invalid selector format: ${selectorHex} (expected 8 hex chars)`);
-  }
-  return Buffer.from(hex, "hex");
-}
-
-function deriveRouterAccounts(
-  verifierRouterId: PublicKey,
-  selector: Buffer
-): { routerPda: PublicKey; verifierEntryPda: PublicKey } {
-  const [routerPda] = getRouterPda(verifierRouterId);
-  const [verifierEntryPda] = getVerifierEntryPda(selector, verifierRouterId);
-  return {
-    routerPda,
-    verifierEntryPda,
-  };
-}
-
-// PDA seeds
-const PA_STATE_SEED = Buffer.from("pa_state");
-const NULLIFIER_SEED = Buffer.from("nullifier");
-const TX_DATA_SEED = Buffer.from("tx_data");
-const ROOT_MARKER_SEED = Buffer.from("root");
-const CONFIG_SEED = Buffer.from("config");
-const ESCROW_SEED = Buffer.from("escrow");
-const NONCE_BITMAP_SEED = Buffer.from("nonce_bitmap");
-const NONCES_PER_WORD = 256n;
-
-// Genesis root for depth-1 tree
-const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
-  "cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06",
-  "hex"
-);
+import {
+  PA_STATE_SEED,
+  NULLIFIER_SEED,
+  TX_DATA_SEED,
+  ROOT_MARKER_SEED,
+  EMPTY_TREE_ROOT_INITIAL,
+} from "./utils";
+import {
+  derivePaStatePda,
+  deriveRootMarkerPda,
+  deriveConfigPda as deriveForwarderConfigPda,
+  deriveEscrowPda,
+  deriveNonceBitmapPda,
+  parseSelectorFromFixture,
+  deriveRouterAccounts,
+} from "./utils";
+import { readJson, Fixture } from "./utils";
+import { airdrop, createWrapMessageHash } from "./utils";
 
 describe("SPL Token Forwarder PA Integration", function () {
   // Increase timeout for fixture-based tests
@@ -138,41 +70,19 @@ describe("SPL Token Forwarder PA Integration", function () {
   const groth16VerifierId = GROTH16_VERIFIER_ID;
   const verifierRouterId = VERIFIER_ROUTER_ID;
 
-  const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], paProgram.programId);
+  const [paState] = derivePaStatePda(paProgram.programId);
 
-  function deriveRootMarkerPda(root: Buffer): PublicKey {
-    return PublicKey.findProgramAddressSync(
-      [ROOT_MARKER_SEED, paState.toBuffer(), root],
-      paProgram.programId
-    )[0];
+  // Thin wrappers that bind program IDs from the closure
+  function localDeriveRootMarkerPda(root: Buffer): PublicKey {
+    return deriveRootMarkerPda(paState, root, paProgram.programId);
   }
 
-  function computeGenesisRoot(): Buffer {
-    return EMPTY_TREE_ROOT_INITIAL;
+  function localDeriveEscrowPda(tokenMint: PublicKey): [PublicKey, number] {
+    return deriveEscrowPda(forwarderProgram.programId, tokenMint);
   }
 
-  // Forwarder PDA helpers
-  function deriveForwarderConfigPda(): [PublicKey, number] {
-    return PublicKey.findProgramAddressSync([CONFIG_SEED], forwarderProgram.programId);
-  }
-
-  function deriveEscrowPda(tokenMint: PublicKey): [PublicKey, number] {
-    return PublicKey.findProgramAddressSync(
-      [ESCROW_SEED, tokenMint.toBuffer()],
-      forwarderProgram.programId
-    );
-  }
-
-  function deriveNonceBitmapPda(user: PublicKey, nonce: bigint): [PublicKey, number] {
-    // Permit2-style bitmap pattern: each PDA stores 256 nonces
-    // Word index = nonce / 256
-    const wordIndex = nonce / NONCES_PER_WORD;
-    const wordIndexBuffer = Buffer.alloc(8);
-    wordIndexBuffer.writeBigUInt64LE(wordIndex);
-    return PublicKey.findProgramAddressSync(
-      [NONCE_BITMAP_SEED, user.toBuffer(), wordIndexBuffer],
-      forwarderProgram.programId
-    );
+  function localDeriveNonceBitmapPda(user: PublicKey, nonce: bigint): [PublicKey, number] {
+    return deriveNonceBitmapPda(forwarderProgram.programId, user, nonce);
   }
 
   // Check if fixtures exist before running tests
@@ -206,8 +116,8 @@ describe("SPL Token Forwarder PA Integration", function () {
     verifierEntryPda = accounts.verifierEntryPda;
 
     // Initialize PA state if needed
-    const genesisRoot = computeGenesisRoot();
-    genesisRootMarkerPda = deriveRootMarkerPda(genesisRoot);
+    const genesisRoot = EMPTY_TREE_ROOT_INITIAL;
+    genesisRootMarkerPda = localDeriveRootMarkerPda(genesisRoot);
 
     try {
       await paProgram.account.paStateAccount.fetch(paState);
@@ -226,7 +136,7 @@ describe("SPL Token Forwarder PA Integration", function () {
     }
 
     // Initialize forwarder config if needed
-    [forwarderConfigPda] = deriveForwarderConfigPda();
+    [forwarderConfigPda] = deriveForwarderConfigPda(forwarderProgram.programId);
     emergencyCommittee = Keypair.generate();
     await airdrop(provider, emergencyCommittee.publicKey, 1);
 
@@ -431,7 +341,7 @@ describe("SPL Token Forwarder PA Integration", function () {
       );
 
       // Create escrow ATA (must exist before wrap)
-      const [escrowPda] = deriveEscrowPda(mint);
+      const [escrowPda] = localDeriveEscrowPda(mint);
       const escrowAtaAccount = await getOrCreateAssociatedTokenAccount(
         provider.connection,
         userKeypair,
@@ -452,7 +362,7 @@ describe("SPL Token Forwarder PA Integration", function () {
       );
 
       // Nonce bitmap PDA (Permit2-style: each PDA stores 256 nonces)
-      const [nonceBitmapPda] = deriveNonceBitmapPda(userPubkey, nonce);
+      const [nonceBitmapPda] = localDeriveNonceBitmapPda(userPubkey, nonce);
 
       // Create Ed25519 verify instruction with the fixture's signature
       // The signature was computed over: SHA256(forwarder_id || mint || amount || nonce || deadline || action_tree_root)
@@ -580,7 +490,7 @@ describe("SPL Token Forwarder PA Integration", function () {
       }
 
       // Create escrow ATA and fund it (simulating prior wraps)
-      const [escrowPda] = deriveEscrowPda(mint);
+      const [escrowPda] = localDeriveEscrowPda(mint);
       const escrowAta = await getOrCreateAssociatedTokenAccount(
         provider.connection,
         recipientKeypair,
@@ -656,24 +566,3 @@ describe("SPL Token Forwarder PA Integration", function () {
     });
   });
 });
-
-// Helper to create wrap message hash (matches WrapMessage in state.rs)
-// Layout: forwarder_id(32) + token_mint(32) + amount(8) + nonce(8) + deadline(8) + action_tree_root(32) = 120 bytes
-function createWrapMessageHash(
-  forwarderId: PublicKey,
-  tokenMint: PublicKey,
-  amount: bigint,
-  nonce: bigint,
-  deadline: bigint,
-  actionTreeRoot: Buffer
-): Buffer {
-  const { createHash } = require("crypto");
-  const message = Buffer.alloc(120);
-  forwarderId.toBuffer().copy(message, 0);   // forwarder_id for domain separation
-  tokenMint.toBuffer().copy(message, 32);
-  message.writeBigUInt64LE(amount, 64);
-  message.writeBigUInt64LE(nonce, 72);
-  message.writeBigInt64LE(deadline, 80);
-  actionTreeRoot.copy(message, 88);
-  return createHash("sha256").update(message).digest();
-}

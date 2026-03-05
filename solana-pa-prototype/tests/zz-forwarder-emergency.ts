@@ -16,7 +16,6 @@ import {
   PublicKey,
   SystemProgram,
   Keypair,
-  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
   createMint,
@@ -30,31 +29,12 @@ import { assert } from "chai";
 import { createHash } from "crypto";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
+import { deriveConfigPda, deriveEscrowPda, derivePaStatePda } from "./utils";
+import { airdrop } from "./utils";
 
 // Deterministic keypair seeds - must match 01-spl-token-forwarder.ts
 const EMERGENCY_COMMITTEE_SEED = createHash("sha256").update("emergency_committee_seed").digest();
 const EMERGENCY_CALLER_SEED = createHash("sha256").update("emergency_caller_seed").digest();
-
-// Helper to derive PDAs
-function deriveConfigPda(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("config")], programId);
-}
-
-function deriveEscrowPda(programId: PublicKey, tokenMint: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("escrow"), tokenMint.toBuffer()],
-    programId
-  );
-}
-
-function derivePaStatePda(paProgram: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("pa_state")], paProgram);
-}
-
-async function airdrop(provider: anchor.AnchorProvider, to: PublicKey, sol: number) {
-  const sig = await provider.connection.requestAirdrop(to, sol * LAMPORTS_PER_SOL);
-  await provider.connection.confirmTransaction(sig, "confirmed");
-}
 
 describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   const provider = anchor.AnchorProvider.env();

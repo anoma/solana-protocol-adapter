@@ -9,25 +9,8 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
-
-const ROOT_MARKER_SEED = Buffer.from("root");
-
-// Genesis root for depth-1 tree
-const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
-  "cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06",
-  "hex"
-);
-
-function derivePaStatePda(paProgramId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("pa_state")], paProgramId);
-}
-
-function deriveRootMarkerPda(paState: PublicKey, root: Buffer, paProgramId: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [ROOT_MARKER_SEED, paState.toBuffer(), root],
-    paProgramId
-  )[0];
-}
+import { derivePaStatePda, deriveRootMarkerPda } from "./utils";
+import { EMPTY_TREE_ROOT_INITIAL } from "./utils";
 
 describe("00-setup", () => {
   const provider = anchor.AnchorProvider.env();

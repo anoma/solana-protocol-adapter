@@ -4,44 +4,35 @@ import {
   PublicKey,
   SystemProgram,
   Keypair,
-  LAMPORTS_PER_SOL,
   ComputeBudgetProgram,
   SYSVAR_CLOCK_PUBKEY,
   Transaction,
 } from "@solana/web3.js";
 import { assert } from "chai";
-import { readFileSync } from "fs";
 import path from "path";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 
 import {
-  getRouterPda,
-  getVerifierEntryPda,
   VERIFIER_ROUTER_ID,
   GROTH16_VERIFIER_ID,
 } from "../scripts/verifier-utils";
 
-type Fixture = {
-  format: string;
-  aggregation_strategy: string;
-  aggregation_proof_type: string;
-  selector: string; // "0x73c457ba" format
-  tx_b64: string;
-  tx_tampered_b64: string;
-  consumed_nullifiers_b64: string[];
-};
-
-function readJson<T>(filePath: string): T {
-  return JSON.parse(readFileSync(filePath, "utf8")) as T;
-}
-
-function loadFixture(filename: string): Fixture {
-  return readJson<Fixture>(path.resolve(process.cwd(), "tests", "fixtures", filename));
-}
-
-// Keypairs funded during tests, drained back to the provider wallet in
-// afterEach() so devnet SOL circulates across the test run.
-const fundedKeypairs: Keypair[] = [];
+import {
+  PA_STATE_SEED,
+  NULLIFIER_SEED,
+  TX_DATA_SEED,
+  ROOT_MARKER_SEED as ROOT_SEED,
+  EMPTY_TREE_ROOT_INITIAL,
+  MIN_EXPIRY_SLOTS,
+  MAX_EXPIRY_SLOTS,
+  SEVEN_DAYS_SLOTS,
+  AUTHORITY_MISMATCH_PATTERN,
+  SEED_MISMATCH_PATTERN,
+  ADDRESS_MISMATCH_PATTERN,
+} from "./utils";
+import { loadFixture, Fixture } from "./utils";
+import { parseSelectorFromFixture, deriveRouterAccounts } from "./utils";
+import { airdrop, fundedKeypairs } from "./utils";
 
 // TxData accounts created during tests, closed in afterEach() to recover rent.
 const openTxDataAccounts: { uploadId: anchor.BN; txData: PublicKey; authority: Keypair }[] = [];
@@ -49,52 +40,7 @@ const openTxDataAccounts: { uploadId: anchor.BN; txData: PublicKey; authority: K
 let providerBalanceBefore = 0;
 let suiteStartBalance = 0;
 
-async function airdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: number) {
-  const needed = sol * LAMPORTS_PER_SOL;
-  const balance = await provider.connection.getBalance(kp.publicKey);
-  if (balance >= needed) return;
-
-  const tx = new Transaction().add(
-    SystemProgram.transfer({
-      fromPubkey: provider.wallet.publicKey,
-      toPubkey: kp.publicKey,
-      lamports: needed - balance,
-    })
-  );
-  await provider.sendAndConfirm(tx);
-  fundedKeypairs.push(kp);
-}
-
-const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
-  "cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06",
-  "hex"
-);
-
-const PA_STATE_SEED = Buffer.from("pa_state");
-const NULLIFIER_SEED = Buffer.from("nullifier");
-const TX_DATA_SEED = Buffer.from("tx_data");
-const ROOT_SEED = Buffer.from("root");
-
-// Protocol constants matching Rust defaults (from state.rs)
-const MIN_EXPIRY_SLOTS = 100;
-const MAX_EXPIRY_SLOTS = 216_000;
-// 7 days at 400ms/slot — matches SEVEN_DAYS_SLOTS in state.rs
-const SEVEN_DAYS_SLOTS = 1_512_000;
-
-// Anchor constraint error patterns for assertion matching
-const AUTHORITY_MISMATCH_PATTERN = /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i;
-const SEED_MISMATCH_PATTERN = /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint|Unauthorized/i;
-const ADDRESS_MISMATCH_PATTERN = /ConstraintAddress|address constraint/i;
-
 const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-
-function parseSelectorFromFixture(selectorHex: string): Buffer {
-  const hex = selectorHex.replace(/^0x/, "");
-  if (hex.length !== 8) {
-    throw new Error(`Invalid selector format: ${selectorHex} (expected 8 hex chars)`);
-  }
-  return Buffer.from(hex, "hex");
-}
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
@@ -103,12 +49,11 @@ const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>
 
 const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
-const fixture = loadFixture("batch_groth16.json");
+const fixture = loadFixture<Fixture>("batch_groth16.json");
 
 const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
 
-const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
-const [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, VERIFIER_ROUTER_ID);
+const { routerPda, verifierEntryPda } = deriveRouterAccounts(VERIFIER_ROUTER_ID, GROTH16_SELECTOR);
 
 // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
 const blockTimeForwarderId = new PublicKey("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf");
@@ -574,7 +519,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     // - timestamp = -1 (past time, forwarder will return RESULT_LT = 0x00)
     // - expected_output = 0x02 (RESULT_GT - intentionally WRONG)
     // The PA should revert with ExternalCallOutputMismatch when actual != expected.
-    const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
+    const mismatchFixture = loadFixture<Fixture>("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
     const mismatchNullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
@@ -727,7 +672,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority, 2);
 
-    const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
+    const mismatchFixture = loadFixture<Fixture>("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
     const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
@@ -781,7 +726,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority, 2);
 
-    const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
+    const mismatchFixture = loadFixture<Fixture>("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
     const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
@@ -1730,7 +1675,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
 describe("solana-pa-prototype (Settlement error paths — fixture variants)", () => {
   async function expectSettleError(fixtureName: string, expectedError: string) {
-    const fx = loadFixture(fixtureName);
+    const fx = loadFixture<Fixture>(fixtureName);
     const payload = Buffer.from(fx.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
@@ -1761,7 +1706,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
     // Replace SYSVAR_CLOCK_PUBKEY with a random pubkey so the CPI to btf fails.
     // The inner CPI error propagates through (btf's AccountSysvarMismatch).
-    const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
+    const mismatchFixture = loadFixture<Fixture>("batch_groth16_mismatch.json");
     const payload = Buffer.from(mismatchFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
     const randomAccount = Keypair.generate().publicKey;
@@ -1787,7 +1732,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
   });
 
   it("rejects settlement when test-forwarder returns error", async () => {
-    const failFixture = loadFixture("batch_forwarder_fail.json");
+    const failFixture = loadFixture<Fixture>("batch_forwarder_fail.json");
     const payload = Buffer.from(failFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(failFixture.consumed_nullifiers_b64);
 
@@ -1810,7 +1755,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
   });
 
   it("rejects ExternalCallOutputMismatch when forwarder returns no data", async () => {
-    const silentFixture = loadFixture("batch_forwarder_silent.json");
+    const silentFixture = loadFixture<Fixture>("batch_forwarder_silent.json");
     const payload = Buffer.from(silentFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(silentFixture.consumed_nullifiers_b64);
 
@@ -1834,7 +1779,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   // On devnet, fixtures may already be settled from a previous run.
   // Check the first nullifier; if it exists, the fixture was already settled.
   async function alreadySettled(fixtureName: string): Promise<boolean> {
-    const f = loadFixture(fixtureName);
+    const f = loadFixture<Fixture>(fixtureName);
     const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
     const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
     return !!info;
@@ -1852,7 +1797,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
-    const v2Fixture = loadFixture("batch_groth16_v2.json");
+    const v2Fixture = loadFixture<Fixture>("batch_groth16_v2.json");
     const payload = Buffer.from(v2Fixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(v2Fixture.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
@@ -1930,7 +1875,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
-    const v3Fixture = loadFixture("batch_groth16_v3.json");
+    const v3Fixture = loadFixture<Fixture>("batch_groth16_v3.json");
     const payload = Buffer.from(v3Fixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(v3Fixture.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
@@ -1951,7 +1896,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
-    const multiFixture = loadFixture("batch_groth16_multi_call.json");
+    const multiFixture = loadFixture<Fixture>("batch_groth16_multi_call.json");
     const payload = Buffer.from(multiFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(multiFixture.consumed_nullifiers_b64);
 
@@ -1973,7 +1918,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
 describe("solana-pa-prototype (OutputAccount mode)", () => {
   it("settles forwarder-output fixture via OutputAccount mode (next_index 4→5)", async () => {
-    const outputFixture = loadFixture("batch_forwarder_output.json");
+    const outputFixture = loadFixture<Fixture>("batch_forwarder_output.json");
     const payload = Buffer.from(outputFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
 
@@ -2010,7 +1955,7 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
   // and expected_output [0x01, 0x02, 0x03, 0x04]. These tests manipulate remaining_accounts
   // to trigger each error path in read_forwarder_output (cpi.rs:89-103).
 
-  const outputFixture = loadFixture("batch_forwarder_output.json");
+  const outputFixture = loadFixture<Fixture>("batch_forwarder_output.json");
 
   it("rejects OutputAccount when index is out of bounds", async () => {
     const payload = Buffer.from(outputFixture.tx_b64, "base64");
