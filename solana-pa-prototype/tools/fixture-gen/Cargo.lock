@@ -4919,15 +4919,12 @@ dependencies = [
  "anchor-lang",
  "anoma-rm-core",
  "anoma-rm-solana",
- "base64ct",
  "bincode",
  "borsh 1.5.7",
- "constant_time_eq",
  "groth_16_verifier",
  "hex-literal",
  "serde",
  "solana-system-interface",
- "time-core",
  "verifier_router",
 ]
 

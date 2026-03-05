@@ -415,7 +415,7 @@ fn execute_settlement<'info>(
     for action in &tx.actions {
         for cu in &action.compliance_units {
             let root = &cu.instance.consumed_commitment_tree_root;
-            if !unique_roots.iter().any(|r| *r == root) {
+            if !unique_roots.contains(&root) {
                 unique_roots.push(root);
             }
         }

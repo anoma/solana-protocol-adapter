@@ -419,12 +419,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
-name = "base64ct"
-version = "1.7.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89e25b6adfb930f02d1981565a6e5d9c547ac15a96606256d3b59040e5cd4ca3"
-
-[[package]]
 name = "bincode"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2634,18 +2628,15 @@ dependencies = [
  "anchor-lang",
  "anoma-rm-core",
  "anoma-rm-solana",
- "base64ct",
  "bincode",
  "block-time-forwarder",
  "borsh 1.6.0",
- "constant_time_eq",
  "groth_16_verifier",
  "hex-literal",
  "proptest",
  "serde",
  "sha2 0.10.9",
  "solana-system-interface",
- "time-core",
  "verifier_router",
 ]
 

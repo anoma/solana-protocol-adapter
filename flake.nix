@@ -24,10 +24,9 @@
           };
           lib = pkgs.lib;
 
-          # Rust 1.84.1: matches the platform-tools rustc version and is
-          # the last release compatible with Anchor 0.31.x (Rust >= 1.85
-          # introduces coherence changes that break the Anchor build).
-          rustToolchain = pkgs.rust-bin.stable."1.84.1".default;
+          # Rust 1.93.0: pinned to match CI exactly. Anchor 0.31.1 builds
+          # fine on 1.85+ after its proc-macro2 fix.
+          rustToolchain = pkgs.rust-bin.stable."1.93.0".default;
 
           # Nightly toolchain needed only for Anchor IDL generation
           # (anchor build calls `cargo +nightly` internally).

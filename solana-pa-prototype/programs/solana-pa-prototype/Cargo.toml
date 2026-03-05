@@ -39,10 +39,6 @@ arm-core = { package = "anoma-rm-core", git = "https://github.com/anoma/arm-risc
 # ARM Solana-specific types (Borsh, syscalls, delta verification)
 arm-solana = { package = "anoma-rm-solana", git = "https://github.com/anoma/arm-risc0", branch = "anthony/arm-solana-crate-split" }
 
-# Pin: edition 2024 crates incompatible with Rust 1.84 / Cargo 1.84
-base64ct = "<=1.7.3"
-constant_time_eq = "<=0.3.1"
-time-core = "<=0.1.7"
 
 [dev-dependencies]
 # Forwarder example program (used in tests for constants/encoding)
