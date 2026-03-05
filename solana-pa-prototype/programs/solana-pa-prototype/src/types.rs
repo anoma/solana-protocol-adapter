@@ -1,15 +1,6 @@
-//! Core type definitions for the Solana Protocol Adapter.
+//! Solana-specific type definitions for the Protocol Adapter.
 
 use serde::{Deserialize, Serialize};
-
-pub use arm_core::action::Action;
-pub use arm_core::compliance::ComplianceInstance;
-pub use arm_core::compliance_unit::ComplianceUnit;
-pub use arm_core::delta_types::DeltaWitness;
-pub use arm_core::logic_instance::LogicVerifierInputs;
-pub use arm_core::logic_instance::{AppData, ExpirableBlob};
-pub use arm_core::transaction::{Delta, Transaction};
-pub use arm_core::Digest;
 
 /// Solana-specific external call structure.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

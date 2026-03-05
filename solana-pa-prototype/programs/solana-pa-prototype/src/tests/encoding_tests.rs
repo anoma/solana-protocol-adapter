@@ -4,32 +4,12 @@ use crate::encoding::{
 use crate::error::PAError;
 use crate::merkle;
 use crate::tests::utils::create_minimal_transaction;
-use crate::types::*;
+use arm_core::Digest;
 
 #[test]
-fn test_output_account_encoding() {
-    let call = SolanaExternalCall {
-        program_id: [0; 32],
-        instruction_data: vec![],
-        expected_output: vec![0u8; 2048],
-        output_mode: OutputMode::OutputAccount {
-            index: 5,
-            offset: 100,
-            len: 2048,
-        },
-    };
-
-    let bytes = bincode::serialize(&call).unwrap();
-    let decoded: SolanaExternalCall = bincode::deserialize(&bytes).unwrap();
-
-    match decoded.output_mode {
-        OutputMode::OutputAccount { index, offset, len } => {
-            assert_eq!(index, 5);
-            assert_eq!(offset, 100);
-            assert_eq!(len, 2048);
-        }
-        _ => panic!("Expected OutputAccount"),
-    }
+fn test_action_tree_root_empty_fails() {
+    let result = compute_action_tree_root(&[]);
+    assert!(result.is_err(), "empty tags should return error");
 }
 
 #[test]
@@ -91,10 +71,10 @@ fn test_find_logic_input_not_found() {
     let action = &tx.actions[0];
 
     let missing_tag = Digest::from_bytes([0xFF; 32]);
-    match find_logic_input(&action.logic_verifier_inputs, &missing_tag) {
-        Err(PAError::TagNotFound) => {}
-        other => panic!("Expected TagNotFound, got {:?}", other),
-    }
+    assert!(matches!(
+        find_logic_input(&action.logic_verifier_inputs, &missing_tag),
+        Err(PAError::TagNotFound)
+    ));
 }
 
 #[test]
@@ -113,13 +93,10 @@ fn test_batch_journal_digest_tag_count_mismatch() {
     let mut tx = create_minimal_transaction();
     tx.actions[0].logic_verifier_inputs.pop();
 
-    match compute_batch_aggregation_journal_digest(&tx) {
-        Err(PAError::InvalidTransactionData) => {}
-        other => panic!(
-            "Expected InvalidTransactionData for tag/LVI count mismatch, got {:?}",
-            other
-        ),
-    }
+    assert!(matches!(
+        compute_batch_aggregation_journal_digest(&tx),
+        Err(PAError::InvalidTransactionData)
+    ));
 }
 
 #[test]
@@ -129,13 +106,10 @@ fn test_batch_journal_digest_vk_mismatch() {
     // Set it to something wrong to trigger the VK mismatch check.
     tx.actions[0].logic_verifier_inputs[0].verifying_key = Digest::from_bytes([0xFF; 32]);
 
-    match compute_batch_aggregation_journal_digest(&tx) {
-        Err(PAError::InvalidTransactionData) => {}
-        other => panic!(
-            "Expected InvalidTransactionData for VK mismatch, got {:?}",
-            other
-        ),
-    }
+    assert!(matches!(
+        compute_batch_aggregation_journal_digest(&tx),
+        Err(PAError::InvalidTransactionData)
+    ));
 }
 
 #[test]

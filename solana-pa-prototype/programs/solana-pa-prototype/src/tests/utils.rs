@@ -24,11 +24,44 @@ macro_rules! make_account_info {
 }
 pub(crate) use make_account_info;
 
-use crate::groth16::Seal;
+/// Assert that a Result is an AnchorError whose `error_name` matches the given PAError variant.
+///
+/// Anchor wraps `#[error_code]` variants into `AnchorError { error_name, error_code_number, .. }`.
+/// This helper extracts the error name and compares it to avoid stringly-typed checks at call sites.
+macro_rules! assert_anchor_err {
+    ($result:expr, $variant:ident) => {{
+        let err = $result.expect_err(concat!("Expected PAError::", stringify!($variant)));
+        match err {
+            ::anchor_lang::error::Error::AnchorError(ref e) => {
+                assert_eq!(
+                    e.error_name,
+                    stringify!($variant),
+                    "Expected PAError::{}, got PAError::{}",
+                    stringify!($variant),
+                    e.error_name,
+                );
+            }
+            _ => panic!(
+                "Expected AnchorError(PAError::{}), got non-Anchor error: {:?}",
+                stringify!($variant),
+                err,
+            ),
+        }
+    }};
+}
+pub(crate) use assert_anchor_err;
+
 use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
 use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
-use crate::types::*;
+use arm_core::action::Action;
+use arm_core::compliance::ComplianceInstance;
+use arm_core::compliance_unit::ComplianceUnit;
+use arm_core::delta_types::DeltaWitness;
+use arm_core::logic_instance::{AppData, ExpirableBlob, LogicVerifierInputs};
+use arm_core::transaction::{Delta, Transaction};
+use arm_core::Digest;
 use groth_16_verifier::Proof;
+use verifier_router::Seal;
 use verifier_router::Selector;
 
 pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction {
@@ -100,18 +133,6 @@ pub fn create_minimal_transaction() -> Transaction {
     build_tx_from_instances(&[instance])
 }
 
-pub fn create_compliance_instance(nullifier: Digest, commitment: Digest) -> ComplianceInstance {
-    ComplianceInstance {
-        consumed_nullifier: nullifier,
-        consumed_logic_ref: Digest::default(),
-        consumed_commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
-        created_commitment: commitment,
-        created_logic_ref: Digest::default(),
-        delta_x: [0u32; 8],
-        delta_y: [0u32; 8],
-    }
-}
-
 pub fn create_transaction_with_external_payload(payloads: Vec<ExpirableBlob>) -> Transaction {
     let mut tx = create_minimal_transaction();
     tx.actions[0].logic_verifier_inputs[0]
@@ -120,32 +141,12 @@ pub fn create_transaction_with_external_payload(payloads: Vec<ExpirableBlob>) ->
     tx
 }
 
-pub fn create_transaction_with_external_payload_and_logic_ref(
-    payloads: Vec<ExpirableBlob>,
-    verifying_key: Digest,
-) -> Transaction {
-    let mut tx = create_transaction_with_external_payload(payloads);
-    tx.actions[0].compliance_units[0]
-        .instance
-        .consumed_logic_ref = verifying_key;
-    tx.actions[0].logic_verifier_inputs[0].verifying_key = verifying_key;
-    tx
-}
-
-pub fn create_transaction_with_multiple_lvi_external_payloads(
+/// One action, one CU, multiple LVIs with per-LVI external payloads.
+pub fn create_transaction_with_multi_lvi_payloads(
     payloads_per_lvi: Vec<Vec<ExpirableBlob>>,
 ) -> Transaction {
-    let instance = ComplianceInstance {
-        consumed_nullifier: Digest::default(),
-        consumed_logic_ref: Digest::default(),
-        consumed_commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
-        created_commitment: Digest::default(),
-        created_logic_ref: Digest::default(),
-        delta_x: [0u32; 8],
-        delta_y: [0u32; 8],
-    };
-
-    let logic_verifier_inputs: Vec<LogicVerifierInputs> = payloads_per_lvi
+    let mut tx = create_minimal_transaction();
+    tx.actions[0].logic_verifier_inputs = payloads_per_lvi
         .into_iter()
         .enumerate()
         .map(|(i, payloads)| LogicVerifierInputs {
@@ -159,39 +160,17 @@ pub fn create_transaction_with_multiple_lvi_external_payloads(
             instance_journal: Vec::new(),
         })
         .collect();
-
-    Transaction {
-        actions: vec![Action {
-            compliance_units: vec![ComplianceUnit {
-                instance,
-                proof: None,
-            }],
-            logic_verifier_inputs,
-        }],
-        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
-        expected_balance: None,
-        aggregation_proof: None,
-    }
+    tx
 }
 
 /// Variable-depth tree starting at depth 1 (capacity = 2 leaves).
 pub fn create_test_pa_state() -> PAStateAccount {
-    PAStateAccount {
-        bump: 0,
-        authority: Pubkey::default(),
-        paused: false,
-        root: ZEROS[INITIAL_TREE_DEPTH - 1].to_bytes(), // ZEROS[0] = PADDING_LEAF for depth 1
-        next_index: 0,
-        current_depth: INITIAL_TREE_DEPTH as u8,
-        frontier: vec![ZEROS[0].to_bytes()], // Single entry for depth 1
-        min_expiry_slots: MIN_EXPIRY_SLOTS,
-        max_expiry_slots: MAX_EXPIRY_SLOTS,
-    }
+    create_test_pa_state_with(Pubkey::default(), false)
 }
 
-pub fn create_mock_pa_state(authority: Pubkey, paused: bool) -> PAStateAccount {
+pub fn create_test_pa_state_with(authority: Pubkey, paused: bool) -> PAStateAccount {
     PAStateAccount {
-        bump: 255,
+        bump: 0,
         authority,
         paused,
         root: EMPTY_TREE_ROOT_INITIAL.to_bytes(),

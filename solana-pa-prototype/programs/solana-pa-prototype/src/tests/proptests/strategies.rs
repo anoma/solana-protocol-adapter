@@ -1,4 +1,6 @@
-use crate::types::*;
+use crate::types::{OutputMode, SolanaExternalCall};
+use arm_core::compliance::ComplianceInstance;
+use arm_core::Digest;
 use proptest::prelude::*;
 
 pub fn arb_digest() -> impl Strategy<Value = Digest> {
@@ -7,15 +9,6 @@ pub fn arb_digest() -> impl Strategy<Value = Digest> {
 
 pub fn arb_byte_vec(max_len: usize) -> impl Strategy<Value = Vec<u8>> {
     prop::collection::vec(any::<u8>(), 0..=max_len)
-}
-
-/// Word-aligned byte arrays (len % 4 == 0).
-pub fn arb_aligned_bytes(max_words: usize) -> impl Strategy<Value = Vec<u8>> {
-    (0..=max_words).prop_flat_map(|word_count| prop::collection::vec(any::<u8>(), word_count * 4))
-}
-
-pub fn arb_words(max_count: usize) -> impl Strategy<Value = Vec<u32>> {
-    prop::collection::vec(any::<u32>(), 0..=max_count)
 }
 
 pub fn arb_compliance_instance() -> impl Strategy<Value = ComplianceInstance> {
@@ -37,13 +30,6 @@ pub fn arb_compliance_instance() -> impl Strategy<Value = ComplianceInstance> {
             delta_x: dx,
             delta_y: dy,
         })
-}
-
-pub fn arb_expirable_blob(max_words: usize) -> impl Strategy<Value = ExpirableBlob> {
-    (arb_words(max_words), any::<u32>()).prop_map(|(blob, dc)| ExpirableBlob {
-        blob,
-        deletion_criterion: dc,
-    })
 }
 
 fn arb_output_mode() -> impl Strategy<Value = OutputMode> {

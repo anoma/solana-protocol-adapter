@@ -27,42 +27,24 @@ pub mod block_time_forwarder {
     /// expected unix timestamp (`input` as i64 LE) against the current clock.
     pub fn forward_call(
         ctx: Context<ForwardCall>,
-        logic_ref: [u8; 32],
+        _logic_ref: [u8; 32],
         input: Vec<u8>,
     ) -> Result<()> {
-        msg!("BlockTimeForwarder: forward_call invoked");
-        msg!("  logic_ref: {:?}", &logic_ref[..8]);
-
         if input.len() != 8 {
-            msg!("  ERROR: input must be 8 bytes, got {}", input.len());
             return Err(ErrorCode::InvalidInput.into());
         }
 
         let expected_time =
             i64::from_le_bytes(input.try_into().map_err(|_| ErrorCode::InvalidInput)?);
-        msg!("  expected_time: {}", expected_time);
-
         let current_time = ctx.accounts.clock.unix_timestamp;
-        msg!("  current_time: {}", current_time);
 
         let result = match expected_time.cmp(&current_time) {
-            std::cmp::Ordering::Less => {
-                msg!("  result: LT (expected < current)");
-                RESULT_LT
-            }
-            std::cmp::Ordering::Greater => {
-                msg!("  result: GT (expected > current)");
-                RESULT_GT
-            }
-            std::cmp::Ordering::Equal => {
-                msg!("  result: EQ (expected == current)");
-                RESULT_EQ
-            }
+            std::cmp::Ordering::Less => RESULT_LT,
+            std::cmp::Ordering::Greater => RESULT_GT,
+            std::cmp::Ordering::Equal => RESULT_EQ,
         };
 
         set_return_data(&[result]);
-        msg!("  return_data set: [{}]", result);
-
         Ok(())
     }
 }

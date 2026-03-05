@@ -1,8 +1,9 @@
 use super::strategies::arb_digest;
-use crate::merkle::{hash_two, INITIAL_TREE_DEPTH};
-use crate::state::PAStateAccount;
+use crate::merkle::{
+    append_to_tree, compute_root_from_frontier, hash_two, required_depth_for_leaves,
+    INITIAL_TREE_DEPTH,
+};
 use crate::tests::utils::create_test_pa_state;
-use crate::{append_to_tree, compute_root_from_frontier, required_depth_for_leaves};
 use proptest::prelude::*;
 
 proptest! {
@@ -77,19 +78,6 @@ proptest! {
             prop_assert!(smaller_capacity < final_next_index,
                 "depth-1 capacity {} should be insufficient for {} leaves", smaller_capacity, final_next_index);
         }
-    }
-
-    #[test]
-    fn prop_account_size_matches_depth(
-        current_depth in 1usize..=32usize,
-    ) {
-        let expected_size = PAStateAccount::space_for_depth(current_depth);
-        let frontier_bytes = 32 * current_depth;
-        prop_assert_eq!(
-            expected_size,
-            PAStateAccount::BASE_SPACE + PAStateAccount::VEC_OVERHEAD + frontier_bytes,
-            "space_for_depth should equal BASE_SPACE + VEC_OVERHEAD + frontier_bytes"
-        );
     }
 
     #[test]

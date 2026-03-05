@@ -85,13 +85,6 @@ pub enum PAError {
     TreeMaxDepthReached,
 }
 
-impl From<anchor_lang::solana_program::program_error::ProgramError> for PAError {
-    fn from(e: anchor_lang::solana_program::program_error::ProgramError) -> Self {
-        anchor_lang::prelude::msg!("CPI failed: {:?}", e);
-        PAError::ExternalCallCpiFailed
-    }
-}
-
 impl From<SolanaArmError> for PAError {
     fn from(e: SolanaArmError) -> Self {
         match e {

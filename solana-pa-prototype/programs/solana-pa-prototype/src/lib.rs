@@ -8,7 +8,6 @@ declare_id!("De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ");
 const VERIFIER_ROUTER_ID: Pubkey =
     anchor_lang::solana_program::pubkey!("BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg");
 
-pub mod delta;
 pub mod encoding;
 pub mod error;
 pub mod external_calls;
@@ -22,14 +21,15 @@ pub mod state;
 mod tests;
 pub mod types;
 
+use arm_core::transaction::Transaction;
 use encoding::{compute_action_tree_root, extract_tags_and_logic_refs};
 pub use error::PAError;
 use groth16::prepare_proof_for_verification;
 use merkle::{
-    hash_two, EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, MAX_TREE_DEPTH, PADDING_LEAF, ZEROS,
+    append_to_tree, compute_root_from_frontier, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL,
+    INITIAL_TREE_DEPTH, MAX_TREE_DEPTH, PADDING_LEAF,
 };
 use state::*;
-use types::{Digest, Transaction};
 
 #[program]
 pub mod solana_pa_prototype {
@@ -64,7 +64,7 @@ pub mod solana_pa_prototype {
 
         // Create root marker for genesis root (so historical root check works from start)
         let genesis_root = state.root;
-        let marker_lamports = Rent::get()?.minimum_balance(0).max(1);
+        let rent = Rent::get()?;
         root::create_root_marker(
             &crate::ID,
             &pa_state_key,
@@ -72,7 +72,7 @@ pub mod solana_pa_prototype {
             &ctx.accounts.payer.to_account_info(),
             &ctx.remaining_accounts[0],
             &ctx.accounts.system_program.to_account_info(),
-            marker_lamports,
+            marker_lamports(&rent),
         )?;
         msg!("Created genesis root marker");
 
@@ -90,7 +90,6 @@ pub mod solana_pa_prototype {
         let tx: Transaction = bincode::deserialize(&transaction_data)
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
 
-        let pa_state_key = ctx.accounts.pa_state.key();
         let pa_state_info = ctx.accounts.pa_state.to_account_info();
         let payer = ctx.accounts.payer.to_account_info();
 
@@ -100,12 +99,13 @@ pub mod solana_pa_prototype {
             &tx,
             ctx.remaining_accounts,
             &payer,
-            &pa_state_key,
             &ctx.accounts.system_program.to_account_info(),
-            &ctx.accounts.verifier_router_program.to_account_info(),
-            &ctx.accounts.router.to_account_info(),
-            &ctx.accounts.verifier_entry.to_account_info(),
-            &ctx.accounts.verifier_program.to_account_info(),
+            VerifierAccounts {
+                router_program: ctx.accounts.verifier_router_program.to_account_info(),
+                router: ctx.accounts.router.to_account_info(),
+                verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
+                verifier_program: ctx.accounts.verifier_program.to_account_info(),
+            },
         )?;
 
         msg!("Settlement complete");
@@ -151,11 +151,7 @@ pub mod solana_pa_prototype {
         let clock = Clock::get()?;
         require!(clock.slot <= txdata.expires_slot, PAError::TxDataExpired);
 
-        let end = offset as usize + data.len();
-        require!(end <= txdata.payload.len(), PAError::TxDataBoundsExceeded);
-
-        txdata.payload[offset as usize..end].copy_from_slice(&data);
-        txdata.written_len = std::cmp::max(txdata.written_len, end as u32);
+        txdata.write_chunk(offset, &data)?;
 
         msg!("TxData write: {} bytes at offset {}", data.len(), offset);
         Ok(())
@@ -267,7 +263,6 @@ pub mod solana_pa_prototype {
         let tx: Transaction = bincode::deserialize(&txdata.payload[..txdata.written_len as usize])
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
 
-        let pa_state_key = ctx.accounts.pa_state.key();
         let pa_state_info = ctx.accounts.pa_state.to_account_info();
         let payer = ctx.accounts.authority.to_account_info();
 
@@ -277,12 +272,13 @@ pub mod solana_pa_prototype {
             &tx,
             ctx.remaining_accounts,
             &payer,
-            &pa_state_key,
             &ctx.accounts.system_program.to_account_info(),
-            &ctx.accounts.verifier_router_program.to_account_info(),
-            &ctx.accounts.router.to_account_info(),
-            &ctx.accounts.verifier_entry.to_account_info(),
-            &ctx.accounts.verifier_program.to_account_info(),
+            VerifierAccounts {
+                router_program: ctx.accounts.verifier_router_program.to_account_info(),
+                router: ctx.accounts.router.to_account_info(),
+                verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
+                verifier_program: ctx.accounts.verifier_program.to_account_info(),
+            },
         )?;
 
         msg!("Settlement from TxData complete");
@@ -318,6 +314,19 @@ pub mod solana_pa_prototype {
     }
 }
 
+/// Floor at 1 lamport because 0-lamport accounts can be garbage-collected.
+fn marker_lamports(rent: &Rent) -> u64 {
+    rent.minimum_balance(0).max(1)
+}
+
+/// Accounts needed for the verifier_router CPI.
+struct VerifierAccounts<'info> {
+    router_program: AccountInfo<'info>,
+    router: AccountInfo<'info>,
+    verifier_entry: AccountInfo<'info>,
+    verifier_program: AccountInfo<'info>,
+}
+
 /// Validate that an expiry slot falls within the configurable bounds.
 fn validate_expiry_bounds(
     pa_state: &PAStateAccount,
@@ -331,69 +340,6 @@ fn validate_expiry_bounds(
     Ok(())
 }
 
-/// Append a single commitment to the tree, growing it if at capacity.
-fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
-    if state.needs_growth() {
-        require!(state.can_grow(), PAError::TreeMaxDepthReached);
-        let current_root = compute_root_from_frontier(state);
-        let new_level = state.grow();
-        state.set_frontier(new_level, current_root);
-    }
-
-    let mut current = leaf;
-    let mut index = state.next_index;
-    let depth = state.depth();
-
-    for level in 0..depth {
-        if index & 1 == 0 {
-            // Left child - store in frontier and return
-            state.set_frontier(level, current);
-            state.next_index += 1;
-            return Ok(());
-        }
-        // Right child - hash with frontier and continue up
-        let left = state.get_frontier(level);
-        current = hash_two(&left, &current);
-        index >>= 1;
-    }
-
-    state.next_index += 1;
-    Ok(())
-}
-
-/// Compute the current root from the frontier using precomputed ZEROS.
-pub fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
-    let depth = state.depth();
-
-    if state.next_index == 0 {
-        // Empty tree root at current depth = ZEROS[depth - 1]
-        return ZEROS[depth - 1];
-    }
-
-    let mut current = ZEROS[0];
-    let mut index = state.next_index;
-
-    for (level, zero) in ZEROS.iter().enumerate().take(depth) {
-        if index & 1 == 1 {
-            current = hash_two(&state.get_frontier(level), &current);
-        } else {
-            current = hash_two(&current, zero);
-        }
-        index >>= 1;
-    }
-    current
-}
-
-/// Minimum tree depth such that 2^depth >= final_next_index.
-pub fn required_depth_for_leaves(final_next_index: u64) -> usize {
-    if final_next_index == 0 {
-        return INITIAL_TREE_DEPTH;
-    }
-    // ceil(log2(final_next_index))
-    let bits = 64 - (final_next_index - 1).leading_zeros();
-    (bits as usize).max(INITIAL_TREE_DEPTH)
-}
-
 /// Reallocate PAState if tree growth is needed for the incoming commitments.
 fn maybe_grow_account<'info>(
     pa_state_info: &AccountInfo<'info>,
@@ -401,6 +347,7 @@ fn maybe_grow_account<'info>(
     num_commitments: usize,
     payer: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
+    rent: &Rent,
 ) -> Result<()> {
     let final_next_index = state.next_index.saturating_add(num_commitments as u64);
     let required_depth = required_depth_for_leaves(final_next_index);
@@ -413,7 +360,6 @@ fn maybe_grow_account<'info>(
     }
 
     let new_size = PAStateAccount::space_for_depth(target_depth);
-    let rent = Rent::get()?;
     let new_minimum_balance = rent.minimum_balance(new_size);
     let current_balance = pa_state_info.lamports();
 
@@ -444,28 +390,27 @@ fn maybe_grow_account<'info>(
 }
 
 /// Shared settlement logic for both settle and settle_from_txdata.
-#[allow(clippy::too_many_arguments)]
+///
+/// `remaining_accounts` layout:
+///   [0..nullifier_count]  — nullifier marker PDAs (created by this function)
+///   [nullifier_count..N]  — external call forwarder segments (program + CPI accounts)
+///   [last]                — (optional) new root marker PDA
+///
+/// Historical root marker PDAs are found by key scan, so they may appear at any index.
 fn execute_settlement<'info>(
     state: &mut PAStateAccount,
     pa_state_info: &AccountInfo<'info>,
     tx: &Transaction,
     remaining_accounts: &[AccountInfo<'info>],
     payer: &AccountInfo<'info>,
-    pa_state_key: &Pubkey,
     system_program: &AccountInfo<'info>,
-    verifier_router_program: &AccountInfo<'info>,
-    router: &AccountInfo<'info>,
-    verifier_entry: &AccountInfo<'info>,
-    verifier_program: &AccountInfo<'info>,
+    verifier: VerifierAccounts<'info>,
 ) -> Result<()> {
+    let pa_state_key = pa_state_info.key;
+
     // Historical roots are valid if their PDA marker exists.
-    for (action_idx, action) in tx.actions.iter().enumerate() {
-        for (cu_idx, cu) in action.compliance_units.iter().enumerate() {
-            msg!(
-                "Parsing compliance instance: action={}, cu={}",
-                action_idx,
-                cu_idx
-            );
+    for action in &tx.actions {
+        for cu in &action.compliance_units {
             require!(
                 root::is_root_valid(
                     state,
@@ -483,18 +428,17 @@ fn execute_settlement<'info>(
 
     require!(tx.aggregation_proof.is_some(), PAError::AggregationRequired);
 
-    msg!("Preparing aggregated proof for verification");
     let prepared = prepare_proof_for_verification(tx).map_err(|_| error!(PAError::InvalidProof))?;
 
     msg!("Verifying aggregated proof via verifier_router");
     {
         let cpi_accounts = verifier_router::cpi::accounts::Verify {
-            router: router.clone(),
-            verifier_entry: verifier_entry.clone(),
-            verifier_program: verifier_program.clone(),
+            router: verifier.router.clone(),
+            verifier_entry: verifier.verifier_entry.clone(),
+            verifier_program: verifier.verifier_program.clone(),
             system_program: system_program.clone(),
         };
-        let cpi_ctx = CpiContext::new(verifier_router_program.clone(), cpi_accounts);
+        let cpi_ctx = CpiContext::new(verifier.router_program.clone(), cpi_accounts);
         verifier_router::cpi::verify(
             cpi_ctx,
             prepared.seal,
@@ -503,9 +447,8 @@ fn execute_settlement<'info>(
         )
         .map_err(|_| error!(PAError::VerifierRouterFailed))?;
     }
-    msg!("Aggregated proof verification passed");
 
-    delta::verify_delta_proof(tx)?;
+    arm_solana::delta::verify_delta_proof(tx).map_err(PAError::from)?;
 
     // Events enable off-chain indexers to reconstruct action/transaction data.
     let total_tag_count: usize = tx
@@ -516,9 +459,7 @@ fn execute_settlement<'info>(
     let mut all_tags: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
     let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
 
-    for (action_idx, action) in tx.actions.iter().enumerate() {
-        msg!("Processing action events: action={}", action_idx);
-
+    for action in &tx.actions {
         let (tags, logic_refs) = extract_tags_and_logic_refs(action);
         let action_tree_root =
             compute_action_tree_root(&tags).map_err(|_| error!(PAError::InvalidTransactionData))?;
@@ -547,8 +488,8 @@ fn execute_settlement<'info>(
         logic_refs: all_logic_refs,
     });
 
-    // Floor at 1 lamport because 0-lamport accounts can be garbage-collected.
-    let marker_lamports = Rent::get()?.minimum_balance(0).max(1);
+    let rent = Rent::get()?;
+    let ml = marker_lamports(&rent);
 
     if !nullifiers.is_empty() {
         require!(
@@ -566,7 +507,7 @@ fn execute_settlement<'info>(
                 payer,
                 marker,
                 system_program,
-                marker_lamports,
+                ml,
             )?;
         }
         msg!("Created {} nullifier PDAs", nullifiers.len());
@@ -579,6 +520,7 @@ fn execute_settlement<'info>(
         commitments.len(),
         payer,
         system_program,
+        &rent,
     )?;
     for commitment in commitments {
         append_to_tree(state, commitment)?;
@@ -598,7 +540,7 @@ fn execute_settlement<'info>(
                 payer,
                 last_account,
                 system_program,
-                marker_lamports,
+                ml,
             )?;
             msg!("Created root marker for new root");
         }
@@ -818,6 +760,9 @@ pub struct UpdateExpiryConfig<'info> {
     pub authority: Signer<'info>,
 }
 
+// Four separate event structs with identical fields: each produces a distinct Anchor
+// discriminator (sha256 of the struct name), enabling indexers to filter by payload
+// category at the log-parsing level without decoding the event body.
 #[event]
 pub struct ResourcePayloadEvent {
     pub tag: [u8; 32],
@@ -868,7 +813,7 @@ pub struct ForwarderCallExecutedEvent {
     pub output: Vec<u8>,
 }
 
-fn emit_app_data_events(tag: &types::Digest, app_data: &types::AppData) {
+fn emit_app_data_events(tag: &arm_core::Digest, app_data: &arm_core::logic_instance::AppData) {
     let tag_bytes = tag.to_bytes();
 
     macro_rules! emit_payloads {

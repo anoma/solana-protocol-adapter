@@ -1,10 +1,13 @@
 use crate::external_calls::{
-    build_forwarder_instruction_data, encode_external_call, FORWARD_CALL_DISCRIMINATOR,
+    build_forwarder_instruction_data, encode_external_call, extract_external_calls,
+    FORWARD_CALL_DISCRIMINATOR,
 };
-use crate::settle;
 use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::tests::utils::*;
-use crate::types::*;
+use crate::types::{OutputMode, SolanaExternalCall};
+use arm_core::compliance::ComplianceInstance;
+use arm_core::transaction::Transaction;
+use arm_core::Digest;
 
 mod fixture_tests {
     use super::*;
@@ -70,7 +73,7 @@ mod integration_tests {
         let blob = encode_external_call(&call);
         let tx = create_transaction_with_external_payload(vec![blob]);
 
-        let extracted = settle::extract_external_calls(&tx).unwrap();
+        let extracted = extract_external_calls(&tx).unwrap();
         assert_eq!(extracted.len(), 1, "Should have 1 external call");
 
         let (logic_ref, extracted_call) = &extracted[0];

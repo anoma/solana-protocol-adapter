@@ -16,24 +16,14 @@ fn make_txdata(capacity: usize, expires_slot: u64) -> TxDataAccount {
     }
 }
 
-fn txdata_write(account: &mut TxDataAccount, offset: u32, data: &[u8]) -> Result<(), PAError> {
-    let end = offset as usize + data.len();
-    if end > account.payload.len() {
-        return Err(PAError::TxDataBoundsExceeded);
-    }
-    account.payload[offset as usize..end].copy_from_slice(data);
-    account.written_len = std::cmp::max(account.written_len, end as u32);
-    Ok(())
-}
-
 #[test]
 fn test_txdata_write_sequential() {
     let mut txdata = make_txdata(100, 1000);
 
-    txdata_write(&mut txdata, 0, &[1, 2, 3, 4]).unwrap();
+    txdata.write_chunk(0, &[1, 2, 3, 4]).unwrap();
     assert_eq!(txdata.written_len, 4);
 
-    txdata_write(&mut txdata, 4, &[5, 6, 7, 8]).unwrap();
+    txdata.write_chunk(4, &[5, 6, 7, 8]).unwrap();
     assert_eq!(txdata.written_len, 8);
 }
 
@@ -41,8 +31,8 @@ fn test_txdata_write_sequential() {
 fn test_txdata_write_overwrites() {
     let mut txdata = make_txdata(100, 1000);
 
-    txdata_write(&mut txdata, 0, &[1, 2, 3, 4]).unwrap();
-    txdata_write(&mut txdata, 0, &[5, 6, 7, 8]).unwrap();
+    txdata.write_chunk(0, &[1, 2, 3, 4]).unwrap();
+    txdata.write_chunk(0, &[5, 6, 7, 8]).unwrap();
     assert_eq!(txdata.written_len, 4);
     assert_eq!(&txdata.payload[..4], &[5, 6, 7, 8]);
 }
@@ -50,8 +40,8 @@ fn test_txdata_write_overwrites() {
 #[test]
 fn test_txdata_write_with_gap() {
     let mut txdata = make_txdata(100, 1000);
-    txdata_write(&mut txdata, 0, &[1, 2, 3, 4]).unwrap();
-    txdata_write(&mut txdata, 10, &[5, 6, 7, 8]).unwrap();
+    txdata.write_chunk(0, &[1, 2, 3, 4]).unwrap();
+    txdata.write_chunk(10, &[5, 6, 7, 8]).unwrap();
     assert_eq!(txdata.written_len, 14);
 }
 
@@ -59,17 +49,13 @@ fn test_txdata_write_with_gap() {
 fn test_txdata_read_payload() {
     let mut txdata = make_txdata(8, 1000);
     let data = [1, 2, 3, 4, 5, 6, 7, 8];
-    txdata_write(&mut txdata, 0, &data).unwrap();
+    txdata.write_chunk(0, &data).unwrap();
     assert_eq!(&txdata.payload[..txdata.written_len as usize], &data);
 }
 
 #[test]
 fn test_txdata_bounds_exceeded() {
     let mut txdata = make_txdata(4, 1000);
-    let result = txdata_write(&mut txdata, 0, &[1, 2, 3, 4, 5, 6, 7, 8]);
-    assert!(result.is_err());
-    match result {
-        Err(PAError::TxDataBoundsExceeded) => {}
-        _ => panic!("Expected TxDataBoundsExceeded error"),
-    }
+    let result = txdata.write_chunk(0, &[1, 2, 3, 4, 5, 6, 7, 8]);
+    assert!(matches!(result, Err(PAError::TxDataBoundsExceeded)));
 }

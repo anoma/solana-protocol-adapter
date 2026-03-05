@@ -33,33 +33,24 @@ pub mod test_forwarder {
         let mode = input.first().copied().unwrap_or(MODE_FAIL);
 
         match mode {
-            MODE_FAIL => {
-                msg!("TestForwarder: mode FAIL — returning error");
-                Err(ErrorCode::IntentionalFailure.into())
-            }
-            MODE_SILENT => {
-                msg!("TestForwarder: mode SILENT — returning Ok with no return data");
-                Ok(())
-            }
+            MODE_FAIL => Err(ErrorCode::IntentionalFailure.into()),
+            MODE_SILENT => Ok(()),
             MODE_WRITE_ACCOUNT => {
                 let payload = &input[1..];
-                msg!("TestForwarder: mode WRITE_ACCOUNT — writing {} bytes", payload.len());
 
-                require!(!ctx.remaining_accounts.is_empty(), ErrorCode::NoWritableAccount);
+                require!(
+                    !ctx.remaining_accounts.is_empty(),
+                    ErrorCode::NoWritableAccount
+                );
                 let account = &ctx.remaining_accounts[0];
                 require!(account.is_writable, ErrorCode::NoWritableAccount);
 
                 let mut data = account.try_borrow_mut_data()?;
                 let write_len = payload.len().min(data.len());
                 data[..write_len].copy_from_slice(&payload[..write_len]);
-
-                msg!("TestForwarder: wrote {} bytes to account", write_len);
                 Ok(())
             }
-            _ => {
-                msg!("TestForwarder: unknown mode {}, failing", mode);
-                Err(ErrorCode::IntentionalFailure.into())
-            }
+            _ => Err(ErrorCode::IntentionalFailure.into()),
         }
     }
 }

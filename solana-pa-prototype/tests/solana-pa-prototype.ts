@@ -34,17 +34,19 @@ function readJson<T>(filePath: string): T {
   return JSON.parse(readFileSync(filePath, "utf8")) as T;
 }
 
+function loadFixture(filename: string): Fixture {
+  return readJson<Fixture>(path.resolve(process.cwd(), "tests", "fixtures", filename));
+}
+
 async function airdrop(provider: anchor.AnchorProvider, to: PublicKey, sol: number) {
   const sig = await provider.connection.requestAirdrop(to, sol * LAMPORTS_PER_SOL);
   await provider.connection.confirmTransaction(sig, "confirmed");
 }
 
-const PADDING_LEAF = Buffer.from(
+const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
   "cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06",
   "hex"
 );
-
-const EMPTY_TREE_ROOT_INITIAL = PADDING_LEAF;
 
 const PA_STATE_SEED = Buffer.from("pa_state");
 const NULLIFIER_SEED = Buffer.from("nullifier");
@@ -68,8 +70,7 @@ const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>
 
 const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
-const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
-const fixture = readJson<Fixture>(fixturePath);
+const fixture = loadFixture("batch_groth16.json");
 
 const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
 
@@ -518,9 +519,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     // - timestamp = -1 (past time, forwarder will return RESULT_LT = 0x00)
     // - expected_output = 0x02 (RESULT_GT - intentionally WRONG)
     // The PA should revert with ExternalCallOutputMismatch when actual != expected.
-    const mismatchFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json")
-    );
+    const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
     const mismatchNullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
@@ -678,9 +677,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const mismatchFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json")
-    );
+    const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
     const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
@@ -734,9 +731,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
 
-    const mismatchFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json")
-    );
+    const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
     const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
@@ -926,48 +921,6 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
   // NOTE: The following tests are destructive - they pause the protocol.
   // We use a separate describe block with its own PAState to avoid affecting other tests.
-});
-
-describe("solana-pa-prototype (Issue #6: Emergency Stop - Destructive)", () => {
-  // We can't easily create a second PAState without modifying the program seeds.
-  // Instead, we'll test the emergency_stop behavior conceptually by:
-  // 1. Skipping the actual pause test (would break other tests)
-  // 2. Verifying the error messages are correct
-
-  it("verifies emergency_stop instruction exists in IDL", async () => {
-    // Read IDL directly from file (more reliable than program.idl)
-    const idl = readJson<any>(IDL_PATH);
-    // IDL uses snake_case: emergency_stop
-    const emergencyStopIx = idl.instructions.find((ix: any) => ix.name === "emergency_stop");
-    assert.ok(emergencyStopIx, "emergency_stop instruction should exist in IDL");
-  });
-
-  it("verifies transfer_authority instruction exists in IDL", async () => {
-    const idl = readJson<any>(IDL_PATH);
-    const transferAuthorityIx = idl.instructions.find((ix: any) => ix.name === "transfer_authority");
-    assert.ok(transferAuthorityIx, "transfer_authority instruction should exist in IDL");
-    const newAuthorityArg = transferAuthorityIx.args?.find((arg: any) => arg.name === "new_authority" || arg.name === "newAuthority");
-    assert.ok(newAuthorityArg, "transfer_authority should have new_authority argument");
-  });
-
-  it("verifies paused check exists in settle instructions", async () => {
-    const idl = readJson<any>(IDL_PATH);
-    const pausedError = idl.errors?.find((e: any) => e.name === "Paused");
-    assert.ok(pausedError, "Paused error should exist in IDL");
-    assert.match(pausedError.msg, /paused/i, "Error message should mention paused");
-  });
-
-  it("verifies AlreadyPaused error exists", async () => {
-    const idl = readJson<any>(IDL_PATH);
-    const alreadyPausedError = idl.errors?.find((e: any) => e.name === "AlreadyPaused");
-    assert.ok(alreadyPausedError, "AlreadyPaused error should exist in IDL");
-  });
-
-  it("verifies Unauthorized error exists", async () => {
-    const idl = readJson<any>(IDL_PATH);
-    const unauthorizedError = idl.errors?.find((e: any) => e.name === "Unauthorized");
-    assert.ok(unauthorizedError, "Unauthorized error should exist in IDL");
-  });
 });
 
 describe("solana-pa-prototype (TxData Expiration)", () => {
@@ -1241,24 +1194,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     }
   });
 
-  it("verifies new error types exist in IDL", async () => {
-    const idl = readJson<any>(IDL_PATH);
-
-    const expiryTooSoonError = idl.errors?.find((e: any) => e.name === "TxDataExpiryTooSoon");
-    assert.ok(expiryTooSoonError, "TxDataExpiryTooSoon error should exist in IDL");
-
-    const expiryTooLateError = idl.errors?.find((e: any) => e.name === "TxDataExpiryTooLate");
-    assert.ok(expiryTooLateError, "TxDataExpiryTooLate error should exist in IDL");
-  });
-
-  it("verifies txdata_extend instruction exists in IDL", async () => {
-    const idl = readJson<any>(IDL_PATH);
-    const txdataExtendIx = idl.instructions.find((ix: any) => ix.name === "txdata_extend");
-    assert.ok(txdataExtendIx, "txdata_extend instruction should exist in IDL");
-    const newExpiresArg = txdataExtendIx.args?.find((arg: any) => arg.name === "new_expires_slot" || arg.name === "newExpiresSlot");
-    assert.ok(newExpiresArg, "txdata_extend should have new_expires_slot argument");
-  });
-
   it("extends TxData expiration deadline successfully", async () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority.publicKey, 2);
@@ -1348,14 +1283,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     }
   });
 
-  it("verifies txdata_close_expired instruction exists in IDL", async () => {
-    const idl = readJson<any>(IDL_PATH);
-    const txdataCloseExpiredIx = idl.instructions.find((ix: any) => ix.name === "txdata_close_expired");
-    assert.ok(txdataCloseExpiredIx, "txdata_close_expired instruction should exist in IDL");
-    const authorityArg = txdataCloseExpiredIx.args?.find((arg: any) => arg.name === "_authority");
-    assert.ok(authorityArg, "txdata_close_expired should have _authority argument (used for PDA derivation)");
-  });
-
   it("rejects txdata_close_expired for non-expired TxData", async () => {
     const authority = Keypair.generate();
     const cleaner = Keypair.generate();
@@ -1399,25 +1326,6 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     }
   });
 
-  it("verifies update_expiry_config instruction exists in IDL", async () => {
-    const idl = readJson<any>(IDL_PATH);
-    const updateExpiryConfigIx = idl.instructions.find((ix: any) => ix.name === "update_expiry_config");
-    assert.ok(updateExpiryConfigIx, "update_expiry_config instruction should exist in IDL");
-    assert.equal(updateExpiryConfigIx.args?.length, 2, "update_expiry_config should have 2 arguments");
-  });
-
-  it("verifies new error types for expiry features exist in IDL", async () => {
-    const idl = readJson<any>(IDL_PATH);
-
-    const extendMustIncreaseError = idl.errors?.find((e: any) => e.name === "TxDataExtendMustIncrease");
-    assert.ok(extendMustIncreaseError, "TxDataExtendMustIncrease error should exist in IDL");
-
-    const notExpiredError = idl.errors?.find((e: any) => e.name === "TxDataNotExpired");
-    assert.ok(notExpiredError, "TxDataNotExpired error should exist in IDL");
-
-    const invalidConfigError = idl.errors?.find((e: any) => e.name === "InvalidExpiryConfig");
-    assert.ok(invalidConfigError, "InvalidExpiryConfig error should exist in IDL");
-  });
 });
 
 describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
@@ -2050,9 +1958,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
 describe("solana-pa-prototype (Settlement error paths — fixture variants)", () => {
   it("rejects NonExistingRoot (wrong commitment tree root)", async () => {
-    const wrongRootFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "wrong_root.json")
-    );
+    const wrongRootFixture = loadFixture("wrong_root.json");
     const payload = Buffer.from(wrongRootFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(wrongRootFixture.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
@@ -2066,9 +1972,7 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
   });
 
   it("rejects AggregationRequired (no aggregation proof)", async () => {
-    const noAggFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "no_aggregation.json")
-    );
+    const noAggFixture = loadFixture("no_aggregation.json");
     const payload = Buffer.from(noAggFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(noAggFixture.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
@@ -2082,9 +1986,7 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
   });
 
   it("rejects InvalidProof (garbage aggregation proof bytes)", async () => {
-    const garbageFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "garbage_proof.json")
-    );
+    const garbageFixture = loadFixture("garbage_proof.json");
     const payload = Buffer.from(garbageFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(garbageFixture.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
@@ -2103,9 +2005,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
     // Replace SYSVAR_CLOCK_PUBKEY with a random pubkey so the CPI to btf fails.
     // The inner CPI error propagates through (btf's AccountSysvarMismatch).
-    const mismatchFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_mismatch.json")
-    );
+    const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
     const payload = Buffer.from(mismatchFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
     const randomAccount = Keypair.generate().publicKey;
@@ -2131,9 +2031,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
   });
 
   it("rejects settlement when test-forwarder returns error", async () => {
-    const failFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "batch_forwarder_fail.json")
-    );
+    const failFixture = loadFixture("batch_forwarder_fail.json");
     const payload = Buffer.from(failFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(failFixture.consumed_nullifiers_b64);
 
@@ -2156,9 +2054,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
   });
 
   it("rejects ExternalCallOutputMismatch when forwarder returns no data", async () => {
-    const silentFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "batch_forwarder_silent.json")
-    );
+    const silentFixture = loadFixture("batch_forwarder_silent.json");
     const payload = Buffer.from(silentFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(silentFixture.consumed_nullifiers_b64);
 
@@ -2180,9 +2076,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   let v2TxSig: string;
 
   it("settles v2 fixture (next_index 1→2)", async () => {
-    const v2Fixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_v2.json")
-    );
+    const v2Fixture = loadFixture("batch_groth16_v2.json");
     const payload = Buffer.from(v2Fixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(v2Fixture.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
@@ -2254,9 +2148,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     const accountInfoBefore = await provider.connection.getAccountInfo(paState);
     const sizeBefore = accountInfoBefore!.data.length;
 
-    const v3Fixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_v3.json")
-    );
+    const v3Fixture = loadFixture("batch_groth16_v3.json");
     const payload = Buffer.from(v3Fixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(v3Fixture.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
@@ -2275,9 +2167,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   });
 
   it("settles multi-call fixture with two external calls (next_index 3→4)", async () => {
-    const multiFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16_multi_call.json")
-    );
+    const multiFixture = loadFixture("batch_groth16_multi_call.json");
     const payload = Buffer.from(multiFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(multiFixture.consumed_nullifiers_b64);
 
@@ -2299,9 +2189,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
 describe("solana-pa-prototype (OutputAccount mode)", () => {
   it("settles forwarder-output fixture via OutputAccount mode (next_index 4→5)", async () => {
-    const outputFixture = readJson<Fixture>(
-      path.resolve(process.cwd(), "tests", "fixtures", "batch_forwarder_output.json")
-    );
+    const outputFixture = loadFixture("batch_forwarder_output.json");
     const payload = Buffer.from(outputFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
 
@@ -2338,9 +2226,7 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
   // and expected_output [0x01, 0x02, 0x03, 0x04]. These tests manipulate remaining_accounts
   // to trigger each error path in read_forwarder_output (cpi.rs:89-103).
 
-  const outputFixture = readJson<Fixture>(
-    path.resolve(process.cwd(), "tests", "fixtures", "batch_forwarder_output.json")
-  );
+  const outputFixture = loadFixture("batch_forwarder_output.json");
 
   it("rejects OutputAccount when index is out of bounds", async () => {
     const f = outputFixture;

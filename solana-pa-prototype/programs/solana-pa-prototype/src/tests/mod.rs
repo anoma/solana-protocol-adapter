@@ -10,6 +10,5 @@ mod merkle_tests;
 mod nullifier_tests;
 mod root_tests;
 mod txdata_tests;
-mod types_tests;
 
 pub mod proptests;

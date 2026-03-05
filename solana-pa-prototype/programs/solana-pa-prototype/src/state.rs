@@ -2,8 +2,8 @@
 //! Named "state" to avoid conflict with Anchor's internal "accounts" module.
 
 use crate::merkle::MAX_TREE_DEPTH;
-use crate::types::Digest;
 use anchor_lang::prelude::*;
+use arm_core::Digest;
 
 /// Protocol Adapter state — commitment tree frontier with variable depth (1-32).
 /// Nullifiers and historical roots are stored as separate PDA marker accounts.
@@ -93,6 +93,21 @@ impl TxDataAccount {
 
     pub fn space(payload_capacity: usize) -> usize {
         Self::HEADER_SIZE + 4 + payload_capacity // +4 for Vec length prefix
+    }
+
+    /// Write a chunk at the given offset, updating `written_len` high-water mark.
+    pub fn write_chunk(
+        &mut self,
+        offset: u32,
+        data: &[u8],
+    ) -> std::result::Result<(), crate::error::PAError> {
+        let end = offset as usize + data.len();
+        if end > self.payload.len() {
+            return Err(crate::error::PAError::TxDataBoundsExceeded);
+        }
+        self.payload[offset as usize..end].copy_from_slice(data);
+        self.written_len = std::cmp::max(self.written_len, end as u32);
+        Ok(())
     }
 }
 

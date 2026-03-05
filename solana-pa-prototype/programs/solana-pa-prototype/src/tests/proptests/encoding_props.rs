@@ -1,38 +1,9 @@
-use super::strategies::{arb_aligned_bytes, arb_digest, arb_words};
+use super::strategies::arb_digest;
 use crate::encoding::compute_action_tree_root;
-use arm_core::utils::{bytes_to_words, words_to_bytes};
 use proptest::prelude::*;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
-
-    #[test]
-    fn prop_byte_word_roundtrip(bytes in arb_aligned_bytes(64)) {
-        let words = bytes_to_words(&bytes);
-        let recovered = words_to_bytes(&words);
-        prop_assert_eq!(bytes, recovered, "roundtrip should preserve aligned bytes");
-    }
-
-    #[test]
-    fn prop_aligned_roundtrip_exact(words in arb_words(64)) {
-        let bytes = words_to_bytes(&words);
-        let recovered_words = bytes_to_words(bytes);
-        prop_assert_eq!(words, recovered_words, "word→byte→word should be exact");
-    }
-
-    #[test]
-    fn prop_words_to_bytes_length(words in arb_words(64)) {
-        let bytes = words_to_bytes(&words);
-        prop_assert_eq!(bytes.len(), words.len() * 4, "output length should be words * 4");
-    }
-
-    #[test]
-    fn prop_little_endian_encoding(word in any::<u32>()) {
-        let arr = [word];
-        let bytes = words_to_bytes(&arr);
-        let expected = word.to_le_bytes();
-        prop_assert_eq!(bytes, &expected[..], "should use little-endian encoding");
-    }
 
     #[test]
     fn prop_action_tree_root_deterministic(
@@ -56,10 +27,4 @@ proptest! {
         let root_b = compute_action_tree_root(&[tag1, tag3]).expect("should compute root");
         prop_assert_ne!(root_a, root_b, "different tags should produce different roots");
     }
-}
-
-#[test]
-fn test_action_tree_root_empty_fails() {
-    let result = compute_action_tree_root(&[]);
-    assert!(result.is_err(), "empty tags should return error");
 }

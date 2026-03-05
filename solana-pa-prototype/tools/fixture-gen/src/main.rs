@@ -3,7 +3,7 @@ use anyhow::{anyhow, Context, Result};
 use arm::action::{Action, ActionExt};
 use arm::action_tree::MerkleTree;
 use arm::compliance::{
-    initial_root, ComplianceInstance, ComplianceInstanceJournalExt, ComplianceWitness,
+    initial_root, ComplianceInstanceJournalExt, ComplianceWitness,
 };
 use arm::compliance_unit::create_compliance_unit;
 use arm::delta_proof::DeltaWitness;
@@ -38,6 +38,7 @@ fn hash_delta_msg(msg: &[u8]) -> [u8; 32] {
     sha2::Sha256::digest(msg).into()
 }
 
+use solana_pa::external_calls::encode_external_call;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
 
 #[derive(Serialize)]
@@ -181,14 +182,6 @@ fn test_forwarder_program_id() -> Result<[u8; 32]> {
     decode_base58_32("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD")
 }
 
-fn wrap_external_call(call: SolanaExternalCall) -> Result<ExpirableBlob> {
-    let call_bytes = bincode::serialize(&call).context("serialize SolanaExternalCall")?;
-    Ok(ExpirableBlob {
-        blob: bytes_to_words(&call_bytes),
-        deletion_criterion: 0,
-    })
-}
-
 fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
     // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
     let program_id = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6")?;
@@ -205,30 +198,30 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
         vec![0x00] // RESULT_LT - correct
     };
 
-    wrap_external_call(SolanaExternalCall {
+    Ok(encode_external_call(&SolanaExternalCall {
         program_id,
         instruction_data: input,
         expected_output,
         output_mode: OutputMode::ReturnData,
-    })
+    }))
 }
 
 fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
-    wrap_external_call(SolanaExternalCall {
+    Ok(encode_external_call(&SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
         instruction_data: vec![TF_MODE_FAIL],
         expected_output: vec![],
         output_mode: OutputMode::ReturnData,
-    })
+    }))
 }
 
 fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
-    wrap_external_call(SolanaExternalCall {
+    Ok(encode_external_call(&SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
         instruction_data: vec![TF_MODE_SILENT],
         expected_output: vec![],
         output_mode: OutputMode::ReturnData,
-    })
+    }))
 }
 
 fn test_forwarder_output_account_payload_blob(
@@ -240,7 +233,7 @@ fn test_forwarder_output_account_payload_blob(
     instruction_data.push(TF_MODE_WRITE_ACCOUNT);
     instruction_data.extend_from_slice(expected_bytes);
 
-    wrap_external_call(SolanaExternalCall {
+    Ok(encode_external_call(&SolanaExternalCall {
         program_id: test_forwarder_program_id()?,
         instruction_data,
         expected_output: expected_bytes.to_vec(),
@@ -249,7 +242,7 @@ fn test_forwarder_output_account_payload_blob(
             offset: 0,
             len: expected_bytes.len() as u32,
         },
-    })
+    }))
 }
 
 fn generate_test_transaction_with_external_payload(
@@ -464,6 +457,17 @@ fn fmt_duration(d: Duration) -> String {
     format!("{hours}h{rem_mins:02}m{rem:02}.{millis:03}s")
 }
 
+fn timed_phase<F, T>(name: &str, f: F) -> Result<T>
+where
+    F: FnOnce() -> Result<T>,
+{
+    eprintln!("phase: {name}");
+    let start = Instant::now();
+    let result = f()?;
+    eprintln!("phase done: {name} ({})", fmt_duration(start.elapsed()));
+    Ok(result)
+}
+
 fn print_usage() {
     eprintln!(
         "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [--forwarder-fail] [--forwarder-silent] [--forwarder-output-account] [--nonce-seed N] [--multi-external-call] [--error-variants DIR] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n  fixture-gen --forwarder-fail tests/fixtures/batch_groth16_forwarder_fail.json\n  fixture-gen --forwarder-silent tests/fixtures/batch_groth16_forwarder_silent.json\n  fixture-gen --forwarder-output-account tests/fixtures/batch_groth16_forwarder_output_account.json\n  fixture-gen --nonce-seed 7 --multi-external-call /tmp/batch_groth16_multi.json\n  fixture-gen --error-variants tests/fixtures/error_variants tests/fixtures/batch_groth16.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a block-time-forwarder fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n  - `--forwarder-fail` uses the test-forwarder with an instruction that fails before output checks.\n  - `--forwarder-silent` uses the test-forwarder with no return data so output comparison fails.\n  - `--forwarder-output-account` uses the test-forwarder with OutputAccount mode.\n  - At most one of `--output-mismatch`, `--forwarder-fail`, `--forwarder-silent`, `--forwarder-output-account` may be set.\n  - `--nonce-seed` overrides the deterministic nonce byte used to derive nullifiers.\n  - `--multi-external-call` appends a second block-time-forwarder external call blob when block-time-forwarder mode is selected.\n  - `--error-variants` writes wrong_root/no_aggregation/garbage_proof fixtures from the final aggregated tx.\n"
@@ -484,14 +488,30 @@ fn parse_args() -> Result<CliArgs> {
     let mut out_path: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
-        match arg.as_str() {
+        // Handle positional arguments before splitting on '='.
+        if !arg.starts_with('-') {
+            if out_path.is_some() {
+                return Err(anyhow!("unexpected extra argument: {arg}"));
+            }
+            out_path = Some(PathBuf::from(arg));
+            continue;
+        }
+
+        // Support both "--flag value" and "--flag=value" uniformly.
+        let (flag, eq_value) = match arg.find('=') {
+            Some(pos) => (&arg[..pos], Some(&arg[pos + 1..])),
+            None => (arg.as_str(), None),
+        };
+
+        match flag {
             "-h" | "--help" => {
                 print_usage();
                 std::process::exit(0);
             }
             "--threads" => {
-                let value = args
-                    .next()
+                let value = eq_value
+                    .map(|s| s.to_string())
+                    .or_else(|| args.next())
                     .ok_or_else(|| anyhow!("--threads requires a value"))?;
                 let parsed = value
                     .parse::<usize>()
@@ -517,8 +537,9 @@ fn parse_args() -> Result<CliArgs> {
                 forwarder_output_account = true;
             }
             "--nonce-seed" => {
-                let value = args
-                    .next()
+                let value = eq_value
+                    .map(|s| s.to_string())
+                    .or_else(|| args.next())
                     .ok_or_else(|| anyhow!("--nonce-seed requires a value"))?;
                 let parsed = value
                     .parse::<u8>()
@@ -529,8 +550,9 @@ fn parse_args() -> Result<CliArgs> {
                 multi_external_call = true;
             }
             "--error-variants" => {
-                let value = args
-                    .next()
+                let value = eq_value
+                    .map(|s| s.to_string())
+                    .or_else(|| args.next())
                     .ok_or_else(|| anyhow!("--error-variants requires a value"))?;
                 if value.is_empty() {
                     return Err(anyhow!(
@@ -539,40 +561,8 @@ fn parse_args() -> Result<CliArgs> {
                 }
                 error_variants_dir = Some(PathBuf::from(value));
             }
-            _ if arg.starts_with("--threads=") => {
-                let (_, value) = arg.split_once('=').unwrap();
-                let parsed = value
-                    .parse::<usize>()
-                    .with_context(|| format!("invalid --threads value: {value}"))?;
-                if parsed == 0 {
-                    return Err(anyhow!("--threads must be >= 1"));
-                }
-                threads = Some(parsed);
-            }
-            _ if arg.starts_with("--nonce-seed=") => {
-                let (_, value) = arg.split_once('=').unwrap();
-                let parsed = value
-                    .parse::<u8>()
-                    .with_context(|| format!("invalid --nonce-seed value: {value}"))?;
-                nonce_seed = Some(parsed);
-            }
-            _ if arg.starts_with("--error-variants=") => {
-                let (_, value) = arg.split_once('=').unwrap();
-                if value.is_empty() {
-                    return Err(anyhow!(
-                        "--error-variants requires a non-empty directory path"
-                    ));
-                }
-                error_variants_dir = Some(PathBuf::from(value));
-            }
-            _ if arg.starts_with('-') => {
-                return Err(anyhow!("unknown flag: {arg}"));
-            }
             _ => {
-                if out_path.is_some() {
-                    return Err(anyhow!("unexpected extra argument: {arg}"));
-                }
-                out_path = Some(PathBuf::from(arg));
+                return Err(anyhow!("unknown flag: {arg}"));
             }
         }
     }
@@ -664,44 +654,25 @@ fn main() -> Result<()> {
         eprintln!("error variants output dir: {}", dir.display());
     }
 
-    eprintln!("phase: generate_test_transaction");
-    let start = Instant::now();
-    let mut tx = generate_test_transaction_with_external_payload(
-        forwarder_mode,
-        nonce_seed,
-        multi_external_call,
-    )?;
-    eprintln!(
-        "phase done: generate_test_transaction ({})",
-        fmt_duration(start.elapsed())
-    );
+    let mut tx = timed_phase("generate_test_transaction", || {
+        generate_test_transaction_with_external_payload(forwarder_mode, nonce_seed, multi_external_call)
+    })?;
 
     if debug_assumptions {
-        eprintln!("phase: debug_assumptions (claim digests must match env::verify calls)");
-        let start = Instant::now();
-        debug_batch_assumptions(&tx)?;
-        eprintln!(
-            "phase done: debug_assumptions ({})",
-            fmt_duration(start.elapsed())
-        );
+        timed_phase(
+            "debug_assumptions (claim digests must match env::verify calls)",
+            || debug_batch_assumptions(&tx),
+        )?;
     }
 
-    eprintln!("phase: aggregate_with_strategy(batch, groth16) (this is the expensive step)");
-    let start = Instant::now();
-    tx.aggregate(ProofType::Groth16)
-        .context("aggregate tx (batch, groth16)")?;
-    eprintln!(
-        "phase done: aggregate_with_strategy(batch, groth16) ({})",
-        fmt_duration(start.elapsed())
-    );
+    timed_phase(
+        "aggregate_with_strategy(batch, groth16) (this is the expensive step)",
+        || tx.aggregate(ProofType::Groth16).context("aggregate tx (batch, groth16)"),
+    )?;
 
-    eprintln!("phase: verify_aggregation");
-    let start = Instant::now();
-    tx.verify_aggregation().context("verify aggregated proof")?;
-    eprintln!(
-        "phase done: verify_aggregation ({})",
-        fmt_duration(start.elapsed())
-    );
+    timed_phase("verify_aggregation", || {
+        tx.verify_aggregation().context("verify aggregated proof")
+    })?;
 
     eprintln!("phase: encode seal");
     let agg_proof_bytes = tx.aggregation_proof.as_ref().unwrap();
@@ -717,18 +688,15 @@ fn main() -> Result<()> {
         tx_bytes.len()
     );
 
-    eprintln!("phase: extract_nullifiers");
-    let start = Instant::now();
-    let mut consumed_nullifiers_b64 = Vec::new();
-    for action in &tx.actions {
-        for cu in &action.compliance_units {
-            consumed_nullifiers_b64.push(BASE64.encode(cu.instance.consumed_nullifier.as_bytes()));
+    let consumed_nullifiers_b64 = timed_phase("extract_nullifiers", || {
+        let mut nuls = Vec::new();
+        for action in &tx.actions {
+            for cu in &action.compliance_units {
+                nuls.push(BASE64.encode(cu.instance.consumed_nullifier.as_bytes()));
+            }
         }
-    }
-    eprintln!(
-        "phase done: extract_nullifiers ({})",
-        fmt_duration(start.elapsed())
-    );
+        Ok(nuls)
+    })?;
 
     eprintln!("phase: tamper_tx_and_serialize");
     let start = Instant::now();
@@ -760,31 +728,24 @@ fn main() -> Result<()> {
         consumed_nullifiers_b64,
     };
 
-    eprintln!("phase: write_fixture");
-    let start = Instant::now();
-    if let Some(parent) = out_path.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create dir {parent:?}"))?;
-    }
-    fs::write(&out_path, serde_json::to_vec_pretty(&fixture)?)
-        .with_context(|| format!("write fixture to {}", out_path.display()))?;
-    eprintln!(
-        "phase done: write_fixture ({})",
-        fmt_duration(start.elapsed())
-    );
+    timed_phase("write_fixture", || {
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent).with_context(|| format!("create dir {parent:?}"))?;
+        }
+        fs::write(&out_path, serde_json::to_vec_pretty(&fixture)?)
+            .with_context(|| format!("write fixture to {}", out_path.display()))?;
+        Ok(())
+    })?;
 
     if let Some(dir) = error_variants_dir.as_deref() {
-        eprintln!("phase: write_error_variants");
-        let start = Instant::now();
-        generate_error_variant_fixtures(
-            &tx,
-            &fixture.selector,
-            &fixture.consumed_nullifiers_b64,
-            dir,
-        )?;
-        eprintln!(
-            "phase done: write_error_variants ({})",
-            fmt_duration(start.elapsed())
-        );
+        timed_phase("write_error_variants", || {
+            generate_error_variant_fixtures(
+                &tx,
+                &fixture.selector,
+                &fixture.consumed_nullifiers_b64,
+                dir,
+            )
+        })?;
     }
 
     eprintln!(
@@ -846,20 +807,7 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
     for (action_idx, action) in tx.actions.iter().enumerate() {
         // Mirror `arm::action::Action::get_logic_verifiers` to derive the logic instances that the
         // batch aggregation circuit verifies.
-        let compliance_instances: Vec<ComplianceInstance> = action
-            .compliance_units
-            .iter()
-            .map(|cu| cu.instance.clone())
-            .collect();
-
-        let tags: Vec<Digest> = compliance_instances
-            .iter()
-            .flat_map(|instance| vec![instance.consumed_nullifier, instance.created_commitment])
-            .collect();
-        let logics: Vec<Digest> = compliance_instances
-            .iter()
-            .flat_map(|instance| vec![instance.consumed_logic_ref, instance.created_logic_ref])
-            .collect();
+        let (tags, logics) = solana_pa::encoding::extract_tags_and_logic_refs(action);
 
         let action_tree = arm::action_tree::MerkleTree::from(tags.clone());
         let root = action_tree.root().context("compute action tree root")?;

@@ -1,10 +1,10 @@
 //! Groth16 proof extraction and preparation for risc0-solana verification.
 
 use crate::error::PAError;
-use crate::types::Transaction;
+use arm_core::transaction::Transaction;
 
 use anchor_lang::prelude::AnchorDeserialize;
-pub use verifier_router::Seal;
+use verifier_router::Seal;
 
 pub use arm_core::constants::BATCH_AGGREGATION_VK_BYTES as BATCH_AGGREGATION_IMAGE_ID;
 

@@ -8,14 +8,16 @@ mod cpi;
 pub use cpi::execute_external_calls;
 
 use crate::error::PAError;
-use crate::types::{ExpirableBlob, SolanaExternalCall};
-#[cfg(test)]
+use crate::types::SolanaExternalCall;
+use arm_core::logic_instance::ExpirableBlob;
+use arm_core::transaction::Transaction;
 use arm_core::utils::bytes_to_words;
 use arm_core::utils::words_to_bytes;
+use arm_core::Digest;
 
-/// Test-only: the on-chain program decodes external calls, never encodes them.
-#[cfg(test)]
-pub(crate) fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
+/// Encode a SolanaExternalCall into an ExpirableBlob (word-array format).
+/// The on-chain program only decodes; this is used by tests and fixture-gen.
+pub fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
     let bytes = bincode::serialize(call).expect("serialization should not fail");
     ExpirableBlob {
         blob: bytes_to_words(&bytes),
@@ -36,6 +38,35 @@ pub fn verify_output(expected: &[u8], actual: &[u8]) -> Result<(), PAError> {
         return Err(PAError::ExternalCallOutputMismatch);
     }
     Ok(())
+}
+
+/// Extract external calls from a transaction.
+///
+/// Iterates through all actions and their LogicVerifierInputs, decoding each
+/// external_payload blob as a SolanaExternalCall.
+///
+/// Returns a vec of (logic_ref, call) tuples where logic_ref is the verifying_key
+/// from the LogicVerifierInputs containing the call.
+pub fn extract_external_calls(
+    tx: &Transaction,
+) -> Result<Vec<(Digest, SolanaExternalCall)>, PAError> {
+    let total: usize = tx
+        .actions
+        .iter()
+        .flat_map(|a| &a.logic_verifier_inputs)
+        .map(|lvi| lvi.app_data.external_payload.len())
+        .sum();
+    let mut calls = Vec::with_capacity(total);
+    for action in &tx.actions {
+        for lvi in &action.logic_verifier_inputs {
+            let logic_ref = lvi.verifying_key;
+            for blob in &lvi.app_data.external_payload {
+                let call = decode_external_call(blob)?;
+                calls.push((logic_ref, call));
+            }
+        }
+    }
+    Ok(calls)
 }
 
 /// Anchor discriminator for BlockTimeForwarder::forward_call (sha256("global:forward_call")[..8])

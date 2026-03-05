@@ -1,16 +1,16 @@
-use crate::external_calls::encode_external_call;
-use crate::settle;
+use crate::external_calls::{encode_external_call, extract_external_calls};
 use crate::tests::utils::{
     create_minimal_transaction, create_transaction_with_external_payload,
-    create_transaction_with_external_payload_and_logic_ref,
-    create_transaction_with_multiple_lvi_external_payloads,
+    create_transaction_with_multi_lvi_payloads,
 };
-use crate::types::{Digest, ExpirableBlob, OutputMode, SolanaExternalCall};
+use crate::types::{OutputMode, SolanaExternalCall};
+use arm_core::logic_instance::ExpirableBlob;
+use arm_core::Digest;
 
 #[test]
 fn test_extract_external_calls_empty() {
     let tx = create_minimal_transaction();
-    let calls = settle::extract_external_calls(&tx).unwrap();
+    let calls = extract_external_calls(&tx).unwrap();
     assert!(
         calls.is_empty(),
         "Transaction with no external_payload should return empty vec"
@@ -29,7 +29,7 @@ fn test_extract_external_calls_single() {
 
     let tx = create_transaction_with_external_payload(vec![blob]);
 
-    let extracted = settle::extract_external_calls(&tx).unwrap();
+    let extracted = extract_external_calls(&tx).unwrap();
     assert_eq!(extracted.len(), 1, "Should extract exactly one call");
 
     let (_logic_ref, extracted_call) = &extracted[0];
@@ -60,12 +60,12 @@ fn test_extract_external_calls_multiple() {
     };
 
     // Two LogicVerifierInputs: first has 2 calls, second has 1 call
-    let tx = create_transaction_with_multiple_lvi_external_payloads(vec![
+    let tx = create_transaction_with_multi_lvi_payloads(vec![
         vec![encode_external_call(&call1), encode_external_call(&call2)],
         vec![encode_external_call(&call3)],
     ]);
 
-    let extracted = settle::extract_external_calls(&tx).unwrap();
+    let extracted = extract_external_calls(&tx).unwrap();
     assert_eq!(extracted.len(), 3, "Should extract all 3 calls");
 
     assert_eq!(extracted[0].1.program_id, call1.program_id);
@@ -82,7 +82,7 @@ fn test_extract_external_calls_invalid_blob() {
 
     let tx = create_transaction_with_external_payload(vec![invalid_blob]);
 
-    let result = settle::extract_external_calls(&tx);
+    let result = extract_external_calls(&tx);
     assert!(result.is_err(), "Invalid blob should return error");
 }
 
@@ -97,9 +97,13 @@ fn test_extract_external_calls_logic_ref_association() {
     let blob = encode_external_call(&call);
 
     let verifying_key = Digest::from_bytes([0xBB; 32]);
-    let tx = create_transaction_with_external_payload_and_logic_ref(vec![blob], verifying_key);
+    let mut tx = create_transaction_with_external_payload(vec![blob]);
+    tx.actions[0].compliance_units[0]
+        .instance
+        .consumed_logic_ref = verifying_key;
+    tx.actions[0].logic_verifier_inputs[0].verifying_key = verifying_key;
 
-    let extracted = settle::extract_external_calls(&tx).unwrap();
+    let extracted = extract_external_calls(&tx).unwrap();
     assert_eq!(extracted.len(), 1);
 
     let (logic_ref, _) = &extracted[0];

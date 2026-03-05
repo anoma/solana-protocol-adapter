@@ -14,6 +14,11 @@ use super::build_forwarder_instruction_data;
 /// Segments start with the forwarder program account, followed by any CPI accounts
 /// the forwarder needs. Segments appear in the same order as external calls.
 ///
+/// **Invariant:** No CPI account within a segment may share its pubkey with any
+/// forwarder program ID in `call_programs`. Segment boundaries are detected by
+/// scanning for the next forwarder program key, so a collision would truncate the
+/// segment prematurely.
+///
 /// Returns (seg_start, seg_end) indices into external_accounts.
 fn find_forwarder_segment(
     external_accounts: &[AccountInfo],
@@ -39,15 +44,17 @@ fn find_forwarder_segment(
 }
 
 /// Invoke a forwarder program via CPI.
-fn invoke_forwarder<'info>(
+///
+/// `segment` must start with the forwarder program account, followed by CPI accounts.
+/// The segment slice is passed directly to `invoke`, avoiding a Vec allocation.
+fn invoke_forwarder(
     logic_ref: &[u8; 32],
     instruction_data: &[u8],
-    forwarder_program_info: &AccountInfo<'info>,
-    cpi_accounts: &[AccountInfo<'info>],
+    segment: &[AccountInfo<'_>],
 ) -> Result<(), PAError> {
     let ix_data = build_forwarder_instruction_data(logic_ref, instruction_data);
 
-    let ix_accounts: Vec<AccountMeta> = cpi_accounts
+    let ix_accounts: Vec<AccountMeta> = segment[1..]
         .iter()
         .map(|ai| AccountMeta {
             pubkey: *ai.key,
@@ -57,16 +64,15 @@ fn invoke_forwarder<'info>(
         .collect();
 
     let ix = Instruction {
-        program_id: *forwarder_program_info.key,
+        program_id: *segment[0].key,
         accounts: ix_accounts,
         data: ix_data,
     };
 
-    let mut invoke_infos: Vec<AccountInfo<'info>> = Vec::with_capacity(1 + cpi_accounts.len());
-    invoke_infos.push(forwarder_program_info.clone());
-    invoke_infos.extend_from_slice(cpi_accounts);
-
-    invoke(&ix, &invoke_infos)?;
+    invoke(&ix, segment).map_err(|e| {
+        anchor_lang::prelude::msg!("CPI failed: {:?}", e);
+        PAError::ExternalCallCpiFailed
+    })?;
     Ok(())
 }
 
@@ -105,27 +111,21 @@ fn read_forwarder_output(
 
 /// Solana analog to EVM's `_executeForwarderCall`: invoke, verify output, emit event.
 fn execute_forwarder_call<'info>(
-    logic_ref: &crate::types::Digest,
-    call: &SolanaExternalCall,
-    forwarder_program_info: &AccountInfo<'info>,
-    cpi_accounts: &[AccountInfo<'info>],
+    logic_ref: &arm_core::Digest,
+    call: SolanaExternalCall,
+    segment: &[AccountInfo<'info>],
     remaining_accounts: &[AccountInfo<'info>],
 ) -> Result<(), PAError> {
-    invoke_forwarder(
-        &logic_ref.to_bytes(),
-        &call.instruction_data,
-        forwarder_program_info,
-        cpi_accounts,
-    )?;
+    invoke_forwarder(&logic_ref.to_bytes(), &call.instruction_data, segment)?;
 
-    let forwarder = *forwarder_program_info.key;
+    let forwarder = *segment[0].key;
     let actual_output = read_forwarder_output(&call.output_mode, &forwarder, remaining_accounts)?;
 
     super::verify_output(&call.expected_output, &actual_output)?;
 
     anchor_lang::prelude::emit!(crate::ForwarderCallExecutedEvent {
         forwarder,
-        input: call.instruction_data.clone(),
+        input: call.instruction_data,
         output: actual_output,
     });
 
@@ -134,13 +134,11 @@ fn execute_forwarder_call<'info>(
 
 /// Execute all external calls from a transaction via CPI.
 pub fn execute_external_calls(
-    tx: &crate::types::Transaction,
+    tx: &arm_core::transaction::Transaction,
     remaining_accounts: &[AccountInfo<'_>],
     nullifier_count: usize,
 ) -> Result<(), PAError> {
-    use crate::settle::extract_external_calls;
-
-    let calls = extract_external_calls(tx)?;
+    let calls = super::extract_external_calls(tx)?;
 
     if remaining_accounts.len() < nullifier_count {
         return Err(PAError::InvalidTransactionData);
@@ -157,14 +155,10 @@ pub fn execute_external_calls(
         let (seg_start, seg_end) =
             find_forwarder_segment(external_accounts, cursor, &call_programs[i], &call_programs)?;
 
-        let forwarder_program_info = &external_accounts[seg_start];
-        let cpi_accounts = &external_accounts[(seg_start + 1)..seg_end];
-
         execute_forwarder_call(
             &logic_ref,
-            &call,
-            forwarder_program_info,
-            cpi_accounts,
+            call,
+            &external_accounts[seg_start..seg_end],
             remaining_accounts,
         )?;
 
