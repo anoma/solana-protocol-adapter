@@ -256,6 +256,7 @@ fi
 echo "==> (3/3) Deploying and running tests"
 anchor deploy --provider.cluster "$CLUSTER_URL" --program-name solana_pa_prototype
 anchor deploy --provider.cluster "$CLUSTER_URL" --program-name block_time_forwarder
+anchor deploy --provider.cluster "$CLUSTER_URL" --program-name test_forwarder
 
 ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
 ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \

@@ -2060,101 +2060,10 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
   });
 });
 
-// MUST BE LAST: emergency_stop permanently pauses PAState. No further
-// settle operations can succeed after this block runs.
-describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
-  it("emergency_stop pauses protocol", async () => {
-    const stateBefore = await program.account.paStateAccount.fetch(paState);
-    assert.equal(stateBefore.paused, false, "Should be unpaused before emergency_stop");
-
-    await program.methods
-      .emergencyStop()
-      .accounts({
-        paState,
-        authority: provider.wallet.publicKey,
-      })
-      .rpc();
-
-    const stateAfter = await program.account.paStateAccount.fetch(paState);
-    assert.equal(stateAfter.paused, true, "Should be paused after emergency_stop");
-  });
-
-  it("rejects emergency_stop when already paused", async () => {
-    try {
-      await program.methods
-        .emergencyStop()
-        .accounts({
-          paState,
-          authority: provider.wallet.publicKey,
-        })
-        .rpc();
-      assert.fail("expected emergency_stop to fail when already paused");
-    } catch (e: any) {
-      assertPAError(e, "AlreadyPaused");
-    }
-  });
-
-  it("rejects settle when paused", async () => {
-    const payer = Keypair.generate();
-    await airdrop(provider, payer, 2);
-
-    // Use a small garbage payload — the paused check fires before deserialization,
-    // so any payload suffices. The full fixture is too large for a single settle instruction.
-    try {
-      await program.methods
-        .settle(Buffer.from([0, 1, 2, 3]))
-        .accounts({
-          paState,
-          payer: payer.publicKey,
-          systemProgram: SystemProgram.programId,
-          verifierRouterProgram: VERIFIER_ROUTER_ID,
-          router: routerPda,
-          verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
-        })
-        .preInstructions([
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ])
-        .signers([payer])
-        .rpc();
-      assert.fail("expected settle to fail when paused");
-    } catch (e: any) {
-      assertPAError(e, "Paused");
-    }
-  });
-
-  it("rejects settle_from_txdata when paused", async () => {
-    const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
-
-    // Paused check fires before deserialization — minimal payload suffices
-    const { uploadId, txData } = await uploadTxData(authority, Buffer.from([0, 1, 2, 3]));
-
-    try {
-      await program.methods
-        .settleFromTxdata(uploadId)
-        .accounts({
-          paState,
-          txData,
-          authority: authority.publicKey,
-          systemProgram: SystemProgram.programId,
-          verifierRouterProgram: VERIFIER_ROUTER_ID,
-          router: routerPda,
-          verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
-        })
-        .preInstructions([
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-        ])
-        .signers([authority])
-        .rpc();
-      assert.fail("expected settle_from_txdata to fail when paused");
-    } catch (e: any) {
-      assertPAError(e, "Paused");
-    }
-  });
-});
+// Emergency stop tests live in zz-forwarder-emergency.ts which runs last.
+// That file stops the PA and tests forwarder emergency operations.
+// PA-specific paused-rejection tests (settle/settle_from_txdata when paused)
+// are also tested there after the PA is stopped.
 
 // ── Close instruction tests ──────────────────────────────────────────────
 
