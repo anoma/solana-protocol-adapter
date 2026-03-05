@@ -24,7 +24,9 @@ use k256::Scalar;
 use rayon::ThreadPoolBuilder;
 use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
 use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest as Sha256Digest, Sha256};
+use ed25519_dalek::{Signer, SigningKey};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -75,9 +77,14 @@ struct Fixture {
     /// Groth16 verifier selector extracted from the proof's verifier_parameters.
     /// Format: "0x" + 4-byte hex (e.g., "0x73c457ba").
     selector: String,
+    forwarder_type: &'static str,
     tx_b64: String,
     tx_tampered_b64: String,
     consumed_nullifiers_b64: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spl_token_wrap: Option<SplTokenWrapMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spl_token_unwrap: Option<SplTokenUnwrapMetadata>,
 }
 
 const FIXTURE_FORMAT: &str = "arm-risc0:Transaction(bincode)";
@@ -115,6 +122,8 @@ enum ForwarderMode {
     TestForwarderFail,
     TestForwarderSilent,
     TestForwarderOutputAccount,
+    SplTokenWrap { output_mismatch: bool },
+    SplTokenUnwrap { output_mismatch: bool },
 }
 
 /// Extract the Groth16 selector from a transaction's aggregation proof.
@@ -526,7 +535,7 @@ fn generate_test_transaction_with_external_payload(
     forwarder_mode: ForwarderMode,
     nonce_seed: Option<u8>,
     multi_external_call: bool,
-) -> Result<Transaction> {
+) -> Result<TransactionGenerationResult> {
     // Inner proofs must be Succinct for aggregation.
     let base_proof_type = ProofType::Succinct;
 
@@ -552,9 +561,20 @@ fn generate_test_transaction_with_external_payload(
         &forwarder_mode,
         ForwarderMode::BlockTimeForwarder {
             output_mismatch: true
+        } | ForwarderMode::SplTokenWrap {
+            output_mismatch: true
+        } | ForwarderMode::SplTokenUnwrap {
+            output_mismatch: true
         }
     );
-    let nonce_byte: u8 = nonce_seed.unwrap_or(if output_mismatch { 2 } else { 0 });
+    let nonce_byte: u8 = nonce_seed.unwrap_or(match (&forwarder_mode, output_mismatch) {
+        (ForwarderMode::SplTokenWrap { .. }, false) => 10,
+        (ForwarderMode::SplTokenWrap { .. }, true) => 12,
+        (ForwarderMode::SplTokenUnwrap { .. }, false) => 20,
+        (ForwarderMode::SplTokenUnwrap { .. }, true) => 22,
+        (_, true) => 2,
+        (_, false) => 0,
+    });
     consumed_resource.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
     let consumed_nf = consumed_resource
         .nullifier(&nf_key)
@@ -581,19 +601,44 @@ fn generate_test_transaction_with_external_payload(
     let action_tree = MerkleTree::from(tags);
     let root = action_tree.root().context("compute action tree root")?;
 
-    // Create app_data with a real external payload for the consumed logic instance only.
+    // Create app_data with external payload based on forwarder type.
     let mut consumed_app_data = AppData::default();
-    let external_blob = match &forwarder_mode {
+    let mut spl_token_wrap_metadata = None;
+    let mut spl_token_unwrap_metadata = None;
+
+    match &forwarder_mode {
         ForwarderMode::BlockTimeForwarder { output_mismatch } => {
-            block_time_forwarder_external_payload_blob(*output_mismatch)?
+            consumed_app_data
+                .external_payload
+                .push(block_time_forwarder_external_payload_blob(*output_mismatch)?);
         }
-        ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob()?,
-        ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
+        ForwarderMode::TestForwarderFail => {
+            consumed_app_data
+                .external_payload
+                .push(test_forwarder_fail_payload_blob()?);
+        }
+        ForwarderMode::TestForwarderSilent => {
+            consumed_app_data
+                .external_payload
+                .push(test_forwarder_silent_payload_blob()?);
+        }
         ForwarderMode::TestForwarderOutputAccount => {
-            test_forwarder_output_account_payload_blob(b"\x01\x02\x03\x04", 2)?
+            consumed_app_data
+                .external_payload
+                .push(test_forwarder_output_account_payload_blob(b"\x01\x02\x03\x04", 2)?);
         }
-    };
-    consumed_app_data.external_payload.push(external_blob);
+        ForwarderMode::SplTokenWrap { output_mismatch } => {
+            let (blob, metadata) =
+                spl_token_forwarder_wrap_external_payload(&root, *output_mismatch)?;
+            consumed_app_data.external_payload.push(blob);
+            spl_token_wrap_metadata = Some(metadata);
+        }
+        ForwarderMode::SplTokenUnwrap { output_mismatch } => {
+            let (blob, metadata) = spl_token_forwarder_unwrap_external_payload(*output_mismatch)?;
+            consumed_app_data.external_payload.push(blob);
+            spl_token_unwrap_metadata = Some(metadata);
+        }
+    }
     if multi_external_call {
         if let ForwarderMode::BlockTimeForwarder { .. } = &forwarder_mode {
             consumed_app_data
@@ -661,7 +706,11 @@ fn generate_test_transaction_with_external_payload(
         .verify(hash_delta_msg)
         .context("verify tx")?;
 
-    Ok(balanced_tx)
+    Ok(TransactionGenerationResult {
+        tx: balanced_tx,
+        spl_token_wrap_metadata,
+        spl_token_unwrap_metadata,
+    })
 }
 
 fn generate_error_variant_fixtures(
@@ -681,9 +730,12 @@ fn generate_error_variant_fixtures(
             aggregation_strategy: "batch",
             aggregation_proof_type: "groth16",
             selector: selector.to_owned(),
+            forwarder_type: "block_time",
             tx_b64: BASE64.encode(tx_bytes),
             tx_tampered_b64: String::new(),
             consumed_nullifiers_b64: nullifiers_b64.to_vec(),
+            spl_token_wrap: None,
+            spl_token_unwrap: None,
         };
 
         let out_path = out_dir.join(file_name);
@@ -841,10 +893,10 @@ fn parse_generate_args(mut args: impl Iterator<Item = String>) -> Result<CliArgs
                 debug_assumptions = true;
             }
             "--output-mismatch" | "--forwarder-fail" | "--forwarder-silent"
-            | "--forwarder-output-account" => {
+            | "--forwarder-output-account" | "--spl-token-wrap" | "--spl-token-unwrap" => {
                 if forwarder_mode.is_some() {
                     return Err(anyhow!(
-                        "at most one of --output-mismatch, --forwarder-fail, --forwarder-silent, --forwarder-output-account may be set"
+                        "at most one forwarder mode flag may be set"
                     ));
                 }
                 forwarder_mode = Some(match flag {
@@ -854,6 +906,12 @@ fn parse_generate_args(mut args: impl Iterator<Item = String>) -> Result<CliArgs
                     "--forwarder-fail" => ForwarderMode::TestForwarderFail,
                     "--forwarder-silent" => ForwarderMode::TestForwarderSilent,
                     "--forwarder-output-account" => ForwarderMode::TestForwarderOutputAccount,
+                    "--spl-token-wrap" => ForwarderMode::SplTokenWrap {
+                        output_mismatch: false,
+                    },
+                    "--spl-token-unwrap" => ForwarderMode::SplTokenUnwrap {
+                        output_mismatch: false,
+                    },
                     _ => unreachable!(),
                 });
             }
@@ -888,11 +946,17 @@ fn parse_generate_args(mut args: impl Iterator<Item = String>) -> Result<CliArgs
         }
     }
 
-    let out_path = out_path
-        .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
-
     let forwarder_mode = forwarder_mode.unwrap_or(ForwarderMode::BlockTimeForwarder {
         output_mismatch: false,
+    });
+
+    let out_path = out_path.unwrap_or_else(|| {
+        let filename = match &forwarder_mode {
+            ForwarderMode::SplTokenWrap { .. } => "spl_token_wrap.json",
+            ForwarderMode::SplTokenUnwrap { .. } => "spl_token_unwrap.json",
+            _ => "batch_groth16.json",
+        };
+        PathBuf::from(format!("solana-pa-prototype/tests/fixtures/{filename}"))
     });
 
     Ok(CliArgs {
@@ -965,9 +1029,25 @@ fn main() -> Result<()> {
         eprintln!("RAYON_NUM_THREADS={n}");
     }
 
+    let forwarder_type_str = match &forwarder_mode {
+        ForwarderMode::BlockTimeForwarder { .. } => "block_time",
+        ForwarderMode::TestForwarderFail
+        | ForwarderMode::TestForwarderSilent
+        | ForwarderMode::TestForwarderOutputAccount => "test_forwarder",
+        ForwarderMode::SplTokenWrap { .. } => "spl_token_wrap",
+        ForwarderMode::SplTokenUnwrap { .. } => "spl_token_unwrap",
+    };
+
     eprintln!("fixture output: {}", out_path.display());
+    eprintln!("forwarder: {forwarder_type_str}");
     eprintln!("mode: aggregated (batch Groth16)");
     if let ForwarderMode::BlockTimeForwarder {
+        output_mismatch: true,
+    }
+    | ForwarderMode::SplTokenWrap {
+        output_mismatch: true,
+    }
+    | ForwarderMode::SplTokenUnwrap {
         output_mismatch: true,
     } = &forwarder_mode
     {
@@ -985,9 +1065,12 @@ fn main() -> Result<()> {
         eprintln!("error variants output dir: {}", dir.display());
     }
 
-    let mut tx = timed_phase("generate_test_transaction", || {
+    let gen_result = timed_phase("generate_test_transaction", || {
         generate_test_transaction_with_external_payload(forwarder_mode, nonce_seed, multi_external_call)
     })?;
+    let mut tx = gen_result.tx;
+    let spl_token_wrap_metadata = gen_result.spl_token_wrap_metadata;
+    let spl_token_unwrap_metadata = gen_result.spl_token_unwrap_metadata;
 
     if debug_assumptions {
         timed_phase(
@@ -1044,9 +1127,12 @@ fn main() -> Result<()> {
         aggregation_strategy: "batch",
         aggregation_proof_type: "groth16",
         selector,
+        forwarder_type: forwarder_type_str,
         tx_b64: BASE64.encode(tx_bytes),
         tx_tampered_b64: BASE64.encode(tx_tampered_bytes),
         consumed_nullifiers_b64,
+        spl_token_wrap: spl_token_wrap_metadata,
+        spl_token_unwrap: spl_token_unwrap_metadata,
     };
 
     timed_phase("write_fixture", || {

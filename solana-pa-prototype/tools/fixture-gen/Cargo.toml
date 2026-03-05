@@ -7,7 +7,6 @@ edition = "2021"
 anyhow = "1.0"
 bs58 = "0.5"
 arm = { package = "anoma-rm-risc0", git = "https://github.com/anoma/arm-risc0", branch = "anthony/arm-solana-crate-split", default-features = false, features = ["aggregation", "prove"] }
-sha2 = "0.10"
 verifier_router = { git = "https://github.com/risc0/risc0-solana.git", tag = "v3.0.0" }
 base64 = "0.22"
 anchor-lang = "0.31.1"
@@ -16,6 +15,8 @@ hex = "0.4"
 k256 = "=0.13.3"
 rayon = "1.10"
 risc0-zkvm = "3.0.3"
+sha2 = "0.10"
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 passthrough-logic-methods = { path = "passthrough-logic/methods" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
