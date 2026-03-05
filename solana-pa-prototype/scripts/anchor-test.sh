@@ -97,7 +97,7 @@ if ! yarn install --frozen-lockfile; then
   yarn install
 fi
 
-if [[ ! -f "target/deploy/solana_pa_prototype-keypair.json" ]] || [[ ! -f "target/deploy/block_time_forwarder-keypair.json" ]]; then
+if [[ ! -f "target/deploy/solana_pa_prototype-keypair.json" ]] || [[ ! -f "target/deploy/block_time_forwarder-keypair.json" ]] || [[ ! -f "target/deploy/test_forwarder-keypair.json" ]]; then
   echo "    Generating missing program keypairs..."
   build_with_filtered_output anchor build --no-idl
 fi
@@ -137,8 +137,20 @@ BTF_ID="$(sync_program_id "block_time_forwarder" \
 
 # BTF ID also appears in fixture-gen and integration tests
 if [[ "$BTF_OLD" != "$BTF_ID" ]]; then
-  sed -i -E "s/decode_base58_32\(\"[^\"]+\"\)/decode_base58_32(\"${BTF_ID}\")/" tools/fixture-gen/src/main.rs
+  sed -i -E "s/decode_base58_32\(\"${BTF_OLD}\"\)/decode_base58_32(\"${BTF_ID}\")/" tools/fixture-gen/src/main.rs
   sed -i -E "s/blockTimeForwarderId = new PublicKey\(\"[^\"]+\"\)/blockTimeForwarderId = new PublicKey(\"${BTF_ID}\")/" tests/solana-pa-prototype.ts
+fi
+
+TF_OLD="$(read_declare_id "programs/test-forwarder/src/lib.rs")"
+TF_ID="$(sync_program_id "test_forwarder" \
+  "target/deploy/test_forwarder-keypair.json" \
+  "programs/test-forwarder/src/lib.rs" \
+  "test_forwarder")"
+
+# TF ID also appears in fixture-gen and integration tests
+if [[ "$TF_OLD" != "$TF_ID" ]]; then
+  sed -i -E "s/decode_base58_32\(\"${TF_OLD}\"\)/decode_base58_32(\"${TF_ID}\")/" tools/fixture-gen/src/main.rs
+  sed -i -E "s/testForwarderId = new PublicKey\(\"[^\"]+\"\)/testForwarderId = new PublicKey(\"${TF_ID}\")/" tests/solana-pa-prototype.ts
 fi
 
 # anchor build uses cargo +nightly for IDL generation, which is incompatible
