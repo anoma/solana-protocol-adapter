@@ -19,7 +19,7 @@ import {
 import { assert } from "chai";
 import { createHash } from "crypto";
 import * as nacl from "tweetnacl";
-import { existsSync } from "fs";
+import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";

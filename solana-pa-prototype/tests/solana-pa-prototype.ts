@@ -30,7 +30,7 @@ import {
   SEED_MISMATCH_PATTERN,
   ADDRESS_MISMATCH_PATTERN,
 } from "./utils";
-import { loadFixture, Fixture } from "./utils";
+import { readJson, loadFixture, Fixture } from "./utils";
 import { parseSelectorFromFixture, deriveRouterAccounts } from "./utils";
 import { airdrop, fundedKeypairs } from "./utils";
 
@@ -1773,6 +1773,14 @@ describe("solana-pa-prototype (External call error paths)", () => {
   });
 });
 
+// Compute expected Merkle tree depth for a given nextIndex.
+// Matches EVM MerkleTree.sol expand-after-fill: a tree with exactly
+// 2^d leaves has depth d+1. Depth = bit-length of nextIndex.
+function expectedDepth(nextIndex: number): number {
+  if (nextIndex === 0) return 1;
+  return Math.max(1, 32 - Math.clz32(nextIndex));
+}
+
 describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   let v2TxSig: string;
 
@@ -1785,7 +1793,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     return !!info;
   }
 
-  it("settles v2 fixture (next_index 1→2, depth 1→2)", async () => {
+  it("settles v2 fixture (next_index increments by 1)", async () => {
     if (await alreadySettled("batch_groth16_v2.json")) {
       const state = await program.account.paStateAccount.fetch(paState);
       assert.isAtLeast(state.nextIndex.toNumber(), 2, "nextIndex should reflect prior v2 settlement");
@@ -1805,7 +1813,17 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     v2TxSig = await settleFixtureViaTxData(payload, remainingAccounts);
 
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
+    const nextIndexAfter = state.nextIndex.toNumber();
+    assert.equal(nextIndexAfter, nextIndexBefore + 1,
+      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`);
+    assert.equal(state.currentDepth, expectedDepth(nextIndexAfter),
+      `depth should be ${expectedDepth(nextIndexAfter)} for next_index=${nextIndexAfter}`);
+
+    const accountInfoAfter = await provider.connection.getAccountInfo(paState);
+    assert.ok(
+      accountInfoAfter!.data.length > sizeBefore,
+      `Account should grow when depth increases (${sizeBefore} → ${accountInfoAfter!.data.length})`
+    );
   });
 
   it("verifies events from v2 settlement", async function () {
@@ -1865,7 +1883,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     );
   });
 
-  it("settles v3 fixture (next_index 2→3, depth stays 2)", async () => {
+  it("settles v3 fixture (next_index increments by 1)", async () => {
     if (await alreadySettled("batch_groth16_v3.json")) {
       const state = await program.account.paStateAccount.fetch(paState);
       assert.isAtLeast(state.nextIndex.toNumber(), 3, "nextIndex should reflect prior v3 settlement");
@@ -1874,6 +1892,9 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
+    const depthBefore = stateBefore.currentDepth;
+    const accountInfoBefore = await provider.connection.getAccountInfo(paState);
+    const sizeBefore = accountInfoBefore!.data.length;
 
     const v3Fixture = loadFixture<Fixture>("batch_groth16_v3.json");
     const payload = Buffer.from(v3Fixture.tx_b64, "base64");
@@ -1883,10 +1904,23 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     await settleFixtureViaTxData(payload, remainingAccounts);
 
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
+    const nextIndexAfter = state.nextIndex.toNumber();
+    assert.equal(nextIndexAfter, nextIndexBefore + 1,
+      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`);
+    const depthAfter = state.currentDepth;
+    assert.equal(depthAfter, expectedDepth(nextIndexAfter),
+      `depth should be ${expectedDepth(nextIndexAfter)} for next_index=${nextIndexAfter}`);
+
+    if (depthAfter > depthBefore) {
+      const accountInfoAfter = await provider.connection.getAccountInfo(paState);
+      assert.ok(
+        accountInfoAfter!.data.length > sizeBefore,
+        `Account should grow when depth increases (${sizeBefore} → ${accountInfoAfter!.data.length})`
+      );
+    }
   });
 
-  it("settles multi-call fixture with two external calls (next_index 3→4)", async () => {
+  it("settles multi-call fixture with two external calls (next_index increments by 1)", async () => {
     if (await alreadySettled("batch_groth16_multi_call.json")) {
       const state = await program.account.paStateAccount.fetch(paState);
       assert.isAtLeast(state.nextIndex.toNumber(), 4, "nextIndex should reflect prior multi-call settlement");
@@ -1912,12 +1946,17 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     await settleFixtureViaTxData(payload, remainingAccounts);
 
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
+    const nextIndexAfter = state.nextIndex.toNumber();
+    assert.equal(nextIndexAfter, nextIndexBefore + 1,
+      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`);
   });
 });
 
 describe("solana-pa-prototype (OutputAccount mode)", () => {
-  it("settles forwarder-output fixture via OutputAccount mode (next_index 4→5)", async () => {
+  it("settles forwarder-output fixture via OutputAccount mode (next_index increments by 1)", async () => {
+    const stateBefore = await program.account.paStateAccount.fetch(paState);
+    const nextIndexBefore = stateBefore.nextIndex.toNumber();
+
     const outputFixture = loadFixture<Fixture>("batch_forwarder_output.json");
     const payload = Buffer.from(outputFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
@@ -1936,7 +1975,9 @@ describe("solana-pa-prototype (OutputAccount mode)", () => {
     await settleFixtureViaTxData(payload, remainingAccounts);
 
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(state.nextIndex.toNumber(), 5, "next_index should be 5 after output-account settlement");
+    const nextIndexAfter = state.nextIndex.toNumber();
+    assert.equal(nextIndexAfter, nextIndexBefore + 1,
+      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`);
 
     // Verify the data account was written by the forwarder
     const dataAccountInfo = await provider.connection.getAccountInfo(dataAccount.publicKey);
