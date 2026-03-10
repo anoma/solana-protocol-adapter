@@ -43,6 +43,7 @@ fn hash_delta_msg(msg: &[u8]) -> [u8; 32] {
 use block_time_forwarder::{RESULT_GT, RESULT_LT};
 use solana_pa::external_calls::encode_external_call;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
+use spl_token_forwarder::{OP_WRAP, OP_UNWRAP, RESULT_SUCCESS as SPL_RESULT_SUCCESS};
 use test_forwarder::{MODE_FAIL, MODE_SILENT, MODE_WRITE_ACCOUNT};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -344,44 +345,11 @@ fn test_forwarder_output_account_payload_blob(
     }))
 }
 
-const BASE58_ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
 fn encode_base58(input: &[u8]) -> String {
-    let mut bytes = input.to_vec();
-    let leading_zeros = bytes.iter().take_while(|&&b| b == 0).count();
-
-    let mut result = Vec::new();
-    while !bytes.is_empty() && bytes.iter().any(|&b| b != 0) {
-        let mut carry = 0u32;
-        for byte in bytes.iter_mut() {
-            let acc = (carry << 8) | (*byte as u32);
-            *byte = (acc / 58) as u8;
-            carry = acc % 58;
-        }
-        result.push(BASE58_ALPHABET[carry as usize]);
-        while bytes.first() == Some(&0) && bytes.len() > 1 {
-            bytes.remove(0);
-        }
-    }
-
-    result.reverse();
-    let mut output = String::new();
-    for _ in 0..leading_zeros {
-        output.push('1');
-    }
-    for b in result {
-        output.push(b as char);
-    }
-    if output.is_empty() {
-        output.push('1');
-    }
-    output
+    bs58::encode(input).into_string()
 }
 
 const SPL_TOKEN_FORWARDER_PROGRAM_ID: &str = "6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1";
-const OP_WRAP: u8 = 0;
-const OP_UNWRAP: u8 = 1;
-const SPL_RESULT_SUCCESS: u8 = 1;
 
 fn sha256_hash(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();

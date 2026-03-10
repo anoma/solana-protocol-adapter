@@ -21,4 +21,3 @@ verbose-logging = []
 
 [dependencies]
 anchor-lang = "0.31.1"
-bytemuck = "1.14"

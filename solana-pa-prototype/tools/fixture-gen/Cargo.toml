@@ -23,6 +23,7 @@ serde_json = "1.0"
 block-time-forwarder = { path = "../../programs/block-time-forwarder", default-features = false, features = ["no-entrypoint"] }
 test-forwarder = { path = "../../programs/test-forwarder", default-features = false, features = ["no-entrypoint"] }
 solana-pa = { package = "solana-pa-prototype", path = "../../programs/solana-pa-prototype", default-features = false, features = ["no-entrypoint"] }
+spl-token-forwarder = { path = "../../programs/spl-token-forwarder", default-features = false, features = ["no-entrypoint"] }
 
 [workspace]
 members = ["passthrough-logic/methods"]

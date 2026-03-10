@@ -14,17 +14,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::{invoke_signed, set_return_data};
 
-pub mod ed25519;
-mod error;
-pub mod state;
-#[cfg(test)]
-mod tests;
-
-pub use error::ErrorCode;
-pub use state::*;
-
-declare_id!("6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1");
-
 // =============================================================================
 // Conditional Debug Logging
 // =============================================================================
@@ -51,6 +40,17 @@ macro_rules! debug_msg {
 macro_rules! debug_msg {
     ($($arg:tt)*) => {};
 }
+
+pub mod ed25519;
+mod error;
+pub mod state;
+#[cfg(test)]
+mod tests;
+
+pub use error::ErrorCode;
+pub use state::*;
+
+declare_id!("6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1");
 
 // =============================================================================
 // Events (mirrors EVM: Wrapped, Unwrapped events)
@@ -498,8 +498,10 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     debug_msg!("  escrow balance before: {}", escrow_balance_before);
 
     // Transfer tokens from user to escrow using delegate authority
-    let mut transfer_data = vec![3u8]; // Transfer opcode
-    transfer_data.extend_from_slice(&wrap_input.amount.to_le_bytes());
+    // SPL Transfer instruction: opcode (1 byte) + amount (8 bytes) = 9 bytes
+    let mut transfer_data = [0u8; 9];
+    transfer_data[0] = 3; // Transfer opcode
+    transfer_data[1..9].copy_from_slice(&wrap_input.amount.to_le_bytes());
 
     let transfer_accounts = vec![
         AccountMeta::new(*user_ata.key, false),
@@ -510,7 +512,7 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
         program_id: SPL_TOKEN_PROGRAM_ID,
         accounts: transfer_accounts,
-        data: transfer_data,
+        data: transfer_data.to_vec(),
     };
 
     let escrow_seeds = &[ESCROW_SEED, wrap_input.token_mint.as_ref(), &[escrow_bump]];
@@ -672,8 +674,10 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     debug_msg!("  recipient balance before: {}", recipient_balance_before);
 
     // Transfer tokens from escrow to recipient
-    let mut transfer_data = vec![3u8];
-    transfer_data.extend_from_slice(&unwrap_input.amount.to_le_bytes());
+    // SPL Transfer instruction: opcode (1 byte) + amount (8 bytes) = 9 bytes
+    let mut transfer_data = [0u8; 9];
+    transfer_data[0] = 3; // Transfer opcode
+    transfer_data[1..9].copy_from_slice(&unwrap_input.amount.to_le_bytes());
 
     let transfer_accounts = vec![
         AccountMeta::new(*escrow_ata.key, false),
@@ -684,7 +688,7 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
         program_id: SPL_TOKEN_PROGRAM_ID,
         accounts: transfer_accounts,
-        data: transfer_data,
+        data: transfer_data.to_vec(),
     };
 
     let escrow_seeds = &[
@@ -794,8 +798,10 @@ fn execute_emergency_withdraw(ctx: &Context<ForwardEmergencyCall>, input: &[u8])
     debug_msg!("  recipient balance before: {}", recipient_balance_before);
 
     // Transfer tokens
-    let mut transfer_data = vec![3u8];
-    transfer_data.extend_from_slice(&amount.to_le_bytes());
+    // SPL Transfer instruction: opcode (1 byte) + amount (8 bytes) = 9 bytes
+    let mut transfer_data = [0u8; 9];
+    transfer_data[0] = 3; // Transfer opcode
+    transfer_data[1..9].copy_from_slice(&amount.to_le_bytes());
 
     let transfer_accounts = vec![
         AccountMeta::new(*escrow_ata.key, false),
@@ -806,7 +812,7 @@ fn execute_emergency_withdraw(ctx: &Context<ForwardEmergencyCall>, input: &[u8])
     let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
         program_id: SPL_TOKEN_PROGRAM_ID,
         accounts: transfer_accounts,
-        data: transfer_data,
+        data: transfer_data.to_vec(),
     };
 
     let escrow_seeds = &[ESCROW_SEED, token_mint.as_ref(), &[escrow_bump]];

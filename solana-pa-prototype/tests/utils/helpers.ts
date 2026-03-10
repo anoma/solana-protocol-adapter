@@ -6,6 +6,7 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import { createHash } from "crypto";
+import { OP_WRAP, OP_UNWRAP } from "./constants";
 
 // Keypairs funded during tests, drained back to the provider wallet in
 // afterEach() so devnet SOL circulates across the test run.
@@ -78,7 +79,6 @@ export function encodeWrapInput(
   signature: Buffer,
   ed25519IxIndex: number
 ): Buffer {
-  const OP_WRAP = 0;
   const input = Buffer.alloc(186);
   let offset = 0;
 
@@ -120,7 +120,6 @@ export function encodeUnwrapInput(
   amount: bigint,
   recipient: PublicKey
 ): Buffer {
-  const OP_UNWRAP = 1;
   const input = Buffer.alloc(73);
   let offset = 0;
 

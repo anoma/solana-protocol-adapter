@@ -34,13 +34,137 @@
             extensions = [ "rust-src" ];
           };
 
-          # Wrapper so `cargo +nightly` dispatches to the Nix-provided
-          # nightly toolchain instead of relying on rustup.
+          # ── risc0 guest-compilation toolchains ──────────────────────
+          # risc0 publishes pre-built toolchains for x86_64-linux and
+          # aarch64-darwin. x86_64-darwin cannot compile guests.
+          risc0RustVersion = "r0.1.88.0";
+          risc0CppVersion = "2024.01.05";
+
+          risc0Platforms = {
+            "x86_64-linux" = {
+              target = "x86_64-unknown-linux-gnu";
+              rustHash = "sha256-IiZReXuljwuv2VkZGkjSOzWzJm2eCC/En7TYRzMGT84=";
+              cppAsset = "riscv32im-linux-x86_64";
+              cppHash = "sha256-zBlJfbX9HM2S+j0xWjPKzUukgPjSGzyE37VJPP1o2g0=";
+            };
+            "aarch64-darwin" = {
+              target = "aarch64-apple-darwin";
+              rustHash = "sha256-kntua+pVWAgGxrk90D9TYKrMMuP+u+xcAOTTth+ynA0=";
+              cppAsset = "riscv32im-osx-arm64";
+              cppHash = "sha256-rx2x/H6otxROyBeLRGtQZv/6RaA5Jp4lEqDWuGACND8=";
+            };
+          };
+
+          hasRisc0 = builtins.hasAttr system risc0Platforms;
+          risc0Target = if hasRisc0 then risc0Platforms.${system}.target else "";
+
+          risc0RustToolchain = if hasRisc0 then
+            let info = risc0Platforms.${system}; in
+            pkgs.stdenvNoCC.mkDerivation {
+              pname = "risc0-rust-toolchain";
+              version = risc0RustVersion;
+              src = pkgs.fetchurl {
+                url = "https://github.com/risc0/rust/releases/download/${risc0RustVersion}/rust-toolchain-${info.target}.tar.gz";
+                hash = info.rustHash;
+              };
+              nativeBuildInputs = [ pkgs.bash ]
+                ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.autoPatchelfHook ];
+              buildInputs = lib.optionals pkgs.stdenv.isLinux [
+                pkgs.stdenv.cc.cc.lib
+                pkgs.zlib
+              ];
+              dontUnpack = true;
+              installPhase = ''
+                runHook preInstall
+                mkdir -p "$out"
+                tar -xzf "$src" --strip-components=1 -C "$out"
+                runHook postInstall
+              '';
+            }
+          else null;
+
+          risc0CppToolchain = if hasRisc0 then
+            let info = risc0Platforms.${system}; in
+            pkgs.stdenvNoCC.mkDerivation {
+              pname = "risc0-cpp-toolchain";
+              version = risc0CppVersion;
+              src = pkgs.fetchurl {
+                url = "https://github.com/risc0/toolchain/releases/download/${risc0CppVersion}/${info.cppAsset}.tar.xz";
+                hash = info.cppHash;
+              };
+              nativeBuildInputs = [ pkgs.bash ]
+                ++ lib.optionals pkgs.stdenv.isLinux [ pkgs.autoPatchelfHook ];
+              buildInputs = lib.optionals pkgs.stdenv.isLinux [
+                pkgs.stdenv.cc.cc.lib
+                pkgs.zlib
+                pkgs.libmpc
+                pkgs.mpfr
+                pkgs.gmp
+              ];
+              dontUnpack = true;
+              installPhase = ''
+                runHook preInstall
+                mkdir -p "$out"
+                tar -xJf "$src" --strip-components=1 -C "$out"
+                runHook postInstall
+              '';
+            }
+          else null;
+
+          # Semver versions for settings.toml (rzup stores semver, not display strings)
+          risc0RustSemver = "1.88.0";
+          risc0CppSemver = "2024.1.5";
+
+          risc0ShellHook = if hasRisc0 then ''
+            # risc0 toolchain: create RISC0_HOME with Nix-provided toolchains.
+            # rzup's find_version_dir filters out symlinked directories, so we
+            # create real directories and symlink their contents.
+            _risc0_home="$_nix_cache/risc0"
+            mkdir -p "$_risc0_home/toolchains"
+
+            _rust_dir="$_risc0_home/toolchains/rust_${risc0Target}_${risc0RustVersion}"
+            rm -rf "$_rust_dir"
+            mkdir -p "$_rust_dir"
+            for item in "${risc0RustToolchain}"/*; do
+              ln -sfn "$item" "$_rust_dir/$(basename "$item")"
+            done
+
+            _cpp_dir="$_risc0_home/toolchains/c_${risc0Target}_${risc0CppVersion}"
+            rm -rf "$_cpp_dir"
+            mkdir -p "$_cpp_dir"
+            for item in "${risc0CppToolchain}"/*; do
+              ln -sfn "$item" "$_cpp_dir/$(basename "$item")"
+            done
+
+            ln -sfn "$_cpp_dir" "$_risc0_home/cpp"
+            touch "$_risc0_home/.rzup"
+            {
+              echo '[default_versions]'
+              echo 'rust = "${risc0RustSemver}"'
+              echo 'cpp = "${risc0CppSemver}"'
+            } > "$_risc0_home/settings.toml"
+            export RISC0_HOME="$_risc0_home"
+          '' else ''
+            # risc0 guest compilation not available on ${system}
+            export RISC0_SKIP_BUILD=1
+          '';
+
+          # Cargo wrapper: dispatches to risc0's cargo for guest builds,
+          # nightly for Anchor IDL, or default stable toolchain.
           cargoWrapper = pkgs.writeShellScriptBin "cargo" ''
+            # risc0 guest build: RUSTC points to risc0 toolchain, use its cargo
+            if [[ "''${RUSTC:-}" == *"risc0"* ]]; then
+              _risc0_cargo="$(dirname "$RUSTC")/cargo"
+              if [[ -x "$_risc0_cargo" ]]; then
+                exec "$_risc0_cargo" "$@"
+              fi
+            fi
+            # Anchor IDL: cargo +nightly
             if [ "''${1:-}" = "+nightly" ]; then
               shift
               exec env PATH="${rustNightly}/bin:$PATH" RUSTC="${rustNightly}/bin/rustc" "${rustNightly}/bin/cargo" "$@"
             fi
+            # Default
             exec "${rustToolchain}/bin/cargo" "$@"
           '';
 
@@ -279,6 +403,8 @@ EOF
               {"default": [{"type": "insecureAcceptAnything"}]}
               POLICY
               fi
+
+              ${risc0ShellHook}
 
               mkdir -p "$HOME/.config/solana"
               if [ ! -f "$HOME/.config/solana/id.json" ]; then

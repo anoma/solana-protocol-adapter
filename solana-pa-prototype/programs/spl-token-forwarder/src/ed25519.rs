@@ -245,10 +245,10 @@ pub fn verify_ed25519_instruction(
     let ix_data = &ix.data;
     let offsets = parse_ed25519_offsets(ix_data).map_err(|e| -> ErrorCode { e.into() })?;
 
-    msg!("Ed25519 instruction parsed:");
-    msg!("  signature_offset: {}", offsets.signature_offset);
-    msg!("  pubkey_offset: {}", offsets.pubkey_offset);
-    msg!(
+    debug_msg!("Ed25519 instruction parsed:");
+    debug_msg!("  signature_offset: {}", offsets.signature_offset);
+    debug_msg!("  pubkey_offset: {}", offsets.pubkey_offset);
+    debug_msg!(
         "  message_offset: {}, size: {}",
         offsets.message_offset,
         offsets.message_size
@@ -277,8 +277,8 @@ pub fn verify_ed25519_instruction(
         code
     })?;
 
-    msg!("  pubkey verified");
-    msg!("  message verified");
+    debug_msg!("  pubkey verified");
+    debug_msg!("  message verified");
 
     // If we got here, the Ed25519 instruction exists and contains:
     // - The expected public key
@@ -288,6 +288,6 @@ pub fn verify_ed25519_instruction(
     // If the Ed25519 instruction fails verification, the whole transaction fails.
     // If we reach this code, it means the transaction was accepted, so the signature is valid.
 
-    msg!("Ed25519 signature verification passed");
+    debug_msg!("Ed25519 signature verification passed");
     Ok(())
 }
