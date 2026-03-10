@@ -1790,7 +1790,10 @@ describe("solana-pa-prototype (External call error paths)", () => {
 describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   let v2TxSig: string;
 
-  it("settles v2 fixture (next_index 1→2)", async () => {
+  it("settles v2 fixture (next_index 1→2, depth 1→2)", async () => {
+    const accountInfoBefore = await provider.connection.getAccountInfo(paState);
+    const sizeBefore = accountInfoBefore!.data.length;
+
     const v2Fixture = loadFixture("batch_groth16_v2.json");
     const payload = Buffer.from(v2Fixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(v2Fixture.consumed_nullifiers_b64);
@@ -1800,7 +1803,14 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), 2, "next_index should be 2 after v2 settlement");
-    assert.equal(state.currentDepth, 1, "depth should still be 1 (capacity=2)");
+    // Expand-after-fill: next_index (2) == capacity (2^1), so depth grows 1→2
+    assert.equal(state.currentDepth, 2, "depth should grow to 2 (expand-after-fill at capacity)");
+
+    const accountInfoAfter = await provider.connection.getAccountInfo(paState);
+    assert.ok(
+      accountInfoAfter!.data.length > sizeBefore,
+      `Account should grow from depth 1 to 2 (${sizeBefore} → ${accountInfoAfter!.data.length})`
+    );
   });
 
   it("verifies events from v2 settlement", async () => {
@@ -1859,10 +1869,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     );
   });
 
-  it("settles v3 fixture with tree growth (depth 1→2, next_index 2→3)", async () => {
-    const accountInfoBefore = await provider.connection.getAccountInfo(paState);
-    const sizeBefore = accountInfoBefore!.data.length;
-
+  it("settles v3 fixture (next_index 2→3, depth stays 2)", async () => {
     const v3Fixture = loadFixture("batch_groth16_v3.json");
     const payload = Buffer.from(v3Fixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(v3Fixture.consumed_nullifiers_b64);
@@ -1872,13 +1879,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), 3, "next_index should be 3 after v3 settlement");
-    assert.equal(state.currentDepth, 2, "depth should grow to 2");
-
-    const accountInfoAfter = await provider.connection.getAccountInfo(paState);
-    assert.ok(
-      accountInfoAfter!.data.length > sizeBefore,
-      `Account should grow (${sizeBefore} → ${accountInfoAfter!.data.length})`
-    );
+    assert.equal(state.currentDepth, 2, "depth should stay at 2 (capacity 4, only 3 used)");
   });
 
   it("settles multi-call fixture with two external calls (next_index 3→4)", async () => {

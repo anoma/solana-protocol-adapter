@@ -201,74 +201,68 @@ pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
     Digest::from_bytes(result.to_bytes())
 }
 
-/// Append a single commitment to the tree, growing it if at capacity.
+/// Append a single commitment to the tree.
+///
+/// Direct port of the EVM reference implementation (MerkleTree.sol `push`):
+/// 1. Walk the branch at the current depth, hashing up from the leaf.
+///    - Left child: store in frontier, hash with zero sibling.
+///    - Right child: hash with frontier (left sibling).
+/// 2. After the walk, if the tree is now full, expand by one level:
+///    store the computed hash as the new frontier entry and hash it
+///    with `ZEROS[depth]` to produce the root at the new depth.
+///
+/// This means a tree with exactly 2^d leaves has depth d+1 and its
+/// root includes one level of zero-padding — matching the EVM PA.
 pub fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
-    if state.needs_growth() {
-        require!(state.can_grow(), PAError::TreeMaxDepthReached);
-        let current_root = compute_root_from_frontier(state);
-        let new_level = state.grow();
-        state.set_frontier(new_level, current_root);
-    }
+    let depth = state.depth();
+    let mut index = state.next_index;
+    state.next_index += 1;
 
     let mut current = leaf;
-    let mut index = state.next_index;
-    let depth = state.depth();
-
-    for level in 0..depth {
+    for (level, zero) in ZEROS.iter().enumerate().take(depth) {
         if index & 1 == 0 {
-            // Left child - store in frontier and return
+            // Left child — store in frontier, hash with zero sibling.
             state.set_frontier(level, current);
-            state.next_index += 1;
-            return Ok(());
+            current = hash_two(&current, zero);
+        } else {
+            // Right child — hash with frontier (left sibling).
+            current = hash_two(&state.get_frontier(level), &current);
         }
-        // Right child - hash with frontier and continue up
-        let left = state.get_frontier(level);
-        current = hash_two(&left, &current);
         index >>= 1;
     }
 
-    // Loop completed without early return: tree is full.
-    // `current` holds the root hash. Cache it so compute_root_from_frontier
-    // can return it (the frontier alone can't recover the root of a full tree).
+    // Expand if the tree is now full (EVM: capacity check after the loop).
+    if state.next_index == state.capacity() {
+        require!(state.can_grow(), PAError::TreeMaxDepthReached);
+        let new_level = state.grow();
+        state.set_frontier(new_level, current);
+        current = hash_two(&current, &ZEROS[new_level]);
+    }
+
     state.root = current.to_bytes();
-    state.next_index += 1;
     Ok(())
 }
 
-/// Compute the current root from the frontier using precomputed ZEROS.
+/// Compute the current root from the cached value.
+///
+/// `append_to_tree` updates `state.root` on every append, so this
+/// simply returns the cached root. For an empty tree (next_index == 0)
+/// the root field is initialized to `ZEROS[depth - 1]` by `initialize`.
 pub fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
-    let depth = state.depth();
-
-    if state.next_index == 0 {
-        return ZEROS[depth - 1];
-    }
-
-    if state.next_index >= state.capacity() {
-        // Tree is full — the frontier can't recover the root because all bits
-        // in 0..depth are zero. Use the root cached by append_to_tree.
-        return Digest::from_bytes(state.root);
-    }
-
-    let mut current = ZEROS[0];
-    let mut index = state.next_index;
-
-    for (level, zero) in ZEROS.iter().enumerate().take(depth) {
-        if index & 1 == 1 {
-            current = hash_two(&state.get_frontier(level), &current);
-        } else {
-            current = hash_two(&current, zero);
-        }
-        index >>= 1;
-    }
-    current
+    Digest::from_bytes(state.root)
 }
 
-/// Minimum tree depth such that 2^depth >= final_next_index.
+/// Required tree depth after `final_next_index` leaves have been appended.
+///
+/// Matches the EVM MerkleTree.sol expand-after-fill semantics: a tree with
+/// exactly 2^d leaves has depth d+1 (the expansion happened when the last
+/// slot was filled). For non-power-of-two counts, depth = ceil(log2(N)).
+///
+/// Equivalently: depth = bit-length of `final_next_index`.
 pub fn required_depth_for_leaves(final_next_index: u64) -> usize {
     if final_next_index == 0 {
         return INITIAL_TREE_DEPTH;
     }
-    // ceil(log2(final_next_index))
-    let bits = 64 - (final_next_index - 1).leading_zeros();
+    let bits = 64 - final_next_index.leading_zeros();
     (bits as usize).max(INITIAL_TREE_DEPTH)
 }

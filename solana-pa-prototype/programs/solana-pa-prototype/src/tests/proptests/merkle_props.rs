@@ -51,6 +51,11 @@ proptest! {
         prop_assert_eq!(state.next_index, leaves.len() as u64, "final next_index should equal leaf count");
     }
 
+    /// With expand-after-fill, the tree at `depth` can hold up to
+    /// `2^depth` leaves, but the last insertion triggers expansion to
+    /// `depth+1`. So `required_depth_for_leaves(N)` returns the depth
+    /// the tree will be at AFTER N appends, which is strictly greater
+    /// than the capacity would need.
     #[test]
     fn prop_required_depth_sufficient_capacity(
         final_next_index in 0u64..1_000_000,
@@ -61,16 +66,21 @@ proptest! {
             "depth {} (capacity {}) should hold {} leaves", depth, capacity, final_next_index);
     }
 
+    /// Verify the depth matches what `append_to_tree` actually produces.
     #[test]
-    fn prop_required_depth_minimal(
-        final_next_index in 2u64..1_000_000,
+    fn prop_required_depth_matches_append(
+        leaves in prop::collection::vec(arb_digest(), 1..32),
     ) {
-        let depth = required_depth_for_leaves(final_next_index);
-        if depth > INITIAL_TREE_DEPTH {
-            let smaller_capacity = 1u64 << (depth - 1);
-            prop_assert!(smaller_capacity < final_next_index,
-                "depth-1 capacity {} should be insufficient for {} leaves", smaller_capacity, final_next_index);
+        let mut state = create_test_pa_state();
+        for leaf in &leaves {
+            append_to_tree(&mut state, *leaf).unwrap();
         }
+        let expected_depth = required_depth_for_leaves(leaves.len() as u64);
+        prop_assert_eq!(
+            state.depth(), expected_depth,
+            "required_depth_for_leaves({}) = {} but tree depth is {}",
+            leaves.len(), expected_depth, state.depth()
+        );
     }
 
     #[test]
