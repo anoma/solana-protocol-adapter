@@ -218,13 +218,11 @@ sync_program_ids() {
 build_programs() {
   # anchor build uses cargo +nightly for IDL generation, which is incompatible
   # with debug artifacts compiled by the stable toolchain (e.g. from cargo test).
-  rm -rf target/debug/
+  # Remove incremental build state and proc-macro artifacts to avoid ABI mismatch.
+  rm -rf target/debug/incremental target/debug/build
 
   echo "    Building programs..."
   build_with_filtered_output anchor build
-
-  echo "    Building spl_token_forwarder..."
-  build_with_filtered_output anchor build -p spl-token-forwarder
 
   REQUIRED_FIXTURE="tests/fixtures/batch_groth16.json"
   OPTIONAL_MISMATCH_FIXTURE="tests/fixtures/batch_groth16_mismatch.json"

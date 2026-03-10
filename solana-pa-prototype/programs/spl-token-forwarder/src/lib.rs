@@ -117,6 +117,12 @@ pub const OP_UNWRAP: u8 = 1;
 /// Return value for successful forward_call
 pub const RESULT_SUCCESS: u8 = 1;
 
+/// Emergency withdraw operation code (used in forward_emergency_call)
+pub const OP_EMERGENCY_WITHDRAW: u8 = 0;
+
+/// SPL Token "Transfer" instruction opcode
+const SPL_TRANSFER_OPCODE: u8 = 3;
+
 /// SPL Token program ID
 const SPL_TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x06, 0xdd, 0xf6, 0xe1, 0xd7, 0x65, 0xa1, 0x93, 0xd9, 0xcb, 0xe1, 0x46, 0xce, 0xeb, 0x79, 0xac,
@@ -247,7 +253,7 @@ pub mod spl_token_forwarder {
         debug_msg!("  operation: {}", op);
 
         match op {
-            0 => execute_emergency_withdraw(&ctx, &input[1..]),
+            OP_EMERGENCY_WITHDRAW => execute_emergency_withdraw(&ctx, &input[1..]),
             _ => Err(ErrorCode::UnknownOperation.into()),
         }
     }
@@ -323,6 +329,34 @@ fn read_token_balance(token_account: &AccountInfo) -> Result<u64> {
         .try_into()
         .unwrap();
     Ok(u64::from_le_bytes(amount_bytes))
+}
+
+// =============================================================================
+// SPL Transfer Helper
+// =============================================================================
+
+/// Build an SPL Token Transfer instruction.
+///
+/// Used by wrap (user→escrow), unwrap (escrow→recipient), and emergency withdraw.
+fn spl_transfer_ix(
+    source: &Pubkey,
+    destination: &Pubkey,
+    authority: &Pubkey,
+    amount: u64,
+) -> anchor_lang::solana_program::instruction::Instruction {
+    let mut data = [0u8; 9];
+    data[0] = SPL_TRANSFER_OPCODE;
+    data[1..9].copy_from_slice(&amount.to_le_bytes());
+
+    anchor_lang::solana_program::instruction::Instruction {
+        program_id: SPL_TOKEN_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(*source, false),
+            AccountMeta::new(*destination, false),
+            AccountMeta::new_readonly(*authority, true),
+        ],
+        data: data.to_vec(),
+    }
 }
 
 // =============================================================================
@@ -498,22 +532,7 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     debug_msg!("  escrow balance before: {}", escrow_balance_before);
 
     // Transfer tokens from user to escrow using delegate authority
-    // SPL Transfer instruction: opcode (1 byte) + amount (8 bytes) = 9 bytes
-    let mut transfer_data = [0u8; 9];
-    transfer_data[0] = 3; // Transfer opcode
-    transfer_data[1..9].copy_from_slice(&wrap_input.amount.to_le_bytes());
-
-    let transfer_accounts = vec![
-        AccountMeta::new(*user_ata.key, false),
-        AccountMeta::new(*escrow_ata.key, false),
-        AccountMeta::new_readonly(*escrow_pda.key, true),
-    ];
-
-    let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
-        program_id: SPL_TOKEN_PROGRAM_ID,
-        accounts: transfer_accounts,
-        data: transfer_data.to_vec(),
-    };
+    let transfer_ix = spl_transfer_ix(user_ata.key, escrow_ata.key, escrow_pda.key, wrap_input.amount);
 
     let escrow_seeds = &[ESCROW_SEED, wrap_input.token_mint.as_ref(), &[escrow_bump]];
     let signer_seeds = &[&escrow_seeds[..]];
@@ -674,22 +693,7 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     debug_msg!("  recipient balance before: {}", recipient_balance_before);
 
     // Transfer tokens from escrow to recipient
-    // SPL Transfer instruction: opcode (1 byte) + amount (8 bytes) = 9 bytes
-    let mut transfer_data = [0u8; 9];
-    transfer_data[0] = 3; // Transfer opcode
-    transfer_data[1..9].copy_from_slice(&unwrap_input.amount.to_le_bytes());
-
-    let transfer_accounts = vec![
-        AccountMeta::new(*escrow_ata.key, false),
-        AccountMeta::new(*recipient_ata.key, false),
-        AccountMeta::new_readonly(*escrow_pda.key, true),
-    ];
-
-    let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
-        program_id: SPL_TOKEN_PROGRAM_ID,
-        accounts: transfer_accounts,
-        data: transfer_data.to_vec(),
-    };
+    let transfer_ix = spl_transfer_ix(escrow_ata.key, recipient_ata.key, escrow_pda.key, unwrap_input.amount);
 
     let escrow_seeds = &[
         ESCROW_SEED,
@@ -798,22 +802,7 @@ fn execute_emergency_withdraw(ctx: &Context<ForwardEmergencyCall>, input: &[u8])
     debug_msg!("  recipient balance before: {}", recipient_balance_before);
 
     // Transfer tokens
-    // SPL Transfer instruction: opcode (1 byte) + amount (8 bytes) = 9 bytes
-    let mut transfer_data = [0u8; 9];
-    transfer_data[0] = 3; // Transfer opcode
-    transfer_data[1..9].copy_from_slice(&amount.to_le_bytes());
-
-    let transfer_accounts = vec![
-        AccountMeta::new(*escrow_ata.key, false),
-        AccountMeta::new(*recipient_ata.key, false),
-        AccountMeta::new_readonly(*escrow_pda.key, true),
-    ];
-
-    let transfer_ix = anchor_lang::solana_program::instruction::Instruction {
-        program_id: SPL_TOKEN_PROGRAM_ID,
-        accounts: transfer_accounts,
-        data: transfer_data.to_vec(),
-    };
+    let transfer_ix = spl_transfer_ix(escrow_ata.key, recipient_ata.key, escrow_pda.key, amount);
 
     let escrow_seeds = &[ESCROW_SEED, token_mint.as_ref(), &[escrow_bump]];
     let signer_seeds = &[&escrow_seeds[..]];

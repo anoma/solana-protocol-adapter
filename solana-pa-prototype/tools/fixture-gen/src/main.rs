@@ -345,9 +345,6 @@ fn test_forwarder_output_account_payload_blob(
     }))
 }
 
-fn encode_base58(input: &[u8]) -> String {
-    bs58::encode(input).into_string()
-}
 
 const SPL_TOKEN_FORWARDER_PROGRAM_ID: &str = "6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1";
 
@@ -429,7 +426,7 @@ fn spl_token_forwarder_wrap_external_payload(
         user_secret_key_b64: BASE64.encode(seed),
         user_pubkey_b64: BASE64.encode(user_pubkey),
         mint_seed_b64: BASE64.encode(mint_seed),
-        token_mint_b58: encode_base58(&token_mint),
+        token_mint_b58: bs58::encode(&token_mint).into_string(),
         amount,
         nonce,
         deadline,
@@ -483,10 +480,10 @@ fn spl_token_forwarder_unwrap_external_payload(
 
     let metadata = SplTokenUnwrapMetadata {
         mint_seed_b64: BASE64.encode(mint_seed),
-        token_mint_b58: encode_base58(&token_mint),
+        token_mint_b58: bs58::encode(&token_mint).into_string(),
         amount,
         recipient_seed_b64: BASE64.encode(recipient_seed),
-        recipient_b58: encode_base58(&recipient),
+        recipient_b58: bs58::encode(&recipient).into_string(),
         logic_ref_b64: BASE64.encode(logic_ref),
     };
 
