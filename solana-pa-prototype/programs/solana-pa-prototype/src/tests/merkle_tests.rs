@@ -1,5 +1,4 @@
-use crate::merkle::{append_to_tree, compute_root_from_frontier};
-use crate::merkle::{hash_two, EMPTY_TREE_ROOT_INITIAL, PADDING_LEAF, ZEROS};
+use crate::merkle::{append_to_tree, hash_two, EMPTY_TREE_ROOT_INITIAL, PADDING_LEAF, ZEROS};
 use crate::tests::utils::create_test_pa_state;
 use anchor_lang::solana_program::hash::hashv;
 use arm_core::Digest;
@@ -44,7 +43,7 @@ fn test_empty_tree_root_is_padding_based() {
     let state = create_test_pa_state();
     assert_eq!(state.next_index, 0);
     assert_eq!(state.current_depth, 1, "test state should start at depth 1");
-    let root = compute_root_from_frontier(&state);
+    let root = state.root_digest();
     assert_ne!(
         root,
         Digest::default(),
@@ -87,7 +86,7 @@ fn test_expand_after_fill_at_depth_1() {
         "filling depth 1 must expand to depth 2"
     );
 
-    let root = compute_root_from_frontier(&state);
+    let root = state.root_digest();
     let expected = hash_two(&hash_two(&leaf0, &leaf1), &ZEROS[1]);
     assert_eq!(
         root, expected,
@@ -111,7 +110,7 @@ fn test_append_after_expansion() {
     assert_eq!(state.current_depth, 2, "depth should remain 2");
     assert_eq!(state.next_index, 3);
 
-    let root = compute_root_from_frontier(&state);
+    let root = state.root_digest();
     let left = hash_two(&leaf0, &leaf1);
     let right = hash_two(&leaf2, &PADDING_LEAF);
     let expected = hash_two(&left, &right);
@@ -163,7 +162,7 @@ fn test_incremental_matches_evm_compute_root() {
     let mut state = create_test_pa_state();
     for (i, leaf) in leaves.iter().enumerate() {
         append_to_tree(&mut state, *leaf).unwrap();
-        let incremental_root = compute_root_from_frontier(&state);
+        let incremental_root = state.root_digest();
 
         let n = i + 1;
         // The EVM tree depth after N pushes: for non-power-of-two N it's
@@ -209,7 +208,7 @@ fn test_expand_after_fill_at_depth_2() {
         "filling depth 2 must expand to depth 3"
     );
 
-    let root = compute_root_from_frontier(&state);
+    let root = state.root_digest();
     let expected = evm_compute_root(&leaves, 3);
     assert_eq!(root, expected, "4-leaf root must match EVM at depth 3");
 }

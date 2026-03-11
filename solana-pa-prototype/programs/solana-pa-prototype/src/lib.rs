@@ -26,8 +26,8 @@ use encoding::{compute_action_tree_root, extract_tags_and_logic_refs};
 pub use error::PAError;
 use groth16::prepare_proof_for_verification;
 use merkle::{
-    append_to_tree, compute_root_from_frontier, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL,
-    INITIAL_TREE_DEPTH, MAX_TREE_DEPTH, PADDING_LEAF,
+    append_to_tree, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH,
+    MAX_TREE_DEPTH, PADDING_LEAF,
 };
 use state::*;
 
@@ -529,8 +529,7 @@ fn execute_settlement<'info>(
         append_to_tree(state, commitment)?;
     }
 
-    let new_root = compute_root_from_frontier(state).to_bytes();
-    state.root = new_root;
+    let new_root = state.root;
 
     // Root markers enable parallel transaction construction against historical roots.
     let (expected_pda, _) = root::derive_root_pda(&crate::ID, pa_state_key, &new_root);

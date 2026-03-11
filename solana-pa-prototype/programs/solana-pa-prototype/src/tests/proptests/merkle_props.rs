@@ -1,8 +1,5 @@
 use super::strategies::arb_digest;
-use crate::merkle::{
-    append_to_tree, compute_root_from_frontier, hash_two, required_depth_for_leaves,
-    INITIAL_TREE_DEPTH,
-};
+use crate::merkle::{append_to_tree, hash_two, required_depth_for_leaves, INITIAL_TREE_DEPTH};
 use crate::tests::utils::create_test_pa_state;
 use proptest::prelude::*;
 
@@ -35,8 +32,8 @@ proptest! {
         append_to_tree(&mut state1, leaf1).unwrap();
         append_to_tree(&mut state2, leaf2).unwrap();
         prop_assert_ne!(
-            compute_root_from_frontier(&state1),
-            compute_root_from_frontier(&state2),
+            state1.root_digest(),
+            state2.root_digest(),
             "distinct leaves should produce distinct roots"
         );
     }

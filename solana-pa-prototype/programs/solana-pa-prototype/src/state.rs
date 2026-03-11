@@ -43,12 +43,12 @@ impl PAStateAccount {
         self.current_depth as usize
     }
 
-    pub fn capacity(&self) -> u64 {
-        1u64 << self.current_depth
+    pub fn root_digest(&self) -> Digest {
+        Digest::from_bytes(self.root)
     }
 
-    pub fn needs_growth(&self) -> bool {
-        self.next_index >= self.capacity()
+    pub fn capacity(&self) -> u64 {
+        1u64 << self.current_depth
     }
 
     pub fn can_grow(&self) -> bool {

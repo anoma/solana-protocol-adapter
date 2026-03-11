@@ -243,15 +243,6 @@ pub fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
     Ok(())
 }
 
-/// Compute the current root from the cached value.
-///
-/// `append_to_tree` updates `state.root` on every append, so this
-/// simply returns the cached root. For an empty tree (next_index == 0)
-/// the root field is initialized to `ZEROS[depth - 1]` by `initialize`.
-pub fn compute_root_from_frontier(state: &PAStateAccount) -> Digest {
-    Digest::from_bytes(state.root)
-}
-
 /// Required tree depth after `final_next_index` leaves have been appended.
 ///
 /// Matches the EVM MerkleTree.sol expand-after-fill semantics: a tree with
