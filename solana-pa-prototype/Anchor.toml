@@ -3,12 +3,12 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-block_time_forwarder = "J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6"
+block_time_forwarder = "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
 solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
 test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
 
 [programs.localnet]
-block_time_forwarder = "J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6"
+block_time_forwarder = "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
 solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
 test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
 
