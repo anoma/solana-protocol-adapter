@@ -82,6 +82,11 @@ case "${1:-}" in
     run_in_project "cargo clippy -p solana-pa-prototype -p block-time-forwarder --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
     ;;
 
+  devnet)
+    shift
+    run_in_project "./scripts/devnet.sh $*"
+    ;;
+
   coverage)
     echo "Building test binaries..."
     BUILD_JSON=$(run_in_project "cargo test -p solana-pa-prototype -p block-time-forwarder --no-run --message-format=json 2>/dev/null")
@@ -183,6 +188,16 @@ PYEOF
     echo "  coverage     Run unit tests with kcov and report line coverage"
     echo "  clean        Remove local validator/test artifacts"
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
+    echo ""
+    echo "Devnet commands:"
+    echo "  devnet deploy [pa|btf|all]    First-time deploy to devnet"
+    echo "  devnet upgrade [pa|btf|all]   Rebuild + deploy over existing programs"
+    echo "  devnet teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent"
+    echo "  devnet test                   Run integration tests against devnet"
+    echo "  devnet init                   Initialize PA state (idempotent)"
+    echo "  devnet status                 Show deployment status + wallet balance"
+    echo "  devnet balance                Show wallet address and balance"
+    echo "  devnet airdrop [amount]       Request devnet airdrop (default: 2 SOL)"
     exit 1
     ;;
 
