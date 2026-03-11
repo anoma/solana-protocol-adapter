@@ -238,6 +238,15 @@ build_programs() {
 }
 
 start_validator() {
+  # Kill any existing validator on the target port to avoid bind conflicts
+  local existing_pid
+  existing_pid=$(lsof -ti :8899 2>/dev/null || true)
+  if [[ -n "$existing_pid" ]]; then
+    echo "Killing existing process on port 8899 (pid $existing_pid)"
+    kill -9 $existing_pid 2>/dev/null || true
+    sleep 1
+  fi
+
   mkdir -p "$VALIDATOR_LEDGER"
 
   solana-test-validator \
