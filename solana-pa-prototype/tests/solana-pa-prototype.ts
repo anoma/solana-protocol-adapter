@@ -39,9 +39,15 @@ function loadFixture(filename: string): Fixture {
   return readJson<Fixture>(path.resolve(process.cwd(), "tests", "fixtures", filename));
 }
 
-// Keypairs funded during tests, drained back to the provider wallet in the
-// global after() hook so devnet SOL is recovered.
+// Keypairs funded during tests, drained back to the provider wallet in
+// afterEach() so devnet SOL circulates across the test run.
 const fundedKeypairs: Keypair[] = [];
+
+// TxData accounts created during tests, closed in afterEach() to recover rent.
+const openTxDataAccounts: { uploadId: anchor.BN; txData: PublicKey; authority: Keypair }[] = [];
+
+let providerBalanceBefore = 0;
+let suiteStartBalance = 0;
 
 async function airdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: number) {
   const needed = sol * LAMPORTS_PER_SOL;
@@ -203,6 +209,7 @@ async function initTxData(
     })
     .signers([authority])
     .rpc();
+  openTxDataAccounts.push({ uploadId, txData, authority });
   return { uploadId, uploadIdLe, txData, expiresSlot };
 }
 
@@ -2104,46 +2111,123 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
   });
 });
 
-// After each test, drain funded keypairs back to the provider wallet so the
-// same SOL circulates across the entire run.  The airdrop() helper checks
-// balance before transferring, so shared keypairs that get drained here are
-// simply re-funded on the next airdrop() call — no SOL is lost.
-afterEach(async () => {
-  if (fundedKeypairs.length === 0) return;
+before(async () => {
+  suiteStartBalance = await provider.connection.getBalance(provider.wallet.publicKey);
+  console.log(`  [sol] suite start: wallet ${(suiteStartBalance / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+});
 
+beforeEach(async () => {
+  providerBalanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
+});
+
+// After each test, close TxData accounts and drain funded keypairs back to the
+// provider wallet so the same SOL circulates across the entire run.
+afterEach(async () => {
+  // 1. Close any open TxData accounts to recover rent to the authority keypair.
+  //    The on-chain refund address is authority.publicKey (set at init time).
+  for (const entry of openTxDataAccounts) {
+    try {
+      const info = await provider.connection.getAccountInfo(entry.txData);
+      if (!info) continue; // already closed by settle or explicit close
+      await program.methods
+        .txdataClose(entry.uploadId)
+        .accounts({
+          txData: entry.txData,
+          authority: entry.authority.publicKey,
+          refund: entry.authority.publicKey,
+        })
+        .signers([entry.authority])
+        .rpc();
+    } catch {
+      // TxData may have been consumed by settle or closed by the test
+    }
+  }
+  openTxDataAccounts.length = 0;
+
+  // 2. Drain any remaining SOL from funded keypairs back to provider wallet.
+  //    Uses sendRawTransaction directly — provider.sendAndConfirm fails because
+  //    Anchor's provider tries to co-sign with the wallet, which isn't needed here.
   const MIN_DRAIN = 5000;
   let recovered = 0;
-  let count = 0;
-
-  const seen = new Set<string>();
-  const unique = fundedKeypairs.filter((kp) => {
-    const key = kp.publicKey.toBase58();
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-
-  for (const kp of unique) {
+  let drained = 0;
+  for (const kp of fundedKeypairs) {
     try {
       const balance = await provider.connection.getBalance(kp.publicKey);
       if (balance <= MIN_DRAIN) continue;
-
       const drainAmount = balance - MIN_DRAIN;
-      const tx = new Transaction().add(
+      const drainTx = new Transaction().add(
         SystemProgram.transfer({
           fromPubkey: kp.publicKey,
           toPubkey: provider.wallet.publicKey,
           lamports: drainAmount,
         })
       );
-      await provider.sendAndConfirm(tx, [kp]);
+      drainTx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
+      drainTx.feePayer = kp.publicKey;
+      drainTx.sign(kp);
+      const sig = await provider.connection.sendRawTransaction(drainTx.serialize());
+      await provider.connection.confirmTransaction(sig);
       recovered += drainAmount;
-      count++;
+      drained++;
     } catch {
-      // Best-effort — skip failures silently
+      // Best-effort — tx may fail if keypair was already drained
+    }
+  }
+  fundedKeypairs.length = 0;
+
+  const providerBalanceAfter = await provider.connection.getBalance(provider.wallet.publicKey);
+  const netCost = providerBalanceBefore - providerBalanceAfter;
+  console.log(
+    `    [sol] spent ${(netCost / LAMPORTS_PER_SOL).toFixed(4)}, ` +
+      `recovered ${(recovered / LAMPORTS_PER_SOL).toFixed(4)} ` +
+      `(${drained} keypairs), ` +
+      `wallet ${(providerBalanceAfter / LAMPORTS_PER_SOL).toFixed(4)} SOL`
+  );
+});
+
+// End-of-suite audit: exact breakdown of where SOL went.
+after(async () => {
+  const suiteEndBalance = await provider.connection.getBalance(provider.wallet.publicKey);
+  const totalSpent = suiteStartBalance - suiteEndBalance;
+
+  // Query all accounts owned by the PA program
+  const allAccounts = await provider.connection.getProgramAccounts(program.programId);
+
+  // PAState is identifiable: it's the only account with data (non-zero-byte).
+  // Nullifier and root markers are 0-byte accounts.
+  // TxData accounts have significant data.
+  let paStateRent = 0;
+  let markerCount = 0;
+  let markerRent = 0;
+  let txdataCount = 0;
+  let txdataRent = 0;
+
+  for (const { account } of allAccounts) {
+    if (account.data.length === 0) {
+      // 0-byte account = nullifier or root marker
+      markerCount++;
+      markerRent += account.lamports;
+    } else if (account.data.length > 200) {
+      // Large account = TxData (unclosed)
+      txdataCount++;
+      txdataRent += account.lamports;
+    } else {
+      // PAState or other small accounts
+      paStateRent += account.lamports;
     }
   }
 
-  // Clear so we don't re-drain the same keypairs next test
-  fundedKeypairs.length = 0;
+  const accountRent = paStateRent + markerRent + txdataRent;
+  const txFees = totalSpent - accountRent;
+
+  console.log(`\n  [sol] ═══ Suite SOL Audit ═══`);
+  console.log(`  [sol]   start balance:     ${(suiteStartBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+  console.log(`  [sol]   end balance:       ${(suiteEndBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+  console.log(`  [sol]   total spent:       ${(totalSpent / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+  console.log(`  [sol]   breakdown:`);
+  console.log(`  [sol]     PAState rent:    ${(paStateRent / LAMPORTS_PER_SOL).toFixed(6)} SOL (${allAccounts.length - markerCount - txdataCount} accounts)`);
+  console.log(`  [sol]     marker rent:     ${(markerRent / LAMPORTS_PER_SOL).toFixed(6)} SOL (${markerCount} nullifier/root markers × ${markerCount > 0 ? allAccounts.find(a => a.account.data.length === 0)!.account.lamports : 0} lamports each)`);
+  console.log(`  [sol]     unclosed TxData: ${(txdataRent / LAMPORTS_PER_SOL).toFixed(6)} SOL (${txdataCount} accounts)`);
+  console.log(`  [sol]     tx fees + dust:  ${(txFees / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+  console.log(`  [sol]   total accounted:   ${((accountRent + txFees) / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
 });
