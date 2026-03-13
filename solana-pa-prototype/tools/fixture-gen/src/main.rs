@@ -140,7 +140,7 @@ fn test_forwarder_program_id() -> Result<[u8; 32]> {
 
 fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
     // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-    let program_id = decode_base58_32("J1YYaBphwHzvGDq6EGY71DfPkuKWxMtHrtzGMUHp1LZ6")?;
+    let program_id = decode_base58_32("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf")?;
 
     // Use -1 so expected_time < current_time for any reasonable cluster clock.
     // The forwarder will return RESULT_LT (0x00).

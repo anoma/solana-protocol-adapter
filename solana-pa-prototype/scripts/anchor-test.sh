@@ -177,6 +177,12 @@ if [[ -f "$OPTIONAL_MISMATCH_FIXTURE" ]] && ! fixture_matches_program_id "$OPTIO
 fi
 
 echo "==> (2/3) Starting validator"
+
+# Kill any stale validator from a previous interrupted run
+if pkill -f solana-test-validator 2>/dev/null; then
+  sleep 1
+fi
+
 mkdir -p "$VALIDATOR_LEDGER"
 
 # RISC0 verifier programs and PDAs cloned from devnet
