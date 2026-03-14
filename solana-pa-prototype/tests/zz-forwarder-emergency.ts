@@ -16,6 +16,8 @@ import {
   PublicKey,
   SystemProgram,
   Keypair,
+  LAMPORTS_PER_SOL,
+  Transaction,
 } from "@solana/web3.js";
 import {
   createMint,
@@ -30,7 +32,7 @@ import { createHash } from "crypto";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 import { deriveConfigPda, deriveEscrowPda, derivePaStatePda } from "./utils";
-import { airdrop } from "./utils";
+import { airdrop, drainKeypairs } from "./utils";
 
 // Deterministic keypair seeds - must match 01-spl-token-forwarder.ts
 const EMERGENCY_COMMITTEE_SEED = createHash("sha256").update("emergency_committee_seed").digest();
@@ -39,6 +41,12 @@ const EMERGENCY_CALLER_SEED = createHash("sha256").update("emergency_caller_seed
 describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
+
+  const localFundedKeypairs: Keypair[] = [];
+  async function localAirdrop(kp: Keypair, sol: number) {
+    await airdrop(provider, kp, sol);
+    localFundedKeypairs.push(kp);
+  }
 
   let program: Program<SplTokenForwarder>;
   let paProgram: Program<SolanaPaPrototype>;
@@ -81,10 +89,10 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
     recipient = Keypair.generate();
 
     // Airdrop SOL
-    await airdrop(provider, authority.publicKey, 10);
-    await airdrop(provider, recipient.publicKey, 1);
-    await airdrop(provider, emergencyCommittee.publicKey, 1);
-    await airdrop(provider, emergencyCaller.publicKey, 1);
+    await localAirdrop(authority, 10);
+    await localAirdrop(recipient, 1);
+    await localAirdrop(emergencyCommittee, 1);
+    await localAirdrop(emergencyCaller, 1);
 
     // Derive PDAs
     [configPda] = deriveConfigPda(program.programId);
@@ -287,7 +295,7 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
     if (!paEmergencyStopped) throw new Error("PA not stopped - previous test failed");
 
     const wrongCaller = Keypair.generate();
-    await airdrop(provider, wrongCaller.publicKey, 1);
+    await localAirdrop(wrongCaller, 1);
 
     const input = Buffer.alloc(73);
     input.writeUInt8(0, 0);
@@ -381,5 +389,10 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
         `Expected ZeroAddressNotAllowed or EmergencyCallerAlreadySet, got: ${errorStr}`
       );
     }
+  });
+
+  after(async () => {
+    await drainKeypairs(provider, localFundedKeypairs, "zz-emergency");
+    localFundedKeypairs.length = 0;
   });
 });

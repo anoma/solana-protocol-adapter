@@ -6,6 +6,7 @@ import {
   Keypair,
   Ed25519Program,
   Transaction,
+  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
   createMint,
@@ -31,6 +32,7 @@ import {
 } from "./utils";
 import {
   airdrop,
+  drainKeypairs,
   createWrapMessageHash,
   encodeWrapInput,
   encodeUnwrapInput,
@@ -41,6 +43,12 @@ import { OP_WRAP, OP_UNWRAP } from "./utils";
 describe("spl-token-forwarder", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
+
+  const localFundedKeypairs: Keypair[] = [];
+  async function localAirdrop(kp: Keypair, sol: number) {
+    await airdrop(provider, kp, sol);
+    localFundedKeypairs.push(kp);
+  }
 
   // We'll use the programs from the workspace
   let program: Program<SplTokenForwarder>;
@@ -91,11 +99,11 @@ describe("spl-token-forwarder", () => {
     recipient = Keypair.generate();
 
     // Airdrop SOL
-    await airdrop(provider, authority.publicKey, 10);
-    await airdrop(provider, user.publicKey, 10);
-    await airdrop(provider, recipient.publicKey, 1);
-    await airdrop(provider, emergencyCommittee.publicKey, 1);
-    await airdrop(provider, emergencyCaller.publicKey, 1);
+    await localAirdrop(authority, 10);
+    await localAirdrop(user, 10);
+    await localAirdrop(recipient, 1);
+    await localAirdrop(emergencyCommittee, 1);
+    await localAirdrop(emergencyCaller, 1);
 
     // Derive PDAs
     [configPda, configBump] = deriveConfigPda(program.programId);
@@ -744,7 +752,7 @@ describe("spl-token-forwarder", () => {
       if (!program) return;
 
       const unauthorizedCaller = Keypair.generate();
-      await airdrop(provider, unauthorizedCaller.publicKey, 1);
+      await localAirdrop(unauthorizedCaller, 1);
 
       const unwrapInput = encodeUnwrapInput(tokenMint, BigInt(1000), recipient.publicKey);
 
@@ -807,7 +815,7 @@ describe("spl-token-forwarder", () => {
 
       // Create a new user without any delegate approval
       const newUser = Keypair.generate();
-      await airdrop(provider, newUser.publicKey, 2);
+      await localAirdrop(newUser, 2);
 
       // Create token account and mint tokens
       const newUserAta = await createAccount(
@@ -883,7 +891,7 @@ describe("spl-token-forwarder", () => {
       if (!program) return;
 
       const unauthorizedCommittee = Keypair.generate();
-      await airdrop(provider, unauthorizedCommittee.publicKey, 1);
+      await localAirdrop(unauthorizedCommittee, 1);
 
       const newCaller = Keypair.generate();
 
@@ -901,5 +909,10 @@ describe("spl-token-forwarder", () => {
         assert.include(e.toString(), "UnauthorizedCaller");
       }
     });
+  });
+
+  after(async () => {
+    await drainKeypairs(provider, localFundedKeypairs, "01-forwarder");
+    localFundedKeypairs.length = 0;
   });
 });

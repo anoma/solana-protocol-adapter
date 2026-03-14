@@ -4,6 +4,7 @@ import {
   PublicKey,
   SystemProgram,
   Keypair,
+  LAMPORTS_PER_SOL,
   ComputeBudgetProgram,
   SYSVAR_CLOCK_PUBKEY,
   Transaction,
@@ -32,10 +33,19 @@ import {
 } from "./utils";
 import { readJson, loadFixture, Fixture } from "./utils";
 import { parseSelectorFromFixture, deriveRouterAccounts } from "./utils";
-import { airdrop, fundedKeypairs } from "./utils";
+import { airdrop, drainKeypairs } from "./utils";
 
 // TxData accounts created during tests, closed in afterEach() to recover rent.
 const openTxDataAccounts: { uploadId: anchor.BN; txData: PublicKey; authority: Keypair }[] = [];
+
+// Keypairs funded during PA tests, drained back in after().
+const paFundedKeypairs: Keypair[] = [];
+
+// Local airdrop wrapper that tracks keypairs for drain-back.
+async function paAirdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: number) {
+  await airdrop(provider, kp, sol);
+  paFundedKeypairs.push(kp);
+}
 
 let providerBalanceBefore = 0;
 let suiteStartBalance = 0;
@@ -228,7 +238,7 @@ async function createDataAccount(
   owner: PublicKey = testForwarderId,
 ): Promise<Keypair> {
   const funder = Keypair.generate();
-  await airdrop(provider, funder, 2);
+  await paAirdrop(provider, funder, 2);
   const account = Keypair.generate();
   const lamports = await provider.connection.getMinimumBalanceForRentExemption(space);
   const tx = new anchor.web3.Transaction().add(
@@ -255,7 +265,7 @@ async function settleFixtureViaTxData(
   remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
 ): Promise<string> {
   const authority = Keypair.generate();
-  await airdrop(provider, authority, 2);
+  await paAirdrop(provider, authority, 2);
   const { uploadId, txData } = await uploadTxData(authority, payload);
   return program.methods
     .settleFromTxdata(uploadId)
@@ -294,7 +304,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       additionalHistoricalRootMarkers?: PublicKey[];
     }
   ) {
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const { uploadId, txData } = await uploadTxData(authority, payload);
 
@@ -569,7 +579,7 @@ describe("solana-pa-prototype (Re-initialization guard)", () => {
 describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
   it("rejects garbage transaction_data via settle", async () => {
     const payer = Keypair.generate();
-    await airdrop(provider, payer, 2);
+    await paAirdrop(provider, payer, 2);
 
     try {
       await program.methods
@@ -600,7 +610,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     // to a fresh TxData and trying to settle must fail at nullifier creation
     // because those nullifier PDAs already exist.
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const tx = Buffer.from(fixture.tx_b64, "base64");
     const { uploadId, txData } = await uploadTxData(authority, tx);
@@ -639,7 +649,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
 describe("solana-pa-prototype (Settle error paths)", () => {
   it("rejects wrong verifier_router_program address", async () => {
     const payer = Keypair.generate();
-    await airdrop(provider, payer, 2);
+    await paAirdrop(provider, payer, 2);
 
     const fakeRouter = Keypair.generate().publicKey;
 
@@ -670,7 +680,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     // Upload the fixture but pass zero nullifier accounts.
     // The program expects 1 nullifier PDA in remaining_accounts.
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const mismatchFixture = loadFixture<Fixture>("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
@@ -724,7 +734,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     // after the nullifier slots) for the forwarder and fails with
     // UnregisteredForwarder when it can't find it.
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const mismatchFixture = loadFixture<Fixture>("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
@@ -785,7 +795,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
   it("rejects emergency_stop from non-authority", async () => {
     const nonAuthority = Keypair.generate();
-    await airdrop(provider, nonAuthority, 1);
+    await paAirdrop(provider, nonAuthority, 1);
 
     try {
       await program.methods
@@ -812,7 +822,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
   it("rejects transfer_authority from non-authority", async () => {
     const nonAuthority = Keypair.generate();
     const newAuthority = Keypair.generate();
-    await airdrop(provider, nonAuthority, 1);
+    await paAirdrop(provider, nonAuthority, 1);
 
     try {
       await program.methods
@@ -839,7 +849,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     const currentAuthority = stateBefore.authority;
 
     const newAuthority = Keypair.generate();
-    await airdrop(provider, newAuthority, 1);
+    await paAirdrop(provider, newAuthority, 1);
 
     await program.methods
       .transferAuthority(newAuthority.publicKey)
@@ -876,7 +886,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     const originalAuthority = stateBefore.authority;
 
     const newAuthority = Keypair.generate();
-    await airdrop(provider, newAuthority, 1);
+    await paAirdrop(provider, newAuthority, 1);
 
     await program.methods
       .transferAuthority(newAuthority.publicKey)
@@ -921,7 +931,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 describe("solana-pa-prototype (TxData Expiration)", () => {
   it("rejects txdata_init with expires_slot too soon", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 1);
+    await paAirdrop(provider, authority, 1);
 
     const { uploadId, uploadIdLe } = freshUploadId();
 
@@ -953,7 +963,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
   it("rejects txdata_init with expires_slot too late", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 1);
+    await paAirdrop(provider, authority, 1);
 
     const { uploadId, uploadIdLe } = freshUploadId();
 
@@ -985,7 +995,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
   it("accepts txdata_init with valid expires_slot", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 1);
+    await paAirdrop(provider, authority, 1);
 
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + Math.floor((MIN_EXPIRY_SLOTS + MAX_EXPIRY_SLOTS) / 2));
@@ -1001,7 +1011,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
   it("allows authority to close TxData anytime", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -1041,8 +1051,8 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     const attacker = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, attacker, 1),
+      paAirdrop(provider, authority, 2),
+      paAirdrop(provider, attacker, 1),
     ]);
 
     const { uploadId, uploadIdLe, txData: authorityTxData } = await initTxData(authority, 100);
@@ -1084,8 +1094,8 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     const attacker = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, attacker, 1),
+      paAirdrop(provider, authority, 2),
+      paAirdrop(provider, attacker, 1),
     ]);
 
     const { uploadId, uploadIdLe, txData: authorityTxData } = await initTxData(authority, 100);
@@ -1116,7 +1126,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
   it("extends TxData expiration deadline successfully", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const slot = await provider.connection.getSlot("confirmed");
     const initialExpiry = new anchor.BN(slot + 1000);
@@ -1144,7 +1154,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
   it("rejects txdata_extend that doesn't increase expires_slot", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const slot = await provider.connection.getSlot("confirmed");
     const initialExpiry = new anchor.BN(slot + 10000);
@@ -1173,8 +1183,8 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const authority = Keypair.generate();
     const cleaner = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, cleaner, 1),
+      paAirdrop(provider, authority, 2),
+      paAirdrop(provider, cleaner, 1),
     ]);
 
     const slot = await provider.connection.getSlot("confirmed");
@@ -1202,7 +1212,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
 
   it("rejects txdata_write that exceeds payload capacity", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -1225,8 +1235,8 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const authority = Keypair.generate();
     const wrongAuthority = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, wrongAuthority, 1),
+      paAirdrop(provider, authority, 2),
+      paAirdrop(provider, wrongAuthority, 1),
     ]);
 
     const { uploadId, txData } = await initTxData(authority, 100);
@@ -1257,8 +1267,8 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const authority = Keypair.generate();
     const wrongAuthority = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, wrongAuthority, 2),
+      paAirdrop(provider, authority, 2),
+      paAirdrop(provider, wrongAuthority, 2),
     ]);
 
     const { uploadId, txData } = await initTxData(authority, 100);
@@ -1304,7 +1314,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
   it("rejects txdata_close with wrong refund address", async () => {
     const authority = Keypair.generate();
     const otherPubkey = Keypair.generate().publicKey;
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -1334,8 +1344,8 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     const cleaner = Keypair.generate();
     const wrongRefund = Keypair.generate().publicKey;
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, cleaner, 1),
+      paAirdrop(provider, authority, 2),
+      paAirdrop(provider, cleaner, 1),
     ]);
 
     const slot = await provider.connection.getSlot("confirmed");
@@ -1435,7 +1445,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
 
   it("rejects wrong authority", async () => {
     const nonAuthority = Keypair.generate();
-    await airdrop(provider, nonAuthority, 1);
+    await paAirdrop(provider, nonAuthority, 1);
 
     try {
       await program.methods
@@ -1500,7 +1510,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
   it("rejects txdata_write on expired TxData", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + EXPIRY_OFFSET);
@@ -1534,7 +1544,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
   it("rejects settle_from_txdata on expired TxData", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const tx = Buffer.from(fixture.tx_b64, "base64");
     const slot = await provider.connection.getSlot("confirmed");
@@ -1577,8 +1587,8 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const authority = Keypair.generate();
     const cleaner = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, cleaner, 1),
+      paAirdrop(provider, authority, 2),
+      paAirdrop(provider, cleaner, 1),
     ]);
 
     const slot = await provider.connection.getSlot("confirmed");
@@ -1615,7 +1625,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
   it("rejects txdata_extend with expires_slot too soon", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const { uploadId, txData, expiresSlot } = await initTxData(authority, 100, new anchor.BN(
       (await provider.connection.getSlot("confirmed")) + EXPIRY_OFFSET
@@ -1647,7 +1657,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
   it("rejects txdata_extend with expires_slot too late", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await paAirdrop(provider, authority, 2);
 
     const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(
       (await provider.connection.getSlot("confirmed")) + 1000
@@ -2165,11 +2175,8 @@ beforeEach(async () => {
   providerBalanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
 });
 
-// After each test, close TxData accounts and drain funded keypairs back to the
-// provider wallet so the same SOL circulates across the entire run.
+// After each PA test, close TxData accounts to recover rent.
 afterEach(async () => {
-  // 1. Close any open TxData accounts to recover rent to the authority keypair.
-  //    The on-chain refund address is authority.publicKey (set at init time).
   for (const entry of openTxDataAccounts) {
     try {
       const info = await provider.connection.getAccountInfo(entry.txData);
@@ -2188,50 +2195,13 @@ afterEach(async () => {
     }
   }
   openTxDataAccounts.length = 0;
-
-  // 2. Drain any remaining SOL from funded keypairs back to provider wallet.
-  //    Uses sendRawTransaction directly — provider.sendAndConfirm fails because
-  //    Anchor's provider tries to co-sign with the wallet, which isn't needed here.
-  const MIN_DRAIN = 5000;
-  let recovered = 0;
-  let drained = 0;
-  for (const kp of fundedKeypairs) {
-    try {
-      const balance = await provider.connection.getBalance(kp.publicKey);
-      if (balance <= MIN_DRAIN) continue;
-      const drainAmount = balance - MIN_DRAIN;
-      const drainTx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: kp.publicKey,
-          toPubkey: provider.wallet.publicKey,
-          lamports: drainAmount,
-        })
-      );
-      drainTx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
-      drainTx.feePayer = kp.publicKey;
-      drainTx.sign(kp);
-      const sig = await provider.connection.sendRawTransaction(drainTx.serialize());
-      await provider.connection.confirmTransaction(sig);
-      recovered += drainAmount;
-      drained++;
-    } catch {
-      // Best-effort — tx may fail if keypair was already drained
-    }
-  }
-  fundedKeypairs.length = 0;
-
-  const providerBalanceAfter = await provider.connection.getBalance(provider.wallet.publicKey);
-  const netCost = providerBalanceBefore - providerBalanceAfter;
-  console.log(
-    `    [sol] spent ${(netCost / LAMPORTS_PER_SOL).toFixed(4)}, ` +
-      `recovered ${(recovered / LAMPORTS_PER_SOL).toFixed(4)} ` +
-      `(${drained} keypairs), ` +
-      `wallet ${(providerBalanceAfter / LAMPORTS_PER_SOL).toFixed(4)} SOL`
-  );
 });
 
-// End-of-suite audit: exact breakdown of where SOL went.
+// End-of-suite: drain funded keypairs and audit SOL usage.
 after(async () => {
+  await drainKeypairs(provider, paFundedKeypairs, "pa-prototype");
+  paFundedKeypairs.length = 0;
+
   const suiteEndBalance = await provider.connection.getBalance(provider.wallet.publicKey);
   const totalSpent = suiteStartBalance - suiteEndBalance;
 

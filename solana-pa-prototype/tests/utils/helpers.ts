@@ -1,16 +1,13 @@
 import * as anchor from "@coral-xyz/anchor";
 import {
   Keypair,
+  PublicKey,
   LAMPORTS_PER_SOL,
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
 import { createHash } from "crypto";
 import { OP_WRAP, OP_UNWRAP } from "./constants";
-
-// Keypairs funded during tests, drained back to the provider wallet in
-// afterEach() so devnet SOL circulates across the test run.
-export const fundedKeypairs: Keypair[] = [];
 
 export async function airdrop(
   provider: anchor.AnchorProvider,
@@ -29,7 +26,47 @@ export async function airdrop(
     })
   );
   await provider.sendAndConfirm(tx);
-  fundedKeypairs.push(kp);
+}
+
+/**
+ * Drain funded keypairs back to the provider wallet.
+ * Call this in an after() hook to recover SOL on devnet.
+ */
+export async function drainKeypairs(
+  provider: anchor.AnchorProvider,
+  keypairs: Keypair[],
+  label: string
+) {
+  const MIN_DRAIN = 5000;
+  let recovered = 0;
+  let drained = 0;
+  for (const kp of keypairs) {
+    try {
+      const balance = await provider.connection.getBalance(kp.publicKey);
+      if (balance <= MIN_DRAIN) continue;
+      const drainAmount = balance - MIN_DRAIN;
+      const drainTx = new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: kp.publicKey,
+          toPubkey: provider.wallet.publicKey,
+          lamports: drainAmount,
+        })
+      );
+      drainTx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
+      drainTx.feePayer = kp.publicKey;
+      drainTx.sign(kp);
+      const sig = await provider.connection.sendRawTransaction(drainTx.serialize());
+      await provider.connection.confirmTransaction(sig);
+      recovered += drainAmount;
+      drained++;
+    } catch {
+      // Best-effort — tx may fail if keypair was already drained
+    }
+  }
+  console.log(
+    `  [sol] ${label}: recovered ${(recovered / LAMPORTS_PER_SOL).toFixed(4)} SOL ` +
+      `(${drained} keypairs)`
+  );
 }
 
 /**

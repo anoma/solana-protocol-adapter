@@ -19,6 +19,8 @@ import {
   SYSVAR_INSTRUCTIONS_PUBKEY,
   Ed25519Program,
   TransactionInstruction,
+  Transaction,
+  LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
 import {
   createMint,
@@ -55,7 +57,7 @@ import {
   deriveRouterAccounts,
 } from "./utils";
 import { readJson, Fixture } from "./utils";
-import { airdrop, createWrapMessageHash } from "./utils";
+import { airdrop, drainKeypairs, createWrapMessageHash } from "./utils";
 
 describe("SPL Token Forwarder PA Integration", function () {
   // Increase timeout for fixture-based tests
@@ -63,6 +65,12 @@ describe("SPL Token Forwarder PA Integration", function () {
 
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
+
+  const localFundedKeypairs: Keypair[] = [];
+  async function localAirdrop(kp: Keypair, sol: number) {
+    await airdrop(provider, kp, sol);
+    localFundedKeypairs.push(kp);
+  }
 
   const paProgram = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
   const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
@@ -138,7 +146,7 @@ describe("SPL Token Forwarder PA Integration", function () {
     // Initialize forwarder config if needed
     [forwarderConfigPda] = deriveForwarderConfigPda(forwarderProgram.programId);
     emergencyCommittee = Keypair.generate();
-    await airdrop(provider, emergencyCommittee.publicKey, 1);
+    await localAirdrop(emergencyCommittee, 1);
 
     try {
       await forwarderProgram.account.config.fetch(forwarderConfigPda);
@@ -173,7 +181,7 @@ describe("SPL Token Forwarder PA Integration", function () {
     const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
     const { routerPda, verifierEntryPda } = deriveRouterAccounts(verifierRouterId, GROTH16_SELECTOR);
 
-    await airdrop(provider, authority.publicKey, 2);
+    await localAirdrop(authority, 2);
 
     const uploadId = new anchor.BN(Date.now());
     const uploadIdLe = Buffer.alloc(8);
@@ -310,7 +318,7 @@ describe("SPL Token Forwarder PA Integration", function () {
       );
 
       // Airdrop for fees
-      await airdrop(provider, userPubkey, 2);
+      await localAirdrop(userKeypair, 2);
 
       // Create deterministic mint using the keypair from fixture
       // The 6th argument to createMint is the mint keypair
@@ -467,7 +475,7 @@ describe("SPL Token Forwarder PA Integration", function () {
       );
 
       // Airdrop for fees
-      await airdrop(provider, recipientKeypair.publicKey, 2);
+      await localAirdrop(recipientKeypair, 2);
 
       // Create deterministic mint using the keypair from fixture
       // Check if mint already exists (may have been created by wrap test running first)
@@ -564,5 +572,11 @@ describe("SPL Token Forwarder PA Integration", function () {
         "Recipient should receive unwrapped tokens"
       );
     });
+  });
+
+  // Drain funded keypairs back to the provider wallet so devnet SOL isn't lost.
+  after(async () => {
+    await drainKeypairs(provider, localFundedKeypairs, "02-forwarder-pa");
+    localFundedKeypairs.length = 0;
   });
 });
