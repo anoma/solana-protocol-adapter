@@ -67,7 +67,7 @@ pub enum Ed25519ParseError {
     PubkeyOutOfBounds,
     /// Message data is out of bounds
     MessageOutOfBounds,
-    /// Message size is not 32 bytes (SHA-256 hash)
+    /// Message size doesn't match expected wrap message length
     InvalidMessageSize,
     /// Pubkey doesn't match expected
     PubkeyMismatch,
@@ -167,7 +167,7 @@ pub fn validate_ed25519_data(
     ix_data: &[u8],
     offsets: &Ed25519Offsets,
     expected_pubkey: &[u8; 32],
-    expected_message: &[u8; 32],
+    expected_message: &[u8],
 ) -> core::result::Result<(), Ed25519ParseError> {
     // Validate signature bounds (64 bytes)
     if offsets.signature_offset + 64 > ix_data.len() {
@@ -193,15 +193,14 @@ pub fn validate_ed25519_data(
         return Err(Ed25519ParseError::MessageOutOfBounds);
     }
 
-    // The expected message is 32 bytes (SHA-256 hash)
-    if offsets.message_size != 32 {
+    // Message size must match the expected message
+    if offsets.message_size != expected_message.len() {
         return Err(Ed25519ParseError::InvalidMessageSize);
     }
 
     // Extract and verify message
-    let message_in_ix: &[u8; 32] = ix_data[offsets.message_offset..offsets.message_offset + 32]
-        .try_into()
-        .map_err(|_| Ed25519ParseError::MessageOutOfBounds)?;
+    let message_in_ix =
+        &ix_data[offsets.message_offset..offsets.message_offset + offsets.message_size];
 
     if message_in_ix != expected_message {
         return Err(Ed25519ParseError::MessageMismatch);
@@ -217,7 +216,7 @@ pub fn validate_ed25519_data(
 /// * `ix_sysvar` - The instructions sysvar account
 /// * `ix_index` - Index of the Ed25519 instruction in the transaction
 /// * `expected_pubkey` - The Ed25519 public key we expect (32 bytes)
-/// * `expected_message` - The message we expect to be signed (typically SHA-256 hash, 32 bytes)
+/// * `expected_message` - The message we expect to be signed (120 bytes wrap message)
 ///
 /// # Returns
 /// Ok(()) if verification passes, error otherwise.
@@ -225,7 +224,7 @@ pub fn verify_ed25519_instruction(
     ix_sysvar: &AccountInfo,
     ix_index: u8,
     expected_pubkey: &[u8; 32],
-    expected_message: &[u8; 32],
+    expected_message: &[u8],
 ) -> Result<()> {
     // Validate the instructions sysvar
     require_keys_eq!(*ix_sysvar.key, IX_SYSVAR_ID, ErrorCode::InvalidInput);

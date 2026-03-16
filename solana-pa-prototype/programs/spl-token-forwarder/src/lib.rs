@@ -442,16 +442,43 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     }
     debug_msg!("  nonce {} not used", wrap_input.nonce);
 
-    // Verify Ed25519 signature via instruction introspection
-    // Include program ID in message for domain separation (mirrors EIP-712)
+    // Verify Ed25519 signature via instruction introspection.
+    // The user signs base64(sha256(120-byte WrapMessage)) — 44 bytes of valid UTF-8.
+    // Wallets reject raw binary in signMessage as a potential transaction.
+    // Base64 is compact (+12 bytes over raw hash) and fits in tx limits.
+    // Include program ID in message for domain separation (mirrors EIP-712).
     let message = wrap_input.to_message(ctx.program_id);
     let message_hash = message.hash();
+
+    // Base64-encode the 32-byte hash → 44 bytes of ASCII text.
+    // Standard base64: each 3 bytes → 4 chars, 32 bytes → ceil(32/3)*4 = 44 chars.
+    const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut b64_bytes = [0u8; 44];
+    let mut si = 0;
+    let mut di = 0;
+    while si + 2 < 32 {
+        let (a, b, c) = (message_hash[si] as u32, message_hash[si + 1] as u32, message_hash[si + 2] as u32);
+        let triple = (a << 16) | (b << 8) | c;
+        b64_bytes[di] = BASE64[((triple >> 18) & 0x3F) as usize];
+        b64_bytes[di + 1] = BASE64[((triple >> 12) & 0x3F) as usize];
+        b64_bytes[di + 2] = BASE64[((triple >> 6) & 0x3F) as usize];
+        b64_bytes[di + 3] = BASE64[(triple & 0x3F) as usize];
+        si += 3;
+        di += 4;
+    }
+    // Handle last 2 bytes (32 = 10*3 + 2): 2 remaining bytes → 3 chars + '='
+    let (a, b) = (message_hash[si] as u32, message_hash[si + 1] as u32);
+    let triple = (a << 16) | (b << 8);
+    b64_bytes[di] = BASE64[((triple >> 18) & 0x3F) as usize];
+    b64_bytes[di + 1] = BASE64[((triple >> 12) & 0x3F) as usize];
+    b64_bytes[di + 2] = BASE64[((triple >> 6) & 0x3F) as usize];
+    b64_bytes[di + 3] = b'=';
 
     ed25519::verify_ed25519_instruction(
         &ctx.accounts.ix_sysvar,
         wrap_input.ed25519_ix_index,
         &wrap_input.user.to_bytes(),
-        &message_hash,
+        &b64_bytes,
     )?;
     debug_msg!("  signature verified");
 
