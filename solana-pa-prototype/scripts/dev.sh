@@ -191,15 +191,16 @@ PYEOF
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
     echo ""
     echo "Devnet commands:"
-    echo "  devnet deploy [pa|btf|all]    First-time deploy to devnet"
-    echo "  devnet upgrade [pa|btf|all]   Rebuild + deploy over existing programs"
-    echo "  devnet teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent"
+    echo "  devnet deploy [pa|btf|anomapay-forwarder|all]   First-time deploy to devnet"
+    echo "  devnet upgrade [pa|btf|anomapay-forwarder|all]  Rebuild + deploy over existing programs"
+    echo "  devnet teardown [pa|btf|anomapay-forwarder|all] PERMANENT: close programs, reclaim rent"
     echo "  devnet close-pdas            Close all PA PDA accounts, reclaim rent"
     echo "  devnet close-pa-state        Close only PAState (for re-init after upgrade)"
-    echo "  devnet test                   Run integration tests against devnet"
-    echo "  devnet init                   Initialize PA state (idempotent)"
-    echo "  devnet status                 Show deployment status + wallet balance"
-    echo "  devnet balance                Show wallet address and balance"
+    echo "  devnet test                             Run integration tests against devnet"
+    echo "  devnet init                             Initialize PA state (idempotent)"
+    echo "  devnet init-forwarder <mint>            Initialize forwarder + escrow for token"
+    echo "  devnet status                           Show deployment status + wallet balance"
+    echo "  devnet balance                          Show wallet address and balance"
     exit 1
     ;;
 

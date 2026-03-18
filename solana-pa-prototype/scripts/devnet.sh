@@ -13,6 +13,7 @@ DEVNET_WALLET="${PROJECT_DIR}/scripts/devnet-wallet.json"
 declare -A PROGRAMS=(
   [pa]="solana_pa_prototype"
   [btf]="block_time_forwarder"
+  [anomapay-forwarder]="spl_token_forwarder"
 )
 
 # Programs that need post-deploy initialization
@@ -136,6 +137,21 @@ init_pa() {
     npx ts-node "${SCRIPT_DIR}/devnet-init-pa.ts"
 }
 
+init_forwarder() {
+  local token_mint="${1:?TOKEN_MINT is required (base58 mint address)}"
+
+  echo "Initializing forwarder (idempotent)..."
+
+  # TOKEN_TRANSFER_ID from transfer_library — must match the backend.
+  local logic_ref="8bceee49ac4646f7bf1ba20be658be5ab5699ce5cab58004f44efaa900717384"
+
+  ANCHOR_PROVIDER_URL="$DEVNET_URL" \
+  ANCHOR_WALLET="$DEVNET_WALLET" \
+  LOGIC_REF="$logic_ref" \
+  TOKEN_MINT="$token_mint" \
+    npx ts-node "${SCRIPT_DIR}/devnet-init-forwarder.ts"
+}
+
 # Resolve target list from user argument.
 # Returns space-separated shorthand names (e.g. "pa btf").
 resolve_targets() {
@@ -144,12 +160,12 @@ resolve_targets() {
     all)
       echo "${!PROGRAMS[*]}"
       ;;
-    pa|btf)
+    pa|btf|anomapay-forwarder)
       echo "$target"
       ;;
     *)
       echo "❌ Unknown target: ${target}" >&2
-      echo "Valid targets: pa, btf, all" >&2
+      echo "Valid targets: pa, btf, anomapay-forwarder, all" >&2
       exit 1
       ;;
   esac
@@ -163,8 +179,9 @@ estimate_balance_needed() {
   local total=0
   for t in $targets; do
     case "$t" in
-      pa)  total=$(awk "BEGIN{print $total + 5}") ;;
-      btf) total=$(awk "BEGIN{print $total + 2}") ;;
+      pa)        total=$(awk "BEGIN{print $total + 5}") ;;
+      btf)       total=$(awk "BEGIN{print $total + 2}") ;;
+      anomapay-forwarder) total=$(awk "BEGIN{print $total + 3}") ;;
     esac
   done
   echo "$total"
@@ -423,6 +440,34 @@ cmd_init() {
   init_pa
 }
 
+cmd_init_forwarder() {
+  local token_mint="${1:-}"
+  if [[ -z "$token_mint" ]]; then
+    echo "❌ TOKEN_MINT argument is required"
+    echo "Usage: devnet.sh init-forwarder <token_mint>"
+    echo "Example: devnet.sh init-forwarder 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+    exit 1
+  fi
+
+  require_cmd solana
+  require_cmd solana-keygen
+  require_cmd npx
+
+  cd "$PROJECT_DIR"
+
+  require_devnet_wallet
+
+  local pid
+  pid="$(get_program_id "spl_token_forwarder")"
+  if ! is_deployed "$pid"; then
+    echo "❌ Forwarder (${pid}) is not deployed on devnet"
+    echo "Run: ./scripts/dev.sh devnet deploy anomapay-forwarder"
+    exit 1
+  fi
+
+  init_forwarder "$token_mint"
+}
+
 cmd_balance() {
   require_cmd solana
   require_cmd solana-keygen
@@ -459,6 +504,9 @@ case "${1:-}" in
   init)
     cmd_init
     ;;
+  init-forwarder)
+    cmd_init_forwarder "${2:-}"
+    ;;
   balance)
     cmd_balance
     ;;
@@ -472,15 +520,16 @@ case "${1:-}" in
     echo "Usage: devnet.sh <command> [target]"
     echo ""
     echo "Commands:"
-    echo "  deploy [pa|btf|all]      First-time deploy to devnet (default: all)"
-    echo "  upgrade [pa|btf|all]     Rebuild + deploy over existing programs"
-    echo "  teardown [pa|btf|all]    PERMANENT: close programs, reclaim rent"
+    echo "  deploy [pa|btf|anomapay-forwarder|all]   First-time deploy to devnet (default: all)"
+    echo "  upgrade [pa|btf|anomapay-forwarder|all]  Rebuild + deploy over existing programs"
+    echo "  teardown [pa|btf|anomapay-forwarder|all] PERMANENT: close programs, reclaim rent"
     echo "  close-pdas               Close all PA PDA accounts, reclaim rent"
     echo "  close-pa-state           Close only PAState (for re-init after upgrade)"
-    echo "  test                     Run integration tests against devnet"
-    echo "  init                     Initialize PA state (idempotent)"
-    echo "  status                   Show deployment status + wallet balance"
-    echo "  balance                  Show wallet address and balance"
+    echo "  test                            Run integration tests against devnet"
+    echo "  init                            Initialize PA state (idempotent)"
+    echo "  init-forwarder <mint>           Initialize forwarder + escrow for token mint"
+    echo "  status                          Show deployment status + wallet balance"
+    echo "  balance                         Show wallet address and balance"
     exit 1
     ;;
 esac
