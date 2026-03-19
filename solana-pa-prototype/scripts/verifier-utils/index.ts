@@ -3,8 +3,8 @@
 
 import { PublicKey } from "@solana/web3.js";
 
-export const VERIFIER_ROUTER_ID = new PublicKey("BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg");
-export const GROTH16_VERIFIER_ID = new PublicKey("2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD");
+export const VERIFIER_ROUTER_ID = new PublicKey("Gh6PcNHqUjCzycGYbCUnjELthWgiCJSJD7GHMXWM5wUJ");
+export const GROTH16_VERIFIER_ID = new PublicKey("AZBNqidSdMKPtrvXaZrqTkFoCJfmkJPQjjvE84Je4mX8");
 
 export function getRouterPda(routerProgramId: PublicKey = VERIFIER_ROUTER_ID): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
