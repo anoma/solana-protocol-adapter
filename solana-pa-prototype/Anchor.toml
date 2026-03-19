@@ -6,12 +6,13 @@ skip-lint = false
 block_time_forwarder = "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
 solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
 test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
+spl_token_forwarder = "3cLKSYBijunpCc2F2gzizUkhYtyFrLr4RVdNiaK79b48"
 
 [programs.localnet]
 block_time_forwarder = "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
 solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
 test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
-spl_token_forwarder = "6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1"
+spl_token_forwarder = "3cLKSYBijunpCc2F2gzizUkhYtyFrLr4RVdNiaK79b48"
 
 [provider]
 cluster = "localnet"

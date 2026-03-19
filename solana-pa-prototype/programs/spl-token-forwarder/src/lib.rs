@@ -50,7 +50,7 @@ mod tests;
 pub use error::ErrorCode;
 pub use state::*;
 
-declare_id!("6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1");
+declare_id!("3cLKSYBijunpCc2F2gzizUkhYtyFrLr4RVdNiaK79b48");
 
 // =============================================================================
 // Events (mirrors EVM: Wrapped, Unwrapped events)

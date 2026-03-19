@@ -13,20 +13,28 @@
  *   LOGIC_REF            - 32-byte hex logic ref for authorized transfer logic (required)
  *   TOKEN_MINT           - SPL token mint address for escrow ATA (required)
  *
- * Usage:
- *   ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
- *   ANCHOR_WALLET=scripts/devnet-wallet.json \
- *   LOGIC_REF=8bceee49ac4646f7bf1ba20be658be5ab5699ce5cab58004f44efaa900717384 \
- *   TOKEN_MINT=4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU \
- *   npx ts-node -P tsconfig.json scripts/devnet-init-forwarder.ts
+ * Reads program IDs from keypair files in target/deploy/ rather than Anchor.toml,
+ * so it works regardless of the [provider] cluster setting.
  */
 import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import { getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
-import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
-import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
+import { readFileSync } from "fs";
+import path from "path";
 import { deriveConfigPda, deriveEscrowPda } from "../tests/utils/pda";
+
+// Read program ID from keypair file (same method as devnet.sh get_program_id)
+function loadProgramId(name: string): PublicKey {
+  const keypairPath = path.resolve(
+    __dirname,
+    "..",
+    "target",
+    "deploy",
+    `${name}-keypair.json`
+  );
+  const keypairData = JSON.parse(readFileSync(keypairPath, "utf8"));
+  return Keypair.fromSecretKey(Uint8Array.from(keypairData)).publicKey;
+}
 
 async function main() {
   const provider = anchor.AnchorProvider.env();
@@ -35,10 +43,23 @@ async function main() {
   const wallet = provider.wallet as anchor.Wallet;
   const connection = provider.connection;
 
-  const paProgram = anchor.workspace
-    .SolanaPaPrototype as Program<SolanaPaPrototype>;
-  const forwarderProgram = anchor.workspace
-    .SplTokenForwarder as Program<SplTokenForwarder>;
+  const paProgramId = loadProgramId("solana_pa_prototype");
+  const forwarderProgramId = loadProgramId("spl_token_forwarder");
+
+  // Load the forwarder IDL and construct a Program manually.
+  // We can't use anchor.workspace because it resolves program IDs from
+  // Anchor.toml's [provider] cluster, which may not match the deployed keypair.
+  const forwarderIdlPath = path.resolve(
+    __dirname,
+    "..",
+    "target",
+    "idl",
+    "spl_token_forwarder.json"
+  );
+  const forwarderIdl = JSON.parse(readFileSync(forwarderIdlPath, "utf8"));
+  // Override the program address in the IDL to match the deployed keypair
+  forwarderIdl.address = forwarderProgramId.toBase58();
+  const forwarderProgram = new anchor.Program(forwarderIdl, provider);
 
   // Require LOGIC_REF
   const logicRefHex = process.env.LOGIC_REF;
@@ -61,20 +82,24 @@ async function main() {
 
   console.log("Wallet:    ", wallet.publicKey.toBase58());
   console.log("RPC:       ", connection.rpcEndpoint);
-  console.log("PA:        ", paProgram.programId.toBase58());
-  console.log("Forwarder: ", forwarderProgram.programId.toBase58());
+  console.log("PA:        ", paProgramId.toBase58());
+  console.log("Forwarder: ", forwarderProgramId.toBase58());
   console.log("Token mint:", tokenMint.toBase58());
 
   // 1. Initialize forwarder config (idempotent)
-  const [configPda] = deriveConfigPda(forwarderProgram.programId);
+  const [configPda] = deriveConfigPda(forwarderProgramId);
   try {
-    await forwarderProgram.account.config.fetch(configPda);
-    console.log("Forwarder already initialized");
+    const configAccount = await connection.getAccountInfo(configPda);
+    if (configAccount) {
+      console.log("Forwarder already initialized");
+    } else {
+      throw new Error("not found");
+    }
   } catch {
     console.log("Initializing forwarder...");
     await forwarderProgram.methods
       .initialize(
-        paProgram.programId,
+        paProgramId,
         Array.from(logicRef),
         wallet.publicKey // emergency committee = deployer wallet
       )
@@ -86,7 +111,7 @@ async function main() {
   }
 
   // 2. Create escrow ATA for the token mint (idempotent)
-  const [escrowPda] = deriveEscrowPda(forwarderProgram.programId, tokenMint);
+  const [escrowPda] = deriveEscrowPda(forwarderProgramId, tokenMint);
   const escrowAta = await getOrCreateAssociatedTokenAccount(
     connection,
     wallet.payer,

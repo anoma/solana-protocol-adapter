@@ -146,10 +146,11 @@ init_forwarder() {
   local logic_ref="8bceee49ac4646f7bf1ba20be658be5ab5699ce5cab58004f44efaa900717384"
 
   ANCHOR_PROVIDER_URL="$DEVNET_URL" \
+  ANCHOR_PROVIDER_CLUSTER=devnet \
   ANCHOR_WALLET="$DEVNET_WALLET" \
   LOGIC_REF="$logic_ref" \
   TOKEN_MINT="$token_mint" \
-    npx ts-node "${SCRIPT_DIR}/devnet-init-forwarder.ts"
+    npx ts-node -P tsconfig.json "${SCRIPT_DIR}/devnet-init-forwarder.ts"
 }
 
 # Resolve target list from user argument.
