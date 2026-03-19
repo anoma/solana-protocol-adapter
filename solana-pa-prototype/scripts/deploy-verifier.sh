@@ -234,9 +234,18 @@ Estimated cost: ~3.7 SOL (router ~2.2 + groth16 ~1.4 + fees)"
   sed -i "s|^cluster = .*|cluster = \"${NETWORK}\"|" "$anchor_toml"
   sed -i "s|^wallet = .*|wallet = \"${WALLET}\"|" "$anchor_toml"
 
+  # Delete old keypairs to force new program IDs.
+  # The router is deployed with --final (non-upgradeable), so old IDs
+  # cannot be reused after a failed or previous deployment.
+  rm -f "${VERIFIER_DIR}/target/deploy/verifier_router-keypair.json"
+  rm -f "${VERIFIER_DIR}/target/deploy/groth_16_verifier-keypair.json"
+
   # Run the risc0-solana deploy script
+  # INITIAL_OWNER must be set at build time — the router program embeds
+  # it as a const and checks it during initialize().
   (
     cd "$VERIFIER_DIR"
+    INITIAL_OWNER="$pubkey" \
     RPC="$RPC_URL" \
     RPC_SUBSCRIPTION="$RPC_WS" \
     KEY_PAIR_FILE="$WALLET" \

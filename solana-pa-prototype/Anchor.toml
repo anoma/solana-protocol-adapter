@@ -24,19 +24,19 @@ url = "https://api.devnet.solana.com"
 
 # Verifier Router Program
 [[test.validator.clone]]
-address = "Gh6PcNHqUjCzycGYbCUnjELthWgiCJSJD7GHMXWM5wUJ"
+address = "595BRy1i9be8TWQNpmd4jUcaRzrQ9JV3fCM4efvrN8xG"
 
 # Groth16 Verifier Program
 [[test.validator.clone]]
-address = "AZBNqidSdMKPtrvXaZrqTkFoCJfmkJPQjjvE84Je4mX8"
+address = "5oU8BusYfNSQyiDk26KGa54oBQSXACHcT9fsbLvxrS8W"
 
 # Router PDA (initialized state)
 [[test.validator.clone]]
-address = "5rcmGegEjvAywVCwLzbfHi8fBpH9fEiuQWZRwmUXEw7V"
+address = "7UwV87rvuhF1hFGdRKh8tsTKP5to6q4mavSiDHM6aeEf"
 
 # Verifier Entry PDA (groth16 selector 0x73c457ba registered)
 [[test.validator.clone]]
-address = "AHtTjeeaLbVLuP3dhkGXRP57Vkp7zoDGHSccHxDWS7en"
+address = "4egZC2TLC5tqd6h6tZyCkmbH5GWPrKxeuicyyfULnXLv"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
