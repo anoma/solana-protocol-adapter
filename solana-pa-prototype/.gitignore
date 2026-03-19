@@ -11,8 +11,9 @@ dist/
 # Proptest regression files
 proptest-regressions/
 
-# Devnet wallet (contains private keys)
+# Wallet keypairs (contain private keys)
 scripts/devnet-wallet.json
+scripts/mainnet-wallet.json
 
 # Cache for downloaded devnet programs
 .cache/

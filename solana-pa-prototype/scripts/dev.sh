@@ -88,6 +88,11 @@ case "${1:-}" in
     run_in_project "./scripts/devnet.sh $*"
     ;;
 
+  mainnet)
+    shift
+    run_in_project "./scripts/mainnet.sh $*"
+    ;;
+
   coverage)
     echo "Building test binaries..."
     BUILD_JSON=$(run_in_project "cargo test -p solana-pa-prototype -p block-time-forwarder --no-run --message-format=json 2>/dev/null")
