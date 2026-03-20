@@ -2,6 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
+import { VERIFIER_ROUTER_ID } from "./verifier-utils";
 
 const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
   "cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06",
@@ -36,12 +37,18 @@ async function main() {
     // Not initialized yet — proceed
   }
 
+  const verifierRouter = process.env.VERIFIER_ROUTER_PROGRAM
+    ? new PublicKey(process.env.VERIFIER_ROUTER_PROGRAM)
+    : VERIFIER_ROUTER_ID;
+  const proofSelector = [0x73, 0xc4, 0x57, 0xba];
+
   console.log("Initializing PA...");
   console.log(`  PAState PDA: ${paState.toBase58()}`);
   console.log(`  Genesis root marker: ${genesisRootMarkerPda.toBase58()}`);
+  console.log(`  Verifier router: ${verifierRouter.toBase58()}`);
 
   await program.methods
-    .initialize()
+    .initialize(verifierRouter, proofSelector)
     .remainingAccounts([
       { pubkey: genesisRootMarkerPda, isWritable: true, isSigner: false },
     ])

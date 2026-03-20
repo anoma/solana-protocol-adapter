@@ -189,7 +189,7 @@ fn decode_base58_32(s: &str) -> Result<[u8; 32]> {
 }
 
 fn test_forwarder_program_id() -> Result<[u8; 32]> {
-    decode_base58_32("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD")
+    decode_base58_32("55DmeHNKT2adP2UVitfZwugSmsDzdUQUmkcbRzwXqqAN")
 }
 
 fn validate_selector(selector: &str) -> Result<()> {
@@ -284,7 +284,7 @@ fn validate_fixture_file(path: &PathBuf, expected_program_id: [u8; 32]) -> Resul
 
 fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
     // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-    let program_id = decode_base58_32("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf")?;
+    let program_id = decode_base58_32("YzkzvRbPvEjKTRaUuxHjuGsi5Sm6A75dXVJoAhhBtHA")?;
 
     // Use -1 so expected_time < current_time for any reasonable cluster clock.
     // The forwarder will return RESULT_LT (0x00).
@@ -346,7 +346,7 @@ fn test_forwarder_output_account_payload_blob(
 }
 
 
-const SPL_TOKEN_FORWARDER_PROGRAM_ID: &str = "6cMwWUEoTnj8ManPCwAtXw5vdnp16mQKfUTdbxLNszN1";
+const SPL_TOKEN_FORWARDER_PROGRAM_ID: &str = "DuBnfWgTVCfFYcjZGakNTd2A7zFX6X4eAEDxVAkRrZCD";
 
 fn sha256_hash(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -388,7 +388,11 @@ fn spl_token_forwarder_wrap_external_payload(
     message.extend_from_slice(action_tree_root_bytes);
 
     let message_hash = sha256_hash(&message);
-    let signature = signing_key.sign(&message_hash);
+    // The on-chain forwarder base64-encodes the hash before comparing to the
+    // Ed25519 instruction's message. The Ed25519 program verifies the signature
+    // against the instruction's message. So the signature must be over base64(hash).
+    let b64_message = BASE64.encode(message_hash);
+    let signature = signing_key.sign(b64_message.as_bytes());
     let signature_bytes = signature.to_bytes();
 
     // Logic ref must match what's in the transaction (PASSTHROUGH_LOGIC_GUEST_ID)

@@ -13,7 +13,7 @@
 
 use anchor_lang::prelude::*;
 
-declare_id!("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD");
+declare_id!("55DmeHNKT2adP2UVitfZwugSmsDzdUQUmkcbRzwXqqAN");
 
 /// Mode bytes encoded in `instruction_data[0]` by fixture-gen.
 pub const MODE_FAIL: u8 = 0x00;

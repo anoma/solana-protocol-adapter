@@ -6,9 +6,9 @@ set -euo pipefail
 # This clones risc0-solana v3.0.0, builds both programs, deploys them,
 # initializes the router PDA, and registers the groth16 verifier.
 #
-# After deployment, update VERIFIER_ROUTER_ID in
-#   programs/solana-pa-prototype/src/lib.rs
-# with the new router program ID and rebuild the PA.
+# After deployment, pass the router program ID when initializing the PA:
+#   program.methods.initialize(verifierRouterPubkey, proofSelector)
+# The verifier router is stored in PAStateAccount (no recompilation needed).
 #
 # Usage:
 #   ./scripts/deploy-verifier.sh devnet          # deploy to devnet
@@ -56,7 +56,7 @@ case "$NETWORK" in
     echo "  status             Show deployed verifier program status"
     echo ""
     echo "This deploys the RISC0 verifier router and groth16 verifier programs."
-    echo "After deployment, update VERIFIER_ROUTER_ID in lib.rs and rebuild the PA."
+    echo "After deployment, pass the router ID when initializing the PA (stored in state, no rebuild needed)."
     exit 1
     ;;
 esac
@@ -273,18 +273,14 @@ Estimated cost: ~3.7 SOL (router ~2.2 + groth16 ~1.4 + fees)"
   echo ""
   echo "=== Next steps ==="
   echo ""
-  echo "1. Update VERIFIER_ROUTER_ID in programs/solana-pa-prototype/src/lib.rs:"
-  echo "   const VERIFIER_ROUTER_ID: Pubkey ="
-  echo "       anchor_lang::solana_program::pubkey!(\"${router_id}\");"
+  echo "1. Pass the verifier router when initializing the PA (no rebuild needed):"
+  echo "   VERIFIER_ROUTER_PROGRAM=${router_id} npx ts-node scripts/devnet-init-pa.ts"
   echo ""
-  echo "2. Rebuild and redeploy the PA:"
-  echo "   ./scripts/dev.sh ${NETWORK} upgrade pa"
-  echo ""
-  echo "3. Update validator-deploy.sh clone addresses (for localnet):"
+  echo "2. Update validator-deploy.sh clone addresses (for localnet):"
   echo "   VERIFIER_ROUTER=\"${router_id}\""
   echo "   GROTH16_VERIFIER=\"${groth16_id}\""
   echo ""
-  echo "4. Update scripts/verifier-utils/index.ts:"
+  echo "3. Update scripts/verifier-utils/index.ts:"
   echo "   export const VERIFIER_ROUTER_ID = new PublicKey(\"${router_id}\");"
   echo "   export const GROTH16_VERIFIER_ID = new PublicKey(\"${groth16_id}\");"
 }

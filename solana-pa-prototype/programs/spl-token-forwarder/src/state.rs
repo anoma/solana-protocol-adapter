@@ -57,8 +57,8 @@ pub struct Config {
 pub const PA_STATE_SEED: &[u8] = b"pa_state";
 
 /// Offset of the `paused` field in PAStateAccount (after 8-byte discriminator).
-/// Layout: discriminator(8) + bump(1) + authority(32) + paused(1)
-pub const PA_PAUSED_OFFSET: usize = 8 + 1 + 32;
+/// Layout: discriminator(8) + bump(1) + authority(32) + verifier_router(32) + proof_selector(4) + paused(1)
+pub const PA_PAUSED_OFFSET: usize = 8 + 1 + 32 + 32 + 4;
 
 /// Check if the Protocol Adapter is emergency stopped by reading its state account.
 ///

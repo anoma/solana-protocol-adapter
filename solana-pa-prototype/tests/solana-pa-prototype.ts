@@ -66,10 +66,10 @@ const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
 const { routerPda, verifierEntryPda } = deriveRouterAccounts(VERIFIER_ROUTER_ID, GROTH16_SELECTOR);
 
 // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-const blockTimeForwarderId = new PublicKey("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf");
+const blockTimeForwarderId = new PublicKey("YzkzvRbPvEjKTRaUuxHjuGsi5Sm6A75dXVJoAhhBtHA");
 
 // Must match `programs/test-forwarder/src/lib.rs::declare_id!`.
-const testForwarderId = new PublicKey("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD");
+const testForwarderId = new PublicKey("55DmeHNKT2adP2UVitfZwugSmsDzdUQUmkcbRzwXqqAN");
 
 function deriveRootPda(root: Buffer): PublicKey {
   return PublicKey.findProgramAddressSync(

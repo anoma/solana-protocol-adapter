@@ -131,7 +131,7 @@ describe("SPL Token Forwarder PA Integration", function () {
       await paProgram.account.paStateAccount.fetch(paState);
     } catch {
       await paProgram.methods
-        .initialize()
+        .initialize(verifierRouterId, Array.from(GROTH16_SELECTOR))
         .accounts({
           paState,
           payer: provider.wallet.publicKey,
@@ -372,8 +372,10 @@ describe("SPL Token Forwarder PA Integration", function () {
       // Nonce bitmap PDA (Permit2-style: each PDA stores 256 nonces)
       const [nonceBitmapPda] = localDeriveNonceBitmapPda(userPubkey, nonce);
 
-      // Create Ed25519 verify instruction with the fixture's signature
-      // The signature was computed over: SHA256(forwarder_id || mint || amount || nonce || deadline || action_tree_root)
+      // Create Ed25519 verify instruction with the fixture's signature.
+      // The on-chain forwarder base64-encodes the hash before comparing to the
+      // Ed25519 instruction's message, so both the instruction and the signature
+      // must use base64(hash), not the raw hash.
       const messageHash = createWrapMessageHash(
         forwarderProgram.programId,
         mint,
@@ -382,9 +384,10 @@ describe("SPL Token Forwarder PA Integration", function () {
         deadline,
         actionTreeRoot
       );
+      const b64Message = Buffer.from(messageHash.toString("base64"));
       const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
         publicKey: userPubkey.toBytes(),
-        message: messageHash,
+        message: b64Message,
         signature: signature,
       });
 

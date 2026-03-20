@@ -197,22 +197,21 @@ sync_program_ids() {
     "programs/test-forwarder/src/lib.rs" \
     "test_forwarder")"
 
-  STF_ID="$(read_declare_id "programs/spl-token-forwarder/src/lib.rs")"
-  if [[ -z "$STF_ID" ]]; then
-    echo "    Failed to read spl_token_forwarder declare_id"
-    exit 1
-  fi
-  if ! grep -qE "^spl_token_forwarder = \"${STF_ID}\"$" Anchor.toml; then
-    echo "    Syncing spl_token_forwarder program ID in Anchor.toml to ${STF_ID}"
-    sed -i -E "s/^spl_token_forwarder = \"[^\"]+\"$/spl_token_forwarder = \"${STF_ID}\"/" Anchor.toml
-  fi
-  echo "    spl_token_forwarder program ID: $STF_ID"
+  STF_OLD="$(read_declare_id "programs/spl-token-forwarder/src/lib.rs")"
+  STF_ID="$(sync_program_id "spl_token_forwarder" \
+    "target/deploy/spl_token_forwarder-keypair.json" \
+    "programs/spl-token-forwarder/src/lib.rs" \
+    "spl_token_forwarder")"
 
   # TF ID also appears in fixture-gen and integration tests
   if [[ "$TF_OLD" != "$TF_ID" ]]; then
     sed -i -E "s/decode_base58_32\(\"${TF_OLD}\"\)/decode_base58_32(\"${TF_ID}\")/" tools/fixture-gen/src/main.rs
     sed -i -E "s/testForwarderId = new PublicKey\(\"[^\"]+\"\)/testForwarderId = new PublicKey(\"${TF_ID}\")/" tests/solana-pa-prototype.ts
   fi
+
+  # STF ID also appears in fixture-gen and test constants — always sync to keypair
+  sed -i -E "s/SPL_TOKEN_FORWARDER_PROGRAM_ID: \&str = \"[^\"]+\"/SPL_TOKEN_FORWARDER_PROGRAM_ID: \&str = \"${STF_ID}\"/" tools/fixture-gen/src/main.rs
+  sed -i -E "s/SPL_TOKEN_FORWARDER_PROGRAM_ID = new PublicKey\(\"[^\"]+\"\)/SPL_TOKEN_FORWARDER_PROGRAM_ID = new PublicKey(\"${STF_ID}\")/" tests/utils/constants.ts
 }
 
 build_programs() {
@@ -224,17 +223,40 @@ build_programs() {
   echo "    Building programs..."
   build_with_filtered_output anchor build
 
-  REQUIRED_FIXTURE="tests/fixtures/batch_groth16.json"
-  OPTIONAL_MISMATCH_FIXTURE="tests/fixtures/batch_groth16_mismatch.json"
-  ensure_fixture_matches_program "$REQUIRED_FIXTURE" "$BTF_ID" "Batch Groth16"
-  if [[ -f "$OPTIONAL_MISMATCH_FIXTURE" ]]; then
-    ensure_fixture_matches_program "$OPTIONAL_MISMATCH_FIXTURE" "$BTF_ID" "Batch Groth16 mismatch" "--output-mismatch"
+  # Validate and regenerate all fixtures that embed program IDs.
+  # Block-time-forwarder fixtures (BTF_ID)
+  ensure_fixture_matches_program "tests/fixtures/batch_groth16.json" "$BTF_ID" "Batch Groth16"
+  if [[ -f "tests/fixtures/batch_groth16_mismatch.json" ]]; then
+    ensure_fixture_matches_program "tests/fixtures/batch_groth16_mismatch.json" "$BTF_ID" "Batch Groth16 mismatch" "--output-mismatch"
+  fi
+  if [[ -f "tests/fixtures/batch_groth16_v2.json" ]]; then
+    ensure_fixture_matches_program "tests/fixtures/batch_groth16_v2.json" "$BTF_ID" "Batch Groth16 v2" "--nonce-seed" "3"
+  fi
+  if [[ -f "tests/fixtures/batch_groth16_v3.json" ]]; then
+    ensure_fixture_matches_program "tests/fixtures/batch_groth16_v3.json" "$BTF_ID" "Batch Groth16 v3" "--nonce-seed" "4"
+  fi
+  if [[ -f "tests/fixtures/batch_groth16_multi_call.json" ]]; then
+    ensure_fixture_matches_program "tests/fixtures/batch_groth16_multi_call.json" "$BTF_ID" "Batch Groth16 multi-call" "--nonce-seed" "5" "--multi-external-call"
   fi
 
-  SPL_WRAP_FIXTURE="tests/fixtures/spl_token_wrap.json"
-  SPL_UNWRAP_FIXTURE="tests/fixtures/spl_token_unwrap.json"
-  ensure_fixture_matches_program "$SPL_WRAP_FIXTURE" "$STF_ID" "SPL wrap" "--spl-token-wrap"
-  ensure_fixture_matches_program "$SPL_UNWRAP_FIXTURE" "$STF_ID" "SPL unwrap" "--spl-token-unwrap"
+  # Test-forwarder fixtures (TF_ID)
+  if [[ -f "tests/fixtures/batch_forwarder_fail.json" ]]; then
+    ensure_fixture_matches_program "tests/fixtures/batch_forwarder_fail.json" "$TF_ID" "Forwarder fail" "--nonce-seed" "6" "--forwarder-fail"
+  fi
+  if [[ -f "tests/fixtures/batch_forwarder_silent.json" ]]; then
+    ensure_fixture_matches_program "tests/fixtures/batch_forwarder_silent.json" "$TF_ID" "Forwarder silent" "--nonce-seed" "7" "--forwarder-silent"
+  fi
+  if [[ -f "tests/fixtures/batch_forwarder_output.json" ]]; then
+    ensure_fixture_matches_program "tests/fixtures/batch_forwarder_output.json" "$TF_ID" "Forwarder output" "--nonce-seed" "8" "--forwarder-output-account"
+  fi
+
+  # SPL Token Forwarder fixtures (STF_ID)
+  if [[ -f "tests/fixtures/spl_token_wrap.json" ]]; then
+    ensure_fixture_matches_program "tests/fixtures/spl_token_wrap.json" "$STF_ID" "SPL wrap" "--spl-token-wrap"
+  fi
+  if [[ -f "tests/fixtures/spl_token_unwrap.json" ]]; then
+    ensure_fixture_matches_program "tests/fixtures/spl_token_unwrap.json" "$STF_ID" "SPL unwrap" "--spl-token-unwrap"
+  fi
 }
 
 start_validator() {

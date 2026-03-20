@@ -42,6 +42,7 @@ import {
   deriveEscrowPda,
 } from "../tests/utils/pda";
 import { EMPTY_TREE_ROOT_INITIAL } from "../tests/utils/constants";
+import { VERIFIER_ROUTER_ID } from "./verifier-utils";
 
 async function main() {
   const provider = anchor.AnchorProvider.env();
@@ -73,19 +74,25 @@ async function main() {
   }
 
   // 2. Initialize PA (idempotent)
+  const verifierRouter = process.env.VERIFIER_ROUTER_PROGRAM
+    ? new PublicKey(process.env.VERIFIER_ROUTER_PROGRAM)
+    : VERIFIER_ROUTER_ID;
+  const proofSelector = [0x73, 0xc4, 0x57, 0xba];
+
   const [paStatePda] = derivePaStatePda(paProgram.programId);
   try {
     await paProgram.account.paStateAccount.fetch(paStatePda);
     console.log("PA already initialized");
   } catch {
     console.log("Initializing PA...");
+    console.log("  Verifier router:", verifierRouter.toBase58());
     const genesisRootMarkerPda = deriveRootMarkerPda(
       paStatePda,
       EMPTY_TREE_ROOT_INITIAL,
       paProgram.programId
     );
     await paProgram.methods
-      .initialize()
+      .initialize(verifierRouter, proofSelector)
       .accounts({
         paState: paStatePda,
         payer: wallet.publicKey,
