@@ -389,7 +389,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     } catch {
       // Initialize with genesis root marker in remaining_accounts
       await program.methods
-        .initialize()
+        .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
         .accounts({
           paState,
           payer: provider.wallet.publicKey,
@@ -436,8 +436,8 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   });
 
   it("account size matches expected size for current depth (no over-allocation)", async () => {
-    // Space formula: BASE_SPACE (99) + VEC_OVERHEAD (4) + 32 * depth
-    const BASE_SPACE = 99;
+    // Space formula: BASE_SPACE (135) + VEC_OVERHEAD (4) + 32 * depth
+    const BASE_SPACE = 135;
     const VEC_OVERHEAD = 4;
     const spaceForDepth = (depth: number) => BASE_SPACE + VEC_OVERHEAD + 32 * depth;
 
@@ -598,7 +598,7 @@ describe("solana-pa-prototype (Re-initialization guard)", () => {
 
     try {
       await program.methods
-        .initialize()
+        .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
         .accounts({
           paState,
           payer: provider.wallet.publicKey,
@@ -717,12 +717,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
         .rpc();
       assert.fail("expected wrong verifier_router_program to fail");
     } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        ADDRESS_MISMATCH_PATTERN,
-        `Expected ConstraintAddress, got: ${haystack}`
-      );
+      assertPAError(e, "VerifierRouterFailed");
     }
   });
 

@@ -13,7 +13,7 @@ fn tx_with_fake_aggregation_proof() -> Transaction {
 #[test]
 fn test_prepare_proof_accepts_batch_discriminant() {
     let tx = tx_with_fake_aggregation_proof();
-    let prepared = prepare_proof_for_verification(&tx).unwrap();
+    let prepared = prepare_proof_for_verification(&tx, FAKE_SELECTOR).unwrap();
     assert_eq!(prepared.image_id, BATCH_AGGREGATION_IMAGE_ID);
 }
 
@@ -21,22 +21,34 @@ fn test_prepare_proof_accepts_batch_discriminant() {
 fn test_prepare_proof_no_proof() {
     let mut tx = create_minimal_transaction();
     tx.aggregation_proof = None;
-    assert!(prepare_proof_for_verification(&tx).is_err());
+    assert!(prepare_proof_for_verification(&tx, FAKE_SELECTOR).is_err());
 }
 
 #[test]
 fn test_prepare_proof_invalid_bytes() {
     let mut tx = create_minimal_transaction();
     tx.aggregation_proof = Some(vec![0xFF, 0xFF, 0xFF]);
-    assert!(prepare_proof_for_verification(&tx).is_err());
+    assert!(prepare_proof_for_verification(&tx, FAKE_SELECTOR).is_err());
 }
 
 #[test]
 fn test_selector_extraction_from_aggregation_proof() {
     let tx = tx_with_fake_aggregation_proof();
-    let prepared = prepare_proof_for_verification(&tx).unwrap();
+    let prepared = prepare_proof_for_verification(&tx, FAKE_SELECTOR).unwrap();
     assert_eq!(
         prepared.seal.selector, FAKE_SELECTOR,
         "Selector should be extracted correctly"
     );
+}
+
+#[test]
+fn test_prepare_proof_rejects_wrong_selector() {
+    let tx = tx_with_fake_aggregation_proof();
+    let wrong_selector = [0x00, 0x00, 0x00, 0x00];
+    let result = prepare_proof_for_verification(&tx, wrong_selector);
+    match result {
+        Err(crate::error::PAError::InvalidProofSelector) => {}
+        Err(other) => panic!("Expected InvalidProofSelector, got {:?}", other),
+        Ok(_) => panic!("Expected error, got Ok"),
+    }
 }

@@ -12,6 +12,12 @@ pub struct PAStateAccount {
     pub bump: u8,
     /// Authority that can call emergency_stop.
     pub authority: Pubkey,
+    /// Verifier router program ID, set at initialization.
+    /// Mirrors EVM's immutable `_TRUSTED_RISC_ZERO_VERIFIER_ROUTER`.
+    pub verifier_router: Pubkey,
+    /// Expected proof selector (4 bytes), set at initialization.
+    /// Validated before sending proofs to the verifier router.
+    pub proof_selector: [u8; 4],
     /// One-way pause; requires upgrade to unpause.
     pub paused: bool,
     /// Cached tree root (updated on every append). Avoids recomputing from frontier.
@@ -26,9 +32,10 @@ pub struct PAStateAccount {
 }
 
 impl PAStateAccount {
-    /// discriminator(8) + bump(1) + authority(32) + paused(1) + root(32) +
+    /// discriminator(8) + bump(1) + authority(32) + verifier_router(32) +
+    /// proof_selector(4) + paused(1) + root(32) +
     /// next_index(8) + current_depth(1) + min_expiry_slots(8) + max_expiry_slots(8)
-    pub const BASE_SPACE: usize = 8 + 1 + 32 + 1 + 32 + 8 + 1 + 8 + 8;
+    pub const BASE_SPACE: usize = 8 + 1 + 32 + 32 + 4 + 1 + 32 + 8 + 1 + 8 + 8;
 
     pub const VEC_OVERHEAD: usize = 4;
 
