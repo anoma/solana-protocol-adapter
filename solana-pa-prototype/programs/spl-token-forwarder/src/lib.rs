@@ -13,6 +13,7 @@
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::{invoke_signed, set_return_data};
+use anchor_lang::solana_program::sysvar::instructions as ix_sysvar;
 
 // =============================================================================
 // Conditional Debug Logging
@@ -188,6 +189,23 @@ pub mod spl_token_forwarder {
         let config = &ctx.accounts.config;
 
         msg!("SPLTokenForwarder: forward_call invoked");
+
+        // Security: Verify this call came via CPI from the Protocol Adapter.
+        // The instructions sysvar stores only top-level instructions. During CPI,
+        // the current instruction index points to the outer (calling) instruction.
+        // If called directly, the program_id will be the forwarder itself — rejected.
+        // This mirrors EVM's msg.sender == _PROTOCOL_ADAPTER check.
+        let ix_sysvar_info = &ctx.accounts.ix_sysvar;
+        let current_ix_index = ix_sysvar::load_current_index_checked(ix_sysvar_info)
+            .map_err(|_| ErrorCode::UnauthorizedCaller)?;
+        let current_ix =
+            ix_sysvar::load_instruction_at_checked(current_ix_index as usize, ix_sysvar_info)
+                .map_err(|_| ErrorCode::UnauthorizedCaller)?;
+        require!(
+            current_ix.program_id == config.protocol_adapter,
+            ErrorCode::UnauthorizedCaller
+        );
+        debug_msg!("  CPI caller verified: {}", config.protocol_adapter);
 
         // Security: Only handle our specific logic_ref
         require!(
@@ -895,52 +913,29 @@ pub struct Initialize<'info> {
 
 /// Context for forward_call instruction.
 ///
-/// # Security Model: Caller Verification
+/// # Security Model: CPI Caller Verification
 ///
-/// **EVM comparison:** `msg.sender == _PROTOCOL_ADAPTER` proves the PA directly invoked the function.
+/// **EVM comparison:** `msg.sender == _PROTOCOL_ADAPTER` proves the PA directly invoked
+/// the function. EVM's `msg.sender` is unforgeable by the runtime.
 ///
-/// **Solana approach:** We verify `caller.key() == config.protocol_adapter`. This ensures:
+/// **Solana approach:** We use instruction introspection to verify the CPI caller.
+/// The instructions sysvar stores only top-level instructions. During CPI execution,
+/// `load_current_index_checked` returns the index of the outer (calling) instruction.
+/// We verify that instruction's program_id matches `config.protocol_adapter`.
 ///
-/// 1. **CPI Context:** When PA calls via CPI, PA passes its own account.
-///    The Anchor constraint rejects any other caller key.
-///
-/// 2. **Defense in Depth:** Even if a malicious actor bypassed caller verification:
-///    - **Wrap:** Requires valid Ed25519 signature from user over specific message
-///      (including forwarder_id for domain separation). Cannot be forged.
-///    - **Unwrap:** Only transfers from escrow to specified recipient. An attacker
-///      could only unwrap to themselves (self-harm, not theft).
-///
-/// 3. **Transaction Authority:** The caller account must be included in the transaction.
-///    For CPI, this means the PA program must be the invoking program.
-///
-/// **Why not instruction introspection?** For a simpler design, we rely on:
-/// - The pubkey match being sufficient for CPI context
-/// - Ed25519 signatures as the primary user authorization
-/// - The logic_ref check ensuring only authorized operations execute
-///
-/// **Production hardening:** For maximum security parity with EVM, consider adding
-/// instruction introspection to verify the calling program ID matches the PA.
+/// If `forward_call` is invoked directly (not via CPI), the current instruction's
+/// program_id will be the forwarder itself, causing the check to reject. This makes
+/// the check unforgeable — unlike a simple account key comparison, an attacker cannot
+/// pass the PA's public key as an AccountInfo to bypass verification.
 #[derive(Accounts)]
 pub struct ForwardCall<'info> {
-    /// The caller must be the Protocol Adapter.
-    ///
-    /// On Solana, this verifies the account key matches config.protocol_adapter.
-    /// Combined with CPI semantics and Ed25519 user signatures, this provides
-    /// equivalent security to EVM's msg.sender check.
-    ///
-    /// CHECK: Verified via constraint against config.protocol_adapter
-    #[account(
-        constraint = caller.key() == config.protocol_adapter @ ErrorCode::UnauthorizedCaller
-    )]
-    pub caller: AccountInfo<'info>,
-
     #[account(
         seeds = [b"config"],
         bump = config.bump
     )]
     pub config: Account<'info, Config>,
 
-    /// Instructions sysvar for Ed25519 signature introspection
+    /// Instructions sysvar for CPI caller verification and Ed25519 signature introspection.
     /// CHECK: Validated via address constraint
     #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
     pub ix_sysvar: AccountInfo<'info>,

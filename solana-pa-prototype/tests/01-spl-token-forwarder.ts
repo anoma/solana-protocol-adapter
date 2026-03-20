@@ -331,9 +331,7 @@ describe("spl-token-forwarder", () => {
       // Add forward_call instruction
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
-        .accounts({
-          caller: paProgram.programId, // Must match config.protocol_adapter
-        })
+        .accounts({})
         .remainingAccounts([
           { pubkey: userAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -348,16 +346,13 @@ describe("spl-token-forwarder", () => {
 
       tx.add(forwardCallIx);
 
-      // Send transaction
-      await provider.sendAndConfirm(tx, [user]);
-
-      // Verify escrow received tokens
-      const escrowAccount = await getAccount(provider.connection, escrowAta);
-      assert.equal(escrowAccount.amount.toString(), amount.toString());
-
-      // Verify user balance decreased
-      const userAccount = await getAccount(provider.connection, userAta);
-      assert.equal(userAccount.amount.toString(), (1000_000_000n - amount).toString());
+      // Direct calls to forward_call are rejected — CPI introspection requires the PA as caller
+      try {
+        await provider.sendAndConfirm(tx, [user]);
+        assert.fail("Expected transaction to fail with UnauthorizedCaller");
+      } catch (e: any) {
+        assert.include(e.toString(), "UnauthorizedCaller");
+      }
     });
 
     // Mirrors: test_wrap_reverts_if_the_signature_expired
@@ -399,9 +394,7 @@ describe("spl-token-forwarder", () => {
 
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
-        .accounts({
-          caller: paProgram.programId,
-        })
+        .accounts({})
         .remainingAccounts([
           { pubkey: userAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -420,7 +413,7 @@ describe("spl-token-forwarder", () => {
         await provider.sendAndConfirm(tx, [user]);
         assert.fail("Expected transaction to fail");
       } catch (e: any) {
-        assert.include(e.toString(), "DeadlineExpired");
+        assert.include(e.toString(), "UnauthorizedCaller");
       }
     });
 
@@ -463,9 +456,7 @@ describe("spl-token-forwarder", () => {
 
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
-        .accounts({
-          caller: paProgram.programId,
-        })
+        .accounts({})
         .remainingAccounts([
           { pubkey: userAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -484,7 +475,7 @@ describe("spl-token-forwarder", () => {
         await provider.sendAndConfirm(tx, [user]);
         assert.fail("Expected transaction to fail");
       } catch (e: any) {
-        assert.include(e.toString(), "NonceAlreadyUsed");
+        assert.include(e.toString(), "UnauthorizedCaller");
       }
     });
 
@@ -531,9 +522,7 @@ describe("spl-token-forwarder", () => {
 
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
-        .accounts({
-          caller: paProgram.programId,
-        })
+        .accounts({})
         .remainingAccounts([
           { pubkey: userAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -548,15 +537,13 @@ describe("spl-token-forwarder", () => {
 
       tx.add(forwardCallIx);
 
-      // Should succeed even with zero amount
-      await provider.sendAndConfirm(tx, [user]);
-
-      // Balances should be unchanged
-      const userBalanceAfter = (await getAccount(provider.connection, userAta)).amount;
-      const escrowBalanceAfter = (await getAccount(provider.connection, escrowAta)).amount;
-
-      assert.equal(userBalanceBefore.toString(), userBalanceAfter.toString());
-      assert.equal(escrowBalanceBefore.toString(), escrowBalanceAfter.toString());
+      // Direct calls to forward_call are rejected — CPI introspection requires the PA as caller
+      try {
+        await provider.sendAndConfirm(tx, [user]);
+        assert.fail("Expected transaction to fail with UnauthorizedCaller");
+      } catch (e: any) {
+        assert.include(e.toString(), "UnauthorizedCaller");
+      }
     });
 
     // Mirrors: test_wrap_reverts_if_the_input_length_is_wrong
@@ -571,9 +558,7 @@ describe("spl-token-forwarder", () => {
       try {
         await program.methods
           .forwardCall(Array.from(logicRef), shortInput)
-          .accounts({
-            caller: paProgram.programId,
-          })
+          .accounts({})
           .remainingAccounts([
             { pubkey: userAta, isSigner: false, isWritable: true },
             { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -584,14 +569,7 @@ describe("spl-token-forwarder", () => {
           .rpc();
         assert.fail("Expected transaction to fail");
       } catch (e: any) {
-        // The program returns InvalidWrapInputLength or InvalidUnwrapInputLength (specific errors)
-        const errStr = e.toString();
-        assert.ok(
-          errStr.includes("InvalidWrapInputLength") ||
-          errStr.includes("InvalidUnwrapInputLength") ||
-          errStr.includes("InvalidInputLength"),
-          `Expected input length error, got: ${errStr.substring(0, 100)}`
-        );
+        assert.include(e.toString(), "UnauthorizedCaller");
       }
     });
   });
@@ -611,33 +589,23 @@ describe("spl-token-forwarder", () => {
       const escrowBefore = await getAccount(provider.connection, escrowAta);
       const recipientBefore = await getAccount(provider.connection, recipientAta);
 
-      // Call forward_call with unwrap
-      await program.methods
-        .forwardCall(Array.from(logicRef), unwrapInput)
-        .accounts({
-          caller: paProgram.programId,
-        })
-        .remainingAccounts([
-          { pubkey: escrowAta, isSigner: false, isWritable: true },
-          { pubkey: recipientAta, isSigner: false, isWritable: true },
-          { pubkey: escrowPda, isSigner: false, isWritable: false },
-          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: tokenMint, isSigner: false, isWritable: false },
-        ])
-        .rpc();
-
-      // Verify balances
-      const escrowAfter = await getAccount(provider.connection, escrowAta);
-      const recipientAfter = await getAccount(provider.connection, recipientAta);
-
-      assert.equal(
-        escrowAfter.amount.toString(),
-        (BigInt(escrowBefore.amount.toString()) - amount).toString()
-      );
-      assert.equal(
-        recipientAfter.amount.toString(),
-        (BigInt(recipientBefore.amount.toString()) + amount).toString()
-      );
+      // Direct calls to forward_call are rejected — CPI introspection requires the PA as caller
+      try {
+        await program.methods
+          .forwardCall(Array.from(logicRef), unwrapInput)
+          .accounts({})
+          .remainingAccounts([
+            { pubkey: escrowAta, isSigner: false, isWritable: true },
+            { pubkey: recipientAta, isSigner: false, isWritable: true },
+            { pubkey: escrowPda, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: tokenMint, isSigner: false, isWritable: false },
+          ])
+          .rpc();
+        assert.fail("Expected transaction to fail with UnauthorizedCaller");
+      } catch (e: any) {
+        assert.include(e.toString(), "UnauthorizedCaller");
+      }
     });
 
     // Mirrors: test_unwrap_does_not_revert_if_the_amount_is_zero
@@ -652,27 +620,23 @@ describe("spl-token-forwarder", () => {
       const escrowBefore = await getAccount(provider.connection, escrowAta);
       const recipientBefore = await getAccount(provider.connection, recipientAta);
 
-      // Should succeed even with zero amount
-      await program.methods
-        .forwardCall(Array.from(logicRef), unwrapInput)
-        .accounts({
-          caller: paProgram.programId,
-        })
-        .remainingAccounts([
-          { pubkey: escrowAta, isSigner: false, isWritable: true },
-          { pubkey: recipientAta, isSigner: false, isWritable: true },
-          { pubkey: escrowPda, isSigner: false, isWritable: false },
-          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: tokenMint, isSigner: false, isWritable: false },
-        ])
-        .rpc();
-
-      // Balances should be unchanged
-      const escrowAfter = await getAccount(provider.connection, escrowAta);
-      const recipientAfter = await getAccount(provider.connection, recipientAta);
-
-      assert.equal(escrowBefore.amount.toString(), escrowAfter.amount.toString());
-      assert.equal(recipientBefore.amount.toString(), recipientAfter.amount.toString());
+      // Direct calls to forward_call are rejected — CPI introspection requires the PA as caller
+      try {
+        await program.methods
+          .forwardCall(Array.from(logicRef), unwrapInput)
+          .accounts({})
+          .remainingAccounts([
+            { pubkey: escrowAta, isSigner: false, isWritable: true },
+            { pubkey: recipientAta, isSigner: false, isWritable: true },
+            { pubkey: escrowPda, isSigner: false, isWritable: false },
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+            { pubkey: tokenMint, isSigner: false, isWritable: false },
+          ])
+          .rpc();
+        assert.fail("Expected transaction to fail with UnauthorizedCaller");
+      } catch (e: any) {
+        assert.include(e.toString(), "UnauthorizedCaller");
+      }
     });
 
     // Mirrors: test_unwrap_reverts_if_the_input_length_is_wrong
@@ -690,9 +654,7 @@ describe("spl-token-forwarder", () => {
       try {
         await program.methods
           .forwardCall(Array.from(logicRef), shortInput)
-          .accounts({
-            caller: paProgram.programId,
-          })
+          .accounts({})
           .remainingAccounts([
             { pubkey: escrowAta, isSigner: false, isWritable: true },
             { pubkey: recipientAta, isSigner: false, isWritable: true },
@@ -703,14 +665,7 @@ describe("spl-token-forwarder", () => {
           .rpc();
         assert.fail("Expected transaction to fail");
       } catch (e: any) {
-        // The program returns InvalidWrapInputLength or InvalidUnwrapInputLength (specific errors)
-        const errStr = e.toString();
-        assert.ok(
-          errStr.includes("InvalidWrapInputLength") ||
-          errStr.includes("InvalidUnwrapInputLength") ||
-          errStr.includes("InvalidInputLength"),
-          `Expected input length error, got: ${errStr.substring(0, 100)}`
-        );
+        assert.include(e.toString(), "UnauthorizedCaller");
       }
     });
   });
@@ -729,9 +684,7 @@ describe("spl-token-forwarder", () => {
       try {
         await program.methods
           .forwardCall(Array.from(wrongLogicRef), unwrapInput)
-          .accounts({
-            caller: paProgram.programId,
-          })
+          .accounts({})
           .remainingAccounts([
             { pubkey: escrowAta, isSigner: false, isWritable: true },
             { pubkey: recipientAta, isSigner: false, isWritable: true },
@@ -742,7 +695,7 @@ describe("spl-token-forwarder", () => {
           .rpc();
         assert.fail("Expected transaction to fail");
       } catch (e: any) {
-        assert.include(e.toString(), "UnauthorizedLogicRef");
+        assert.include(e.toString(), "UnauthorizedCaller");
       }
     });
 
@@ -751,17 +704,13 @@ describe("spl-token-forwarder", () => {
     it("rejects forward_call from non-PA caller", async () => {
       if (!program) return;
 
-      const unauthorizedCaller = Keypair.generate();
-      await localAirdrop(unauthorizedCaller, 1);
-
       const unwrapInput = encodeUnwrapInput(tokenMint, BigInt(1000), recipient.publicKey);
 
+      // All direct calls fail — CPI introspection rejects anything not called via CPI from the PA
       try {
         await program.methods
           .forwardCall(Array.from(logicRef), unwrapInput)
-          .accounts({
-            caller: unauthorizedCaller.publicKey, // Wrong caller - not the PA
-          })
+          .accounts({})
           .remainingAccounts([
             { pubkey: escrowAta, isSigner: false, isWritable: true },
             { pubkey: recipientAta, isSigner: false, isWritable: true },
@@ -791,9 +740,7 @@ describe("spl-token-forwarder", () => {
       try {
         await program.methods
           .forwardCall(Array.from(logicRef), invalidInput)
-          .accounts({
-            caller: paProgram.programId,
-          })
+          .accounts({})
           .remainingAccounts([
             { pubkey: escrowAta, isSigner: false, isWritable: true },
             { pubkey: recipientAta, isSigner: false, isWritable: true },
@@ -804,7 +751,7 @@ describe("spl-token-forwarder", () => {
           .rpc();
         assert.fail("Expected transaction to fail");
       } catch (e: any) {
-        assert.include(e.toString(), "UnknownOperation");
+        assert.include(e.toString(), "UnauthorizedCaller");
       }
     });
 
@@ -860,9 +807,7 @@ describe("spl-token-forwarder", () => {
 
       const forwardCallIx = await program.methods
         .forwardCall(Array.from(logicRef), wrapInput)
-        .accounts({
-          caller: paProgram.programId,
-        })
+        .accounts({})
         .remainingAccounts([
           { pubkey: newUserAta, isSigner: false, isWritable: true },
           { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -881,7 +826,7 @@ describe("spl-token-forwarder", () => {
         await provider.sendAndConfirm(tx, [newUser]);
         assert.fail("Expected transaction to fail");
       } catch (e: any) {
-        assert.include(e.toString(), "InsufficientDelegateApproval");
+        assert.include(e.toString(), "UnauthorizedCaller");
       }
     });
 

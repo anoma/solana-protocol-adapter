@@ -392,12 +392,11 @@ describe("SPL Token Forwarder PA Integration", function () {
       const authority = Keypair.generate();
 
       // Forwarder accounts for CPI
-      // Order: forwarder_program (segment marker) | caller | config | ix_sysvar | clock | ...remaining
-      // The PA strips the forwarder_program and passes the rest to the forwarder's instruction
+      // Order: forwarder_program (segment marker) | config | ix_sysvar | clock | ...remaining
+      // CPI caller verification uses instruction introspection (no caller account needed).
       // Remaining accounts order: user_ata, escrow_ata, escrow_pda, nonce_bitmap, token_program, system_program, payer, mint
       const forwarderAccounts = [
         { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
-        { pubkey: paProgram.programId, isWritable: false, isSigner: false }, // caller (must match config.protocol_adapter)
         { pubkey: forwarderConfigPda, isWritable: false, isSigner: false },
         { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
         { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
@@ -536,10 +535,9 @@ describe("SPL Token Forwarder PA Integration", function () {
       );
 
       // Forwarder accounts for CPI
-      // Order: forwarder_program (segment marker) | caller | config | ix_sysvar | clock | ...remaining
+      // Order: forwarder_program (segment marker) | config | ix_sysvar | clock | ...remaining
       const forwarderAccounts = [
         { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
-        { pubkey: paProgram.programId, isWritable: false, isSigner: false }, // caller (must match config.protocol_adapter)
         { pubkey: forwarderConfigPda, isWritable: false, isSigner: false },
         { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
         { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
