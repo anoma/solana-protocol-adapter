@@ -17,11 +17,21 @@ pub struct PreparedProof {
 }
 
 /// Prepare proof data for verification.
-/// Extracts seal and selector, negates pi_a, computes journal digest, and selects image ID.
-pub fn prepare_proof_for_verification(tx: &Transaction) -> Result<PreparedProof, PAError> {
+/// Extracts seal, validates selector, negates pi_a, computes journal digest, and selects image ID.
+pub fn prepare_proof_for_verification(
+    tx: &Transaction,
+    expected_selector: [u8; 4],
+) -> Result<PreparedProof, PAError> {
     let proof_bytes = tx.aggregation_proof.as_ref().ok_or(PAError::InvalidProof)?;
 
     let mut seal: Seal = Seal::try_from_slice(proof_bytes).map_err(|_| PAError::InvalidProof)?;
+
+    // Validate proof selector matches what was configured at initialization.
+    // EVM PA validates selector before verification; wrong-selector proofs would fail
+    // at the verifier anyway, but this gives an explicit error message.
+    if seal.selector != expected_selector {
+        return Err(PAError::InvalidProofSelector);
+    }
 
     // The risc0-solana groth16 verifier expects pi_a to be negated (on BN254 G1).
     seal.proof.pi_a = groth_16_verifier::negate_g1(&seal.proof.pi_a);

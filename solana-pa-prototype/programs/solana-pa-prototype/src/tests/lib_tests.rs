@@ -93,11 +93,11 @@ mod governance_tests {
 
     #[test]
     fn test_pa_state_account_space_calculation() {
-        assert_eq!(PAStateAccount::INITIAL_SPACE, 135);
-        assert_eq!(PAStateAccount::MAX_SPACE, 1127);
-        assert_eq!(PAStateAccount::space_for_depth(1), 135);
-        assert_eq!(PAStateAccount::space_for_depth(2), 167);
-        assert_eq!(PAStateAccount::space_for_depth(32), 1127);
+        assert_eq!(PAStateAccount::INITIAL_SPACE, 171);
+        assert_eq!(PAStateAccount::MAX_SPACE, 1163);
+        assert_eq!(PAStateAccount::space_for_depth(1), 171);
+        assert_eq!(PAStateAccount::space_for_depth(2), 203);
+        assert_eq!(PAStateAccount::space_for_depth(32), 1163);
     }
 }
 

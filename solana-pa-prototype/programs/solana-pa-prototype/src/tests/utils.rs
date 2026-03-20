@@ -179,6 +179,8 @@ pub fn create_test_pa_state_with(authority: Pubkey, paused: bool) -> PAStateAcco
     PAStateAccount {
         bump: 0,
         authority,
+        verifier_router: Pubkey::default(),
+        proof_selector: FAKE_SELECTOR,
         paused,
         root: EMPTY_TREE_ROOT_INITIAL.to_bytes(),
         next_index: 0,

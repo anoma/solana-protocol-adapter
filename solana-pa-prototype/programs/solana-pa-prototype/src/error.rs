@@ -45,6 +45,8 @@ pub enum PAError {
     VerifierRouterFailed,
     #[msg("Aggregation required: non-aggregated proofs not enabled")]
     AggregationRequired,
+    #[msg("Proof selector does not match expected selector")]
+    InvalidProofSelector,
 
     // External call errors
     #[msg("Invalid external call blob encoding")]
