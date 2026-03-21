@@ -199,7 +199,6 @@ PYEOF
     echo "  devnet init                   Initialize PA state (idempotent)"
     echo "  devnet status                 Show deployment status + wallet balance"
     echo "  devnet balance                Show wallet address and balance"
-    echo "  devnet airdrop [amount]       Request devnet airdrop (default: 2 SOL)"
     exit 1
     ;;
 
