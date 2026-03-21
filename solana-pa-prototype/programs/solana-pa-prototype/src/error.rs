@@ -85,6 +85,10 @@ pub enum PAError {
     // Merkle tree errors
     #[msg("Tree has reached maximum depth (32 levels)")]
     TreeMaxDepthReached,
+
+    // Close errors
+    #[msg("Account is not owned by this program")]
+    InvalidMarker,
 }
 
 impl From<SolanaArmError> for PAError {

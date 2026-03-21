@@ -313,6 +313,33 @@ pub mod solana_pa_prototype {
         );
         Ok(())
     }
+
+    /// Close the PAState account and reclaim rent to authority.
+    pub fn close_pa_state(_ctx: Context<ClosePaState>) -> Result<()> {
+        msg!("PAState closed");
+        Ok(())
+    }
+
+    /// Close multiple marker PDAs (nullifier or root) in one transaction.
+    /// Markers are passed as remaining_accounts.
+    pub fn close_markers_batch<'info>(
+        ctx: Context<'_, '_, '_, 'info, CloseMarkersBatch<'info>>,
+    ) -> Result<()> {
+        let authority_info = ctx.accounts.authority.to_account_info();
+        for marker in ctx.remaining_accounts {
+            require!(marker.owner == &crate::ID, PAError::InvalidMarker);
+            require!(marker.data_is_empty(), PAError::InvalidMarker);
+            let marker_lamports = marker.lamports();
+            **marker.lamports.borrow_mut() = 0;
+            **authority_info.lamports.borrow_mut() = authority_info
+                .lamports()
+                .checked_add(marker_lamports)
+                .unwrap();
+            marker.assign(&anchor_lang::solana_program::system_program::ID);
+        }
+        msg!("Closed {} markers", ctx.remaining_accounts.len());
+        Ok(())
+    }
 }
 
 /// Floor at 1 lamport because 0-lamport accounts can be garbage-collected.
@@ -761,6 +788,34 @@ pub struct UpdateExpiryConfig<'info> {
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct ClosePaState<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        has_one = authority @ PAError::Unauthorized,
+        close = authority,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseMarkersBatch<'info> {
+    #[account(
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        has_one = authority @ PAError::Unauthorized,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    #[account(mut)]
     pub authority: Signer<'info>,
 }
 

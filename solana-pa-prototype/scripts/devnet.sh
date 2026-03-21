@@ -226,12 +226,28 @@ cmd_deploy() {
   done
 }
 
+cmd_close_pdas() {
+  local flag="${1:-}"
+
+  require_cmd npx
+
+  cd "$PROJECT_DIR"
+
+  require_devnet_wallet
+
+  echo "Closing PA PDA accounts..."
+  ANCHOR_PROVIDER_URL="$DEVNET_URL" \
+  ANCHOR_WALLET="$DEVNET_WALLET" \
+  npx ts-node -P tsconfig.json scripts/close-pdas.ts ${flag:+"$flag"}
+}
+
 cmd_teardown() {
   local targets
   targets="$(resolve_targets "${1:-all}")"
 
   require_cmd solana
   require_cmd solana-keygen
+  require_cmd npx
 
   cd "$PROJECT_DIR"
 
@@ -241,13 +257,15 @@ cmd_teardown() {
   echo "Closed program IDs cannot be reused. You will need new keypairs to deploy again."
   echo ""
 
+  # Close PDA accounts first (programs must still be deployed for close instructions to work)
+  echo "==> Closing PDA accounts before closing programs..."
+  cmd_close_pdas || echo "⚠ PDA close failed or partially completed — continuing with program close"
+  echo ""
+
   for t in $targets; do
     close_program "${PROGRAMS[$t]}"
   done
 
-  echo ""
-  echo "Note: PDAs (PAState, nullifiers, root markers) cannot be closed — the"
-  echo "program has no close instructions for them. They persist on devnet."
   echo ""
   echo "✅ Teardown complete"
 }
@@ -476,6 +494,12 @@ case "${1:-}" in
   airdrop)
     cmd_airdrop "${2:-2}"
     ;;
+  close-pdas)
+    cmd_close_pdas "${2:-}"
+    ;;
+  close-pa-state)
+    cmd_close_pdas "--pa-state-only"
+    ;;
   *)
     echo "Usage: devnet.sh <command> [target]"
     echo ""
@@ -483,6 +507,8 @@ case "${1:-}" in
     echo "  deploy [pa|btf|all]      First-time deploy to devnet (default: all)"
     echo "  upgrade [pa|btf|all]     Rebuild + deploy over existing programs"
     echo "  teardown [pa|btf|all]    PERMANENT: close programs, reclaim rent"
+    echo "  close-pdas               Close all PA PDA accounts, reclaim rent"
+    echo "  close-pa-state           Close only PAState (for re-init after upgrade)"
     echo "  test                     Run integration tests against devnet"
     echo "  init                     Initialize PA state (idempotent)"
     echo "  status                   Show deployment status + wallet balance"
