@@ -111,10 +111,7 @@ async function main() {
   try {
     await program.methods
       .closePaState()
-      .accounts({
-        paState: paStatePda,
-        authority: wallet.publicKey,
-      })
+      .accounts({})
       .rpc();
     totalRecovered += paStateLamports;
     console.log(`  ✅ PAState closed (${(paStateLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL)`);
