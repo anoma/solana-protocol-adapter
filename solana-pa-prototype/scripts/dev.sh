@@ -48,6 +48,30 @@ case "${1:-}" in
 
   anchor-build)
     run_in_project "anchor build --no-idl"
+    # --no-idl skips IDL generation, leaving stale addresses in target/idl/.
+    # Patch them to match the current declare_id! in source.
+    run_in_project '
+      for lib_rs in programs/*/src/lib.rs; do
+        prog_dir="$(basename "$(dirname "$(dirname "$lib_rs")")")"
+        idl_name="$(echo "$prog_dir" | tr - _)"
+        idl_file="target/idl/${idl_name}.json"
+        if [[ -f "$idl_file" ]]; then
+          source_id=$(grep -oP "declare_id!\(\"\K[^\"]+\"" "$lib_rs" | tr -d "\"")
+          if [[ -n "$source_id" ]]; then
+            current_id=$(python3 -c "import json; print(json.load(open(\"$idl_file\")).get(\"address\",\"\"))")
+            if [[ "$current_id" != "$source_id" ]]; then
+              python3 -c "
+import json
+with open(\"$idl_file\") as f: d = json.load(f)
+d[\"address\"] = \"$source_id\"
+with open(\"$idl_file\", \"w\") as f: json.dump(d, f, indent=2)
+"
+              echo "Patched IDL address: $idl_name ($current_id -> $source_id)"
+            fi
+          fi
+        fi
+      done
+    '
     ;;
 
   anchor-test)
