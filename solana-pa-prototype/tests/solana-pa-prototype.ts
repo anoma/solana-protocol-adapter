@@ -2175,7 +2175,7 @@ beforeEach(async () => {
   providerBalanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
 });
 
-// After each PA test, close TxData accounts to recover rent.
+// After each PA test, close TxData accounts and drain funded keypairs to recover SOL.
 afterEach(async () => {
   for (const entry of openTxDataAccounts) {
     try {
@@ -2195,12 +2195,13 @@ afterEach(async () => {
     }
   }
   openTxDataAccounts.length = 0;
+
+  await drainKeypairs(provider, paFundedKeypairs, "pa-afterEach");
+  paFundedKeypairs.length = 0;
 });
 
-// End-of-suite: drain funded keypairs and audit SOL usage.
+// End-of-suite: audit SOL usage.
 after(async () => {
-  await drainKeypairs(provider, paFundedKeypairs, "pa-prototype");
-  paFundedKeypairs.length = 0;
 
   const suiteEndBalance = await provider.connection.getBalance(provider.wallet.publicKey);
   const totalSpent = suiteStartBalance - suiteEndBalance;
