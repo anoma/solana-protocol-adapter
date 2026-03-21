@@ -2156,6 +2156,111 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
   });
 });
 
+// ── Close instruction tests ──────────────────────────────────────────────
+
+describe("solana-pa-prototype (Close instructions)", () => {
+  it("close_markers_batch closes marker PDAs and refunds rent", async () => {
+    // Find all 0-byte marker accounts owned by the PA program
+    const allAccounts = await provider.connection.getProgramAccounts(program.programId, {
+      filters: [{ dataSize: 0 }],
+    });
+
+    if (allAccounts.length === 0) {
+      console.log("    No markers to close (no settlements ran)");
+      return;
+    }
+
+    const markersBefore = allAccounts.length;
+    const balanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
+
+    // Close in one batch (test suite creates few markers)
+    const remainingAccounts = allAccounts.map(({ pubkey }) => ({
+      pubkey,
+      isWritable: true,
+      isSigner: false,
+    }));
+
+    await program.methods
+      .closeMarkersBatch()
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .remainingAccounts(remainingAccounts)
+      .rpc();
+
+    // Verify markers are gone
+    const markersAfter = await provider.connection.getProgramAccounts(program.programId, {
+      filters: [{ dataSize: 0 }],
+    });
+    assert.equal(markersAfter.length, 0, "All markers should be closed");
+
+    const balanceAfter = await provider.connection.getBalance(provider.wallet.publicKey);
+    assert.ok(balanceAfter > balanceBefore, "Authority should have received rent refund");
+    console.log(`    Closed ${markersBefore} markers, recovered ${((balanceAfter - balanceBefore) / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+  });
+
+  it("close_markers_batch rejects non-authority", async () => {
+    const fakeAuthority = Keypair.generate();
+    await airdrop(provider, fakeAuthority, 1);
+
+    try {
+      await program.methods
+        .closeMarkersBatch()
+        .accounts({
+          paState,
+          authority: fakeAuthority.publicKey,
+        })
+        .signers([fakeAuthority])
+        .rpc();
+      assert.fail("Expected unauthorized close to fail");
+    } catch (e: any) {
+      assert.match(e.toString(), AUTHORITY_MISMATCH_PATTERN);
+    }
+  });
+
+  it("close_pa_state rejects non-authority", async () => {
+    const fakeAuthority = Keypair.generate();
+    await airdrop(provider, fakeAuthority, 1);
+
+    try {
+      await program.methods
+        .closePaState()
+        .accounts({
+          paState,
+          authority: fakeAuthority.publicKey,
+        })
+        .signers([fakeAuthority])
+        .rpc();
+      assert.fail("Expected unauthorized close to fail");
+    } catch (e: any) {
+      assert.match(e.toString(), AUTHORITY_MISMATCH_PATTERN);
+    }
+  });
+
+  it("close_pa_state closes PAState and refunds rent", async () => {
+    const paStateInfo = await provider.connection.getAccountInfo(paState);
+    assert.ok(paStateInfo, "PAState should exist before close");
+
+    const balanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
+
+    await program.methods
+      .closePaState()
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    const paStateAfter = await provider.connection.getAccountInfo(paState);
+    assert.equal(paStateAfter, null, "PAState should be closed");
+
+    const balanceAfter = await provider.connection.getBalance(provider.wallet.publicKey);
+    assert.ok(balanceAfter > balanceBefore, "Authority should have received rent refund");
+    console.log(`    PAState closed, recovered ${((balanceAfter - balanceBefore) / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+  });
+});
+
 before(async () => {
   suiteStartBalance = await provider.connection.getBalance(provider.wallet.publicKey);
   console.log(`  [sol] suite start: wallet ${(suiteStartBalance / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
