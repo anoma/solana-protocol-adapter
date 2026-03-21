@@ -47,11 +47,14 @@ async function main() {
     return;
   }
 
-  const paState = await program.account.paStateAccount.fetch(paStatePda);
-  if (!paState.authority.equals(wallet.publicKey)) {
+  // Read authority directly from raw data to handle layout migrations.
+  // Layout: discriminator(8) + bump(1) + authority(32)
+  const authorityBytes = paStateInfo.data.subarray(9, 41);
+  const authority = new PublicKey(authorityBytes);
+  if (!authority.equals(wallet.publicKey)) {
     console.error(
       `❌ Wallet ${wallet.publicKey.toBase58()} is not the PA authority ` +
-      `(${paState.authority.toBase58()})`
+      `(${authority.toBase58()})`
     );
     process.exit(1);
   }

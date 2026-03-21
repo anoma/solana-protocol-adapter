@@ -317,7 +317,33 @@ pub mod solana_pa_prototype {
     }
 
     /// Close the PAState account and reclaim rent to authority.
-    pub fn close_pa_state(_ctx: Context<ClosePaState>) -> Result<()> {
+    ///
+    /// Uses raw account data instead of typed deserialization so it works
+    /// even when the PAState layout has changed (migration-safe).
+    pub fn close_pa_state(ctx: Context<ClosePaState>) -> Result<()> {
+        let pa_state = &ctx.accounts.pa_state;
+        let authority = &ctx.accounts.authority;
+
+        // Read authority from raw data: discriminator(8) + bump(1) + authority(32)
+        let data = pa_state.try_borrow_data()?;
+        require!(data.len() >= 41, PAError::InvalidTransactionData);
+        let stored_authority = Pubkey::new_from_array(
+            data[9..41].try_into().unwrap()
+        );
+        drop(data);
+
+        require!(stored_authority == authority.key(), PAError::Unauthorized);
+
+        // Close: transfer lamports, assign to system, zero data
+        let pa_lamports = pa_state.lamports();
+        **pa_state.lamports.borrow_mut() = 0;
+        **authority.lamports.borrow_mut() = authority
+            .lamports()
+            .checked_add(pa_lamports)
+            .unwrap();
+        pa_state.assign(&anchor_lang::solana_program::system_program::ID);
+        pa_state.realloc(0, false)?;
+
         msg!("PAState closed");
         Ok(())
     }
@@ -793,16 +819,17 @@ pub struct UpdateExpiryConfig<'info> {
     pub authority: Signer<'info>,
 }
 
+/// Uses UncheckedAccount so close works even when PAState layout has changed.
+/// Authority and PDA are verified manually in the handler.
 #[derive(Accounts)]
 pub struct ClosePaState<'info> {
+    /// CHECK: PDA verified via seeds constraint. Data read manually for migration safety.
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
-        bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
-        close = authority,
+        bump,
     )]
-    pub pa_state: Account<'info, PAStateAccount>,
+    pub pa_state: UncheckedAccount<'info>,
 
     #[account(mut)]
     pub authority: Signer<'info>,
