@@ -189,7 +189,7 @@ fn decode_base58_32(s: &str) -> Result<[u8; 32]> {
 }
 
 fn test_forwarder_program_id() -> Result<[u8; 32]> {
-    decode_base58_32("55DmeHNKT2adP2UVitfZwugSmsDzdUQUmkcbRzwXqqAN")
+    decode_base58_32("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD")
 }
 
 fn validate_selector(selector: &str) -> Result<()> {
@@ -284,7 +284,7 @@ fn validate_fixture_file(path: &PathBuf, expected_program_id: [u8; 32]) -> Resul
 
 fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
     // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-    let program_id = decode_base58_32("YzkzvRbPvEjKTRaUuxHjuGsi5Sm6A75dXVJoAhhBtHA")?;
+    let program_id = decode_base58_32("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf")?;
 
     // Use -1 so expected_time < current_time for any reasonable cluster clock.
     // The forwarder will return RESULT_LT (0x00).
@@ -346,7 +346,7 @@ fn test_forwarder_output_account_payload_blob(
 }
 
 
-const SPL_TOKEN_FORWARDER_PROGRAM_ID: &str = "DuBnfWgTVCfFYcjZGakNTd2A7zFX6X4eAEDxVAkRrZCD";
+const SPL_TOKEN_FORWARDER_PROGRAM_ID: &str = "3cLKSYBijunpCc2F2gzizUkhYtyFrLr4RVdNiaK79b48";
 
 fn sha256_hash(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();

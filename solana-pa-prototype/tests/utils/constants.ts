@@ -19,7 +19,7 @@ export const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
 );
 
 // Program IDs
-export const SPL_TOKEN_FORWARDER_PROGRAM_ID = new PublicKey("DuBnfWgTVCfFYcjZGakNTd2A7zFX6X4eAEDxVAkRrZCD");
+export const SPL_TOKEN_FORWARDER_PROGRAM_ID = new PublicKey("3cLKSYBijunpCc2F2gzizUkhYtyFrLr4RVdNiaK79b48");
 
 // SPL Token Forwarder operation codes
 export const OP_WRAP = 0;

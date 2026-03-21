@@ -134,6 +134,22 @@ sync_program_id() {
 
   local id
   id="$(solana-keygen pubkey "$keypair")"
+
+  # Safety: verify the keypair matches what's committed in git.
+  # If someone accidentally regenerated a keypair, this catches it
+  # before we silently rewrite declare_id! to a new program ID.
+  local committed_keypair
+  committed_keypair="$(git show HEAD:"$keypair" 2>/dev/null || true)"
+  if [[ -n "$committed_keypair" ]]; then
+    local committed_id
+    committed_id="$(echo "$committed_keypair" | solana-keygen pubkey /dev/stdin 2>/dev/null || true)"
+    if [[ -n "$committed_id" && "$committed_id" != "$id" ]]; then
+      echo "    ❌ ${name} keypair was regenerated! Local: $id, committed: $committed_id" >&2
+      echo "    Restore with: git checkout HEAD -- $keypair" >&2
+      exit 1
+    fi
+  fi
+
   local current
   current="$(read_declare_id "$lib_rs")"
 
@@ -167,11 +183,26 @@ sync_program_ids() {
     yarn install
   fi
 
-  if [[ ! -f "target/deploy/solana_pa_prototype-keypair.json" ]] || \
-     [[ ! -f "target/deploy/block_time_forwarder-keypair.json" ]] || \
-     [[ ! -f "target/deploy/test_forwarder-keypair.json" ]]; then
-    echo "    Generating missing program keypairs..."
-    build_with_filtered_output anchor build --no-idl
+  # Keypairs are committed to the repo and must NEVER be regenerated.
+  # They correspond to deployed program IDs — regenerating them creates
+  # unredeployable programs and orphans deployed state.
+  local missing_keypairs=()
+  for kp in target/deploy/solana_pa_prototype-keypair.json \
+            target/deploy/block_time_forwarder-keypair.json \
+            target/deploy/test_forwarder-keypair.json; do
+    if [[ ! -f "$kp" ]]; then
+      missing_keypairs+=("$kp")
+    fi
+  done
+  if [[ ${#missing_keypairs[@]} -gt 0 ]]; then
+    echo "❌ Missing program keypairs (these must NEVER be regenerated):"
+    for kp in "${missing_keypairs[@]}"; do
+      echo "   $kp"
+    done
+    echo ""
+    echo "Keypairs are committed in git. Restore them with:"
+    echo "   git checkout origin/main -- target/deploy/"
+    exit 1
   fi
 
   PA_ID="$(sync_program_id "PA" \

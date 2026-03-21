@@ -51,7 +51,7 @@ mod tests;
 pub use error::ErrorCode;
 pub use state::*;
 
-declare_id!("DuBnfWgTVCfFYcjZGakNTd2A7zFX6X4eAEDxVAkRrZCD");
+declare_id!("3cLKSYBijunpCc2F2gzizUkhYtyFrLr4RVdNiaK79b48");
 
 // =============================================================================
 // Events (mirrors EVM: Wrapped, Unwrapped events)
