@@ -65,23 +65,9 @@ ensure_balance() {
     return 0
   fi
 
-  echo "Balance: ${balance} SOL (need ${min_sol}), requesting airdrops..."
-  local attempts=0
-  while (( attempts < 5 )); do
-    solana airdrop 2 --keypair "$DEVNET_WALLET" --url "$DEVNET_URL" 2>/dev/null || true
-    sleep 2
-    balance="$(get_balance)"
-    if awk "BEGIN{exit ($balance >= $min_sol) ? 0 : 1}"; then
-      echo "Balance: ${balance} SOL"
-      return 0
-    fi
-    (( attempts++ )) || true
-  done
-
   echo "❌ Insufficient balance: ${balance} SOL (need ${min_sol})"
   echo "Wallet: $(get_wallet_pubkey)"
-  echo "Fund manually: solana airdrop 2 $(get_wallet_pubkey) --url ${DEVNET_URL}"
-  echo "Or transfer SOL from another wallet."
+  echo "Transfer SOL to this wallet before proceeding."
   exit 1
 }
 
@@ -452,21 +438,6 @@ cmd_balance() {
   echo "${pubkey}  ${balance} SOL"
 }
 
-cmd_airdrop() {
-  local amount="$1"
-  require_cmd solana
-  require_cmd solana-keygen
-
-  ensure_devnet_wallet
-
-  echo "Requesting airdrop of ${amount} SOL..."
-  solana airdrop "$amount" --keypair "$DEVNET_WALLET" --url "$DEVNET_URL"
-
-  local balance
-  balance="$(get_balance)"
-  echo "Balance: ${balance} SOL"
-}
-
 # ---------- dispatch ----------
 
 case "${1:-}" in
@@ -491,9 +462,6 @@ case "${1:-}" in
   balance)
     cmd_balance
     ;;
-  airdrop)
-    cmd_airdrop "${2:-2}"
-    ;;
   close-pdas)
     cmd_close_pdas "${2:-}"
     ;;
@@ -513,7 +481,6 @@ case "${1:-}" in
     echo "  init                     Initialize PA state (idempotent)"
     echo "  status                   Show deployment status + wallet balance"
     echo "  balance                  Show wallet address and balance"
-    echo "  airdrop [amount]         Request devnet airdrop (default: 2 SOL)"
     exit 1
     ;;
 esac
