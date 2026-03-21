@@ -32,7 +32,7 @@ import { createHash } from "crypto";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 import { deriveConfigPda, deriveEscrowPda, derivePaStatePda } from "./utils";
-import { airdrop, drainKeypairs } from "./utils";
+import { fundKeypair, drainKeypairs } from "./utils";
 
 // Deterministic keypair seeds - must match 01-spl-token-forwarder.ts
 const EMERGENCY_COMMITTEE_SEED = createHash("sha256").update("emergency_committee_seed").digest();
@@ -44,7 +44,7 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
 
   const localFundedKeypairs: Keypair[] = [];
   async function localAirdrop(kp: Keypair, sol: number) {
-    await airdrop(provider, kp, sol);
+    await fundKeypair(provider, kp, sol);
     localFundedKeypairs.push(kp);
   }
 

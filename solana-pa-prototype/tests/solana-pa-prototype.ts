@@ -33,7 +33,7 @@ import {
 } from "./utils";
 import { readJson, loadFixture, Fixture } from "./utils";
 import { parseSelectorFromFixture, deriveRouterAccounts } from "./utils";
-import { airdrop, drainKeypairs } from "./utils";
+import { fundKeypair, drainKeypairs } from "./utils";
 
 // TxData accounts created during tests, closed in afterEach() to recover rent.
 const openTxDataAccounts: { uploadId: anchor.BN; txData: PublicKey; authority: Keypair }[] = [];
@@ -41,9 +41,9 @@ const openTxDataAccounts: { uploadId: anchor.BN; txData: PublicKey; authority: K
 // Keypairs funded during PA tests, drained back in after().
 const paFundedKeypairs: Keypair[] = [];
 
-// Local airdrop wrapper that tracks keypairs for drain-back.
+// Local fundKeypair wrapper that tracks keypairs for drain-back.
 async function paAirdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: number) {
-  await airdrop(provider, kp, sol);
+  await fundKeypair(provider, kp, sol);
   paFundedKeypairs.push(kp);
 }
 
@@ -2107,7 +2107,7 @@ describe("solana-pa-prototype (Close instructions)", () => {
 
   it("close_markers_batch rejects non-authority", async () => {
     const fakeAuthority = Keypair.generate();
-    await airdrop(provider, fakeAuthority, 1);
+    await fundKeypair(provider, fakeAuthority, 1);
 
     try {
       await program.methods
@@ -2126,7 +2126,7 @@ describe("solana-pa-prototype (Close instructions)", () => {
 
   it("close_pa_state rejects non-authority", async () => {
     const fakeAuthority = Keypair.generate();
-    await airdrop(provider, fakeAuthority, 1);
+    await fundKeypair(provider, fakeAuthority, 1);
 
     try {
       await program.methods

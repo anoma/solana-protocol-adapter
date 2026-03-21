@@ -9,7 +9,7 @@ import {
 import { createHash } from "crypto";
 import { OP_WRAP, OP_UNWRAP } from "./constants";
 
-export async function airdrop(
+export async function fundKeypair(
   provider: anchor.AnchorProvider,
   kp: Keypair,
   sol: number

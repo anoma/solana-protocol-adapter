@@ -31,7 +31,7 @@ import {
   derivePaStatePda,
 } from "./utils";
 import {
-  airdrop,
+  fundKeypair,
   drainKeypairs,
   createWrapMessageHash,
   encodeWrapInput,
@@ -46,7 +46,7 @@ describe("spl-token-forwarder", () => {
 
   const localFundedKeypairs: Keypair[] = [];
   async function localAirdrop(kp: Keypair, sol: number) {
-    await airdrop(provider, kp, sol);
+    await fundKeypair(provider, kp, sol);
     localFundedKeypairs.push(kp);
   }
 

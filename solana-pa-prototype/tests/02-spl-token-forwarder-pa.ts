@@ -57,7 +57,7 @@ import {
   deriveRouterAccounts,
 } from "./utils";
 import { readJson, Fixture } from "./utils";
-import { airdrop, drainKeypairs, createWrapMessageHash } from "./utils";
+import { fundKeypair, drainKeypairs, createWrapMessageHash } from "./utils";
 
 describe("SPL Token Forwarder PA Integration", function () {
   // Increase timeout for fixture-based tests
@@ -68,7 +68,7 @@ describe("SPL Token Forwarder PA Integration", function () {
 
   const localFundedKeypairs: Keypair[] = [];
   async function localAirdrop(kp: Keypair, sol: number) {
-    await airdrop(provider, kp, sol);
+    await fundKeypair(provider, kp, sol);
     localFundedKeypairs.push(kp);
   }
 
