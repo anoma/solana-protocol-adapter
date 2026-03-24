@@ -12,6 +12,7 @@ solana-pa-prototype/target/deploy/*
 # Mainnet keypairs — NEVER commit these
 solana-pa-prototype/scripts/mainnet-wallet.json
 solana-pa-prototype/scripts/mainnet-fee-payer.json
+solana-pa-prototype/scripts/mainnet-nonce.json
 
 # Claude Code
 .claude/
