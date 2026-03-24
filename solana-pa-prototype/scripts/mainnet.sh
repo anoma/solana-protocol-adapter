@@ -7,10 +7,9 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MAINNET_URL="${MAINNET_RPC_URL:-https://api.mainnet-beta.solana.com}"
 MAINNET_WALLET="${MAINNET_WALLET:-${PROJECT_DIR}/scripts/mainnet-wallet.json}"
 
-# Program registry — same programs as devnet.
+# Program registry — btf excluded (test utility, not needed on mainnet).
 declare -A PROGRAMS=(
   [pa]="solana_pa_prototype"
-  [btf]="block_time_forwarder"
   [anomapay-forwarder]="spl_token_forwarder"
 )
 
@@ -137,8 +136,24 @@ init_pa() {
   local program_id
   program_id="$(get_program_id "solana_pa_prototype")"
 
+  local verifier_router="${MAINNET_VERIFIER_ROUTER:-}"
+  if [[ -z "$verifier_router" ]]; then
+    # Check for keypair from a previous deploy-verifier run
+    local router_keypair="${PROJECT_DIR}/.cache/risc0-solana/solana-verifier/target/deploy/verifier_router-keypair.json"
+    if [[ -f "$router_keypair" ]]; then
+      verifier_router="$(solana-keygen pubkey "$router_keypair")"
+      echo "  Using verifier router from cached keypair: $verifier_router"
+    else
+      echo "❌ MAINNET_VERIFIER_ROUTER not set and no cached verifier keypair found."
+      echo "Run: ./scripts/dev.sh deploy-verifier mainnet"
+      echo "Or set: export MAINNET_VERIFIER_ROUTER=<router_program_id>"
+      exit 1
+    fi
+  fi
+
   ANCHOR_PROVIDER_URL="$MAINNET_URL" \
   ANCHOR_WALLET="$MAINNET_WALLET" \
+  VERIFIER_ROUTER_PROGRAM="$verifier_router" \
     npx ts-node "${SCRIPT_DIR}/devnet-init-pa.ts"
 }
 
@@ -164,12 +179,12 @@ resolve_targets() {
     all)
       echo "${!PROGRAMS[*]}"
       ;;
-    pa|btf|anomapay-forwarder)
+    pa|anomapay-forwarder)
       echo "$target"
       ;;
     *)
       echo "❌ Unknown target: ${target}" >&2
-      echo "Valid targets: pa, btf, anomapay-forwarder, all" >&2
+      echo "Valid targets: pa, anomapay-forwarder, all" >&2
       exit 1
       ;;
   esac
@@ -181,7 +196,6 @@ estimate_balance_needed() {
   for t in $targets; do
     case "$t" in
       pa)        total=$(awk "BEGIN{print $total + 5}") ;;
-      btf)       total=$(awk "BEGIN{print $total + 2}") ;;
       anomapay-forwarder) total=$(awk "BEGIN{print $total + 3}") ;;
     esac
   done
@@ -209,8 +223,7 @@ cmd_deploy() {
   cd "$PROJECT_DIR"
 
   confirm "Deploy programs to MAINNET: ${targets}
-This will spend real SOL (~${min_sol} SOL) to deploy on-chain programs.
-Make sure the PA is built with the correct mainnet VERIFIER_ROUTER_ID."
+This will spend real SOL (~${min_sol} SOL) to deploy on-chain programs."
 
   ensure_mainnet_wallet
   build_programs
@@ -261,8 +274,7 @@ cmd_upgrade() {
   done
 
   confirm "Upgrade programs on MAINNET: ${targets}
-This will overwrite live mainnet programs with newly-built binaries.
-Make sure the PA is built with the correct mainnet VERIFIER_ROUTER_ID."
+This will overwrite live mainnet programs with newly-built binaries."
 
   build_programs
 
@@ -462,8 +474,8 @@ case "${1:-}" in
     echo "Usage: mainnet.sh <command> [target]"
     echo ""
     echo "Commands:"
-    echo "  deploy [pa|btf|anomapay-forwarder|all]   First-time deploy to mainnet (default: all)"
-    echo "  upgrade [pa|btf|anomapay-forwarder|all]  Rebuild + deploy over existing programs"
+    echo "  deploy [pa|anomapay-forwarder|all]        First-time deploy to mainnet (default: all)"
+    echo "  upgrade [pa|anomapay-forwarder|all]       Rebuild + deploy over existing programs"
     echo "  init                            Initialize PA state (idempotent)"
     echo "  init-forwarder <mint>           Initialize forwarder + escrow for token mint"
     echo "  close-pdas                      Close all PA + forwarder PDAs, recover rent"
