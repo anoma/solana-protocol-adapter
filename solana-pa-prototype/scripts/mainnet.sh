@@ -407,6 +407,33 @@ cmd_balance() {
   echo "${pubkey}  ${balance} SOL"
 }
 
+cmd_close_pdas() {
+  require_cmd npx
+
+  cd "$PROJECT_DIR"
+
+  require_mainnet_wallet
+
+  confirm "Close ALL PA and forwarder PDA accounts on MAINNET.
+This recovers rent SOL but is irreversible — you will need to re-initialize
+PA state and forwarder config to use these programs again.
+
+Order: PA markers → PA state → forwarder bitmaps → forwarder escrow → forwarder config"
+
+  echo ""
+  echo "=== Closing PA PDAs ==="
+  ANCHOR_PROVIDER_URL="$MAINNET_URL" \
+  ANCHOR_WALLET="$MAINNET_WALLET" \
+    npx ts-node -P tsconfig.json "${SCRIPT_DIR}/close-pdas.ts"
+
+  echo ""
+  echo "=== Closing Forwarder PDAs ==="
+  ANCHOR_PROVIDER_URL="$MAINNET_URL" \
+  ANCHOR_WALLET="$MAINNET_WALLET" \
+  TOKEN_MINT="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" \
+    npx ts-node -P tsconfig.json "${SCRIPT_DIR}/close-forwarder.ts"
+}
+
 # ---------- dispatch ----------
 
 case "${1:-}" in
@@ -428,6 +455,9 @@ case "${1:-}" in
   balance)
     cmd_balance
     ;;
+  close-pdas)
+    cmd_close_pdas
+    ;;
   *)
     echo "Usage: mainnet.sh <command> [target]"
     echo ""
@@ -436,6 +466,7 @@ case "${1:-}" in
     echo "  upgrade [pa|btf|anomapay-forwarder|all]  Rebuild + deploy over existing programs"
     echo "  init                            Initialize PA state (idempotent)"
     echo "  init-forwarder <mint>           Initialize forwarder + escrow for token mint"
+    echo "  close-pdas                      Close all PA + forwarder PDAs, recover rent"
     echo "  status                          Show deployment status + wallet balance"
     echo "  balance                         Show wallet address and balance"
     echo ""

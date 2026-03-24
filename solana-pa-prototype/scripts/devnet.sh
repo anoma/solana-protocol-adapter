@@ -239,10 +239,19 @@ cmd_close_pdas() {
 
   require_devnet_wallet
 
-  echo "Closing PA PDA accounts..."
+  echo "=== Closing PA PDA accounts ==="
   ANCHOR_PROVIDER_URL="$DEVNET_URL" \
   ANCHOR_WALLET="$DEVNET_WALLET" \
   npx ts-node -P tsconfig.json scripts/close-pdas.ts ${flag:+"$flag"}
+
+  if [[ "$flag" != "--pa-state-only" ]]; then
+    echo ""
+    echo "=== Closing Forwarder PDA accounts ==="
+    ANCHOR_PROVIDER_URL="$DEVNET_URL" \
+    ANCHOR_WALLET="$DEVNET_WALLET" \
+    TOKEN_MINT="4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU" \
+    npx ts-node -P tsconfig.json scripts/close-forwarder.ts
+  fi
 }
 
 cmd_teardown() {
@@ -524,7 +533,7 @@ case "${1:-}" in
     echo "  deploy [pa|btf|anomapay-forwarder|all]   First-time deploy to devnet (default: all)"
     echo "  upgrade [pa|btf|anomapay-forwarder|all]  Rebuild + deploy over existing programs"
     echo "  teardown [pa|btf|anomapay-forwarder|all] PERMANENT: close programs, reclaim rent"
-    echo "  close-pdas               Close all PA PDA accounts, reclaim rent"
+    echo "  close-pdas               Close all PA + forwarder PDA accounts, reclaim rent"
     echo "  close-pa-state           Close only PAState (for re-init after upgrade)"
     echo "  test                            Run integration tests against devnet"
     echo "  init                            Initialize PA state (idempotent)"

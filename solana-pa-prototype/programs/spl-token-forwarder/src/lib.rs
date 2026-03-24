@@ -124,6 +124,9 @@ pub const OP_EMERGENCY_WITHDRAW: u8 = 0;
 /// SPL Token "Transfer" instruction opcode
 const SPL_TRANSFER_OPCODE: u8 = 3;
 
+/// SPL Token "CloseAccount" instruction opcode
+const SPL_CLOSE_ACCOUNT_OPCODE: u8 = 9;
+
 /// SPL Token program ID
 const SPL_TOKEN_PROGRAM_ID: Pubkey = Pubkey::new_from_array([
     0x06, 0xdd, 0xf6, 0xe1, 0xd7, 0x65, 0xa1, 0x93, 0xd9, 0xcb, 0xe1, 0x46, 0xce, 0xeb, 0x79, 0xac,
@@ -320,6 +323,100 @@ pub mod spl_token_forwarder {
 
         Ok(())
     }
+
+    // =========================================================================
+    // Teardown Instructions
+    // =========================================================================
+
+    /// Close the escrow for a specific token mint, draining tokens first.
+    ///
+    /// Transfers ALL remaining tokens to the recipient, then closes the
+    /// escrow token account. Rent lamports are recovered to the authority.
+    ///
+    /// The drain is automatic: if the escrow holds tokens, they are
+    /// transferred out before the account is closed.
+    pub fn close_escrow(ctx: Context<CloseEscrow>) -> Result<()> {
+        let token_mint_key = ctx.accounts.token_mint.key();
+        let escrow_bump = ctx.bumps.escrow_pda;
+        let escrow_seeds: &[&[u8]] = &[ESCROW_SEED, token_mint_key.as_ref(), &[escrow_bump]];
+        let signer_seeds = &[escrow_seeds];
+
+        let balance = read_token_balance(&ctx.accounts.escrow_ata)?;
+        if balance > 0 {
+            msg!("Draining {} tokens from escrow to recipient", balance);
+            let transfer_ix = spl_transfer_ix(
+                ctx.accounts.escrow_ata.key,
+                ctx.accounts.recipient_ata.key,
+                ctx.accounts.escrow_pda.key,
+                balance,
+            );
+            invoke_signed(
+                &transfer_ix,
+                &[
+                    ctx.accounts.escrow_ata.to_account_info(),
+                    ctx.accounts.recipient_ata.to_account_info(),
+                    ctx.accounts.escrow_pda.to_account_info(),
+                    ctx.accounts.token_program.to_account_info(),
+                ],
+                signer_seeds,
+            )?;
+        }
+
+        let close_ix = spl_close_account_ix(
+            ctx.accounts.escrow_ata.key,
+            ctx.accounts.authority.key,
+            ctx.accounts.escrow_pda.key,
+        );
+        invoke_signed(
+            &close_ix,
+            &[
+                ctx.accounts.escrow_ata.to_account_info(),
+                ctx.accounts.authority.to_account_info(),
+                ctx.accounts.escrow_pda.to_account_info(),
+            ],
+            signer_seeds,
+        )?;
+
+        msg!("Escrow closed: {} tokens drained, rent recovered", balance);
+        Ok(())
+    }
+
+    /// Close the forwarder config PDA, recovering rent to the authority.
+    ///
+    /// Call LAST, after closing all escrows and nonce bitmaps.
+    pub fn close_config(_ctx: Context<CloseConfig>) -> Result<()> {
+        msg!("Forwarder config closed");
+        Ok(())
+    }
+
+    /// Close nonce bitmap PDAs in a batch, recovering rent to the authority.
+    ///
+    /// Bitmap PDAs are passed as remaining_accounts.
+    pub fn close_nonce_bitmaps_batch<'info>(
+        ctx: Context<'_, '_, '_, 'info, CloseNonceBitmaps<'info>>,
+    ) -> Result<()> {
+        let authority_info = ctx.accounts.authority.to_account_info();
+
+        for bitmap in ctx.remaining_accounts {
+            require!(bitmap.owner == ctx.program_id, ErrorCode::InvalidAccountOwner);
+            require!(
+                bitmap.data_len() == NONCE_BITMAP_SIZE,
+                ErrorCode::InvalidNonceBitmapPda
+            );
+
+            let lamports = bitmap.lamports();
+            **bitmap.lamports.borrow_mut() = 0;
+            **authority_info.lamports.borrow_mut() = authority_info
+                .lamports()
+                .checked_add(lamports)
+                .unwrap();
+            bitmap.assign(&anchor_lang::solana_program::system_program::ID);
+            bitmap.realloc(0, false)?;
+        }
+
+        msg!("Closed {} nonce bitmaps", ctx.remaining_accounts.len());
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -374,6 +471,26 @@ fn spl_transfer_ix(
             AccountMeta::new_readonly(*authority, true),
         ],
         data: data.to_vec(),
+    }
+}
+
+/// Build an SPL Token CloseAccount instruction.
+///
+/// Closes a token account and transfers remaining lamports to the destination.
+/// The token account must have zero token balance.
+fn spl_close_account_ix(
+    account: &Pubkey,
+    destination: &Pubkey,
+    authority: &Pubkey,
+) -> anchor_lang::solana_program::instruction::Instruction {
+    anchor_lang::solana_program::instruction::Instruction {
+        program_id: SPL_TOKEN_PROGRAM_ID,
+        accounts: vec![
+            AccountMeta::new(*account, false),
+            AccountMeta::new(*destination, false),
+            AccountMeta::new_readonly(*authority, true),
+        ],
+        data: vec![SPL_CLOSE_ACCOUNT_OPCODE],
     }
 }
 
@@ -983,4 +1100,83 @@ pub struct SetEmergencyCaller<'info> {
         constraint = pa_state.key() == derive_pa_state_pda(&config.protocol_adapter).0 @ ErrorCode::InvalidPaState
     )]
     pub pa_state: AccountInfo<'info>,
+}
+
+// =============================================================================
+// Teardown Account Contexts
+// =============================================================================
+
+#[derive(Accounts)]
+pub struct CloseEscrow<'info> {
+    /// Emergency committee — receives rent lamports from closed escrow ATA.
+    #[account(
+        mut,
+        constraint = config.emergency_committee == authority.key() @ ErrorCode::UnauthorizedCaller
+    )]
+    pub authority: Signer<'info>,
+
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
+
+    /// The escrow token account to drain and close.
+    /// CHECK: Ownership verified by SPL Token program during transfer and close CPIs.
+    #[account(mut)]
+    pub escrow_ata: AccountInfo<'info>,
+
+    /// The escrow PDA authority over the escrow ATA.
+    /// CHECK: Derived from seeds; SPL Token CPI verifies it owns the escrow ATA.
+    #[account(
+        seeds = [ESCROW_SEED, token_mint.key().as_ref()],
+        bump,
+    )]
+    pub escrow_pda: AccountInfo<'info>,
+
+    /// Recipient token account for drained tokens.
+    /// CHECK: Passed to SPL Token transfer CPI.
+    #[account(mut)]
+    pub recipient_ata: AccountInfo<'info>,
+
+    /// The token mint for this escrow.
+    /// CHECK: Used for PDA seed derivation; the seeds constraint on escrow_pda
+    /// ensures the correct mint is provided.
+    pub token_mint: AccountInfo<'info>,
+
+    /// CHECK: Verified by address constraint.
+    #[account(address = SPL_TOKEN_PROGRAM_ID)]
+    pub token_program: AccountInfo<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CloseConfig<'info> {
+    /// Emergency committee — receives rent from closed config.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(
+        mut,
+        seeds = [b"config"],
+        bump = config.bump,
+        constraint = config.emergency_committee == authority.key() @ ErrorCode::UnauthorizedCaller,
+        close = authority
+    )]
+    pub config: Account<'info, Config>,
+}
+
+#[derive(Accounts)]
+pub struct CloseNonceBitmaps<'info> {
+    /// Emergency committee — receives rent from closed bitmaps.
+    #[account(
+        mut,
+        constraint = config.emergency_committee == authority.key() @ ErrorCode::UnauthorizedCaller
+    )]
+    pub authority: Signer<'info>,
+
+    #[account(
+        seeds = [b"config"],
+        bump = config.bump,
+    )]
+    pub config: Account<'info, Config>,
 }
