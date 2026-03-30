@@ -259,7 +259,7 @@ dependencies = [
 [[package]]
 name = "anoma-rm-core"
 version = "1.0.0"
-source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#f68112634ae4c09e23927ff595f9bdd59c0ec746"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#6eb7c6301111cb234be55dc3e41993e9a621bd3e"
 dependencies = [
  "bincode",
  "borsh 1.5.7",
@@ -268,13 +268,14 @@ dependencies = [
  "hex-literal",
  "serde",
  "serde_with",
+ "sha2 0.10.9",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "anoma-rm-risc0"
 version = "1.1.1"
-source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#f68112634ae4c09e23927ff595f9bdd59c0ec746"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#6eb7c6301111cb234be55dc3e41993e9a621bd3e"
 dependencies = [
  "anoma-rm-core",
  "bincode",
@@ -292,7 +293,7 @@ dependencies = [
 [[package]]
 name = "anoma-rm-solana"
 version = "1.0.0"
-source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#f68112634ae4c09e23927ff595f9bdd59c0ec746"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-crate-split#6eb7c6301111cb234be55dc3e41993e9a621bd3e"
 dependencies = [
  "anoma-rm-core",
  "bytemuck",

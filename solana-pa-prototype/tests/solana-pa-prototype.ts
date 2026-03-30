@@ -10,7 +10,6 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import { assert } from "chai";
-import { readFileSync } from "fs";
 import path from "path";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 
@@ -21,23 +20,21 @@ import {
   GROTH16_VERIFIER_ID,
 } from "../scripts/verifier-utils";
 
-type Fixture = {
-  format: string;
-  aggregation_strategy: string;
-  aggregation_proof_type: string;
-  selector: string; // "0x73c457ba" format
-  tx_b64: string;
-  tx_tampered_b64: string;
-  consumed_nullifiers_b64: string[];
-};
-
-function readJson<T>(filePath: string): T {
-  return JSON.parse(readFileSync(filePath, "utf8")) as T;
-}
-
-function loadFixture(filename: string): Fixture {
-  return readJson<Fixture>(path.resolve(process.cwd(), "tests", "fixtures", filename));
-}
+import {
+  PA_STATE_SEED,
+  NULLIFIER_SEED,
+  TX_DATA_SEED,
+  ROOT_MARKER_SEED as ROOT_SEED,
+  EMPTY_TREE_ROOT_INITIAL,
+  MIN_EXPIRY_SLOTS,
+  MAX_EXPIRY_SLOTS,
+  SEVEN_DAYS_SLOTS,
+  AUTHORITY_MISMATCH_PATTERN,
+  SEED_MISMATCH_PATTERN,
+  ADDRESS_MISMATCH_PATTERN,
+} from "./utils";
+import { readJson, loadFixture, Fixture, parseSelectorFromFixture } from "./utils";
+import { fundKeypair } from "./utils";
 
 // Keypairs funded during tests, drained back to the provider wallet in
 // afterEach() so devnet SOL circulates across the test run.
@@ -50,51 +47,11 @@ let providerBalanceBefore = 0;
 let suiteStartBalance = 0;
 
 async function airdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: number) {
-  const needed = sol * LAMPORTS_PER_SOL;
-  const balance = await provider.connection.getBalance(kp.publicKey);
-  if (balance >= needed) return;
-
-  const tx = new Transaction().add(
-    SystemProgram.transfer({
-      fromPubkey: provider.wallet.publicKey,
-      toPubkey: kp.publicKey,
-      lamports: needed - balance,
-    })
-  );
-  await provider.sendAndConfirm(tx);
+  await fundKeypair(provider, kp, sol);
   fundedKeypairs.push(kp);
 }
 
-const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
-  "cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06",
-  "hex"
-);
-
-const PA_STATE_SEED = Buffer.from("pa_state");
-const NULLIFIER_SEED = Buffer.from("nullifier");
-const TX_DATA_SEED = Buffer.from("tx_data");
-const ROOT_SEED = Buffer.from("root");
-
-// Protocol constants matching Rust defaults (from state.rs)
-const MIN_EXPIRY_SLOTS = 100;
-const MAX_EXPIRY_SLOTS = 216_000;
-// 7 days at 400ms/slot — matches SEVEN_DAYS_SLOTS in state.rs
-const SEVEN_DAYS_SLOTS = 1_512_000;
-
-// Anchor constraint error patterns for assertion matching
-const AUTHORITY_MISMATCH_PATTERN = /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i;
-const SEED_MISMATCH_PATTERN = /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint|Unauthorized/i;
-const ADDRESS_MISMATCH_PATTERN = /ConstraintAddress|address constraint/i;
-
 const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-
-function parseSelectorFromFixture(selectorHex: string): Buffer {
-  const hex = selectorHex.replace(/^0x/, "");
-  if (hex.length !== 8) {
-    throw new Error(`Invalid selector format: ${selectorHex} (expected 8 hex chars)`);
-  }
-  return Buffer.from(hex, "hex");
-}
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
