@@ -12,6 +12,9 @@ solana-pa-prototype/target/deploy/*
 # Claude Code
 .claude/
 
+# Mainnet keypairs (secrets)
+solana-pa-prototype/scripts/mainnet-*.json
+
 # OS files
 .DS_Store
 
