@@ -73,6 +73,8 @@ pub enum PAError {
     // Logic verification errors
     #[msg("Logic verifier input not found for tag")]
     TagNotFound,
+    #[msg("App data hash does not match proven hash in instance journal")]
+    AppDataHashMismatch,
 
     // Protocol state errors
     #[msg("Protocol adapter is paused")]

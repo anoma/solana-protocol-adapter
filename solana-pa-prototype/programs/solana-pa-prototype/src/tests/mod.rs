@@ -1,5 +1,6 @@
 pub mod utils;
 
+mod app_data_hash_benchmark;
 mod app_data_substitution_tests;
 mod delta_tests;
 mod encoding_tests;

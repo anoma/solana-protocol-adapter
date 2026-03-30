@@ -107,6 +107,53 @@ pub fn extract_tags_and_logic_refs(
     (tags, logic_refs)
 }
 
+/// Verify that each LVI's app_data matches the hash proven in its instance_journal.
+///
+/// The logic circuit guest computes `sha256(borsh(app_data))` and commits it as the
+/// last 32 bytes of the journal. This function recomputes the hash on-chain and
+/// compares it against the proven value, preventing app_data substitution attacks.
+pub fn verify_app_data_hashes(tx: &Transaction) -> Result<(), PAError> {
+    use anchor_lang::solana_program::hash::hash;
+
+    for action in &tx.actions {
+        for lvi in &action.logic_verifier_inputs {
+            let journal = &lvi.instance_journal;
+            // The app_data_hash Digest is the last field of LogicInstance.
+            // It occupies 8 u32 words = 32 bytes at the end of the journal.
+            // The journal is 4-byte aligned (risc0 serde produces u32 words;
+            // borsh to_journal() pads to alignment before the hash).
+            if journal.len() < 32 || journal.len() % 4 != 0 {
+                return Err(PAError::AppDataHashMismatch);
+            }
+
+            // Extract the last 8 u32 words as the proven hash.
+            // Journal bytes are native-endian u32 words.
+            let hash_start = journal.len() - 32;
+            let mut proven_words = [0u32; 8];
+            for i in 0..8 {
+                let off = hash_start + i * 4;
+                proven_words[i] = u32::from_ne_bytes(
+                    journal[off..off + 4]
+                        .try_into()
+                        .map_err(|_| PAError::AppDataHashMismatch)?,
+                );
+            }
+
+            // Compute the expected hash: sha256(borsh(app_data)), converted
+            // to Digest word representation via from_bytes (same as compute_hash).
+            let app_data_bytes =
+                borsh::to_vec(&lvi.app_data).map_err(|_| PAError::InvalidTransactionData)?;
+            let computed_hash = hash(&app_data_bytes);
+            let computed_digest = Digest::from_bytes(computed_hash.to_bytes());
+
+            if proven_words != *computed_digest.as_words() {
+                return Err(PAError::AppDataHashMismatch);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Find a LogicVerifierInputs entry by its tag.
 pub fn find_logic_input<'a>(
     inputs: &'a [LogicVerifierInputs],
