@@ -350,7 +350,9 @@ pub mod solana_pa_prototype {
     }
 
     /// Close the PAState account and reclaim rent to authority.
-    pub fn close_pa_state(_ctx: Context<ClosePaState>) -> Result<()> {
+    /// Requires the PA to be paused (teardown only).
+    pub fn close_pa_state(ctx: Context<ClosePaState>) -> Result<()> {
+        require!(ctx.accounts.pa_state.paused, PAError::NotPaused);
         msg!("PAState closed");
         Ok(())
     }
@@ -360,6 +362,7 @@ pub mod solana_pa_prototype {
     pub fn close_markers_batch<'info>(
         ctx: Context<'_, '_, '_, 'info, CloseMarkersBatch<'info>>,
     ) -> Result<()> {
+        require!(ctx.accounts.pa_state.paused, PAError::NotPaused);
         let authority_info = ctx.accounts.authority.to_account_info();
         for marker in ctx.remaining_accounts {
             require!(marker.owner == &crate::ID, PAError::InvalidMarker);
