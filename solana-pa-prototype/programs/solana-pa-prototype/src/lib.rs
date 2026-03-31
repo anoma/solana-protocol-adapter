@@ -303,6 +303,10 @@ pub mod solana_pa_prototype {
         ctx: Context<TransferAuthority>,
         new_authority: Pubkey,
     ) -> Result<()> {
+        require!(
+            new_authority != Pubkey::default(),
+            PAError::InvalidAuthority
+        );
         let state = &mut ctx.accounts.pa_state;
         let old_authority = state.authority;
         state.authority = new_authority;

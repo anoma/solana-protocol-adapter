@@ -3,6 +3,7 @@ pub mod utils;
 mod app_data_hash_benchmark;
 mod app_data_substitution_tests;
 mod delta_tests;
+mod duplicate_tag_tests;
 mod encoding_tests;
 mod error_tests;
 mod external_calls_tests;
