@@ -52,6 +52,7 @@ pub mod solana_pa_prototype {
         let state = &mut ctx.accounts.pa_state;
         state.bump = ctx.bumps.pa_state;
         state.authority = ctx.accounts.payer.key();
+        state.pending_authority = None;
         state.verifier_router = verifier_router;
         state.proof_selector = proof_selector;
         state.paused = false;
@@ -298,16 +299,38 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Transfer authority to a new account (single-step, no pending/accept).
-    pub fn transfer_authority(
-        ctx: Context<TransferAuthority>,
+    /// Propose a new authority. The transfer is not effective until the
+    /// proposed authority calls `accept_authority`.
+    pub fn propose_authority(
+        ctx: Context<ProposeAuthority>,
         new_authority: Pubkey,
     ) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
+        state.pending_authority = Some(new_authority);
+        msg!(
+            "Authority transfer proposed: {} -> {}",
+            state.authority,
+            new_authority
+        );
+        Ok(())
+    }
+
+    /// Accept a pending authority transfer. Must be signed by the proposed
+    /// authority. Completes the two-step transfer.
+    pub fn accept_authority(ctx: Context<AcceptAuthority>) -> Result<()> {
+        let state = &mut ctx.accounts.pa_state;
+        let new_authority = state
+            .pending_authority
+            .ok_or(PAError::NoPendingAuthority)?;
+        require!(
+            ctx.accounts.new_authority.key() == new_authority,
+            PAError::Unauthorized
+        );
         let old_authority = state.authority;
         state.authority = new_authority;
+        state.pending_authority = None;
         msg!(
-            "Authority transferred from {} to {}",
+            "Authority transferred: {} -> {}",
             old_authority,
             new_authority
         );
@@ -613,7 +636,7 @@ pub struct EmergencyStop<'info> {
 }
 
 #[derive(Accounts)]
-pub struct TransferAuthority<'info> {
+pub struct ProposeAuthority<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
@@ -623,6 +646,18 @@ pub struct TransferAuthority<'info> {
     pub pa_state: Account<'info, PAStateAccount>,
 
     pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct AcceptAuthority<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    pub new_authority: Signer<'info>,
 }
 
 #[derive(Accounts)]

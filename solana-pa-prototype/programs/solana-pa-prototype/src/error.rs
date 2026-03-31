@@ -83,6 +83,8 @@ pub enum PAError {
     Unauthorized,
     #[msg("Already paused")]
     AlreadyPaused,
+    #[msg("No pending authority transfer to accept")]
+    NoPendingAuthority,
 
     // Merkle tree errors
     #[msg("Tree has reached maximum depth (32 levels)")]

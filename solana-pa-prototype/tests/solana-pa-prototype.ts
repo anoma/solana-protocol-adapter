@@ -393,8 +393,9 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   });
 
   it("account size matches expected size for current depth (no over-allocation)", async () => {
-    // Space formula: BASE_SPACE (135) + VEC_OVERHEAD (4) + 32 * depth
-    const BASE_SPACE = 135;
+    // Space formula: BASE_SPACE (168) + VEC_OVERHEAD (4) + 32 * depth
+    // BASE_SPACE includes pending_authority: Option<Pubkey> (+33 bytes over original 135)
+    const BASE_SPACE = 168;
     const VEC_OVERHEAD = 4;
     const spaceForDepth = (depth: number) => BASE_SPACE + VEC_OVERHEAD + 32 * depth;
 
@@ -821,21 +822,21 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     }
   });
 
-  it("rejects transfer_authority from non-authority", async () => {
+  it("rejects propose_authority from non-authority", async () => {
     const nonAuthority = Keypair.generate();
     const newAuthority = Keypair.generate();
     await airdrop(provider, nonAuthority, 1);
 
     try {
       await program.methods
-        .transferAuthority(newAuthority.publicKey)
+        .proposeAuthority(newAuthority.publicKey)
         .accounts({
           paState,
           authority: nonAuthority.publicKey,
         })
         .signers([nonAuthority])
         .rpc();
-      assert.fail("expected transfer_authority to fail for non-authority");
+      assert.fail("expected propose_authority to fail for non-authority");
     } catch (e: any) {
       const haystack = errorHaystack(e);
       assert.match(
@@ -846,34 +847,61 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     }
   });
 
-  it("transfers authority when called by current authority", async () => {
+  it("two-step authority transfer: propose + accept", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const currentAuthority = stateBefore.authority;
 
     const newAuthority = Keypair.generate();
     await airdrop(provider, newAuthority, 1);
 
+    // Step 1: propose
     await program.methods
-      .transferAuthority(newAuthority.publicKey)
+      .proposeAuthority(newAuthority.publicKey)
       .accounts({
         paState,
         authority: provider.wallet.publicKey,
       })
       .rpc();
 
-    const stateAfter = await program.account.paStateAccount.fetch(paState);
+    // Authority hasn't changed yet
+    const stateAfterPropose = await program.account.paStateAccount.fetch(paState);
     assert.ok(
-      stateAfter.authority.equals(newAuthority.publicKey),
-      "Authority should be updated to new authority"
+      stateAfterPropose.authority.equals(currentAuthority),
+      "Authority should NOT change after propose"
     );
 
+    // Step 2: accept (signed by new authority)
     await program.methods
-      .transferAuthority(currentAuthority)
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: newAuthority.publicKey,
+      })
+      .signers([newAuthority])
+      .rpc();
+
+    const stateAfterAccept = await program.account.paStateAccount.fetch(paState);
+    assert.ok(
+      stateAfterAccept.authority.equals(newAuthority.publicKey),
+      "Authority should be updated after accept"
+    );
+
+    // Restore: propose back, accept with provider wallet
+    await program.methods
+      .proposeAuthority(currentAuthority)
       .accounts({
         paState,
         authority: newAuthority.publicKey,
       })
       .signers([newAuthority])
+      .rpc();
+
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: provider.wallet.publicKey,
+      })
       .rpc();
 
     const stateRestored = await program.account.paStateAccount.fetch(paState);
@@ -890,12 +918,21 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     const newAuthority = Keypair.generate();
     await airdrop(provider, newAuthority, 1);
 
+    // Two-step transfer
     await program.methods
-      .transferAuthority(newAuthority.publicKey)
+      .proposeAuthority(newAuthority.publicKey)
       .accounts({
         paState,
         authority: provider.wallet.publicKey,
       })
+      .rpc();
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: newAuthority.publicKey,
+      })
+      .signers([newAuthority])
       .rpc();
 
     try {
@@ -916,13 +953,21 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       );
     }
 
+    // Restore
     await program.methods
-      .transferAuthority(originalAuthority)
+      .proposeAuthority(originalAuthority)
       .accounts({
         paState,
         authority: newAuthority.publicKey,
       })
       .signers([newAuthority])
+      .rpc();
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: provider.wallet.publicKey,
+      })
       .rpc();
   });
 
