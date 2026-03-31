@@ -337,6 +337,18 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
+    /// Cancel a pending authority transfer. Only callable by the current authority.
+    pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Result<()> {
+        let state = &mut ctx.accounts.pa_state;
+        require!(
+            state.pending_authority.is_some(),
+            PAError::NoPendingAuthority
+        );
+        state.pending_authority = None;
+        msg!("Pending authority transfer cancelled");
+        Ok(())
+    }
+
     /// Close the PAState account and reclaim rent to authority.
     pub fn close_pa_state(_ctx: Context<ClosePaState>) -> Result<()> {
         msg!("PAState closed");
@@ -658,6 +670,19 @@ pub struct AcceptAuthority<'info> {
     pub pa_state: Account<'info, PAStateAccount>,
 
     pub new_authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CancelAuthorityTransfer<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        has_one = authority @ PAError::Unauthorized,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
