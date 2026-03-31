@@ -7,7 +7,7 @@ use crate::encoding::{compute_batch_aggregation_journal_digest, verify_app_data_
 use crate::error::PAError;
 use crate::external_calls::{encode_external_call, extract_external_calls};
 use crate::types::{OutputMode, SolanaExternalCall};
-use arm_core::logic_instance::{AppData, LogicInstance, LogicVerifierInputs};
+use arm_core::logic_instance::LogicInstance;
 use arm_core::Digest;
 
 use crate::tests::utils::create_minimal_transaction;

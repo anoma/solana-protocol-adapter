@@ -793,7 +793,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
   it("initializes with paused=false", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(state.paused, false, "State should be unpaused after initialize");
+    assert.equal(JSON.stringify(state.lifecycle), JSON.stringify({ running: {} }), "State should be Running after initialize");
   });
 
   it("rejects emergency_stop from non-authority", async () => {
@@ -2067,7 +2067,7 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
 describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
   it("emergency_stop pauses protocol", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
-    assert.equal(stateBefore.paused, false, "Should be unpaused before emergency_stop");
+    assert.equal(JSON.stringify(stateBefore.lifecycle), JSON.stringify({ running: {} }), "Should be Running before emergency_stop");
 
     await program.methods
       .emergencyStop()
@@ -2078,7 +2078,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
       .rpc();
 
     const stateAfter = await program.account.paStateAccount.fetch(paState);
-    assert.equal(stateAfter.paused, true, "Should be paused after emergency_stop");
+    assert.equal(JSON.stringify(stateAfter.lifecycle), JSON.stringify({ stopped: {} }), "Should be Stopped after emergency_stop");
   });
 
   it("rejects emergency_stop when already paused", async () => {
@@ -2092,7 +2092,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
         .rpc();
       assert.fail("expected emergency_stop to fail when already paused");
     } catch (e: any) {
-      assertPAError(e, "AlreadyPaused");
+      assertPAError(e, "AlreadyStopped");
     }
   });
 
@@ -2121,7 +2121,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
         .rpc();
       assert.fail("expected settle to fail when paused");
     } catch (e: any) {
-      assertPAError(e, "Paused");
+      assertPAError(e, "Stopped");
     }
   });
 
@@ -2153,7 +2153,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
         .rpc();
       assert.fail("expected settle_from_txdata to fail when paused");
     } catch (e: any) {
-      assertPAError(e, "Paused");
+      assertPAError(e, "Stopped");
     }
   });
 });
@@ -2221,46 +2221,6 @@ describe("solana-pa-prototype (Close instructions)", () => {
     }
   });
 
-  it("close_pa_state rejects non-authority", async () => {
-    const fakeAuthority = Keypair.generate();
-    await airdrop(provider, fakeAuthority, 1);
-
-    try {
-      await program.methods
-        .closePaState()
-        .accounts({
-          paState,
-          authority: fakeAuthority.publicKey,
-        })
-        .signers([fakeAuthority])
-        .rpc();
-      assert.fail("Expected unauthorized close to fail");
-    } catch (e: any) {
-      assert.match(e.toString(), AUTHORITY_MISMATCH_PATTERN);
-    }
-  });
-
-  it("close_pa_state closes PAState and refunds rent", async () => {
-    const paStateInfo = await provider.connection.getAccountInfo(paState);
-    assert.ok(paStateInfo, "PAState should exist before close");
-
-    const balanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
-
-    await program.methods
-      .closePaState()
-      .accounts({
-        paState,
-        authority: provider.wallet.publicKey,
-      })
-      .rpc();
-
-    const paStateAfter = await provider.connection.getAccountInfo(paState);
-    assert.equal(paStateAfter, null, "PAState should be closed");
-
-    const balanceAfter = await provider.connection.getBalance(provider.wallet.publicKey);
-    assert.ok(balanceAfter > balanceBefore, "Authority should have received rent refund");
-    console.log(`    PAState closed, recovered ${((balanceAfter - balanceBefore) / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
-  });
 });
 
 before(async () => {

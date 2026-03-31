@@ -52,7 +52,7 @@ macro_rules! assert_anchor_err {
 pub(crate) use assert_anchor_err;
 
 use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
-use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
+use crate::state::{PALifecycle, PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use arm_core::action::Action;
 use arm_core::compliance::ComplianceInstance;
 use arm_core::compliance_unit::ComplianceUnit;
@@ -175,14 +175,14 @@ pub fn create_test_pa_state() -> PAStateAccount {
     create_test_pa_state_with(Pubkey::default(), false)
 }
 
-pub fn create_test_pa_state_with(authority: Pubkey, paused: bool) -> PAStateAccount {
+pub fn create_test_pa_state_with(authority: Pubkey, stopped: bool) -> PAStateAccount {
     PAStateAccount {
         bump: 0,
         authority,
         pending_authority: None,
         verifier_router: Pubkey::default(),
         proof_selector: FAKE_SELECTOR,
-        paused,
+        lifecycle: if stopped { PALifecycle::Stopped } else { PALifecycle::Running },
         root: EMPTY_TREE_ROOT_INITIAL.to_bytes(),
         next_index: 0,
         current_depth: INITIAL_TREE_DEPTH as u8,

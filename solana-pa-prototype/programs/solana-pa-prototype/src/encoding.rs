@@ -130,9 +130,9 @@ pub fn verify_app_data_hashes(tx: &Transaction) -> Result<(), PAError> {
             // Journal bytes are native-endian u32 words.
             let hash_start = journal.len() - 32;
             let mut proven_words = [0u32; 8];
-            for i in 0..8 {
+            for (i, word) in proven_words.iter_mut().enumerate() {
                 let off = hash_start + i * 4;
-                proven_words[i] = u32::from_ne_bytes(
+                *word = u32::from_ne_bytes(
                     journal[off..off + 4]
                         .try_into()
                         .map_err(|_| PAError::AppDataHashMismatch)?,

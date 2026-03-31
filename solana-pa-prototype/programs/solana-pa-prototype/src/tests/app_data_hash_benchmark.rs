@@ -7,9 +7,7 @@
 //! Borsh serialization: pure BPF computation, ~1-3 CU per byte output
 //! (heap allocation cost dominates for larger payloads)
 
-use anchor_lang::solana_program::hash::hash;
 use arm_core::logic_instance::{AppData, ExpirableBlob};
-use arm_core::utils::bytes_to_words;
 
 use crate::external_calls::encode_external_call;
 use crate::types::{OutputMode, SolanaExternalCall};
@@ -19,13 +17,6 @@ fn borsh_serialize_app_data(app_data: &AppData) -> (Vec<u8>, usize) {
     let bytes = borsh::to_vec(app_data).expect("borsh serialization should succeed");
     let len = bytes.len();
     (bytes, len)
-}
-
-/// Simulate the full on-chain operation: borsh serialize + SHA256 hash.
-fn hash_app_data(app_data: &AppData) -> ([u8; 32], usize) {
-    let (bytes, len) = borsh_serialize_app_data(app_data);
-    let digest = hash(&bytes);
-    (digest.to_bytes(), len)
 }
 
 /// Estimate CU cost for borsh serialization + SHA256.

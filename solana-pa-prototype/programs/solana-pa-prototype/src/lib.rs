@@ -55,7 +55,7 @@ pub mod solana_pa_prototype {
         state.pending_authority = None;
         state.verifier_router = verifier_router;
         state.proof_selector = proof_selector;
-        state.paused = false;
+        state.lifecycle = PALifecycle::Running;
 
         state.current_depth = INITIAL_TREE_DEPTH as u8;
         state.frontier = vec![PADDING_LEAF.to_bytes()];
@@ -87,7 +87,7 @@ pub mod solana_pa_prototype {
         ctx: Context<'_, '_, '_, 'info, Settle<'info>>,
         transaction_data: Vec<u8>,
     ) -> Result<()> {
-        require!(!ctx.accounts.pa_state.paused, PAError::Paused);
+        require!(ctx.accounts.pa_state.lifecycle == PALifecycle::Running, PAError::Stopped);
 
         let tx: Transaction = bincode::deserialize(&transaction_data)
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
@@ -255,7 +255,7 @@ pub mod solana_pa_prototype {
         ctx: Context<'_, '_, '_, 'info, SettleFromTxData<'info>>,
         _upload_id: u64,
     ) -> Result<()> {
-        require!(!ctx.accounts.pa_state.paused, PAError::Paused);
+        require!(ctx.accounts.pa_state.lifecycle == PALifecycle::Running, PAError::Stopped);
 
         let txdata = &ctx.accounts.tx_data;
 
@@ -290,8 +290,8 @@ pub mod solana_pa_prototype {
     /// Emergency stop — permanently pause the protocol (requires upgrade to unpause).
     pub fn emergency_stop(ctx: Context<EmergencyStop>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
-        require!(!state.paused, PAError::AlreadyPaused);
-        state.paused = true;
+        require!(state.lifecycle == PALifecycle::Running, PAError::AlreadyStopped);
+        state.lifecycle = PALifecycle::Stopped;
         msg!(
             "Emergency stop activated by {}",
             ctx.accounts.authority.key()
@@ -349,20 +349,12 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Close the PAState account and reclaim rent to authority.
-    /// Requires the PA to be paused (teardown only).
-    pub fn close_pa_state(ctx: Context<ClosePaState>) -> Result<()> {
-        require!(ctx.accounts.pa_state.paused, PAError::NotPaused);
-        msg!("PAState closed");
-        Ok(())
-    }
-
     /// Close multiple marker PDAs (nullifier or root) in one transaction.
     /// Markers are passed as remaining_accounts.
     pub fn close_markers_batch<'info>(
         ctx: Context<'_, '_, '_, 'info, CloseMarkersBatch<'info>>,
     ) -> Result<()> {
-        require!(ctx.accounts.pa_state.paused, PAError::NotPaused);
+        require!(ctx.accounts.pa_state.lifecycle == PALifecycle::Stopped, PAError::NotStopped);
         let authority_info = ctx.accounts.authority.to_account_info();
         for marker in ctx.remaining_accounts {
             require!(marker.owner == &crate::ID, PAError::InvalidMarker);

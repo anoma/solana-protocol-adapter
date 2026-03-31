@@ -5,6 +5,65 @@ use crate::merkle::MAX_TREE_DEPTH;
 use anchor_lang::prelude::*;
 use arm_core::Digest;
 
+/// PA lifecycle: Running → Stopped (one-way, irreversible).
+/// Wire-compatible with the old `paused: bool` (Running=0, Stopped=1).
+///
+/// Serialized as a single byte (0=Running, 1=Stopped) — same layout as `bool`.
+/// Manual AnchorSerialize/AnchorDeserialize impl avoids the borsh 0.10/1.x
+/// ambiguity that Anchor 0.31's derive macros trigger.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum PALifecycle {
+    Running = 0,
+    Stopped = 1,
+}
+
+impl anchor_lang::AnchorSerialize for PALifecycle {
+    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        writer.write_all(&[*self as u8])
+    }
+}
+
+impl anchor_lang::AnchorDeserialize for PALifecycle {
+    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
+        let mut byte = [0u8; 1];
+        reader.read_exact(&mut byte)?;
+        match byte[0] {
+            0 => Ok(PALifecycle::Running),
+            1 => Ok(PALifecycle::Stopped),
+            _ => Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "invalid PALifecycle variant",
+            )),
+        }
+    }
+}
+
+#[cfg(feature = "idl-build")]
+impl anchor_lang::IdlBuild for PALifecycle {
+    fn create_type() -> Option<anchor_lang::idl::types::IdlTypeDef> {
+        Some(anchor_lang::idl::types::IdlTypeDef {
+            name: "PALifecycle".into(),
+            docs: vec!["PA lifecycle: Running (0) or Stopped (1).".into()],
+            serialization: anchor_lang::idl::types::IdlSerialization::default(),
+            repr: None,
+            generics: vec![],
+            ty: anchor_lang::idl::types::IdlTypeDefTy::Enum {
+                variants: vec![
+                    anchor_lang::idl::types::IdlEnumVariant {
+                        name: "Running".into(),
+                        fields: None,
+                    },
+                    anchor_lang::idl::types::IdlEnumVariant {
+                        name: "Stopped".into(),
+                        fields: None,
+                    },
+                ],
+            },
+        })
+    }
+}
+
 /// Protocol Adapter state — commitment tree frontier with variable depth (1-32).
 /// Nullifiers and historical roots are stored as separate PDA marker accounts.
 #[account]
@@ -20,8 +79,8 @@ pub struct PAStateAccount {
     pub proof_selector: [u8; 4],
     /// Pending authority for two-step transfer (propose + accept).
     pub pending_authority: Option<Pubkey>,
-    /// One-way pause; requires upgrade to unpause.
-    pub paused: bool,
+    /// Lifecycle state. One-way transition: Running → Stopped.
+    pub lifecycle: PALifecycle,
     /// Cached tree root (updated on every append). Avoids recomputing from frontier.
     pub root: [u8; 32],
     pub next_index: u64,

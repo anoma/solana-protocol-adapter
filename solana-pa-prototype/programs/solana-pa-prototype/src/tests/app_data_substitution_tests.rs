@@ -8,7 +8,7 @@
 
 use crate::encoding::{compute_batch_aggregation_journal_digest, verify_app_data_hashes};
 use crate::error::PAError;
-use crate::external_calls::{encode_external_call, extract_external_calls};
+use crate::external_calls::encode_external_call;
 use crate::types::{OutputMode, SolanaExternalCall};
 use arm_core::logic_instance::{AppData, LogicInstance};
 use arm_core::Digest;

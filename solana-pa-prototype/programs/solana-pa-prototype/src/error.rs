@@ -77,16 +77,16 @@ pub enum PAError {
     AppDataHashMismatch,
 
     // Protocol state errors
-    #[msg("Protocol adapter is paused")]
-    Paused,
+    #[msg("Protocol adapter is stopped")]
+    Stopped,
     #[msg("Unauthorized: caller is not the authority")]
     Unauthorized,
-    #[msg("Already paused")]
-    AlreadyPaused,
+    #[msg("Protocol adapter is already stopped")]
+    AlreadyStopped,
     #[msg("No pending authority transfer to accept")]
     NoPendingAuthority,
-    #[msg("Operation requires the PA to be paused")]
-    NotPaused,
+    #[msg("Operation requires the PA to be stopped")]
+    NotStopped,
 
     // Merkle tree errors
     #[msg("Tree has reached maximum depth (32 levels)")]
