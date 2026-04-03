@@ -966,8 +966,279 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .rpc();
   });
 
-  // NOTE: The following tests are destructive - they pause the protocol.
-  // We use a separate describe block with its own PAState to avoid affecting other tests.
+  it("proposing zero address does not brick governance", async () => {
+    // Propose transfer to zero address
+    await program.methods
+      .proposeAuthority(PublicKey.default)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    // Authority is still the provider — proposal doesn't transfer
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.ok(
+      state.authority.equals(provider.wallet.publicKey),
+      "Authority should still be provider after propose"
+    );
+
+    // Overwrite with a real candidate, complete transfer, then restore
+    const realCandidate = Keypair.generate();
+    await airdrop(provider, realCandidate, 1);
+
+    await program.methods
+      .proposeAuthority(realCandidate.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: realCandidate.publicKey,
+      })
+      .signers([realCandidate])
+      .rpc();
+
+    const stateAfter = await program.account.paStateAccount.fetch(paState);
+    assert.ok(
+      stateAfter.authority.equals(realCandidate.publicKey),
+      "Authority should transfer to the real candidate"
+    );
+
+    // Restore
+    await program.methods
+      .proposeAuthority(provider.wallet.publicKey)
+      .accounts({
+        paState,
+        authority: realCandidate.publicKey,
+      })
+      .signers([realCandidate])
+      .rpc();
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: provider.wallet.publicKey,
+      })
+      .rpc();
+  });
+
+  it("accept_authority fails without a pending proposal", async () => {
+    const random = Keypair.generate();
+    await airdrop(provider, random, 1);
+
+    try {
+      await program.methods
+        .acceptAuthority()
+        .accounts({
+          paState,
+          newAuthority: random.publicKey,
+        })
+        .signers([random])
+        .rpc();
+      assert.fail("accept_authority should fail with no pending proposal");
+    } catch (e: any) {
+      assertPAError(e, "NoPendingAuthority");
+    }
+  });
+
+  it("wrong signer cannot accept a pending proposal", async () => {
+    const intended = Keypair.generate();
+    const attacker = Keypair.generate();
+    await airdrop(provider, attacker, 1);
+
+    // Propose the intended authority
+    await program.methods
+      .proposeAuthority(intended.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    // Attacker tries to accept
+    try {
+      await program.methods
+        .acceptAuthority()
+        .accounts({
+          paState,
+          newAuthority: attacker.publicKey,
+        })
+        .signers([attacker])
+        .rpc();
+      assert.fail("attacker should not be able to accept someone else's proposal");
+    } catch (e: any) {
+      assertPAError(e, "Unauthorized");
+    }
+
+    // Cancel the proposal
+    await program.methods
+      .cancelAuthorityTransfer()
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+  });
+
+  it("overwrite invalidates previous proposal", async () => {
+    const firstCandidate = Keypair.generate();
+    const secondCandidate = Keypair.generate();
+    await airdrop(provider, firstCandidate, 1);
+    await airdrop(provider, secondCandidate, 1);
+
+    // Propose first candidate
+    await program.methods
+      .proposeAuthority(firstCandidate.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    // Overwrite with second candidate
+    await program.methods
+      .proposeAuthority(secondCandidate.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    // First candidate cannot accept
+    try {
+      await program.methods
+        .acceptAuthority()
+        .accounts({
+          paState,
+          newAuthority: firstCandidate.publicKey,
+        })
+        .signers([firstCandidate])
+        .rpc();
+      assert.fail("first candidate should not be able to accept after overwrite");
+    } catch (e: any) {
+      assertPAError(e, "Unauthorized");
+    }
+
+    // Cancel
+    await program.methods
+      .cancelAuthorityTransfer()
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+  });
+
+  it("pending_authority is cleared after accept", async () => {
+    const candidate = Keypair.generate();
+    await airdrop(provider, candidate, 1);
+
+    await program.methods
+      .proposeAuthority(candidate.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: candidate.publicKey,
+      })
+      .signers([candidate])
+      .rpc();
+
+    // Second accept should fail — pending is cleared
+    try {
+      await program.methods
+        .acceptAuthority()
+        .accounts({
+          paState,
+          newAuthority: candidate.publicKey,
+        })
+        .signers([candidate])
+        .rpc();
+      assert.fail("second accept should fail");
+    } catch (e: any) {
+      assertPAError(e, "NoPendingAuthority");
+    }
+
+    // Restore authority
+    await program.methods
+      .proposeAuthority(provider.wallet.publicKey)
+      .accounts({
+        paState,
+        authority: candidate.publicKey,
+      })
+      .signers([candidate])
+      .rpc();
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: provider.wallet.publicKey,
+      })
+      .rpc();
+  });
+
+  it("cancel_authority_transfer clears pending proposal", async () => {
+    const candidate = Keypair.generate();
+    await airdrop(provider, candidate, 1);
+
+    await program.methods
+      .proposeAuthority(candidate.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    await program.methods
+      .cancelAuthorityTransfer()
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    // Accept should fail — cancelled
+    try {
+      await program.methods
+        .acceptAuthority()
+        .accounts({
+          paState,
+          newAuthority: candidate.publicKey,
+        })
+        .signers([candidate])
+        .rpc();
+      assert.fail("accept should fail after cancel");
+    } catch (e: any) {
+      assertPAError(e, "NoPendingAuthority");
+    }
+  });
+
+  it("cancel_authority_transfer fails when no proposal is pending", async () => {
+    try {
+      await program.methods
+        .cancelAuthorityTransfer()
+        .accounts({
+          paState,
+          authority: provider.wallet.publicKey,
+        })
+        .rpc();
+      assert.fail("cancel should fail with no pending proposal");
+    } catch (e: any) {
+      assertPAError(e, "NoPendingAuthority");
+    }
+  });
 });
 
 describe("solana-pa-prototype (TxData Expiration)", () => {
@@ -2053,6 +2324,39 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
       assert.fail("expected ExternalCallOutputMismatch (data too short)");
     } catch (e: any) {
       assertPAError(e, "ExternalCallOutputMismatch");
+    }
+  });
+});
+
+// ── Close-while-running guard ────────────────────────────────────────────
+// Verifies that teardown operations cannot be performed while the PA is
+// running. Must run BEFORE emergency_stop pauses the protocol.
+
+describe("solana-pa-prototype (close_markers_batch requires stopped state)", () => {
+  it("close_markers_batch fails when PA is not stopped", async () => {
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.deepEqual(state.lifecycle, { running: {} }, "PA should be Running at start of test");
+
+    // Find any existing markers (genesis root marker + settlement markers)
+    const markers = await provider.connection.getProgramAccounts(program.programId, {
+      filters: [{ dataSize: 0 }],
+    });
+    assert.ok(markers.length > 0, "Should have markers to close (genesis root marker at minimum)");
+
+    try {
+      await program.methods
+        .closeMarkersBatch()
+        .accounts({
+          paState,
+          authority: provider.wallet.publicKey,
+        })
+        .remainingAccounts(markers.map(({ pubkey }) => ({
+          pubkey, isWritable: true, isSigner: false,
+        })))
+        .rpc();
+      assert.fail("close_markers_batch should fail when PA is not stopped");
+    } catch (e: any) {
+      assertPAError(e, "NotStopped");
     }
   });
 });

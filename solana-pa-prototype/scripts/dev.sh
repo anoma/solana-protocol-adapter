@@ -53,10 +53,6 @@ case "${1:-}" in
     run_in_project "./scripts/anchor-test.sh"
     ;;
 
-  security-test)
-    run_in_project "./scripts/security-test.sh"
-    ;;
-
   validator)
     run_in_project "solana-test-validator --reset --url devnet --rpc-port 8899 --faucet-port 9900 --bind-address 127.0.0.1 --log"
     ;;
@@ -204,7 +200,6 @@ PYEOF
     echo "  clippy       Run clippy lints"
     echo "  anchor-build Build Anchor programs"
     echo "  anchor-test    Run deterministic Anchor integration tests"
-    echo "  security-test  Run security/exploit integration tests (tests/exploit-*.ts)"
     echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
     echo "  fixture-test Run fixture-gen tests"
     echo "  validator    Start a local Solana validator"
