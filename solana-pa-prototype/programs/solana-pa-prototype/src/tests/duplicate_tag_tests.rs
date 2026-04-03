@@ -51,7 +51,8 @@ fn duplicate_tag_causes_tag_not_found() {
     // Set both LVIs to the same tag (consumed nullifier).
     tx.actions[0].logic_verifier_inputs[1].tag = consumed_tag;
     // Also set vk to match so the vk check doesn't fail first.
-    tx.actions[0].logic_verifier_inputs[1].verifying_key = tx.actions[0].logic_verifier_inputs[0].verifying_key;
+    tx.actions[0].logic_verifier_inputs[1].verifying_key =
+        tx.actions[0].logic_verifier_inputs[0].verifying_key;
 
     // Count: 2 tags == 2 LVIs → passes.
     // find_logic_input(consumed_nullifier) → LVI[0] ✓

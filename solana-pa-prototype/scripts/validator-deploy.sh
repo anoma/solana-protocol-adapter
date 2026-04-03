@@ -153,26 +153,25 @@ sync_program_ids() {
     yarn install
   fi
 
-  # Keypairs are committed to the repo and must NEVER be regenerated.
-  # They correspond to deployed program IDs — regenerating them creates
-  # unredeployable programs and orphans deployed state.
-  local missing_keypairs=()
+  # Keypairs are committed to the repo. If missing locally, restore from git.
+  # If not in git (fresh repo / CI), generate them via anchor build.
+  local missing_keypairs=false
   for kp in target/deploy/solana_pa_prototype-keypair.json \
             target/deploy/block_time_forwarder-keypair.json \
             target/deploy/test_forwarder-keypair.json; do
     if [[ ! -f "$kp" ]]; then
-      missing_keypairs+=("$kp")
+      missing_keypairs=true
+      break
     fi
   done
-  if [[ ${#missing_keypairs[@]} -gt 0 ]]; then
-    echo "❌ Missing program keypairs (these must NEVER be regenerated):"
-    for kp in "${missing_keypairs[@]}"; do
-      echo "   $kp"
-    done
-    echo ""
-    echo "Keypairs are committed in git. Restore them with:"
-    echo "   git checkout origin/main -- target/deploy/"
-    exit 1
+  if [[ "$missing_keypairs" == "true" ]]; then
+    if git show HEAD:target/deploy/solana_pa_prototype-keypair.json >/dev/null 2>&1; then
+      echo "    Restoring program keypairs from git..."
+      git checkout HEAD -- target/deploy/ 2>/dev/null || true
+    else
+      echo "    Generating program keypairs (first build)..."
+      build_with_filtered_output anchor build --no-idl
+    fi
   fi
 
   PA_ID="$(sync_program_id "PA" \

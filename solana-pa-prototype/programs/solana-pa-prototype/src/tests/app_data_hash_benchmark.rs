@@ -36,7 +36,7 @@ fn make_block_time_forwarder_call() -> SolanaExternalCall {
     SolanaExternalCall {
         program_id: [0x11; 32],
         instruction_data: (-1_i64).to_le_bytes().to_vec(), // 8 bytes
-        expected_output: vec![0x01],                        // 1 byte
+        expected_output: vec![0x01],                       // 1 byte
         output_mode: OutputMode::ReturnData,
     }
 }
@@ -176,10 +176,7 @@ fn benchmark_typical_transaction_total() {
         "  Consumed LVI: {} bytes, ~{} CU",
         consumed_size, consumed_cu
     );
-    println!(
-        "  Created LVI:  {} bytes, ~{} CU",
-        created_size, created_cu
-    );
+    println!("  Created LVI:  {} bytes, ~{} CU", created_size, created_cu);
     println!("  Total app_data hash cost: ~{} CU", total_cu);
     println!(
         "  As % of 1.4M CU budget: {:.2}%",

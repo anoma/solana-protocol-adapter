@@ -16,7 +16,11 @@ use arm_core::Digest;
 use crate::tests::utils::create_minimal_transaction;
 
 /// Build a `LogicInstance` with computed app_data_hash, return it and its journal bytes.
-fn make_logic_instance(tag: Digest, is_consumed: bool, app_data: AppData) -> (LogicInstance, Vec<u8>) {
+fn make_logic_instance(
+    tag: Digest,
+    is_consumed: bool,
+    app_data: AppData,
+) -> (LogicInstance, Vec<u8>) {
     let mut instance = LogicInstance {
         tag,
         is_consumed,
@@ -25,7 +29,9 @@ fn make_logic_instance(tag: Digest, is_consumed: bool, app_data: AppData) -> (Lo
         app_data_hash: Digest::default(),
     };
     instance.compute_and_set_app_data_hash();
-    let journal = instance.to_journal().expect("borsh serialization should succeed");
+    let journal = instance
+        .to_journal()
+        .expect("borsh serialization should succeed");
     (instance, journal)
 }
 
@@ -177,9 +183,7 @@ fn verify_app_data_hashes_rejects_stripped_external_call() {
     // Journal was computed WITH an external call
     let call = make_external_call([0x11; 32], b"block_time".to_vec());
     let mut app_data = AppData::default();
-    app_data
-        .external_payload
-        .push(encode_external_call(&call));
+    app_data.external_payload.push(encode_external_call(&call));
 
     let (_, consumed_journal) = make_logic_instance(consumed_tag, true, app_data);
     let (_, created_journal) = make_logic_instance(created_tag, false, AppData::default());

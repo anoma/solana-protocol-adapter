@@ -182,7 +182,11 @@ pub fn create_test_pa_state_with(authority: Pubkey, stopped: bool) -> PAStateAcc
         pending_authority: None,
         verifier_router: Pubkey::default(),
         proof_selector: FAKE_SELECTOR,
-        lifecycle: if stopped { PALifecycle::Stopped } else { PALifecycle::Running },
+        lifecycle: if stopped {
+            PALifecycle::Stopped
+        } else {
+            PALifecycle::Running
+        },
         root: EMPTY_TREE_ROOT_INITIAL.to_bytes(),
         next_index: 0,
         current_depth: INITIAL_TREE_DEPTH as u8,

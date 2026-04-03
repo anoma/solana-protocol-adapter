@@ -87,7 +87,10 @@ pub mod solana_pa_prototype {
         ctx: Context<'_, '_, '_, 'info, Settle<'info>>,
         transaction_data: Vec<u8>,
     ) -> Result<()> {
-        require!(ctx.accounts.pa_state.lifecycle == PALifecycle::Running, PAError::Stopped);
+        require!(
+            ctx.accounts.pa_state.lifecycle == PALifecycle::Running,
+            PAError::Stopped
+        );
 
         let tx: Transaction = bincode::deserialize(&transaction_data)
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
@@ -255,7 +258,10 @@ pub mod solana_pa_prototype {
         ctx: Context<'_, '_, '_, 'info, SettleFromTxData<'info>>,
         _upload_id: u64,
     ) -> Result<()> {
-        require!(ctx.accounts.pa_state.lifecycle == PALifecycle::Running, PAError::Stopped);
+        require!(
+            ctx.accounts.pa_state.lifecycle == PALifecycle::Running,
+            PAError::Stopped
+        );
 
         let txdata = &ctx.accounts.tx_data;
 
@@ -290,7 +296,10 @@ pub mod solana_pa_prototype {
     /// Emergency stop — permanently pause the protocol (requires upgrade to unpause).
     pub fn emergency_stop(ctx: Context<EmergencyStop>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
-        require!(state.lifecycle == PALifecycle::Running, PAError::AlreadyStopped);
+        require!(
+            state.lifecycle == PALifecycle::Running,
+            PAError::AlreadyStopped
+        );
         state.lifecycle = PALifecycle::Stopped;
         msg!(
             "Emergency stop activated by {}",
@@ -301,10 +310,7 @@ pub mod solana_pa_prototype {
 
     /// Propose a new authority. The transfer is not effective until the
     /// proposed authority calls `accept_authority`.
-    pub fn propose_authority(
-        ctx: Context<ProposeAuthority>,
-        new_authority: Pubkey,
-    ) -> Result<()> {
+    pub fn propose_authority(ctx: Context<ProposeAuthority>, new_authority: Pubkey) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         state.pending_authority = Some(new_authority);
         msg!(
@@ -319,9 +325,7 @@ pub mod solana_pa_prototype {
     /// authority. Completes the two-step transfer.
     pub fn accept_authority(ctx: Context<AcceptAuthority>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
-        let new_authority = state
-            .pending_authority
-            .ok_or(PAError::NoPendingAuthority)?;
+        let new_authority = state.pending_authority.ok_or(PAError::NoPendingAuthority)?;
         require!(
             ctx.accounts.new_authority.key() == new_authority,
             PAError::Unauthorized
@@ -354,7 +358,10 @@ pub mod solana_pa_prototype {
     pub fn close_markers_batch<'info>(
         ctx: Context<'_, '_, '_, 'info, CloseMarkersBatch<'info>>,
     ) -> Result<()> {
-        require!(ctx.accounts.pa_state.lifecycle == PALifecycle::Stopped, PAError::NotStopped);
+        require!(
+            ctx.accounts.pa_state.lifecycle == PALifecycle::Stopped,
+            PAError::NotStopped
+        );
         let authority_info = ctx.accounts.authority.to_account_info();
         for marker in ctx.remaining_accounts {
             require!(marker.owner == &crate::ID, PAError::InvalidMarker);
