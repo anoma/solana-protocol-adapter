@@ -165,7 +165,10 @@ sync_program_ids() {
     fi
   done
   if [[ "$missing_keypairs" == "true" ]]; then
-    if git show HEAD:target/deploy/solana_pa_prototype-keypair.json >/dev/null 2>&1; then
+    # git show/checkout use paths relative to repo root, not working dir
+    local git_root
+    git_root="$(git rev-parse --show-prefix 2>/dev/null)"
+    if git show "HEAD:${git_root}target/deploy/solana_pa_prototype-keypair.json" >/dev/null 2>&1; then
       echo "    Restoring program keypairs from git..."
       git checkout HEAD -- target/deploy/ 2>/dev/null || true
     else
