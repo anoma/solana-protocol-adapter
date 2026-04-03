@@ -856,21 +856,6 @@ pub struct UpdateExpiryConfig<'info> {
 }
 
 #[derive(Accounts)]
-pub struct ClosePaState<'info> {
-    #[account(
-        mut,
-        seeds = [PA_STATE_SEED],
-        bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
-        close = authority,
-    )]
-    pub pa_state: Account<'info, PAStateAccount>,
-
-    #[account(mut)]
-    pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
 pub struct CloseMarkersBatch<'info> {
     #[account(
         seeds = [PA_STATE_SEED],

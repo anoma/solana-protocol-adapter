@@ -22,7 +22,6 @@ import {
 
 import {
   PA_STATE_SEED,
-  NULLIFIER_SEED,
   TX_DATA_SEED,
   ROOT_MARKER_SEED as ROOT_SEED,
   EMPTY_TREE_ROOT_INITIAL,
@@ -32,9 +31,13 @@ import {
   AUTHORITY_MISMATCH_PATTERN,
   SEED_MISMATCH_PATTERN,
   ADDRESS_MISMATCH_PATTERN,
+  readJson,
+  loadFixture,
+  Fixture,
+  parseSelectorFromFixture,
+  fundKeypair,
+  deriveNullifierAccounts as deriveNullifierAccountsFromB64,
 } from "./utils";
-import { readJson, loadFixture, Fixture, parseSelectorFromFixture } from "./utils";
-import { fundKeypair } from "./utils";
 
 // Keypairs funded during tests, drained back to the provider wallet in
 // afterEach() so devnet SOL circulates across the test run.
@@ -81,14 +84,7 @@ function deriveRootPda(root: Buffer): PublicKey {
 }
 
 function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
-  return nullifierB64s.map((nfB64) => {
-    const nf = Buffer.from(nfB64, "base64");
-    const pubkey = PublicKey.findProgramAddressSync(
-      [NULLIFIER_SEED, paState.toBuffer(), nf],
-      program.programId
-    )[0];
-    return { pubkey, isWritable: true, isSigner: false };
-  });
+  return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
 }
 
 function buildSettleRemainingAccounts(

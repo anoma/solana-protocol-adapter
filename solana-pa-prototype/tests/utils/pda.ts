@@ -26,3 +26,19 @@ export function deriveRootMarkerPda(
     programId
   )[0];
 }
+
+/**
+ * Derive nullifier marker account metas from base64-encoded nullifier bytes.
+ * Returns writable, non-signer account metas suitable for remaining_accounts.
+ */
+export function deriveNullifierAccounts(
+  nullifierB64s: string[],
+  paState: PublicKey,
+  programId: PublicKey
+): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
+  return nullifierB64s.map((nfB64) => {
+    const nf = Buffer.from(nfB64, "base64");
+    const [pubkey] = deriveNullifierPda(programId, paState, nf);
+    return { pubkey, isWritable: true, isSigner: false };
+  });
+}
