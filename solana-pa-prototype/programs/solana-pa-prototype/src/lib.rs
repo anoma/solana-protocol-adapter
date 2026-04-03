@@ -421,7 +421,7 @@ fn maybe_grow_account<'info>(
     let target_depth = required_depth.min(MAX_TREE_DEPTH);
 
     if target_depth <= state.depth() {
-        return Ok(()); // No growth needed
+        return Ok(());
     }
 
     let new_size = PAStateAccount::space_for_depth(target_depth);

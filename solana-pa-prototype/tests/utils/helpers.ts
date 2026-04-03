@@ -29,28 +29,3 @@ export async function fundKeypair(
   await provider.sendAndConfirm(tx);
 }
 
-/**
- * Drain SOL from funded keypairs back to the provider wallet.
- */
-export async function drainKeypairs(
-  provider: anchor.AnchorProvider,
-  keypairs: Keypair[]
-): Promise<void> {
-  for (const kp of keypairs) {
-    const balance = await provider.connection.getBalance(kp.publicKey);
-    if (balance <= 5000) continue; // not worth the tx fee
-    try {
-      const tx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: kp.publicKey,
-          toPubkey: provider.wallet.publicKey,
-          lamports: balance - 5000, // leave enough for rent
-        })
-      );
-      tx.feePayer = kp.publicKey;
-      await provider.sendAndConfirm(tx, [kp]);
-    } catch {
-      // Best effort — don't fail test cleanup
-    }
-  }
-}

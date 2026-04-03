@@ -6,20 +6,10 @@
 use crate::encoding::{compute_batch_aggregation_journal_digest, verify_app_data_hashes};
 use crate::error::PAError;
 use crate::external_calls::{encode_external_call, extract_external_calls};
-use crate::types::{OutputMode, SolanaExternalCall};
 use arm_core::logic_instance::LogicInstance;
 use arm_core::Digest;
 
-use crate::tests::utils::create_minimal_transaction;
-
-fn make_external_call(program_id: [u8; 32]) -> SolanaExternalCall {
-    SolanaExternalCall {
-        program_id,
-        instruction_data: vec![1, 2, 3],
-        expected_output: vec![],
-        output_mode: OutputMode::ReturnData,
-    }
-}
+use crate::tests::utils::{create_minimal_transaction, make_external_call};
 
 /// Count check blocks extra LVIs: 1 CU produces 2 tags, 3 LVIs rejected.
 #[test]
@@ -81,7 +71,10 @@ fn duplicate_tag_external_calls_extracted_but_journal_digest_blocks() {
     tx.actions[0].logic_verifier_inputs[1]
         .app_data
         .external_payload
-        .push(encode_external_call(&make_external_call([0xFF; 32])));
+        .push(encode_external_call(&make_external_call(
+            [0xFF; 32],
+            vec![1, 2, 3],
+        )));
 
     // extract_external_calls sees the malicious call (it iterates all LVIs).
     let calls = extract_external_calls(&tx).unwrap();
@@ -127,7 +120,10 @@ fn verify_app_data_hashes_checks_all_lvis_including_duplicates() {
     tx.actions[0].logic_verifier_inputs[1]
         .app_data
         .external_payload
-        .push(encode_external_call(&make_external_call([0xAA; 32])));
+        .push(encode_external_call(&make_external_call(
+            [0xAA; 32],
+            vec![1, 2, 3],
+        )));
     // instance_journal still has hash of OLD (empty) app_data.
 
     // verify_app_data_hashes catches the mismatch on LVI[1].

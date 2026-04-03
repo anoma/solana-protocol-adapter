@@ -23,7 +23,7 @@ import {
 import {
   PA_STATE_SEED,
   TX_DATA_SEED,
-  ROOT_MARKER_SEED as ROOT_SEED,
+  ROOT_MARKER_SEED,
   EMPTY_TREE_ROOT_INITIAL,
   MIN_EXPIRY_SLOTS,
   MAX_EXPIRY_SLOTS,
@@ -33,7 +33,6 @@ import {
   ADDRESS_MISMATCH_PATTERN,
   readJson,
   loadFixture,
-  Fixture,
   parseSelectorFromFixture,
   fundKeypair,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
@@ -78,7 +77,7 @@ const testForwarderId = new PublicKey("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNc
 
 function deriveRootPda(root: Buffer): PublicKey {
   return PublicKey.findProgramAddressSync(
-    [ROOT_SEED, paState.toBuffer(), root],
+    [ROOT_MARKER_SEED, paState.toBuffer(), root],
     program.programId
   )[0];
 }

@@ -1,9 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
-import { PA_STATE_SEED, NULLIFIER_SEED, ROOT_MARKER_SEED } from "./constants";
-
-export function derivePaStatePda(programId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([PA_STATE_SEED], programId);
-}
+import { NULLIFIER_SEED, ROOT_MARKER_SEED } from "./constants";
 
 export function deriveNullifierPda(
   programId: PublicKey,

@@ -183,7 +183,7 @@ sync_program_ids() {
     "solana_pa_prototype")"
 
   BTF_OLD="$(read_declare_id "programs/block-time-forwarder/src/lib.rs")"
-  BTF_ID="$(sync_program_id "block_time_forwarder" \
+  BTF_ID="$(sync_program_id "BTF" \
     "target/deploy/block_time_forwarder-keypair.json" \
     "programs/block-time-forwarder/src/lib.rs" \
     "block_time_forwarder")"
@@ -195,7 +195,7 @@ sync_program_ids() {
   fi
 
   TF_OLD="$(read_declare_id "programs/test-forwarder/src/lib.rs")"
-  TF_ID="$(sync_program_id "test_forwarder" \
+  TF_ID="$(sync_program_id "TF" \
     "target/deploy/test_forwarder-keypair.json" \
     "programs/test-forwarder/src/lib.rs" \
     "test_forwarder")"

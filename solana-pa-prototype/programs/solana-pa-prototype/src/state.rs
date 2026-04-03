@@ -6,9 +6,8 @@ use anchor_lang::prelude::*;
 use arm_core::Digest;
 
 /// PA lifecycle: Running → Stopped (one-way, irreversible).
-/// Wire-compatible with the old `paused: bool` (Running=0, Stopped=1).
 ///
-/// Serialized as a single byte (0=Running, 1=Stopped) — same layout as `bool`.
+/// Serialized as a single byte (0=Running, 1=Stopped).
 /// Manual AnchorSerialize/AnchorDeserialize impl avoids the borsh 0.10/1.x
 /// ambiguity that Anchor 0.31's derive macros trigger.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -93,8 +92,8 @@ pub struct PAStateAccount {
 }
 
 impl PAStateAccount {
-    /// discriminator(8) + bump(1) + authority(32) + pending_authority(1+32) +
-    /// verifier_router(32) + proof_selector(4) + lifecycle(1) + root(32) +
+    /// discriminator(8) + bump(1) + authority(32) + verifier_router(32) +
+    /// proof_selector(4) + pending_authority(1+32) + lifecycle(1) + root(32) +
     /// next_index(8) + current_depth(1) + min_expiry_slots(8) + max_expiry_slots(8)
     pub const BASE_SPACE: usize = 8 + 1 + 32 + 33 + 32 + 4 + 1 + 32 + 8 + 1 + 8 + 8;
 

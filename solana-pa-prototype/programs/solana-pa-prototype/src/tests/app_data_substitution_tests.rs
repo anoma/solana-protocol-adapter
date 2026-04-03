@@ -9,18 +9,13 @@
 use crate::encoding::{compute_batch_aggregation_journal_digest, verify_app_data_hashes};
 use crate::error::PAError;
 use crate::external_calls::encode_external_call;
-use crate::types::{OutputMode, SolanaExternalCall};
 use arm_core::logic_instance::{AppData, LogicInstance};
+use arm_core::transaction::Transaction;
 use arm_core::Digest;
 
-use crate::tests::utils::create_minimal_transaction;
+use crate::tests::utils::{create_minimal_transaction, make_external_call};
 
-/// Build a `LogicInstance` with computed app_data_hash, return it and its journal bytes.
-fn make_logic_instance(
-    tag: Digest,
-    is_consumed: bool,
-    app_data: AppData,
-) -> (LogicInstance, Vec<u8>) {
+fn make_instance_journal(tag: Digest, is_consumed: bool, app_data: AppData) -> Vec<u8> {
     let mut instance = LogicInstance {
         tag,
         is_consumed,
@@ -29,19 +24,22 @@ fn make_logic_instance(
         app_data_hash: Digest::default(),
     };
     instance.compute_and_set_app_data_hash();
-    let journal = instance
+    instance
         .to_journal()
-        .expect("borsh serialization should succeed");
-    (instance, journal)
+        .expect("borsh serialization should succeed")
 }
 
-fn make_external_call(program_id: [u8; 32], instruction_data: Vec<u8>) -> SolanaExternalCall {
-    SolanaExternalCall {
-        program_id,
-        instruction_data,
-        expected_output: vec![],
-        output_mode: OutputMode::ReturnData,
-    }
+fn create_tx_with_journals(consumed_app_data: AppData) -> Transaction {
+    let mut tx = create_minimal_transaction();
+    let action = &mut tx.actions[0];
+    let consumed_tag = action.compliance_units[0].instance.consumed_nullifier;
+    let created_tag = action.compliance_units[0].instance.created_commitment;
+    action.logic_verifier_inputs[0].instance_journal =
+        make_instance_journal(consumed_tag, true, consumed_app_data.clone());
+    action.logic_verifier_inputs[1].instance_journal =
+        make_instance_journal(created_tag, false, AppData::default());
+    action.logic_verifier_inputs[0].app_data = consumed_app_data;
+    tx
 }
 
 // ============================================================================
@@ -50,17 +48,7 @@ fn make_external_call(program_id: [u8; 32], instruction_data: Vec<u8>) -> Solana
 
 #[test]
 fn journal_digest_is_blind_to_app_data_changes() {
-    let mut tx = create_minimal_transaction();
-    let action = &mut tx.actions[0];
-
-    let consumed_tag = action.compliance_units[0].instance.consumed_nullifier;
-    let created_tag = action.compliance_units[0].instance.created_commitment;
-
-    let (_, consumed_journal) = make_logic_instance(consumed_tag, true, AppData::default());
-    let (_, created_journal) = make_logic_instance(created_tag, false, AppData::default());
-
-    action.logic_verifier_inputs[0].instance_journal = consumed_journal;
-    action.logic_verifier_inputs[1].instance_journal = created_journal;
+    let mut tx = create_tx_with_journals(AppData::default());
 
     let digest_before = compute_batch_aggregation_journal_digest(&tx).unwrap();
 
@@ -84,17 +72,7 @@ fn journal_digest_is_blind_to_app_data_changes() {
 
 #[test]
 fn verify_app_data_hashes_passes_for_consistent_data() {
-    let mut tx = create_minimal_transaction();
-    let action = &mut tx.actions[0];
-
-    let consumed_tag = action.compliance_units[0].instance.consumed_nullifier;
-    let created_tag = action.compliance_units[0].instance.created_commitment;
-
-    let (_, consumed_journal) = make_logic_instance(consumed_tag, true, AppData::default());
-    let (_, created_journal) = make_logic_instance(created_tag, false, AppData::default());
-
-    action.logic_verifier_inputs[0].instance_journal = consumed_journal;
-    action.logic_verifier_inputs[1].instance_journal = created_journal;
+    let tx = create_tx_with_journals(AppData::default());
     // app_data is default (empty) — matches what was hashed in the journal
 
     assert!(
@@ -105,18 +83,7 @@ fn verify_app_data_hashes_passes_for_consistent_data() {
 
 #[test]
 fn verify_app_data_hashes_rejects_injected_external_call() {
-    let mut tx = create_minimal_transaction();
-    let action = &mut tx.actions[0];
-
-    let consumed_tag = action.compliance_units[0].instance.consumed_nullifier;
-    let created_tag = action.compliance_units[0].instance.created_commitment;
-
-    // Journal was computed with empty app_data
-    let (_, consumed_journal) = make_logic_instance(consumed_tag, true, AppData::default());
-    let (_, created_journal) = make_logic_instance(created_tag, false, AppData::default());
-
-    action.logic_verifier_inputs[0].instance_journal = consumed_journal;
-    action.logic_verifier_inputs[1].instance_journal = created_journal;
+    let mut tx = create_tx_with_journals(AppData::default());
 
     // Inject a call into app_data — this doesn't match the hash in the journal
     let call = make_external_call([0xBB; 32], b"steal_tokens".to_vec());
@@ -135,12 +102,6 @@ fn verify_app_data_hashes_rejects_injected_external_call() {
 
 #[test]
 fn verify_app_data_hashes_rejects_replaced_external_call() {
-    let mut tx = create_minimal_transaction();
-    let action = &mut tx.actions[0];
-
-    let consumed_tag = action.compliance_units[0].instance.consumed_nullifier;
-    let created_tag = action.compliance_units[0].instance.created_commitment;
-
     // Journal was computed with a legitimate external call
     let legitimate_call = make_external_call([0x11; 32], b"legitimate".to_vec());
     let mut honest_app_data = AppData::default();
@@ -148,12 +109,7 @@ fn verify_app_data_hashes_rejects_replaced_external_call() {
         .external_payload
         .push(encode_external_call(&legitimate_call));
 
-    let (_, consumed_journal) = make_logic_instance(consumed_tag, true, honest_app_data.clone());
-    let (_, created_journal) = make_logic_instance(created_tag, false, AppData::default());
-
-    action.logic_verifier_inputs[0].instance_journal = consumed_journal;
-    action.logic_verifier_inputs[1].instance_journal = created_journal;
-    action.logic_verifier_inputs[0].app_data = honest_app_data;
+    let mut tx = create_tx_with_journals(honest_app_data);
 
     // Consistent state — should pass
     assert!(verify_app_data_hashes(&tx).is_ok());
@@ -174,23 +130,14 @@ fn verify_app_data_hashes_rejects_replaced_external_call() {
 
 #[test]
 fn verify_app_data_hashes_rejects_stripped_external_call() {
-    let mut tx = create_minimal_transaction();
-    let action = &mut tx.actions[0];
-
-    let consumed_tag = action.compliance_units[0].instance.consumed_nullifier;
-    let created_tag = action.compliance_units[0].instance.created_commitment;
-
     // Journal was computed WITH an external call
     let call = make_external_call([0x11; 32], b"block_time".to_vec());
     let mut app_data = AppData::default();
     app_data.external_payload.push(encode_external_call(&call));
 
-    let (_, consumed_journal) = make_logic_instance(consumed_tag, true, app_data);
-    let (_, created_journal) = make_logic_instance(created_tag, false, AppData::default());
-
-    action.logic_verifier_inputs[0].instance_journal = consumed_journal;
-    action.logic_verifier_inputs[1].instance_journal = created_journal;
-    // app_data is still default (empty) — the call was STRIPPED
+    let mut tx = create_tx_with_journals(app_data);
+    // Strip the call from app_data — journal still has hash of the version WITH the call
+    tx.actions[0].logic_verifier_inputs[0].app_data = AppData::default();
 
     let result = verify_app_data_hashes(&tx);
     assert!(

@@ -195,3 +195,15 @@ pub fn create_test_pa_state_with(authority: Pubkey, stopped: bool) -> PAStateAcc
         max_expiry_slots: MAX_EXPIRY_SLOTS,
     }
 }
+
+pub fn make_external_call(
+    program_id: [u8; 32],
+    instruction_data: Vec<u8>,
+) -> crate::types::SolanaExternalCall {
+    crate::types::SolanaExternalCall {
+        program_id,
+        instruction_data,
+        expected_output: vec![],
+        output_mode: crate::types::OutputMode::ReturnData,
+    }
+}
