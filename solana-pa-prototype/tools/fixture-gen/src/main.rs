@@ -281,17 +281,22 @@ fn generate_test_transaction_with_external_payload(
         }
     }
 
+    let consumed_app_data_hash = consumed_app_data.compute_hash();
     let consumed_instance = LogicInstance {
         tag: consumed_nf,
         is_consumed: true,
         root,
         app_data: consumed_app_data,
+        app_data_hash: consumed_app_data_hash,
     };
+    let created_app_data = AppData::default();
+    let created_app_data_hash = created_app_data.compute_hash();
     let created_instance = LogicInstance {
         tag: created_cm,
         is_consumed: false,
         root,
-        app_data: AppData::default(),
+        app_data: created_app_data,
+        app_data_hash: created_app_data_hash,
     };
 
     let (consumed_proof, consumed_journal) = arm::proving_system::prove(

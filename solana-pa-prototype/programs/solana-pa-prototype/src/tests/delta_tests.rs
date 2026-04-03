@@ -24,10 +24,12 @@ fn test_verify_delta_proof_invalid_point_returns_error() {
     // Use Delta::Proof so verify_delta_proof reaches accumulate_deltas (which rejects the point).
     tx.delta_proof = Delta::Proof(DeltaProof([0u8; 65]));
 
+    // All-zeros DeltaProof has recovery_id byte = 0, which is < 27 (Ethereum convention).
+    // arm_solana rejects it as InvalidDeltaProof at the signature parsing step.
     match verify_delta_proof(&tx) {
-        Err(SolanaArmError::DeltaPointNotOnCurve) => {}
+        Err(SolanaArmError::InvalidDeltaProof) => {}
         other => panic!(
-            "Invalid delta point should return DeltaPointNotOnCurve, got {:?}",
+            "All-zeros delta proof should return InvalidDeltaProof, got {:?}",
             other
         ),
     }

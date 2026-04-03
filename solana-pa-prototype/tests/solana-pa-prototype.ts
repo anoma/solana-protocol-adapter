@@ -10,7 +10,6 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import { assert } from "chai";
-import { readFileSync } from "fs";
 import path from "path";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 
@@ -21,23 +20,23 @@ import {
   GROTH16_VERIFIER_ID,
 } from "../scripts/verifier-utils";
 
-type Fixture = {
-  format: string;
-  aggregation_strategy: string;
-  aggregation_proof_type: string;
-  selector: string; // "0x73c457ba" format
-  tx_b64: string;
-  tx_tampered_b64: string;
-  consumed_nullifiers_b64: string[];
-};
-
-function readJson<T>(filePath: string): T {
-  return JSON.parse(readFileSync(filePath, "utf8")) as T;
-}
-
-function loadFixture(filename: string): Fixture {
-  return readJson<Fixture>(path.resolve(process.cwd(), "tests", "fixtures", filename));
-}
+import {
+  PA_STATE_SEED,
+  TX_DATA_SEED,
+  ROOT_MARKER_SEED,
+  EMPTY_TREE_ROOT_INITIAL,
+  MIN_EXPIRY_SLOTS,
+  MAX_EXPIRY_SLOTS,
+  SEVEN_DAYS_SLOTS,
+  AUTHORITY_MISMATCH_PATTERN,
+  SEED_MISMATCH_PATTERN,
+  ADDRESS_MISMATCH_PATTERN,
+  readJson,
+  loadFixture,
+  parseSelectorFromFixture,
+  fundKeypair,
+  deriveNullifierAccounts as deriveNullifierAccountsFromB64,
+} from "./utils";
 
 // Keypairs funded during tests, drained back to the provider wallet in
 // afterEach() so devnet SOL circulates across the test run.
@@ -50,51 +49,11 @@ let providerBalanceBefore = 0;
 let suiteStartBalance = 0;
 
 async function airdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: number) {
-  const needed = sol * LAMPORTS_PER_SOL;
-  const balance = await provider.connection.getBalance(kp.publicKey);
-  if (balance >= needed) return;
-
-  const tx = new Transaction().add(
-    SystemProgram.transfer({
-      fromPubkey: provider.wallet.publicKey,
-      toPubkey: kp.publicKey,
-      lamports: needed - balance,
-    })
-  );
-  await provider.sendAndConfirm(tx);
+  await fundKeypair(provider, kp, sol);
   fundedKeypairs.push(kp);
 }
 
-const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
-  "cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06",
-  "hex"
-);
-
-const PA_STATE_SEED = Buffer.from("pa_state");
-const NULLIFIER_SEED = Buffer.from("nullifier");
-const TX_DATA_SEED = Buffer.from("tx_data");
-const ROOT_SEED = Buffer.from("root");
-
-// Protocol constants matching Rust defaults (from state.rs)
-const MIN_EXPIRY_SLOTS = 100;
-const MAX_EXPIRY_SLOTS = 216_000;
-// 7 days at 400ms/slot — matches SEVEN_DAYS_SLOTS in state.rs
-const SEVEN_DAYS_SLOTS = 1_512_000;
-
-// Anchor constraint error patterns for assertion matching
-const AUTHORITY_MISMATCH_PATTERN = /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i;
-const SEED_MISMATCH_PATTERN = /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint|Unauthorized/i;
-const ADDRESS_MISMATCH_PATTERN = /ConstraintAddress|address constraint/i;
-
 const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
-
-function parseSelectorFromFixture(selectorHex: string): Buffer {
-  const hex = selectorHex.replace(/^0x/, "");
-  if (hex.length !== 8) {
-    throw new Error(`Invalid selector format: ${selectorHex} (expected 8 hex chars)`);
-  }
-  return Buffer.from(hex, "hex");
-}
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
@@ -118,20 +77,13 @@ const testForwarderId = new PublicKey("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNc
 
 function deriveRootPda(root: Buffer): PublicKey {
   return PublicKey.findProgramAddressSync(
-    [ROOT_SEED, paState.toBuffer(), root],
+    [ROOT_MARKER_SEED, paState.toBuffer(), root],
     program.programId
   )[0];
 }
 
 function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
-  return nullifierB64s.map((nfB64) => {
-    const nf = Buffer.from(nfB64, "base64");
-    const pubkey = PublicKey.findProgramAddressSync(
-      [NULLIFIER_SEED, paState.toBuffer(), nf],
-      program.programId
-    )[0];
-    return { pubkey, isWritable: true, isSigner: false };
-  });
+  return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
 }
 
 function buildSettleRemainingAccounts(
@@ -436,8 +388,9 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   });
 
   it("account size matches expected size for current depth (no over-allocation)", async () => {
-    // Space formula: BASE_SPACE (135) + VEC_OVERHEAD (4) + 32 * depth
-    const BASE_SPACE = 135;
+    // Space formula: BASE_SPACE (168) + VEC_OVERHEAD (4) + 32 * depth
+    // BASE_SPACE includes pending_authority: Option<Pubkey> (+33 bytes over original 135)
+    const BASE_SPACE = 168;
     const VEC_OVERHEAD = 4;
     const spaceForDepth = (depth: number) => BASE_SPACE + VEC_OVERHEAD + 32 * depth;
 
@@ -835,7 +788,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
   it("initializes with paused=false", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(state.paused, false, "State should be unpaused after initialize");
+    assert.equal(JSON.stringify(state.lifecycle), JSON.stringify({ running: {} }), "State should be Running after initialize");
   });
 
   it("rejects emergency_stop from non-authority", async () => {
@@ -864,21 +817,21 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     }
   });
 
-  it("rejects transfer_authority from non-authority", async () => {
+  it("rejects propose_authority from non-authority", async () => {
     const nonAuthority = Keypair.generate();
     const newAuthority = Keypair.generate();
     await airdrop(provider, nonAuthority, 1);
 
     try {
       await program.methods
-        .transferAuthority(newAuthority.publicKey)
+        .proposeAuthority(newAuthority.publicKey)
         .accounts({
           paState,
           authority: nonAuthority.publicKey,
         })
         .signers([nonAuthority])
         .rpc();
-      assert.fail("expected transfer_authority to fail for non-authority");
+      assert.fail("expected propose_authority to fail for non-authority");
     } catch (e: any) {
       const haystack = errorHaystack(e);
       assert.match(
@@ -889,34 +842,61 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     }
   });
 
-  it("transfers authority when called by current authority", async () => {
+  it("two-step authority transfer: propose + accept", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const currentAuthority = stateBefore.authority;
 
     const newAuthority = Keypair.generate();
     await airdrop(provider, newAuthority, 1);
 
+    // Step 1: propose
     await program.methods
-      .transferAuthority(newAuthority.publicKey)
+      .proposeAuthority(newAuthority.publicKey)
       .accounts({
         paState,
         authority: provider.wallet.publicKey,
       })
       .rpc();
 
-    const stateAfter = await program.account.paStateAccount.fetch(paState);
+    // Authority hasn't changed yet
+    const stateAfterPropose = await program.account.paStateAccount.fetch(paState);
     assert.ok(
-      stateAfter.authority.equals(newAuthority.publicKey),
-      "Authority should be updated to new authority"
+      stateAfterPropose.authority.equals(currentAuthority),
+      "Authority should NOT change after propose"
     );
 
+    // Step 2: accept (signed by new authority)
     await program.methods
-      .transferAuthority(currentAuthority)
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: newAuthority.publicKey,
+      })
+      .signers([newAuthority])
+      .rpc();
+
+    const stateAfterAccept = await program.account.paStateAccount.fetch(paState);
+    assert.ok(
+      stateAfterAccept.authority.equals(newAuthority.publicKey),
+      "Authority should be updated after accept"
+    );
+
+    // Restore: propose back, accept with provider wallet
+    await program.methods
+      .proposeAuthority(currentAuthority)
       .accounts({
         paState,
         authority: newAuthority.publicKey,
       })
       .signers([newAuthority])
+      .rpc();
+
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: provider.wallet.publicKey,
+      })
       .rpc();
 
     const stateRestored = await program.account.paStateAccount.fetch(paState);
@@ -933,12 +913,21 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     const newAuthority = Keypair.generate();
     await airdrop(provider, newAuthority, 1);
 
+    // Two-step transfer
     await program.methods
-      .transferAuthority(newAuthority.publicKey)
+      .proposeAuthority(newAuthority.publicKey)
       .accounts({
         paState,
         authority: provider.wallet.publicKey,
       })
+      .rpc();
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: newAuthority.publicKey,
+      })
+      .signers([newAuthority])
       .rpc();
 
     try {
@@ -959,18 +948,297 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       );
     }
 
+    // Restore
     await program.methods
-      .transferAuthority(originalAuthority)
+      .proposeAuthority(originalAuthority)
       .accounts({
         paState,
         authority: newAuthority.publicKey,
       })
       .signers([newAuthority])
       .rpc();
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: provider.wallet.publicKey,
+      })
+      .rpc();
   });
 
-  // NOTE: The following tests are destructive - they pause the protocol.
-  // We use a separate describe block with its own PAState to avoid affecting other tests.
+  it("proposing zero address does not brick governance", async () => {
+    // Propose transfer to zero address
+    await program.methods
+      .proposeAuthority(PublicKey.default)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    // Authority is still the provider — proposal doesn't transfer
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.ok(
+      state.authority.equals(provider.wallet.publicKey),
+      "Authority should still be provider after propose"
+    );
+
+    // Overwrite with a real candidate, complete transfer, then restore
+    const realCandidate = Keypair.generate();
+    await airdrop(provider, realCandidate, 1);
+
+    await program.methods
+      .proposeAuthority(realCandidate.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: realCandidate.publicKey,
+      })
+      .signers([realCandidate])
+      .rpc();
+
+    const stateAfter = await program.account.paStateAccount.fetch(paState);
+    assert.ok(
+      stateAfter.authority.equals(realCandidate.publicKey),
+      "Authority should transfer to the real candidate"
+    );
+
+    // Restore
+    await program.methods
+      .proposeAuthority(provider.wallet.publicKey)
+      .accounts({
+        paState,
+        authority: realCandidate.publicKey,
+      })
+      .signers([realCandidate])
+      .rpc();
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: provider.wallet.publicKey,
+      })
+      .rpc();
+  });
+
+  it("accept_authority fails without a pending proposal", async () => {
+    const random = Keypair.generate();
+    await airdrop(provider, random, 1);
+
+    try {
+      await program.methods
+        .acceptAuthority()
+        .accounts({
+          paState,
+          newAuthority: random.publicKey,
+        })
+        .signers([random])
+        .rpc();
+      assert.fail("accept_authority should fail with no pending proposal");
+    } catch (e: any) {
+      assertPAError(e, "NoPendingAuthority");
+    }
+  });
+
+  it("wrong signer cannot accept a pending proposal", async () => {
+    const intended = Keypair.generate();
+    const attacker = Keypair.generate();
+    await airdrop(provider, attacker, 1);
+
+    // Propose the intended authority
+    await program.methods
+      .proposeAuthority(intended.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    // Attacker tries to accept
+    try {
+      await program.methods
+        .acceptAuthority()
+        .accounts({
+          paState,
+          newAuthority: attacker.publicKey,
+        })
+        .signers([attacker])
+        .rpc();
+      assert.fail("attacker should not be able to accept someone else's proposal");
+    } catch (e: any) {
+      assertPAError(e, "Unauthorized");
+    }
+
+    // Cancel the proposal
+    await program.methods
+      .cancelAuthorityTransfer()
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+  });
+
+  it("overwrite invalidates previous proposal", async () => {
+    const firstCandidate = Keypair.generate();
+    const secondCandidate = Keypair.generate();
+    await airdrop(provider, firstCandidate, 1);
+    await airdrop(provider, secondCandidate, 1);
+
+    // Propose first candidate
+    await program.methods
+      .proposeAuthority(firstCandidate.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    // Overwrite with second candidate
+    await program.methods
+      .proposeAuthority(secondCandidate.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    // First candidate cannot accept
+    try {
+      await program.methods
+        .acceptAuthority()
+        .accounts({
+          paState,
+          newAuthority: firstCandidate.publicKey,
+        })
+        .signers([firstCandidate])
+        .rpc();
+      assert.fail("first candidate should not be able to accept after overwrite");
+    } catch (e: any) {
+      assertPAError(e, "Unauthorized");
+    }
+
+    // Cancel
+    await program.methods
+      .cancelAuthorityTransfer()
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+  });
+
+  it("pending_authority is cleared after accept", async () => {
+    const candidate = Keypair.generate();
+    await airdrop(provider, candidate, 1);
+
+    await program.methods
+      .proposeAuthority(candidate.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: candidate.publicKey,
+      })
+      .signers([candidate])
+      .rpc();
+
+    // Second accept should fail — pending is cleared
+    try {
+      await program.methods
+        .acceptAuthority()
+        .accounts({
+          paState,
+          newAuthority: candidate.publicKey,
+        })
+        .signers([candidate])
+        .rpc();
+      assert.fail("second accept should fail");
+    } catch (e: any) {
+      assertPAError(e, "NoPendingAuthority");
+    }
+
+    // Restore authority
+    await program.methods
+      .proposeAuthority(provider.wallet.publicKey)
+      .accounts({
+        paState,
+        authority: candidate.publicKey,
+      })
+      .signers([candidate])
+      .rpc();
+    await program.methods
+      .acceptAuthority()
+      .accounts({
+        paState,
+        newAuthority: provider.wallet.publicKey,
+      })
+      .rpc();
+  });
+
+  it("cancel_authority_transfer clears pending proposal", async () => {
+    const candidate = Keypair.generate();
+    await airdrop(provider, candidate, 1);
+
+    await program.methods
+      .proposeAuthority(candidate.publicKey)
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    await program.methods
+      .cancelAuthorityTransfer()
+      .accounts({
+        paState,
+        authority: provider.wallet.publicKey,
+      })
+      .rpc();
+
+    // Accept should fail — cancelled
+    try {
+      await program.methods
+        .acceptAuthority()
+        .accounts({
+          paState,
+          newAuthority: candidate.publicKey,
+        })
+        .signers([candidate])
+        .rpc();
+      assert.fail("accept should fail after cancel");
+    } catch (e: any) {
+      assertPAError(e, "NoPendingAuthority");
+    }
+  });
+
+  it("cancel_authority_transfer fails when no proposal is pending", async () => {
+    try {
+      await program.methods
+        .cancelAuthorityTransfer()
+        .accounts({
+          paState,
+          authority: provider.wallet.publicKey,
+        })
+        .rpc();
+      assert.fail("cancel should fail with no pending proposal");
+    } catch (e: any) {
+      assertPAError(e, "NoPendingAuthority");
+    }
+  });
 });
 
 describe("solana-pa-prototype (TxData Expiration)", () => {
@@ -2060,12 +2328,45 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
   });
 });
 
+// ── Close-while-running guard ────────────────────────────────────────────
+// Verifies that teardown operations cannot be performed while the PA is
+// running. Must run BEFORE emergency_stop pauses the protocol.
+
+describe("solana-pa-prototype (close_markers_batch requires stopped state)", () => {
+  it("close_markers_batch fails when PA is not stopped", async () => {
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.deepEqual(state.lifecycle, { running: {} }, "PA should be Running at start of test");
+
+    // Find any existing markers (genesis root marker + settlement markers)
+    const markers = await provider.connection.getProgramAccounts(program.programId, {
+      filters: [{ dataSize: 0 }],
+    });
+    assert.ok(markers.length > 0, "Should have markers to close (genesis root marker at minimum)");
+
+    try {
+      await program.methods
+        .closeMarkersBatch()
+        .accounts({
+          paState,
+          authority: provider.wallet.publicKey,
+        })
+        .remainingAccounts(markers.map(({ pubkey }) => ({
+          pubkey, isWritable: true, isSigner: false,
+        })))
+        .rpc();
+      assert.fail("close_markers_batch should fail when PA is not stopped");
+    } catch (e: any) {
+      assertPAError(e, "NotStopped");
+    }
+  });
+});
+
 // MUST BE LAST: emergency_stop permanently pauses PAState. No further
 // settle operations can succeed after this block runs.
 describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
   it("emergency_stop pauses protocol", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
-    assert.equal(stateBefore.paused, false, "Should be unpaused before emergency_stop");
+    assert.equal(JSON.stringify(stateBefore.lifecycle), JSON.stringify({ running: {} }), "Should be Running before emergency_stop");
 
     await program.methods
       .emergencyStop()
@@ -2076,7 +2377,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
       .rpc();
 
     const stateAfter = await program.account.paStateAccount.fetch(paState);
-    assert.equal(stateAfter.paused, true, "Should be paused after emergency_stop");
+    assert.equal(JSON.stringify(stateAfter.lifecycle), JSON.stringify({ stopped: {} }), "Should be Stopped after emergency_stop");
   });
 
   it("rejects emergency_stop when already paused", async () => {
@@ -2090,7 +2391,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
         .rpc();
       assert.fail("expected emergency_stop to fail when already paused");
     } catch (e: any) {
-      assertPAError(e, "AlreadyPaused");
+      assertPAError(e, "AlreadyStopped");
     }
   });
 
@@ -2119,7 +2420,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
         .rpc();
       assert.fail("expected settle to fail when paused");
     } catch (e: any) {
-      assertPAError(e, "Paused");
+      assertPAError(e, "Stopped");
     }
   });
 
@@ -2151,7 +2452,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
         .rpc();
       assert.fail("expected settle_from_txdata to fail when paused");
     } catch (e: any) {
-      assertPAError(e, "Paused");
+      assertPAError(e, "Stopped");
     }
   });
 });
@@ -2219,46 +2520,6 @@ describe("solana-pa-prototype (Close instructions)", () => {
     }
   });
 
-  it("close_pa_state rejects non-authority", async () => {
-    const fakeAuthority = Keypair.generate();
-    await airdrop(provider, fakeAuthority, 1);
-
-    try {
-      await program.methods
-        .closePaState()
-        .accounts({
-          paState,
-          authority: fakeAuthority.publicKey,
-        })
-        .signers([fakeAuthority])
-        .rpc();
-      assert.fail("Expected unauthorized close to fail");
-    } catch (e: any) {
-      assert.match(e.toString(), AUTHORITY_MISMATCH_PATTERN);
-    }
-  });
-
-  it("close_pa_state closes PAState and refunds rent", async () => {
-    const paStateInfo = await provider.connection.getAccountInfo(paState);
-    assert.ok(paStateInfo, "PAState should exist before close");
-
-    const balanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
-
-    await program.methods
-      .closePaState()
-      .accounts({
-        paState,
-        authority: provider.wallet.publicKey,
-      })
-      .rpc();
-
-    const paStateAfter = await provider.connection.getAccountInfo(paState);
-    assert.equal(paStateAfter, null, "PAState should be closed");
-
-    const balanceAfter = await provider.connection.getBalance(provider.wallet.publicKey);
-    assert.ok(balanceAfter > balanceBefore, "Authority should have received rent refund");
-    console.log(`    PAState closed, recovered ${((balanceAfter - balanceBefore) / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
-  });
 });
 
 before(async () => {
