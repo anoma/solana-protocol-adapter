@@ -2,9 +2,7 @@ use anchor_lang::prelude::AnchorDeserialize as BorshDeserialize;
 use anyhow::{anyhow, Context, Result};
 use arm::action::{Action, ActionExt};
 use arm::action_tree::MerkleTree;
-use arm::compliance::{
-    initial_root, ComplianceInstanceJournalExt, ComplianceWitness,
-};
+use arm::compliance::{initial_root, ComplianceInstanceJournalExt, ComplianceWitness};
 use arm::compliance_unit::create_compliance_unit;
 use arm::delta_proof::DeltaWitness;
 use arm::logic_instance::ExpirableBlob;
@@ -56,7 +54,13 @@ struct Fixture {
     consumed_nullifiers_b64: Vec<String>,
 }
 
-struct CliArgs {
+enum Command {
+    Generate(GenerateArgs),
+    StripCalls { input: PathBuf, output: PathBuf },
+    Dump { input: PathBuf },
+}
+
+struct GenerateArgs {
     threads: Option<usize>,
     debug_assumptions: bool,
     forwarder_mode: ForwarderMode,
@@ -429,14 +433,136 @@ where
     Ok(result)
 }
 
+fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
+    let fixture_str =
+        fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
+
+    #[derive(serde::Deserialize, Serialize)]
+    struct RawFixture {
+        tx_b64: String,
+        #[serde(flatten)]
+        rest: serde_json::Map<String, serde_json::Value>,
+    }
+
+    let mut fixture: RawFixture =
+        serde_json::from_str(&fixture_str).context("parsing fixture JSON")?;
+    let tx_bytes = BASE64.decode(&fixture.tx_b64).context("decoding tx_b64")?;
+    let mut tx: Transaction =
+        bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
+
+    let mut stripped = 0usize;
+    for action in &mut tx.actions {
+        for lvi in &mut action.logic_verifier_inputs {
+            let count = lvi.app_data.external_payload.len();
+            if count > 0 {
+                eprintln!(
+                    "  Stripping {} external_payload blob(s) from LVI tag {:?}",
+                    count,
+                    &lvi.tag.to_bytes()[..4]
+                );
+                lvi.app_data.external_payload.clear();
+                stripped += count;
+            }
+        }
+    }
+    eprintln!("Stripped {} external call(s) total", stripped);
+
+    let modified_bytes = bincode::serialize(&tx).context("re-serializing Transaction")?;
+    fixture.tx_b64 = BASE64.encode(&modified_bytes);
+    fixture.rest.remove("forwarder_type");
+
+    let output_str = serde_json::to_string_pretty(&fixture).context("serializing fixture")?;
+    fs::write(output, output_str).with_context(|| format!("writing {}", output.display()))?;
+    eprintln!("Wrote fixture to {}", output.display());
+    Ok(())
+}
+
+fn dump_fixture(input: &Path) -> Result<()> {
+    let fixture_str =
+        fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
+    let raw: serde_json::Value =
+        serde_json::from_str(&fixture_str).context("parsing fixture JSON")?;
+    let tx_b64 = raw["tx_b64"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing tx_b64 field"))?;
+    let tx_bytes = BASE64.decode(tx_b64).context("decoding tx_b64")?;
+    let tx: Transaction =
+        bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
+
+    eprintln!("Transaction:");
+    eprintln!("  actions: {}", tx.actions.len());
+    for (ai, action) in tx.actions.iter().enumerate() {
+        eprintln!("  Action {}:", ai);
+        eprintln!("    compliance_units: {}", action.compliance_units.len());
+        for (ci, cu) in action.compliance_units.iter().enumerate() {
+            let nf = cu.instance.consumed_nullifier.to_bytes();
+            let cm = cu.instance.created_commitment.to_bytes();
+            eprintln!(
+                "    CU {}: nullifier={:02x}{:02x}..., commitment={:02x}{:02x}...",
+                ci, nf[0], nf[1], cm[0], cm[1]
+            );
+        }
+        eprintln!(
+            "    logic_verifier_inputs: {}",
+            action.logic_verifier_inputs.len()
+        );
+        for (li, lvi) in action.logic_verifier_inputs.iter().enumerate() {
+            let tag = lvi.tag.to_bytes();
+            let ext = lvi.app_data.external_payload.len();
+            let journal_len = lvi.instance_journal.len();
+            eprintln!(
+                "    LVI {}: tag={:02x}{:02x}..., vk={:02x}{:02x}..., external_payload={}, instance_journal={} bytes",
+                li, tag[0], tag[1],
+                lvi.verifying_key.to_bytes()[0], lvi.verifying_key.to_bytes()[1],
+                ext, journal_len
+            );
+        }
+    }
+    eprintln!(
+        "  delta_proof: {:?}",
+        std::mem::discriminant(&tx.delta_proof)
+    );
+    eprintln!(
+        "  aggregation_proof: {} bytes",
+        tx.aggregation_proof.as_ref().map_or(0, |p| p.len())
+    );
+    Ok(())
+}
+
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [--threads N] [--debug-assumptions] [--output-mismatch] [--forwarder-fail] [--forwarder-silent] [--forwarder-output-account] [--nonce-seed N] [--multi-external-call] [--error-variants DIR] [OUT_PATH]\n\nExamples:\n  fixture-gen tests/fixtures/batch_groth16.json\n  fixture-gen --threads 4 tests/fixtures/batch_groth16.json\n  fixture-gen --debug-assumptions /tmp/batch_groth16.json\n  fixture-gen --output-mismatch tests/fixtures/batch_groth16_mismatch.json\n  fixture-gen --forwarder-fail tests/fixtures/batch_groth16_forwarder_fail.json\n  fixture-gen --forwarder-silent tests/fixtures/batch_groth16_forwarder_silent.json\n  fixture-gen --forwarder-output-account tests/fixtures/batch_groth16_forwarder_output_account.json\n  fixture-gen --nonce-seed 7 --multi-external-call /tmp/batch_groth16_multi.json\n  fixture-gen --error-variants tests/fixtures/error_variants tests/fixtures/batch_groth16.json\n\nNotes:\n  - `--threads` sets the global rayon thread pool size (must be set before proving starts).\n  - `RAYON_NUM_THREADS` can also be used; `--threads` wins.\n  - `--debug-assumptions` prints claim digests for composition debugging.\n  - `--output-mismatch` generates a block-time-forwarder fixture with intentionally wrong expected_output to test ExternalCallOutputMismatch.\n  - `--forwarder-fail` uses the test-forwarder with an instruction that fails before output checks.\n  - `--forwarder-silent` uses the test-forwarder with no return data so output comparison fails.\n  - `--forwarder-output-account` uses the test-forwarder with OutputAccount mode.\n  - At most one of `--output-mismatch`, `--forwarder-fail`, `--forwarder-silent`, `--forwarder-output-account` may be set.\n  - `--nonce-seed` overrides the deterministic nonce byte used to derive nullifiers.\n  - `--multi-external-call` appends a second block-time-forwarder external call blob when block-time-forwarder mode is selected.\n  - `--error-variants` writes wrong_root/no_aggregation/garbage_proof fixtures from the final aggregated tx.\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n\nGenerate options:\n  --threads N              Set rayon thread pool size\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-output-account  Test-forwarder with OutputAccount mode\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof variants\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent, --forwarder-output-account.\n  - --threads wins over RAYON_NUM_THREADS.\n  - --error-variants writes to DIR from the final aggregated tx.\n"
     );
 }
 
-fn parse_args() -> Result<CliArgs> {
-    let mut args = env::args().skip(1);
+fn parse_args() -> Result<Command> {
+    let mut raw_args: Vec<String> = env::args().skip(1).collect();
+
+    // Check for subcommands before flag parsing.
+    if let Some(first) = raw_args.first() {
+        match first.as_str() {
+            "strip-calls" => {
+                if raw_args.len() != 3 {
+                    return Err(anyhow!(
+                        "Usage: fixture-gen strip-calls <input.json> <output.json>"
+                    ));
+                }
+                let output = PathBuf::from(raw_args.remove(2));
+                let input = PathBuf::from(raw_args.remove(1));
+                return Ok(Command::StripCalls { input, output });
+            }
+            "dump" => {
+                if raw_args.len() != 2 {
+                    return Err(anyhow!("Usage: fixture-gen dump <input.json>"));
+                }
+                let input = PathBuf::from(raw_args.remove(1));
+                return Ok(Command::Dump { input });
+            }
+            _ => {}
+        }
+    }
+
+    let mut args = raw_args.into_iter();
     let mut threads: Option<usize> = None;
     let mut debug_assumptions = false;
     let mut forwarder_mode: Option<ForwarderMode> = None;
@@ -482,7 +608,9 @@ fn parse_args() -> Result<CliArgs> {
             "--debug-assumptions" => {
                 debug_assumptions = true;
             }
-            "--output-mismatch" | "--forwarder-fail" | "--forwarder-silent"
+            "--output-mismatch"
+            | "--forwarder-fail"
+            | "--forwarder-silent"
             | "--forwarder-output-account" => {
                 if forwarder_mode.is_some() {
                     return Err(anyhow!(
@@ -537,7 +665,7 @@ fn parse_args() -> Result<CliArgs> {
         output_mismatch: false,
     });
 
-    Ok(CliArgs {
+    Ok(Command::Generate(GenerateArgs {
         threads,
         debug_assumptions,
         forwarder_mode,
@@ -545,12 +673,11 @@ fn parse_args() -> Result<CliArgs> {
         multi_external_call,
         error_variants_dir,
         out_path,
-    })
+    }))
 }
 
 fn main() -> Result<()> {
-    let total_start = Instant::now();
-    let CliArgs {
+    let GenerateArgs {
         threads,
         debug_assumptions,
         forwarder_mode,
@@ -558,7 +685,13 @@ fn main() -> Result<()> {
         multi_external_call,
         error_variants_dir,
         out_path,
-    } = parse_args()?;
+    } = match parse_args()? {
+        Command::StripCalls { input, output } => return strip_calls_from_fixture(&input, &output),
+        Command::Dump { input } => return dump_fixture(&input),
+        Command::Generate(args) => args,
+    };
+
+    let total_start = Instant::now();
 
     // Configure rayon parallelism deterministically (helps avoid pegging/overheating/OOM).
     // Must happen before any proving work starts.
@@ -593,7 +726,11 @@ fn main() -> Result<()> {
     }
 
     let mut tx = timed_phase("generate_test_transaction", || {
-        generate_test_transaction_with_external_payload(forwarder_mode, nonce_seed, multi_external_call)
+        generate_test_transaction_with_external_payload(
+            forwarder_mode,
+            nonce_seed,
+            multi_external_call,
+        )
     })?;
 
     if debug_assumptions {
@@ -605,7 +742,10 @@ fn main() -> Result<()> {
 
     timed_phase(
         "aggregate_with_strategy(batch, groth16) (this is the expensive step)",
-        || tx.aggregate(ProofType::Groth16).context("aggregate tx (batch, groth16)"),
+        || {
+            tx.aggregate(ProofType::Groth16)
+                .context("aggregate tx (batch, groth16)")
+        },
     )?;
 
     timed_phase("verify_aggregation", || {
@@ -637,8 +777,7 @@ fn main() -> Result<()> {
     let (tx_tampered_bytes, selector) = timed_phase("tamper_and_extract_selector", || {
         let mut tx_tampered = tx.clone();
         mutate_created_commitment_keep_structure(&mut tx_tampered)?;
-        let tampered_bytes =
-            bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
+        let tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
         eprintln!("  tampered: {} bytes", tampered_bytes.len());
 
         let sel = extract_selector(&tx).context("extract selector from proof")?;
@@ -684,10 +823,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn compute_expected_claim_digest(
-    journal: &[u8],
-    vk: &Digest,
-) -> risc0_zkvm::sha::Digest {
+fn compute_expected_claim_digest(journal: &[u8], vk: &Digest) -> risc0_zkvm::sha::Digest {
     let words = arm::utils::bytes_to_words(journal);
     let padded_bytes = arm::utils::words_to_bytes(&words);
     let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);

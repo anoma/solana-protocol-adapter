@@ -196,6 +196,21 @@ pub fn create_test_pa_state_with(authority: Pubkey, stopped: bool) -> PAStateAcc
     }
 }
 
+pub fn make_instance_journal(tag: Digest, is_consumed: bool, app_data: AppData) -> Vec<u8> {
+    use arm_core::logic_instance::LogicInstance;
+    let mut instance = LogicInstance {
+        tag,
+        is_consumed,
+        root: Digest::default(),
+        app_data,
+        app_data_hash: Digest::default(),
+    };
+    instance.compute_and_set_app_data_hash();
+    instance
+        .to_journal()
+        .expect("borsh serialization should succeed")
+}
+
 pub fn make_external_call(
     program_id: [u8; 32],
     instruction_data: Vec<u8>,
