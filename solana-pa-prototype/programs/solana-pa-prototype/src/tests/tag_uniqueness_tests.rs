@@ -5,9 +5,7 @@ use crate::encoding::{compute_batch_aggregation_journal_digest, verify_app_data_
 use crate::error::PAError;
 use crate::external_calls::{encode_external_call, extract_external_calls};
 
-use crate::tests::utils::{
-    create_minimal_transaction, make_external_call, make_instance_journal,
-};
+use crate::tests::utils::{create_minimal_transaction, make_external_call, make_instance_journal};
 
 /// Tag count must equal LVI count. 1 CU produces 2 tags; 3 LVIs is rejected.
 #[test]
@@ -94,8 +92,7 @@ fn verify_app_data_hashes_checks_all_lvis_including_duplicates() {
 
     // Set up both LVIs with proper instance_journal containing app_data_hash.
     for lvi in &mut tx.actions[0].logic_verifier_inputs {
-        lvi.instance_journal =
-            make_instance_journal(lvi.tag, true, lvi.app_data.clone());
+        lvi.instance_journal = make_instance_journal(lvi.tag, true, lvi.app_data.clone());
     }
 
     // Consistent state — should pass.

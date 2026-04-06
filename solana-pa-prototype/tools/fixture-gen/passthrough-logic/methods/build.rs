@@ -46,8 +46,8 @@ fn main() {
         )
     });
 
-    let image_id =
-        compute_image_id(&combined_binary).expect("failed computing image id for passthrough guest");
+    let image_id = compute_image_id(&combined_binary)
+        .expect("failed computing image id for passthrough guest");
     let image_id_words: [u32; 8] = image_id
         .as_words()
         .try_into()
@@ -76,7 +76,12 @@ fn build_guest_in_docker(manifest_dir: &Path, guest_target_dir: &Path) {
     let docker_root = manifest_dir
         .parent()
         .and_then(Path::parent)
-        .unwrap_or_else(|| panic!("failed to compute fixture-gen root from {}", manifest_dir.display()));
+        .unwrap_or_else(|| {
+            panic!(
+                "failed to compute fixture-gen root from {}",
+                manifest_dir.display()
+            )
+        });
     let guest_manifest = manifest_dir.join("guest").join("Cargo.toml");
     let guest_manifest_rel = guest_manifest
         .strip_prefix(docker_root)
@@ -176,9 +181,12 @@ fn run_docker_cargo(
         .arg("-c")
         .arg(&docker_command);
 
-    let status = cmd
-        .status()
-        .unwrap_or_else(|err| panic!("failed running docker {} for guest build: {err}", subcommand));
+    let status = cmd.status().unwrap_or_else(|err| {
+        panic!(
+            "failed running docker {} for guest build: {err}",
+            subcommand
+        )
+    });
     if !status.success() {
         panic!("docker {} failed for guest build", subcommand);
     }

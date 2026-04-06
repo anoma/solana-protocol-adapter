@@ -2,9 +2,7 @@ use anchor_lang::prelude::AnchorDeserialize as BorshDeserialize;
 use anyhow::{anyhow, Context, Result};
 use arm::action::{Action, ActionExt};
 use arm::action_tree::MerkleTree;
-use arm::compliance::{
-    initial_root, ComplianceInstanceJournalExt, ComplianceWitness,
-};
+use arm::compliance::{initial_root, ComplianceInstanceJournalExt, ComplianceWitness};
 use arm::compliance_unit::create_compliance_unit;
 use arm::delta_proof::DeltaWitness;
 use arm::logic_instance::ExpirableBlob;
@@ -448,9 +446,7 @@ fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
 
     let mut fixture: RawFixture =
         serde_json::from_str(&fixture_str).context("parsing fixture JSON")?;
-    let tx_bytes = BASE64
-        .decode(&fixture.tx_b64)
-        .context("decoding tx_b64")?;
+    let tx_bytes = BASE64.decode(&fixture.tx_b64).context("decoding tx_b64")?;
     let mut tx: Transaction =
         bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
 
@@ -476,8 +472,7 @@ fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
     fixture.rest.remove("forwarder_type");
 
     let output_str = serde_json::to_string_pretty(&fixture).context("serializing fixture")?;
-    fs::write(output, output_str)
-        .with_context(|| format!("writing {}", output.display()))?;
+    fs::write(output, output_str).with_context(|| format!("writing {}", output.display()))?;
     eprintln!("Wrote fixture to {}", output.display());
     Ok(())
 }
@@ -613,7 +608,9 @@ fn parse_args() -> Result<Command> {
             "--debug-assumptions" => {
                 debug_assumptions = true;
             }
-            "--output-mismatch" | "--forwarder-fail" | "--forwarder-silent"
+            "--output-mismatch"
+            | "--forwarder-fail"
+            | "--forwarder-silent"
             | "--forwarder-output-account" => {
                 if forwarder_mode.is_some() {
                     return Err(anyhow!(
@@ -729,7 +726,11 @@ fn main() -> Result<()> {
     }
 
     let mut tx = timed_phase("generate_test_transaction", || {
-        generate_test_transaction_with_external_payload(forwarder_mode, nonce_seed, multi_external_call)
+        generate_test_transaction_with_external_payload(
+            forwarder_mode,
+            nonce_seed,
+            multi_external_call,
+        )
     })?;
 
     if debug_assumptions {
@@ -741,7 +742,10 @@ fn main() -> Result<()> {
 
     timed_phase(
         "aggregate_with_strategy(batch, groth16) (this is the expensive step)",
-        || tx.aggregate(ProofType::Groth16).context("aggregate tx (batch, groth16)"),
+        || {
+            tx.aggregate(ProofType::Groth16)
+                .context("aggregate tx (batch, groth16)")
+        },
     )?;
 
     timed_phase("verify_aggregation", || {
@@ -773,8 +777,7 @@ fn main() -> Result<()> {
     let (tx_tampered_bytes, selector) = timed_phase("tamper_and_extract_selector", || {
         let mut tx_tampered = tx.clone();
         mutate_created_commitment_keep_structure(&mut tx_tampered)?;
-        let tampered_bytes =
-            bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
+        let tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
         eprintln!("  tampered: {} bytes", tampered_bytes.len());
 
         let sel = extract_selector(&tx).context("extract selector from proof")?;
@@ -820,10 +823,7 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn compute_expected_claim_digest(
-    journal: &[u8],
-    vk: &Digest,
-) -> risc0_zkvm::sha::Digest {
+fn compute_expected_claim_digest(journal: &[u8], vk: &Digest) -> risc0_zkvm::sha::Digest {
     let words = arm::utils::bytes_to_words(journal);
     let padded_bytes = arm::utils::words_to_bytes(&words);
     let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
