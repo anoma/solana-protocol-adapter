@@ -1,33 +1,13 @@
-//! Tests for H-001: app_data substitution attack and its fix.
-//!
-//! The first three tests demonstrate that the journal digest is structurally
-//! blind to app_data changes (the underlying vulnerability).
-//!
-//! The last three tests verify that `verify_app_data_hashes` catches the
-//! substitution by checking the hash committed in `instance_journal`.
+//! Tests for `verify_app_data_hashes`: ensures on-chain app_data matches the
+//! hash committed in each LVI's `instance_journal`.
 
 use crate::encoding::{compute_batch_aggregation_journal_digest, verify_app_data_hashes};
 use crate::error::PAError;
 use crate::external_calls::encode_external_call;
-use arm_core::logic_instance::{AppData, LogicInstance};
+use arm_core::logic_instance::AppData;
 use arm_core::transaction::Transaction;
-use arm_core::Digest;
 
-use crate::tests::utils::{create_minimal_transaction, make_external_call};
-
-fn make_instance_journal(tag: Digest, is_consumed: bool, app_data: AppData) -> Vec<u8> {
-    let mut instance = LogicInstance {
-        tag,
-        is_consumed,
-        root: Digest::default(),
-        app_data,
-        app_data_hash: Digest::default(),
-    };
-    instance.compute_and_set_app_data_hash();
-    instance
-        .to_journal()
-        .expect("borsh serialization should succeed")
-}
+use crate::tests::utils::{create_minimal_transaction, make_external_call, make_instance_journal};
 
 fn create_tx_with_journals(consumed_app_data: AppData) -> Transaction {
     let mut tx = create_minimal_transaction();
@@ -42,17 +22,15 @@ fn create_tx_with_journals(consumed_app_data: AppData) -> Transaction {
     tx
 }
 
-// ============================================================================
-// Vulnerability demonstration: journal digest is blind to app_data
-// ============================================================================
-
+/// The journal digest is computed over compliance instances and logic keys,
+/// not over app_data. Modifications to app_data do not change the digest.
+/// `verify_app_data_hashes` is the check that binds app_data to the proof.
 #[test]
-fn journal_digest_is_blind_to_app_data_changes() {
+fn journal_digest_does_not_cover_app_data() {
     let mut tx = create_tx_with_journals(AppData::default());
 
     let digest_before = compute_batch_aggregation_journal_digest(&tx).unwrap();
 
-    // Inject a call into app_data — journal digest should NOT change.
     let call = make_external_call([0xAA; 32], vec![0xDE, 0xAD]);
     tx.actions[0].logic_verifier_inputs[0]
         .app_data
@@ -62,13 +40,9 @@ fn journal_digest_is_blind_to_app_data_changes() {
     let digest_after = compute_batch_aggregation_journal_digest(&tx).unwrap();
     assert_eq!(
         digest_before, digest_after,
-        "Journal digest is blind to app_data — this is the structural vulnerability"
+        "Journal digest does not cover app_data"
     );
 }
-
-// ============================================================================
-// Fix verification: verify_app_data_hashes catches substitution
-// ============================================================================
 
 #[test]
 fn verify_app_data_hashes_passes_for_consistent_data() {
@@ -86,7 +60,7 @@ fn verify_app_data_hashes_rejects_injected_external_call() {
     let mut tx = create_tx_with_journals(AppData::default());
 
     // Inject a call into app_data — this doesn't match the hash in the journal
-    let call = make_external_call([0xBB; 32], b"steal_tokens".to_vec());
+    let call = make_external_call([0xBB; 32], b"extra_call".to_vec());
     tx.actions[0].logic_verifier_inputs[0]
         .app_data
         .external_payload
@@ -95,7 +69,7 @@ fn verify_app_data_hashes_rejects_injected_external_call() {
     let result = verify_app_data_hashes(&tx);
     assert!(
         matches!(result, Err(PAError::AppDataHashMismatch)),
-        "Injected external call should be caught by hash check: {:?}",
+        "Added external call mismatches journal hash: {:?}",
         result
     );
 }
@@ -114,16 +88,16 @@ fn verify_app_data_hashes_rejects_replaced_external_call() {
     // Consistent state — should pass
     assert!(verify_app_data_hashes(&tx).is_ok());
 
-    // Now replace with a malicious call
-    let malicious_call = make_external_call([0xFF; 32], b"drain_escrow".to_vec());
+    // Replace with a different call
+    let different_call = make_external_call([0xFF; 32], b"different".to_vec());
     tx.actions[0].logic_verifier_inputs[0]
         .app_data
-        .external_payload = vec![encode_external_call(&malicious_call)];
+        .external_payload = vec![encode_external_call(&different_call)];
 
     let result = verify_app_data_hashes(&tx);
     assert!(
         matches!(result, Err(PAError::AppDataHashMismatch)),
-        "Replaced external call should be caught by hash check: {:?}",
+        "Replaced external call mismatches journal hash: {:?}",
         result
     );
 }

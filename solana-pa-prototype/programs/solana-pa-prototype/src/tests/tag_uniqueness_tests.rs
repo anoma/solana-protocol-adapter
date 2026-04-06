@@ -1,17 +1,15 @@
-//! H-002: Duplicate logic tag investigation.
-//!
-//! Tests whether an attacker can exploit duplicate tags in LogicVerifierInputs
-//! to inject unverified external calls.
+//! Tests that duplicate tags in LogicVerifierInputs are rejected by journal
+//! digest computation and app_data hash verification.
 
 use crate::encoding::{compute_batch_aggregation_journal_digest, verify_app_data_hashes};
 use crate::error::PAError;
 use crate::external_calls::{encode_external_call, extract_external_calls};
-use arm_core::logic_instance::LogicInstance;
-use arm_core::Digest;
 
-use crate::tests::utils::{create_minimal_transaction, make_external_call};
+use crate::tests::utils::{
+    create_minimal_transaction, make_external_call, make_instance_journal,
+};
 
-/// Count check blocks extra LVIs: 1 CU produces 2 tags, 3 LVIs rejected.
+/// Tag count must equal LVI count. 1 CU produces 2 tags; 3 LVIs is rejected.
 #[test]
 fn extra_lvi_rejected_by_count_check() {
     let mut tx = create_minimal_transaction();
@@ -28,9 +26,7 @@ fn extra_lvi_rejected_by_count_check() {
     );
 }
 
-/// Duplicate tag with correct count: one tag is missing → TagNotFound.
-/// Attacker provides 2 LVIs both with tag=consumed_nullifier.
-/// The created_commitment tag has no matching LVI.
+/// Duplicate tag with correct count: one required tag has no matching LVI.
 #[test]
 fn duplicate_tag_causes_tag_not_found() {
     let mut tx = create_minimal_transaction();
@@ -55,9 +51,8 @@ fn duplicate_tag_causes_tag_not_found() {
     );
 }
 
-/// Even if extract_external_calls iterates all LVIs, the journal digest
-/// computation rejects the transaction before external calls execute.
-/// This confirms the duplicate-tag attack cannot reach CPI execution.
+/// External calls are extracted from all LVIs, but journal digest computation
+/// rejects the transaction before external calls can execute.
 #[test]
 fn duplicate_tag_external_calls_extracted_but_journal_digest_blocks() {
     let mut tx = create_minimal_transaction();
@@ -65,8 +60,8 @@ fn duplicate_tag_external_calls_extracted_but_journal_digest_blocks() {
         .instance
         .consumed_nullifier;
 
-    // LVI[0]: honest, tag=consumed_nullifier, no external calls
-    // LVI[1]: malicious, tag=consumed_nullifier (duplicate), has external call
+    // LVI[0]: tag=consumed_nullifier, no external calls
+    // LVI[1]: tag=consumed_nullifier (duplicate), has external call
     tx.actions[0].logic_verifier_inputs[1].tag = consumed_tag;
     tx.actions[0].logic_verifier_inputs[1]
         .app_data
@@ -76,9 +71,9 @@ fn duplicate_tag_external_calls_extracted_but_journal_digest_blocks() {
             vec![1, 2, 3],
         )));
 
-    // extract_external_calls sees the malicious call (it iterates all LVIs).
+    // extract_external_calls iterates all LVIs regardless of tag uniqueness.
     let calls = extract_external_calls(&tx).unwrap();
-    assert_eq!(calls.len(), 1, "Malicious call IS extracted from app_data");
+    assert_eq!(calls.len(), 1, "Call is extracted from app_data");
 
     // But compute_batch_aggregation_journal_digest rejects it.
     let result = compute_batch_aggregation_journal_digest(&tx);
@@ -89,9 +84,7 @@ fn duplicate_tag_external_calls_extracted_but_journal_digest_blocks() {
     );
 }
 
-/// verify_app_data_hashes checks ALL LVIs regardless of tag duplication.
-/// Even if an attacker could somehow bypass the journal digest check,
-/// the hash check would catch mismatched app_data.
+/// verify_app_data_hashes checks all LVIs regardless of tag duplication.
 #[test]
 fn verify_app_data_hashes_checks_all_lvis_including_duplicates() {
     let mut tx = create_minimal_transaction();
@@ -101,15 +94,8 @@ fn verify_app_data_hashes_checks_all_lvis_including_duplicates() {
 
     // Set up both LVIs with proper instance_journal containing app_data_hash.
     for lvi in &mut tx.actions[0].logic_verifier_inputs {
-        let mut instance = LogicInstance {
-            tag: lvi.tag,
-            is_consumed: true,
-            root: Digest::default(),
-            app_data: lvi.app_data.clone(),
-            app_data_hash: Digest::default(),
-        };
-        instance.compute_and_set_app_data_hash();
-        lvi.instance_journal = instance.to_journal().unwrap();
+        lvi.instance_journal =
+            make_instance_journal(lvi.tag, true, lvi.app_data.clone());
     }
 
     // Consistent state — should pass.
@@ -126,11 +112,10 @@ fn verify_app_data_hashes_checks_all_lvis_including_duplicates() {
         )));
     // instance_journal still has hash of OLD (empty) app_data.
 
-    // verify_app_data_hashes catches the mismatch on LVI[1].
     let result = verify_app_data_hashes(&tx);
     assert!(
         matches!(result, Err(PAError::AppDataHashMismatch)),
-        "Hash check catches tampered duplicate LVI: {:?}",
+        "Hash check catches modified app_data on duplicate-tagged LVI: {:?}",
         result
     );
 }

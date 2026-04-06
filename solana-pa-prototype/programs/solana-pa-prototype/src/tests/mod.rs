@@ -1,9 +1,8 @@
 pub mod utils;
 
 mod app_data_hash_benchmark;
-mod app_data_substitution_tests;
+mod app_data_hash_tests;
 mod delta_tests;
-mod duplicate_tag_tests;
 mod encoding_tests;
 mod error_tests;
 mod external_calls_tests;
@@ -12,6 +11,7 @@ mod lib_tests;
 mod merkle_tests;
 mod nullifier_tests;
 mod root_tests;
+mod tag_uniqueness_tests;
 mod txdata_tests;
 
 pub mod proptests;
