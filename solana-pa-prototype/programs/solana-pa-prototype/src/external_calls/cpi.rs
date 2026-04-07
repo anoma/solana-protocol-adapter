@@ -9,40 +9,6 @@ use crate::types::{OutputMode, SolanaExternalCall};
 
 use super::build_forwarder_instruction_data;
 
-/// Find the account segment for a forwarder in remaining_accounts.
-///
-/// Segments start with the forwarder program account, followed by any CPI accounts
-/// the forwarder needs. Segments appear in the same order as external calls.
-///
-/// **Invariant:** No CPI account within a segment may share its pubkey with any
-/// forwarder program ID in `call_programs`. Segment boundaries are detected by
-/// scanning for the next forwarder program key, so a collision would truncate the
-/// segment prematurely.
-///
-/// Returns (seg_start, seg_end) indices into external_accounts.
-fn find_forwarder_segment(
-    external_accounts: &[AccountInfo],
-    cursor: usize,
-    program_id: &Pubkey,
-    call_programs: &[Pubkey],
-) -> Result<(usize, usize), PAError> {
-    let seg_start_rel = external_accounts[cursor..]
-        .iter()
-        .position(|a| a.key == program_id)
-        .ok_or(PAError::UnregisteredForwarder)?;
-    let seg_start = cursor + seg_start_rel;
-
-    let mut seg_end = external_accounts.len();
-    for (i, account) in external_accounts.iter().enumerate().skip(seg_start + 1) {
-        if call_programs.iter().any(|p| account.key == p) {
-            seg_end = i;
-            break;
-        }
-    }
-
-    Ok((seg_start, seg_end))
-}
-
 /// Invoke a forwarder program via CPI.
 ///
 /// `segment` must start with the forwarder program account, followed by CPI accounts.
@@ -145,20 +111,29 @@ pub fn execute_external_calls(
     }
     let external_accounts = &remaining_accounts[nullifier_count..];
 
-    let call_programs: Vec<Pubkey> = calls
-        .iter()
-        .map(|(_, call)| Pubkey::new_from_array(call.program_id))
-        .collect();
-
     let mut cursor = 0usize;
-    for (i, (logic_ref, call)) in calls.into_iter().enumerate() {
-        let (seg_start, seg_end) =
-            find_forwarder_segment(external_accounts, cursor, &call_programs[i], &call_programs)?;
+    for (logic_ref, call) in calls.into_iter() {
+        let seg_len = call.num_accounts as usize;
+        let seg_end = cursor
+            .checked_add(seg_len)
+            .ok_or(PAError::InvalidTransactionData)?;
+        if seg_end > external_accounts.len() {
+            return Err(PAError::InvalidTransactionData);
+        }
+
+        // Validate that the segment's first account matches the expected forwarder program ID.
+        if seg_len == 0 {
+            return Err(PAError::InvalidTransactionData);
+        }
+        let expected_program = Pubkey::new_from_array(call.program_id);
+        if external_accounts[cursor].key != &expected_program {
+            return Err(PAError::UnregisteredForwarder);
+        }
 
         execute_forwarder_call(
             &logic_ref,
             call,
-            &external_accounts[seg_start..seg_end],
+            &external_accounts[cursor..seg_end],
             remaining_accounts,
         )?;
 

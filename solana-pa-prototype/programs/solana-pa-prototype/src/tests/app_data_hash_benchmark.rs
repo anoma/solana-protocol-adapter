@@ -38,6 +38,7 @@ fn make_block_time_forwarder_call() -> SolanaExternalCall {
         instruction_data: (-1_i64).to_le_bytes().to_vec(), // 8 bytes
         expected_output: vec![0x01],                       // 1 byte
         output_mode: OutputMode::ReturnData,
+        num_accounts: 2,
     }
 }
 
@@ -50,6 +51,7 @@ fn make_spl_wrap_call() -> SolanaExternalCall {
         instruction_data,
         expected_output: vec![0x01],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 2,
     }
 }
 
@@ -62,6 +64,7 @@ fn make_spl_unwrap_call() -> SolanaExternalCall {
         instruction_data,
         expected_output: vec![0x01],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 2,
     }
 }
 

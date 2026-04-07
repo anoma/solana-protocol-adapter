@@ -53,11 +53,15 @@ pub fn arb_solana_external_call(max_data_len: usize) -> impl Strategy<Value = So
         arb_byte_vec(max_data_len),
         arb_byte_vec(max_data_len),
         arb_output_mode(),
+        1..=10u8,
     )
-        .prop_map(|(pid, input, output, mode)| SolanaExternalCall {
-            program_id: pid,
-            instruction_data: input,
-            expected_output: output,
-            output_mode: mode,
-        })
+        .prop_map(
+            |(pid, input, output, mode, num_accounts)| SolanaExternalCall {
+                program_id: pid,
+                instruction_data: input,
+                expected_output: output,
+                output_mode: mode,
+                num_accounts,
+            },
+        )
 }

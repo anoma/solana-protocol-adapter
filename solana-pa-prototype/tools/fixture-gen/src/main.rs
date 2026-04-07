@@ -163,6 +163,7 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
         instruction_data: input,
         expected_output,
         output_mode: OutputMode::ReturnData,
+        num_accounts: 2,
     }))
 }
 
@@ -172,6 +173,7 @@ fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
         instruction_data: vec![MODE_FAIL],
         expected_output: vec![],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
     }))
 }
 
@@ -181,6 +183,7 @@ fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
         instruction_data: vec![MODE_SILENT],
         expected_output: vec![],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
     }))
 }
 
@@ -202,6 +205,7 @@ fn test_forwarder_output_account_payload_blob(
             offset: 0,
             len: expected_bytes.len() as u32,
         },
+        num_accounts: 2,
     }))
 }
 
