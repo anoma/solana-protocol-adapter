@@ -27,6 +27,7 @@ fn test_extract_external_calls_single() {
         instruction_data: vec![1, 2, 3, 4],
         expected_output: vec![0x00],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
     };
     let blob = encode_external_call(&call);
 
@@ -48,18 +49,21 @@ fn test_extract_external_calls_multiple() {
         instruction_data: vec![1, 2],
         expected_output: vec![0x00],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
     };
     let call2 = SolanaExternalCall {
         program_id: [0x22; 32],
         instruction_data: vec![3, 4],
         expected_output: vec![0x01],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
     };
     let call3 = SolanaExternalCall {
         program_id: [0x33; 32],
         instruction_data: vec![5, 6, 7, 8],
         expected_output: vec![0x02],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
     };
 
     // Two LogicVerifierInputs: first has 2 calls, second has 1 call
@@ -99,6 +103,7 @@ fn test_extract_external_calls_logic_ref_association() {
         instruction_data: vec![1, 2, 3, 4],
         expected_output: vec![0x00],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
     };
     let blob = encode_external_call(&call);
 

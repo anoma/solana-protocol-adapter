@@ -62,6 +62,7 @@ mod integration_tests {
             instruction_data: expected_time.to_le_bytes().to_vec(),
             expected_output: vec![RESULT_LT],
             output_mode: OutputMode::ReturnData,
+            num_accounts: 2,
         };
 
         let blob = encode_external_call(&call);

@@ -220,5 +220,6 @@ pub fn make_external_call(
         instruction_data,
         expected_output: vec![],
         output_mode: crate::types::OutputMode::ReturnData,
+        num_accounts: 1,
     }
 }

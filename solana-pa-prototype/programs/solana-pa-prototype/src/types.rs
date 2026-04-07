@@ -9,6 +9,9 @@ pub struct SolanaExternalCall {
     pub instruction_data: Vec<u8>,
     pub expected_output: Vec<u8>,
     pub output_mode: OutputMode,
+    /// Number of accounts in this call's segment (including the forwarder program account).
+    /// Committed in the ZK proof, making segment boundaries unambiguous.
+    pub num_accounts: u8,
 }
 
 /// How to read external call output.

@@ -47,7 +47,9 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
         }
     }
 
-    // Serialize the tuple exactly as the circuit does, then hash
+    // Borsh serialization here matches risc0_zkvm::serde byte-for-byte: both
+    // use 4-byte LE length prefixes for Vec and identical layout for [u32; N].
+    // Standard bincode differs (8-byte length prefixes) and is not equivalent.
     let compliance_key = Digest::from_bytes(COMPLIANCE_VK_BYTES);
     let output = (
         compliance_instances,
