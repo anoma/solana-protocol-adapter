@@ -473,6 +473,8 @@ fn execute_settlement<'info>(
 ) -> Result<()> {
     let pa_state_key = pa_state_info.key;
 
+    require!(!tx.actions.is_empty(), PAError::InvalidTransactionData);
+
     // Deduplicate roots before validation to avoid redundant PDA derivations.
     // Each `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
     // so deduplication saves significant compute when CUs share roots.
