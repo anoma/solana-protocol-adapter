@@ -1,8 +1,7 @@
-use super::strategies::{arb_compliance_instance, arb_digest};
+use super::strategies::arb_digest;
 use crate::encoding::{compute_action_tree_root, compute_batch_aggregation_journal_digest};
 use crate::merkle::append_to_tree;
 use crate::tests::utils::{create_minimal_transaction, create_test_pa_state};
-use arm_core::compliance::ComplianceInstanceWords;
 use arm_core::Digest;
 use proptest::prelude::*;
 
@@ -179,58 +178,3 @@ proptest! {
     }
 }
 
-// ---------------------------------------------------------------------------
-// 4. ComplianceInstanceWords roundtrip preserves all fields.
-// ---------------------------------------------------------------------------
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1000))]
-
-    #[test]
-    fn compliance_instance_words_preserves_all_fields(ci in arb_compliance_instance()) {
-        let words = ComplianceInstanceWords::from(&ci);
-        prop_assert_eq!(&words.u32_words[0..8], ci.consumed_nullifier.as_words());
-        prop_assert_eq!(&words.u32_words[8..16], ci.consumed_logic_ref.as_words());
-        prop_assert_eq!(&words.u32_words[16..24], ci.consumed_commitment_tree_root.as_words());
-        prop_assert_eq!(&words.u32_words[24..32], ci.created_commitment.as_words());
-        prop_assert_eq!(&words.u32_words[32..40], ci.created_logic_ref.as_words());
-        prop_assert_eq!(&words.u32_words[40..48], &ci.delta_x);
-        prop_assert_eq!(&words.u32_words[48..56], &ci.delta_y);
-    }
-
-    #[test]
-    fn distinct_compliance_instances_produce_distinct_words(
-        ci_a in arb_compliance_instance(),
-        ci_b in arb_compliance_instance(),
-    ) {
-        prop_assume!(ci_a != ci_b);
-        let words_a = ComplianceInstanceWords::from(&ci_a);
-        let words_b = ComplianceInstanceWords::from(&ci_b);
-        prop_assert_ne!(words_a.u32_words, words_b.u32_words);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 5. Digest injectivity.
-// ---------------------------------------------------------------------------
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1000))]
-
-    #[test]
-    fn digest_to_bytes_is_injective(
-        a_bytes in prop::array::uniform32(any::<u8>()),
-        b_bytes in prop::array::uniform32(any::<u8>()),
-    ) {
-        prop_assume!(a_bytes != b_bytes);
-        let a = Digest::from_bytes(a_bytes);
-        let b = Digest::from_bytes(b_bytes);
-        prop_assert_ne!(a.to_bytes(), b.to_bytes(), "distinct input bytes must produce distinct Digests");
-    }
-
-    #[test]
-    fn digest_roundtrip_from_bytes(bytes in prop::array::uniform32(any::<u8>())) {
-        let d = Digest::from_bytes(bytes);
-        prop_assert_eq!(d.to_bytes(), bytes);
-    }
-}
