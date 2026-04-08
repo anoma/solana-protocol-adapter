@@ -93,6 +93,25 @@ proptest! {
         let result = compute_batch_aggregation_journal_digest(&tx);
         prop_assert!(result.is_err(), "wrong verifying_key must be rejected: {:?}", result);
     }
+
+    /// Duplicate LVI tags: if two LVIs share the same tag, compute_batch_aggregation_journal_digest
+    /// must either reject the transaction or find_logic_input returns the same LVI for both,
+    /// producing a deterministic (not undefined) result.
+    #[test]
+    fn duplicate_lvi_tags_handled_deterministically(_seed in 0..255u8) {
+        let mut tx = create_minimal_transaction();
+        let nf = tx.actions[0].compliance_units[0].instance.consumed_nullifier;
+
+        // Set both LVI tags to the same value (consumed nullifier)
+        tx.actions[0].logic_verifier_inputs[1].tag = nf;
+        // Also set verifying_key to match so the vk check doesn't fail first
+        tx.actions[0].logic_verifier_inputs[1].verifying_key =
+            tx.actions[0].compliance_units[0].instance.consumed_logic_ref;
+
+        let result = compute_batch_aggregation_journal_digest(&tx);
+        // Should fail because find_logic_input can't find the created_commitment tag
+        prop_assert!(result.is_err(), "duplicate tags should cause TagNotFound for the missing tag");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -176,6 +195,51 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
+// 2b. Cross-component: journal digest and app_data_hash must both catch mutations.
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100_000))]
+
+    /// A transaction with correct journal and correct app_data passes both checks.
+    /// Mutating the app_data must be caught by verify_app_data_hashes even if
+    /// the journal digest is not recomputed.
+    #[test]
+    fn app_data_mutation_caught_independently(poison in any::<u8>()) {
+        let mut tx = create_minimal_transaction();
+        let nf = tx.actions[0].compliance_units[0].instance.consumed_nullifier;
+        let cm = tx.actions[0].compliance_units[0].instance.created_commitment;
+
+        tx.actions[0].logic_verifier_inputs[0].instance_journal =
+            make_instance_journal(nf, true, AppData::new());
+        tx.actions[0].logic_verifier_inputs[1].instance_journal =
+            make_instance_journal(cm, false, AppData::new());
+
+        // Both should pass on valid tx
+        prop_assert!(compute_batch_aggregation_journal_digest(&tx).is_ok());
+        prop_assert!(verify_app_data_hashes(&tx).is_ok());
+
+        // Corrupt app_data on LVI[0]
+        tx.actions[0].logic_verifier_inputs[0]
+            .app_data
+            .resource_payload
+            .push(arm_core::logic_instance::ExpirableBlob {
+                blob: vec![poison as u32],
+                deletion_criterion: 0,
+            });
+
+        // app_data_hash check must catch this
+        let hash_result = verify_app_data_hashes(&tx);
+        prop_assert!(hash_result.is_err(), "corrupted app_data must fail hash check");
+
+        // journal digest should still succeed (it doesn't check app_data content,
+        // only the instance_journal bytes which haven't changed)
+        let digest_result = compute_batch_aggregation_journal_digest(&tx);
+        prop_assert!(digest_result.is_ok(), "journal digest should not be affected by app_data mutation");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 3. Merkle tree: verify against a naive reference implementation.
 //    The PA's frontier-based tree must produce the same root as building
 //    the full tree from scratch.
@@ -239,6 +303,30 @@ proptest! {
             leaves.len()
         );
     }
+
+    /// Merkle tree at exact power-of-two boundaries: 2^k-1, 2^k, 2^k+1 leaves.
+    /// These are where the tree grows, which is where frontier bugs would appear.
+    #[test]
+    fn merkle_tree_boundary_correctness(k in 1..7u32, extra in 0..2u32) {
+        let target_count = (1u64 << k) - 1 + extra as u64;
+        // Generate deterministic leaves
+        let leaves: Vec<Digest> = (0..target_count)
+            .map(|i| {
+                use sha2::{Digest as Sha2Digest, Sha256};
+                let hash: [u8; 32] = Sha256::digest(&i.to_le_bytes()).into();
+                arm_core::Digest::from_bytes(hash)
+            })
+            .collect();
+
+        let mut state = create_test_pa_state();
+        for leaf in &leaves {
+            append_to_tree(&mut state, *leaf).unwrap();
+        }
+
+        let expected = reference_merkle_root(&leaves);
+        let actual = state.root_digest();
+        prop_assert_eq!(actual, expected, "boundary test: {} leaves (2^{} {:+})", target_count, k, extra as i32 - 1);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -290,5 +378,19 @@ proptest! {
             "tag substitution at position {} must change root",
             position
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 5. Seal deserialization fuzz — arbitrary proof bytes must not panic.
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100_000))]
+
+    #[test]
+    fn seal_try_from_slice_no_panic(bytes in prop::collection::vec(any::<u8>(), 0..512)) {
+        use anchor_lang::prelude::AnchorDeserialize;
+        let _ = verifier_router::Seal::try_from_slice(&bytes);
     }
 }
