@@ -20,7 +20,7 @@ use proptest::prelude::*;
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(500))]
+    #![proptest_config(ProptestConfig::with_cases(100_000))]
 
     /// Swapping two LVI tags must cause TagNotFound or a digest mismatch.
     /// This tests the tag→LVI binding in compute_batch_aggregation_journal_digest.
@@ -102,7 +102,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(500))]
+    #![proptest_config(ProptestConfig::with_cases(100_000))]
 
     /// Corrupted app_data (different from what was hashed in the journal)
     /// must be caught by verify_app_data_hashes.
@@ -216,13 +216,13 @@ fn reference_merkle_root(leaves: &[Digest]) -> Digest {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(200))]
+    #![proptest_config(ProptestConfig::with_cases(50_000))]
 
     /// The frontier-based append must produce the same root as the naive
     /// reference for any leaf sequence up to 16 leaves.
     #[test]
     fn merkle_tree_matches_reference(
-        leaves in prop::collection::vec(arb_digest(), 1..16)
+        leaves in prop::collection::vec(arb_digest(), 1..64)
     ) {
         let mut state = create_test_pa_state();
 
@@ -249,15 +249,34 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(500))]
+    #![proptest_config(ProptestConfig::with_cases(100_000))]
 
-    /// Replacing any single tag in a 4-tag tree must change the root.
+    /// PADDING_LEAF as a tag must not collide with padding in the tree.
+    /// [A] padded to [A, PADDING_LEAF] must differ from [A, PADDING_LEAF] as explicit tags.
+    #[test]
+    fn padding_leaf_tag_does_not_collide_with_tree_padding(
+        a in arb_digest(),
+    ) {
+        use crate::merkle::PADDING_LEAF;
+
+        let root_one_tag = compute_action_tree_root(&[a]).unwrap();
+        let root_two_tags = compute_action_tree_root(&[a, PADDING_LEAF]).unwrap();
+
+        // If these are equal, an attacker can add/remove trailing PADDING_LEAF
+        // tags without changing the action tree root.
+        prop_assert_ne!(
+            root_one_tag, root_two_tags,
+            "1-tag tree padded with PADDING_LEAF must differ from 2-tag tree with explicit PADDING_LEAF"
+        );
+    }
+
+    /// Replacing any single tag in a 2-to-32-tag tree must change the root.
     #[test]
     fn action_tree_detects_single_tag_substitution(
-        tags in prop::collection::vec(arb_digest(), 4..=4),
+        tags in prop::collection::vec(arb_digest(), 2..=32),
         replacement in arb_digest(),
-        position in 0..4usize,
     ) {
+        let position = tags.len() / 2; // deterministic mid-point, always valid
         prop_assume!(tags[position] != replacement);
 
         let original_root = compute_action_tree_root(&tags).unwrap();
