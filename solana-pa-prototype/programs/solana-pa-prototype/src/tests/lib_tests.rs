@@ -102,6 +102,36 @@ mod governance_tests {
     }
 }
 
+mod empty_transaction_tests {
+    use super::*;
+
+    #[test]
+    fn empty_transaction_has_no_actions() {
+        use arm_core::delta_types::DeltaProof;
+        use arm_core::transaction::Delta;
+
+        let tx = Transaction {
+            actions: vec![],
+            delta_proof: Delta::Proof(DeltaProof([0u8; 65])),
+            expected_balance: None,
+            aggregation_proof: Some(vec![0u8; 64]),
+        };
+
+        // The validation that execute_settlement performs:
+        assert!(
+            tx.actions.is_empty(),
+            "Zero-action transaction must be caught by the non-empty check"
+        );
+
+        // base_proofs_are_empty returns false for zero actions — this is
+        // why the aggregation path accepted it before the fix.
+        assert!(
+            !tx.base_proofs_are_empty(),
+            "Zero actions means no empty proofs — the old check passed"
+        );
+    }
+}
+
 mod txdata_expiry_bounds_tests {
     use super::*;
 
