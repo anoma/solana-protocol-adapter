@@ -979,4 +979,148 @@ mod tests {
             assert_eq!(b, 0, "padding bytes should be zero");
         }
     }
+
+    /// Helper: build a minimal valid transaction with a real delta proof.
+    /// Uses the passthrough logic circuit and ephemeral resources.
+    fn build_valid_tx_with_delta_proof(nonce_byte: u8) -> Transaction {
+        let nf_key = NullifierKey::default();
+        let nf_key_cm = nf_key.commit();
+        let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
+
+        let mut consumed = Resource {
+            logic_ref: passthrough_vk,
+            nk_commitment: nf_key_cm,
+            quantity: 1,
+            is_ephemeral: true,
+            ..Default::default()
+        };
+        consumed.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
+        let consumed_nf = consumed.nullifier(&nf_key).unwrap();
+
+        let mut created = consumed;
+        created.set_nonce(consumed_nf);
+
+        let witness = ComplianceWitness {
+            consumed_resource: consumed,
+            created_resource: created,
+            merkle_path: MerklePath::empty(),
+            rcv: Scalar::ONE.to_bytes().to_vec(),
+            nf_key,
+            ephemeral_root: initial_root(),
+        };
+        let cu = create_compliance_unit(&witness, ProofType::Succinct).unwrap();
+
+        let consumed_nf = cu.instance.consumed_nullifier;
+        let created_cm = cu.instance.created_commitment;
+        let tags = vec![consumed_nf, created_cm];
+        let tree = MerkleTree::from(tags);
+        let root = tree.root().unwrap();
+
+        let consumed_instance = LogicInstance {
+            tag: consumed_nf,
+            is_consumed: true,
+            root,
+            app_data: AppData::default(),
+            app_data_hash: AppData::default().compute_hash(),
+        };
+        let created_instance = LogicInstance {
+            tag: created_cm,
+            is_consumed: false,
+            root,
+            app_data: AppData::default(),
+            app_data_hash: AppData::default().compute_hash(),
+        };
+
+        let (cp, cj) = arm::proving_system::prove(
+            PASSTHROUGH_LOGIC_GUEST_ELF, &consumed_instance, ProofType::Succinct,
+        ).unwrap();
+        let (crp, crj) = arm::proving_system::prove(
+            PASSTHROUGH_LOGIC_GUEST_ELF, &created_instance, ProofType::Succinct,
+        ).unwrap();
+
+        let consumed_logic = LogicVerifier {
+            proof: Some(cp),
+            instance: cj,
+            verifying_key: passthrough_vk,
+        };
+        let created_logic = LogicVerifier {
+            proof: Some(crp),
+            instance: crj,
+            verifying_key: passthrough_vk,
+        };
+
+        let action = Action::new(vec![cu], vec![consumed_logic, created_logic]).unwrap();
+
+        let delta_witness =
+            DeltaWitness::from_bytes_vec(&[witness.rcv]).unwrap();
+        let tx = Transaction::create(
+            vec![action],
+            Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
+        );
+        tx.generate_delta_proof(hash_delta_msg).unwrap()
+    }
+
+    /// A valid transaction must pass delta verification via the k256 path.
+    #[test]
+    fn valid_tx_passes_delta_verification() {
+        let tx = build_valid_tx_with_delta_proof(100);
+        tx.verify(hash_delta_msg).unwrap();
+    }
+
+    /// Swapping the nullifier and commitment tags in the delta message
+    /// must invalidate the delta proof signature.
+    #[test]
+    fn swapped_tags_invalidate_delta_proof() {
+        let tx = build_valid_tx_with_delta_proof(101);
+        tx.clone().verify(hash_delta_msg).unwrap();
+
+        // Swap nullifier and commitment in the compliance instance.
+        // This changes the delta message (which is [nf, cm] → [cm, nf]),
+        // invalidating the signature over the original message hash.
+        let mut swapped = tx.clone();
+        let inst = &mut swapped.actions[0].compliance_units[0].instance;
+        let nf = inst.consumed_nullifier;
+        let cm = inst.created_commitment;
+        inst.consumed_nullifier = cm;
+        inst.created_commitment = nf;
+
+        let result = swapped.verify(hash_delta_msg);
+        assert!(
+            result.is_err(),
+            "swapped nf/cm must invalidate delta proof"
+        );
+    }
+
+    /// Mutating a single delta coordinate must invalidate the delta proof.
+    #[test]
+    fn mutated_delta_x_invalidates_proof() {
+        let mut tx = build_valid_tx_with_delta_proof(102);
+        tx.clone().verify(hash_delta_msg).unwrap();
+
+        // Flip a word in delta_x
+        tx.actions[0].compliance_units[0].instance.delta_x[0] ^= 0xFFFFFFFF;
+
+        let result = tx.verify(hash_delta_msg);
+        assert!(
+            result.is_err(),
+            "mutated delta_x must invalidate delta proof"
+        );
+    }
+
+    /// Mutating a nullifier must invalidate the delta proof (changes the message hash).
+    #[test]
+    fn mutated_nullifier_invalidates_delta_proof() {
+        let mut tx = build_valid_tx_with_delta_proof(103);
+        tx.clone().verify(hash_delta_msg).unwrap();
+
+        // Corrupt the nullifier
+        tx.actions[0].compliance_units[0].instance.consumed_nullifier =
+            Digest::from_bytes([0xFF; 32]);
+
+        let result = tx.verify(hash_delta_msg);
+        assert!(
+            result.is_err(),
+            "mutated nullifier must invalidate delta proof"
+        );
+    }
 }
