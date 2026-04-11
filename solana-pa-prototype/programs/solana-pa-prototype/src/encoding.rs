@@ -9,21 +9,18 @@ use arm_core::Digest;
 use arm_core::constants::COMPLIANCE_VK_BYTES;
 use arm_core::utils::bytes_to_words;
 
-/// Compute the journal digest for verifying a *batch aggregation* proof.
+/// Compute the journal digest pinned by the batch aggregation Groth16 proof.
 ///
-/// This builds and serializes the exact same tuple as the circuit:
-/// `(Vec<ComplianceInstanceWords>, Digest, Vec<Vec<u32>>, Vec<Digest>)`
-/// Then hashes the serialized bytes.
+/// Per-LVI journal bytes are re-derived from `lvi.app_data` via
+/// `LogicInstance::to_journal()`, so any mutation of `app_data` flows into the
+/// digest and invalidates the proof (H-001 closure).
 pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Digest, PAError> {
     use anchor_lang::solana_program::hash::hash;
     use arm_core::compliance::ComplianceInstanceWords;
 
-    let total_cus: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
-    let total_tags = total_cus * 2;
-
-    let mut compliance_instances: Vec<ComplianceInstanceWords> = Vec::with_capacity(total_cus);
-    let mut logic_instances: Vec<Vec<u32>> = Vec::with_capacity(total_tags);
-    let mut logic_keys: Vec<Digest> = Vec::with_capacity(total_tags);
+    let mut compliance_instances: Vec<ComplianceInstanceWords> = Vec::new();
+    let mut logic_instances: Vec<Vec<u32>> = Vec::new();
+    let mut logic_keys: Vec<Digest> = Vec::new();
 
     for action in &tx.actions {
         for cu in &action.compliance_units {
@@ -31,34 +28,36 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
         }
 
         let (tags, expected_logic_refs) = extract_tags_and_logic_refs(action);
-
         if tags.len() != action.logic_verifier_inputs.len() {
             return Err(PAError::InvalidTransactionData);
         }
 
-        for (tag, expected_vk) in tags.iter().zip(expected_logic_refs.iter()) {
+        let action_tree_root = compute_action_tree_root(&tags)?;
+
+        // tags is [consumed_nullifier, created_commitment, ...] so even idx is consumed.
+        for (idx, (tag, expected_vk)) in tags.iter().zip(&expected_logic_refs).enumerate() {
             let input = find_logic_input(&action.logic_verifier_inputs, tag)?;
             if input.verifying_key != *expected_vk {
                 return Err(PAError::InvalidTransactionData);
             }
-
-            logic_instances.push(bytes_to_words(&input.instance_journal));
+            let journal_bytes = input
+                .to_instance(idx % 2 == 0, action_tree_root)
+                .to_journal()
+                .map_err(|_| PAError::InvalidTransactionData)?;
+            logic_instances.push(bytes_to_words(&journal_bytes));
             logic_keys.push(input.verifying_key);
         }
     }
 
-    // Borsh serialization here matches risc0_zkvm::serde byte-for-byte: both
-    // use 4-byte LE length prefixes for Vec and identical layout for [u32; N].
-    // Standard bincode differs (8-byte length prefixes) and is not equivalent.
-    let compliance_key = Digest::from_bytes(COMPLIANCE_VK_BYTES);
+    // borsh and risc0_zkvm::serde agree byte-for-byte on this tuple shape:
+    // both use 4-byte LE length prefixes for Vec and identical [u32; N] layout.
     let output = (
         compliance_instances,
-        compliance_key,
+        Digest::from_bytes(COMPLIANCE_VK_BYTES),
         logic_instances,
         logic_keys,
     );
     let journal_bytes = borsh::to_vec(&output).map_err(|_| PAError::InvalidTransactionData)?;
-
     Ok(Digest::from_bytes(hash(&journal_bytes).to_bytes()))
 }
 
@@ -107,53 +106,6 @@ pub fn extract_tags_and_logic_refs(
     }
 
     (tags, logic_refs)
-}
-
-/// Verify that each LVI's app_data matches the hash proven in its instance_journal.
-///
-/// The logic circuit guest computes `sha256(borsh(app_data))` and commits it as the
-/// last 32 bytes of the journal. This function recomputes the hash on-chain and
-/// compares it against the proven value, preventing app_data substitution attacks.
-pub fn verify_app_data_hashes(tx: &Transaction) -> Result<(), PAError> {
-    use anchor_lang::solana_program::hash::hash;
-
-    for action in &tx.actions {
-        for lvi in &action.logic_verifier_inputs {
-            let journal = &lvi.instance_journal;
-            // The app_data_hash Digest is the last field of LogicInstance.
-            // It occupies 8 u32 words = 32 bytes at the end of the journal.
-            // The journal is 4-byte aligned (risc0 serde produces u32 words;
-            // borsh to_journal() pads to alignment before the hash).
-            if journal.len() < 32 || journal.len() % 4 != 0 {
-                return Err(PAError::AppDataHashMismatch);
-            }
-
-            // Extract the last 8 u32 words as the proven hash.
-            // Journal bytes are native-endian u32 words.
-            let hash_start = journal.len() - 32;
-            let mut proven_words = [0u32; 8];
-            for (i, word) in proven_words.iter_mut().enumerate() {
-                let off = hash_start + i * 4;
-                *word = u32::from_ne_bytes(
-                    journal[off..off + 4]
-                        .try_into()
-                        .map_err(|_| PAError::AppDataHashMismatch)?,
-                );
-            }
-
-            // Compute the expected hash: sha256(borsh(app_data)), converted
-            // to Digest word representation via from_bytes (same as compute_hash).
-            let app_data_bytes =
-                borsh::to_vec(&lvi.app_data).map_err(|_| PAError::InvalidTransactionData)?;
-            let computed_hash = hash(&app_data_bytes);
-            let computed_digest = Digest::from_bytes(computed_hash.to_bytes());
-
-            if proven_words != *computed_digest.as_words() {
-                return Err(PAError::AppDataHashMismatch);
-            }
-        }
-    }
-    Ok(())
 }
 
 /// Find a LogicVerifierInputs entry by its tag.

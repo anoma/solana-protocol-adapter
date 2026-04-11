@@ -80,14 +80,12 @@ pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction 
             verifying_key: inst.consumed_logic_ref,
             app_data: AppData::default(),
             proof: None,
-            instance_journal: Vec::new(),
         });
         lvis.push(LogicVerifierInputs {
             tag: inst.created_commitment,
             verifying_key: inst.created_logic_ref,
             app_data: AppData::default(),
             proof: None,
-            instance_journal: Vec::new(),
         });
     }
 
@@ -164,7 +162,6 @@ pub fn create_transaction_with_multi_lvi_payloads(
                 ..AppData::default()
             },
             proof: None,
-            instance_journal: Vec::new(),
         })
         .collect();
     tx
@@ -194,21 +191,6 @@ pub fn create_test_pa_state_with(authority: Pubkey, stopped: bool) -> PAStateAcc
         min_expiry_slots: MIN_EXPIRY_SLOTS,
         max_expiry_slots: MAX_EXPIRY_SLOTS,
     }
-}
-
-pub fn make_instance_journal(tag: Digest, is_consumed: bool, app_data: AppData) -> Vec<u8> {
-    use arm_core::logic_instance::LogicInstance;
-    let mut instance = LogicInstance {
-        tag,
-        is_consumed,
-        root: Digest::default(),
-        app_data,
-        app_data_hash: Digest::default(),
-    };
-    instance.compute_and_set_app_data_hash();
-    instance
-        .to_journal()
-        .expect("borsh serialization should succeed")
 }
 
 pub fn make_external_call(

@@ -521,8 +521,6 @@ fn execute_settlement<'info>(
 
     arm_solana::delta::verify_delta_proof(tx).map_err(PAError::from)?;
 
-    encoding::verify_app_data_hashes(tx).map_err(anchor_lang::error::Error::from)?;
-
     // Events enable off-chain indexers to reconstruct action/transaction data.
     let total_tag_count: usize = tx
         .actions

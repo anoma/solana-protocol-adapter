@@ -13,7 +13,7 @@ use arm::nullifier_key::{NullifierKey, NullifierKeyExt};
 use arm::proving_system::{encode_seal, ProofType};
 use arm::resource::Resource;
 use arm::transaction::{Delta, Transaction, TransactionExt};
-use arm::utils::{bytes_to_words, core_to_risc0_digest};
+use arm::utils::core_to_risc0_digest;
 use arm::CoreDeltaWitness;
 use arm::Digest;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -289,22 +289,17 @@ fn generate_test_transaction_with_external_payload(
         }
     }
 
-    let consumed_app_data_hash = consumed_app_data.compute_hash();
     let consumed_instance = LogicInstance {
         tag: consumed_nf,
         is_consumed: true,
         root,
         app_data: consumed_app_data,
-        app_data_hash: consumed_app_data_hash,
     };
-    let created_app_data = AppData::default();
-    let created_app_data_hash = created_app_data.compute_hash();
     let created_instance = LogicInstance {
         tag: created_cm,
         is_consumed: false,
         root,
-        app_data: created_app_data,
-        app_data_hash: created_app_data_hash,
+        app_data: AppData::default(),
     };
 
     let (consumed_proof, consumed_journal) = arm::proving_system::prove(
@@ -513,12 +508,11 @@ fn dump_fixture(input: &Path) -> Result<()> {
         for (li, lvi) in action.logic_verifier_inputs.iter().enumerate() {
             let tag = lvi.tag.to_bytes();
             let ext = lvi.app_data.external_payload.len();
-            let journal_len = lvi.instance_journal.len();
             eprintln!(
-                "    LVI {}: tag={:02x}{:02x}..., vk={:02x}{:02x}..., external_payload={}, instance_journal={} bytes",
+                "    LVI {}: tag={:02x}{:02x}..., vk={:02x}{:02x}..., external_payload={}",
                 li, tag[0], tag[1],
                 lvi.verifying_key.to_bytes()[0], lvi.verifying_key.to_bytes()[1],
-                ext, journal_len
+                ext
             );
         }
     }
@@ -960,23 +954,145 @@ mod tests {
         assert!(decode_base58_32("1").is_err());
     }
 
-    #[test]
-    fn bytes_to_words_roundtrip() {
-        let original = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-        let words = bytes_to_words(&original);
-        let recovered = arm::utils::words_to_bytes(&words);
-        assert_eq!(&recovered[..original.len()], &original[..]);
+    /// Helper: build a minimal valid transaction with a real delta proof.
+    /// Uses the passthrough logic circuit and ephemeral resources.
+    fn build_valid_tx_with_delta_proof(nonce_byte: u8) -> Transaction {
+        let nf_key = NullifierKey::default();
+        let nf_key_cm = nf_key.commit();
+        let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
+
+        let mut consumed = Resource {
+            logic_ref: passthrough_vk,
+            nk_commitment: nf_key_cm,
+            quantity: 1,
+            is_ephemeral: true,
+            ..Default::default()
+        };
+        consumed.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
+        let consumed_nf = consumed.nullifier(&nf_key).unwrap();
+
+        let mut created = consumed;
+        created.set_nonce(consumed_nf);
+
+        let witness = ComplianceWitness {
+            consumed_resource: consumed,
+            created_resource: created,
+            merkle_path: MerklePath::empty(),
+            rcv: Scalar::ONE.to_bytes().to_vec(),
+            nf_key,
+            ephemeral_root: initial_root(),
+        };
+        let cu = create_compliance_unit(&witness, ProofType::Succinct).unwrap();
+
+        let consumed_nf = cu.instance.consumed_nullifier;
+        let created_cm = cu.instance.created_commitment;
+        let tags = vec![consumed_nf, created_cm];
+        let tree = MerkleTree::from(tags);
+        let root = tree.root().unwrap();
+
+        let consumed_instance = LogicInstance {
+            tag: consumed_nf,
+            is_consumed: true,
+            root,
+            app_data: AppData::default(),
+        };
+        let created_instance = LogicInstance {
+            tag: created_cm,
+            is_consumed: false,
+            root,
+            app_data: AppData::default(),
+        };
+
+        let (cp, cj) = arm::proving_system::prove(
+            PASSTHROUGH_LOGIC_GUEST_ELF, &consumed_instance, ProofType::Succinct,
+        ).unwrap();
+        let (crp, crj) = arm::proving_system::prove(
+            PASSTHROUGH_LOGIC_GUEST_ELF, &created_instance, ProofType::Succinct,
+        ).unwrap();
+
+        let consumed_logic = LogicVerifier {
+            proof: Some(cp),
+            instance: cj,
+            verifying_key: passthrough_vk,
+        };
+        let created_logic = LogicVerifier {
+            proof: Some(crp),
+            instance: crj,
+            verifying_key: passthrough_vk,
+        };
+
+        let action = Action::new(vec![cu], vec![consumed_logic, created_logic]).unwrap();
+
+        let delta_witness =
+            DeltaWitness::from_bytes_vec(&[witness.rcv]).unwrap();
+        let tx = Transaction::create(
+            vec![action],
+            Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
+        );
+        tx.generate_delta_proof(hash_delta_msg).unwrap()
     }
 
+    /// A valid transaction must pass delta verification via the k256 path.
     #[test]
-    fn bytes_to_words_roundtrip_with_padding() {
-        // 5 bytes: not a multiple of 4, so words_to_bytes will have 3 padding zeros
-        let original = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
-        let words = bytes_to_words(&original);
-        let recovered = arm::utils::words_to_bytes(&words);
-        assert_eq!(&recovered[..original.len()], &original[..]);
-        for &b in &recovered[original.len()..] {
-            assert_eq!(b, 0, "padding bytes should be zero");
-        }
+    fn valid_tx_passes_delta_verification() {
+        let tx = build_valid_tx_with_delta_proof(100);
+        tx.verify(hash_delta_msg).unwrap();
+    }
+
+    /// Swapping the nullifier and commitment tags in the delta message
+    /// must invalidate the delta proof signature.
+    #[test]
+    fn swapped_tags_invalidate_delta_proof() {
+        let tx = build_valid_tx_with_delta_proof(101);
+        tx.clone().verify(hash_delta_msg).unwrap();
+
+        // Swap nullifier and commitment in the compliance instance.
+        // This changes the delta message (which is [nf, cm] → [cm, nf]),
+        // invalidating the signature over the original message hash.
+        let mut swapped = tx.clone();
+        let inst = &mut swapped.actions[0].compliance_units[0].instance;
+        let nf = inst.consumed_nullifier;
+        let cm = inst.created_commitment;
+        inst.consumed_nullifier = cm;
+        inst.created_commitment = nf;
+
+        let result = swapped.verify(hash_delta_msg);
+        assert!(
+            result.is_err(),
+            "swapped nf/cm must invalidate delta proof"
+        );
+    }
+
+    /// Mutating a single delta coordinate must invalidate the delta proof.
+    #[test]
+    fn mutated_delta_x_invalidates_proof() {
+        let mut tx = build_valid_tx_with_delta_proof(102);
+        tx.clone().verify(hash_delta_msg).unwrap();
+
+        // Flip a word in delta_x
+        tx.actions[0].compliance_units[0].instance.delta_x[0] ^= 0xFFFFFFFF;
+
+        let result = tx.verify(hash_delta_msg);
+        assert!(
+            result.is_err(),
+            "mutated delta_x must invalidate delta proof"
+        );
+    }
+
+    /// Mutating a nullifier must invalidate the delta proof (changes the message hash).
+    #[test]
+    fn mutated_nullifier_invalidates_delta_proof() {
+        let mut tx = build_valid_tx_with_delta_proof(103);
+        tx.clone().verify(hash_delta_msg).unwrap();
+
+        // Corrupt the nullifier
+        tx.actions[0].compliance_units[0].instance.consumed_nullifier =
+            Digest::from_bytes([0xFF; 32]);
+
+        let result = tx.verify(hash_delta_msg);
+        assert!(
+            result.is_err(),
+            "mutated nullifier must invalidate delta proof"
+        );
     }
 }
