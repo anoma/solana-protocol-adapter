@@ -2,130 +2,103 @@ use super::strategies::arb_digest;
 use crate::encoding::{compute_action_tree_root, compute_batch_aggregation_journal_digest};
 use crate::merkle::append_to_tree;
 use crate::tests::utils::{create_minimal_transaction, create_test_pa_state};
-use arm_core::logic_instance::AppData;
+use arm_core::logic_instance::{AppData, ExpirableBlob, LogicVerifierInputs};
 use arm_core::Digest;
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
-// 1. Journal digest rejects structurally invalid transactions.
-//    These test that the validation CATCHES specific corruptions,
-//    not that mutation changes a hash (which is trivially true).
+// Journal digest rejects structurally invalid transactions.
 // ---------------------------------------------------------------------------
+
+/// Swapping the consumed/created LVI tags must be detected — the swapped LVI's
+/// verifying_key no longer matches the expected logic_ref for the tag position.
+#[test]
+fn swapped_lvi_tags_rejected() {
+    let mut tx = create_minimal_transaction();
+    let original = compute_batch_aggregation_journal_digest(&tx).unwrap();
+
+    let tag0 = tx.actions[0].logic_verifier_inputs[0].tag;
+    let tag1 = tx.actions[0].logic_verifier_inputs[1].tag;
+    tx.actions[0].logic_verifier_inputs[0].tag = tag1;
+    tx.actions[0].logic_verifier_inputs[1].tag = tag0;
+
+    let result = compute_batch_aggregation_journal_digest(&tx);
+    assert!(
+        result.is_err() || result.unwrap() != original,
+        "swapped LVI tags must be detected"
+    );
+}
+
+/// Removing an LVI leaves fewer LVIs than tags and must be rejected.
+#[test]
+fn missing_lvi_rejected() {
+    let mut tx = create_minimal_transaction();
+    tx.actions[0].logic_verifier_inputs.pop();
+    assert!(compute_batch_aggregation_journal_digest(&tx).is_err());
+}
+
+/// Two LVIs sharing the same tag leave one required tag without an LVI →
+/// `find_logic_input` returns `TagNotFound`.
+#[test]
+fn duplicate_lvi_tags_rejected() {
+    let mut tx = create_minimal_transaction();
+    let nf = tx.actions[0].compliance_units[0]
+        .instance
+        .consumed_nullifier;
+    tx.actions[0].logic_verifier_inputs[1].tag = nf;
+    tx.actions[0].logic_verifier_inputs[1].verifying_key = tx.actions[0].compliance_units[0]
+        .instance
+        .consumed_logic_ref;
+
+    assert!(compute_batch_aggregation_journal_digest(&tx).is_err());
+}
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(100_000))]
 
-    /// Swapping two LVI tags must cause TagNotFound or a digest mismatch.
-    /// This tests the tag→LVI binding in compute_batch_aggregation_journal_digest.
-    #[test]
-    fn swapped_lvi_tags_rejected(_swap_seed in prop::array::uniform32(any::<u8>())) {
-        let mut tx = create_minimal_transaction();
-        let original = compute_batch_aggregation_journal_digest(&tx);
-        prop_assert!(original.is_ok(), "valid tx must produce a digest");
-
-        // Swap the tags (nullifier ↔ commitment)
-        let tag0 = tx.actions[0].logic_verifier_inputs[0].tag;
-        let tag1 = tx.actions[0].logic_verifier_inputs[1].tag;
-        tx.actions[0].logic_verifier_inputs[0].tag = tag1;
-        tx.actions[0].logic_verifier_inputs[1].tag = tag0;
-
-        // The verifying_key check should fail because the swapped LVI's
-        // verifying_key won't match the expected logic_ref for that tag position
-        let result = compute_batch_aggregation_journal_digest(&tx);
-        prop_assert!(
-            result.is_err() || result.unwrap() != original.unwrap(),
-            "swapped LVI tags must be detected"
-        );
-    }
-
-    /// Extra LVI beyond the tag count must be rejected.
+    /// Pushing an extra LVI beyond `tags.len()` must be rejected by the count check.
     #[test]
     fn extra_lvi_rejected(extra_vk in prop::array::uniform32(any::<u8>())) {
         let mut tx = create_minimal_transaction();
-        let extra = arm_core::logic_instance::LogicVerifierInputs {
+        tx.actions[0].logic_verifier_inputs.push(LogicVerifierInputs {
             tag: Digest::from_bytes(extra_vk),
             verifying_key: Digest::from_bytes(extra_vk),
             app_data: AppData::new(),
             proof: None,
-        };
-        tx.actions[0].logic_verifier_inputs.push(extra);
-
-        let result = compute_batch_aggregation_journal_digest(&tx);
-        prop_assert!(result.is_err(), "extra LVI must be rejected: {:?}", result);
+        });
+        prop_assert!(compute_batch_aggregation_journal_digest(&tx).is_err());
     }
 
-    /// Removing an LVI must be rejected (fewer LVIs than tags).
-    #[test]
-    fn missing_lvi_rejected(_seed in 0..255u8) {
-        let mut tx = create_minimal_transaction();
-        tx.actions[0].logic_verifier_inputs.pop();
-
-        let result = compute_batch_aggregation_journal_digest(&tx);
-        prop_assert!(result.is_err(), "missing LVI must be rejected: {:?}", result);
-    }
-
-    /// Wrong verifying_key on an LVI must be rejected.
+    /// Wrong verifying_key on an LVI must be rejected before journal serialization.
     #[test]
     fn wrong_verifying_key_rejected(wrong_vk in prop::array::uniform32(any::<u8>())) {
         let mut tx = create_minimal_transaction();
-        let original_vk = tx.actions[0].logic_verifier_inputs[0].verifying_key;
         let new_vk = Digest::from_bytes(wrong_vk);
-        prop_assume!(new_vk != original_vk);
-
+        prop_assume!(new_vk != tx.actions[0].logic_verifier_inputs[0].verifying_key);
         tx.actions[0].logic_verifier_inputs[0].verifying_key = new_vk;
-
-        let result = compute_batch_aggregation_journal_digest(&tx);
-        prop_assert!(result.is_err(), "wrong verifying_key must be rejected: {:?}", result);
+        prop_assert!(compute_batch_aggregation_journal_digest(&tx).is_err());
     }
 
-    /// Duplicate LVI tags: if two LVIs share the same tag, compute_batch_aggregation_journal_digest
-    /// must either reject the transaction or find_logic_input returns the same LVI for both,
-    /// producing a deterministic (not undefined) result.
-    #[test]
-    fn duplicate_lvi_tags_handled_deterministically(_seed in 0..255u8) {
-        let mut tx = create_minimal_transaction();
-        let nf = tx.actions[0].compliance_units[0].instance.consumed_nullifier;
-
-        // Set both LVI tags to the same value (consumed nullifier)
-        tx.actions[0].logic_verifier_inputs[1].tag = nf;
-        // Also set verifying_key to match so the vk check doesn't fail first
-        tx.actions[0].logic_verifier_inputs[1].verifying_key =
-            tx.actions[0].compliance_units[0].instance.consumed_logic_ref;
-
-        let result = compute_batch_aggregation_journal_digest(&tx);
-        // Should fail because find_logic_input can't find the created_commitment tag
-        prop_assert!(result.is_err(), "duplicate tags should cause TagNotFound for the missing tag");
-    }
-
-    /// Any mutation of `lvi.app_data` must change the re-derived aggregation
-    /// digest. This is the core H-001 regression: under journal re-derivation,
-    /// an attacker cannot substitute `app_data` while keeping the aggregation
-    /// digest (and thus the Groth16 proof) valid.
+    /// H-001 core regression: any mutation of `lvi.app_data` must change the
+    /// re-derived journal digest, so a tampered transaction cannot keep its
+    /// Groth16 proof valid.
     #[test]
     fn app_data_mutation_changes_journal_digest(poison in any::<u8>()) {
         let mut tx = create_minimal_transaction();
-        let honest_digest = compute_batch_aggregation_journal_digest(&tx).unwrap();
+        let honest = compute_batch_aggregation_journal_digest(&tx).unwrap();
 
         tx.actions[0].logic_verifier_inputs[0]
             .app_data
             .resource_payload
-            .push(arm_core::logic_instance::ExpirableBlob {
-                blob: vec![poison as u32],
-                deletion_criterion: 0,
-            });
+            .push(ExpirableBlob { blob: vec![poison as u32], deletion_criterion: 0 });
 
-        let tampered_digest = compute_batch_aggregation_journal_digest(&tx).unwrap();
-        prop_assert_ne!(
-            honest_digest, tampered_digest,
-            "mutated app_data must change the re-derived journal digest"
-        );
+        let tampered = compute_batch_aggregation_journal_digest(&tx).unwrap();
+        prop_assert_ne!(honest, tampered);
     }
 }
 
 // ---------------------------------------------------------------------------
-// 3. Merkle tree: verify against a naive reference implementation.
-//    The PA's frontier-based tree must produce the same root as building
-//    the full tree from scratch.
+// Merkle tree: verify against a naive reference implementation.
 // ---------------------------------------------------------------------------
 
 /// Naive reference Merkle tree: builds the full tree layer by layer.
@@ -266,10 +239,7 @@ fn merkle_tree_rejects_at_max_capacity() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Action tree: verify the Merkle construction catches tag substitution.
-//    If an attacker replaces one tag with another, the action tree root
-//    must differ. This is a collision resistance check on the tree, not
-//    on the hash function.
+// Action tree: catches tag substitution and PADDING_LEAF tag collisions.
 // ---------------------------------------------------------------------------
 
 proptest! {
@@ -318,7 +288,7 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Seal deserialization fuzz — arbitrary proof bytes must not panic.
+// Seal deserialization fuzz — arbitrary proof bytes must not panic.
 // ---------------------------------------------------------------------------
 
 proptest! {

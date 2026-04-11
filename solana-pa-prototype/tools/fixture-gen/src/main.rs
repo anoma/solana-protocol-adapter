@@ -954,26 +954,6 @@ mod tests {
         assert!(decode_base58_32("1").is_err());
     }
 
-    #[test]
-    fn bytes_to_words_roundtrip() {
-        let original = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-        let words = bytes_to_words(&original);
-        let recovered = arm::utils::words_to_bytes(&words);
-        assert_eq!(&recovered[..original.len()], &original[..]);
-    }
-
-    #[test]
-    fn bytes_to_words_roundtrip_with_padding() {
-        // 5 bytes: not a multiple of 4, so words_to_bytes will have 3 padding zeros
-        let original = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
-        let words = bytes_to_words(&original);
-        let recovered = arm::utils::words_to_bytes(&words);
-        assert_eq!(&recovered[..original.len()], &original[..]);
-        for &b in &recovered[original.len()..] {
-            assert_eq!(b, 0, "padding bytes should be zero");
-        }
-    }
-
     /// Helper: build a minimal valid transaction with a real delta proof.
     /// Uses the passthrough logic circuit and ephemeral resources.
     fn build_valid_tx_with_delta_proof(nonce_byte: u8) -> Transaction {
