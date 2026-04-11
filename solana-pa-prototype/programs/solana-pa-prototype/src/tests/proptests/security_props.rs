@@ -1,14 +1,7 @@
 use super::strategies::arb_digest;
-use crate::encoding::{
-    compute_action_tree_root, compute_batch_aggregation_journal_digest, verify_app_data_hashes,
-};
-use crate::error::PAError;
+use crate::encoding::{compute_action_tree_root, compute_batch_aggregation_journal_digest};
 use crate::merkle::append_to_tree;
-use crate::tests::utils::{
-    build_tx_from_instances, create_minimal_transaction, create_test_pa_state,
-    make_instance_journal,
-};
-use arm_core::compliance::ComplianceInstance;
+use crate::tests::utils::{create_minimal_transaction, create_test_pa_state};
 use arm_core::logic_instance::AppData;
 use arm_core::Digest;
 use proptest::prelude::*;
@@ -25,16 +18,8 @@ proptest! {
     /// Swapping two LVI tags must cause TagNotFound or a digest mismatch.
     /// This tests the tag→LVI binding in compute_batch_aggregation_journal_digest.
     #[test]
-    fn swapped_lvi_tags_rejected(swap_seed in prop::array::uniform32(any::<u8>())) {
+    fn swapped_lvi_tags_rejected(_swap_seed in prop::array::uniform32(any::<u8>())) {
         let mut tx = create_minimal_transaction();
-        // Give LVIs valid instance_journals so they pass deeper checks
-        let nf = tx.actions[0].compliance_units[0].instance.consumed_nullifier;
-        let cm = tx.actions[0].compliance_units[0].instance.created_commitment;
-        tx.actions[0].logic_verifier_inputs[0].instance_journal =
-            make_instance_journal(nf, true, AppData::new());
-        tx.actions[0].logic_verifier_inputs[1].instance_journal =
-            make_instance_journal(cm, false, AppData::new());
-
         let original = compute_batch_aggregation_journal_digest(&tx);
         prop_assert!(original.is_ok(), "valid tx must produce a digest");
 
@@ -62,7 +47,6 @@ proptest! {
             verifying_key: Digest::from_bytes(extra_vk),
             app_data: AppData::new(),
             proof: None,
-            instance_journal: Vec::new(),
         };
         tx.actions[0].logic_verifier_inputs.push(extra);
 
@@ -112,114 +96,16 @@ proptest! {
         // Should fail because find_logic_input can't find the created_commitment tag
         prop_assert!(result.is_err(), "duplicate tags should cause TagNotFound for the missing tag");
     }
-}
 
-// ---------------------------------------------------------------------------
-// 2. verify_app_data_hashes rejects corrupted app_data.
-//    The app_data_hash in the journal must match sha256(borsh(app_data)).
-//    Any mismatch must be caught.
-// ---------------------------------------------------------------------------
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100_000))]
-
-    /// Corrupted app_data (different from what was hashed in the journal)
-    /// must be caught by verify_app_data_hashes.
+    /// Any mutation of `lvi.app_data` must change the re-derived aggregation
+    /// digest. This is the core H-001 regression: under journal re-derivation,
+    /// an attacker cannot substitute `app_data` while keeping the aggregation
+    /// digest (and thus the Groth16 proof) valid.
     #[test]
-    fn corrupted_app_data_detected(
-        poison_byte in any::<u8>(),
-    ) {
+    fn app_data_mutation_changes_journal_digest(poison in any::<u8>()) {
         let mut tx = create_minimal_transaction();
-        let nf = tx.actions[0].compliance_units[0].instance.consumed_nullifier;
-        let cm = tx.actions[0].compliance_units[0].instance.created_commitment;
+        let honest_digest = compute_batch_aggregation_journal_digest(&tx).unwrap();
 
-        // Build valid journals with correct app_data_hash
-        tx.actions[0].logic_verifier_inputs[0].instance_journal =
-            make_instance_journal(nf, true, AppData::new());
-        tx.actions[0].logic_verifier_inputs[1].instance_journal =
-            make_instance_journal(cm, false, AppData::new());
-
-        // Verify the uncorrupted tx passes
-        let valid = verify_app_data_hashes(&tx);
-        prop_assert!(valid.is_ok(), "valid tx must pass app_data_hash check");
-
-        // Corrupt the app_data by adding a payload that wasn't in the hash
-        tx.actions[0].logic_verifier_inputs[0]
-            .app_data
-            .resource_payload
-            .push(arm_core::logic_instance::ExpirableBlob {
-                blob: vec![poison_byte as u32],
-                deletion_criterion: 0,
-            });
-
-        let result = verify_app_data_hashes(&tx);
-        prop_assert!(
-            matches!(result, Err(PAError::AppDataHashMismatch)),
-            "corrupted app_data must be detected as AppDataHashMismatch, got: {:?}",
-            result
-        );
-    }
-
-    /// Truncated instance_journal (shorter than 32 bytes) must be rejected.
-    #[test]
-    fn truncated_journal_rejected(len in 0..31usize) {
-        let mut tx = create_minimal_transaction();
-        tx.actions[0].logic_verifier_inputs[0].instance_journal = vec![0u8; len];
-
-        let result = verify_app_data_hashes(&tx);
-        prop_assert!(
-            result.is_err(),
-            "truncated journal ({} bytes) must be rejected",
-            len
-        );
-    }
-
-    /// Journal with wrong alignment (not 4-byte aligned) must be rejected.
-    #[test]
-    fn misaligned_journal_rejected(extra_bytes in 1..3usize) {
-        let mut tx = create_minimal_transaction();
-        let nf = tx.actions[0].compliance_units[0].instance.consumed_nullifier;
-        let mut journal = make_instance_journal(nf, true, AppData::new());
-        // Add bytes to break 4-byte alignment
-        for _ in 0..extra_bytes {
-            journal.push(0);
-        }
-        tx.actions[0].logic_verifier_inputs[0].instance_journal = journal;
-
-        let result = verify_app_data_hashes(&tx);
-        prop_assert!(
-            result.is_err(),
-            "misaligned journal must be rejected"
-        );
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 2b. Cross-component: journal digest and app_data_hash must both catch mutations.
-// ---------------------------------------------------------------------------
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100_000))]
-
-    /// A transaction with correct journal and correct app_data passes both checks.
-    /// Mutating the app_data must be caught by verify_app_data_hashes even if
-    /// the journal digest is not recomputed.
-    #[test]
-    fn app_data_mutation_caught_independently(poison in any::<u8>()) {
-        let mut tx = create_minimal_transaction();
-        let nf = tx.actions[0].compliance_units[0].instance.consumed_nullifier;
-        let cm = tx.actions[0].compliance_units[0].instance.created_commitment;
-
-        tx.actions[0].logic_verifier_inputs[0].instance_journal =
-            make_instance_journal(nf, true, AppData::new());
-        tx.actions[0].logic_verifier_inputs[1].instance_journal =
-            make_instance_journal(cm, false, AppData::new());
-
-        // Both should pass on valid tx
-        prop_assert!(compute_batch_aggregation_journal_digest(&tx).is_ok());
-        prop_assert!(verify_app_data_hashes(&tx).is_ok());
-
-        // Corrupt app_data on LVI[0]
         tx.actions[0].logic_verifier_inputs[0]
             .app_data
             .resource_payload
@@ -228,14 +114,11 @@ proptest! {
                 deletion_criterion: 0,
             });
 
-        // app_data_hash check must catch this
-        let hash_result = verify_app_data_hashes(&tx);
-        prop_assert!(hash_result.is_err(), "corrupted app_data must fail hash check");
-
-        // journal digest should still succeed (it doesn't check app_data content,
-        // only the instance_journal bytes which haven't changed)
-        let digest_result = compute_batch_aggregation_journal_digest(&tx);
-        prop_assert!(digest_result.is_ok(), "journal digest should not be affected by app_data mutation");
+        let tampered_digest = compute_batch_aggregation_journal_digest(&tx).unwrap();
+        prop_assert_ne!(
+            honest_digest, tampered_digest,
+            "mutated app_data must change the re-derived journal digest"
+        );
     }
 }
 
@@ -313,7 +196,7 @@ proptest! {
         let leaves: Vec<Digest> = (0..target_count)
             .map(|i| {
                 use sha2::{Digest as Sha2Digest, Sha256};
-                let hash: [u8; 32] = Sha256::digest(&i.to_le_bytes()).into();
+                let hash: [u8; 32] = Sha256::digest(i.to_le_bytes()).into();
                 arm_core::Digest::from_bytes(hash)
             })
             .collect();
@@ -352,14 +235,12 @@ fn merkle_tree_rejects_at_max_capacity() {
         max_expiry_slots: 216_000,
     };
 
-    let leaf = Digest::from_bytes([0xAA; 32]);
-
     // Fill to capacity (2^3 = 8 leaves). Each append grows the tree as needed.
     // At depth 3, capacity = 8. After 8 appends the tree will have grown.
     for i in 0..128u64 {
         let leaf_i = Digest::from_bytes({
             use sha2::{Digest as Sha2Digest, Sha256};
-            let h: [u8; 32] = Sha256::digest(&i.to_le_bytes()).into();
+            let h: [u8; 32] = Sha256::digest(i.to_le_bytes()).into();
             h
         });
         let result = append_to_tree(&mut state, leaf_i);

@@ -261,11 +261,9 @@ The fixture generator (`tools/fixture-gen`) encodes this structure with the forw
 
 The Solana PA intentionally mirrors the EVM PA trust model:
 
-1. Aggregation proof verification is bound to `instance_journal` bytes.
+1. Aggregation proof verification is bound to per-LVI journal bytes re-derived from `LogicVerifierInputs.app_data` at verification time via `LogicInstance::to_journal()` (a hand-rolled risc0-serde encoder in `arm_core`, matching EVM's `RiscZeroUtils.toJournal`).
 2. External call execution and output checks are driven by `LogicVerifierInputs.app_data.external_payload`.
-3. The PA does **not** deserialize `instance_journal` on-chain to reconstruct or cross-check payload fields.
-
-As a result, transaction construction tooling (fixture generation, relayer/builder pipeline) is responsible for ensuring `app_data` and `instance_journal` are consistent.
+3. Because (1) and (2) read from the same structured field, any mutation of `app_data` flows into the aggregation digest and invalidates the Groth16 proof — there is no duplicated wire field that can diverge.
 
 ### How the Test Passes Accounts
 

@@ -13,7 +13,7 @@ use arm::nullifier_key::{NullifierKey, NullifierKeyExt};
 use arm::proving_system::{encode_seal, ProofType};
 use arm::resource::Resource;
 use arm::transaction::{Delta, Transaction, TransactionExt};
-use arm::utils::{bytes_to_words, core_to_risc0_digest};
+use arm::utils::core_to_risc0_digest;
 use arm::CoreDeltaWitness;
 use arm::Digest;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -289,22 +289,17 @@ fn generate_test_transaction_with_external_payload(
         }
     }
 
-    let consumed_app_data_hash = consumed_app_data.compute_hash();
     let consumed_instance = LogicInstance {
         tag: consumed_nf,
         is_consumed: true,
         root,
         app_data: consumed_app_data,
-        app_data_hash: consumed_app_data_hash,
     };
-    let created_app_data = AppData::default();
-    let created_app_data_hash = created_app_data.compute_hash();
     let created_instance = LogicInstance {
         tag: created_cm,
         is_consumed: false,
         root,
-        app_data: created_app_data,
-        app_data_hash: created_app_data_hash,
+        app_data: AppData::default(),
     };
 
     let (consumed_proof, consumed_journal) = arm::proving_system::prove(
@@ -513,12 +508,11 @@ fn dump_fixture(input: &Path) -> Result<()> {
         for (li, lvi) in action.logic_verifier_inputs.iter().enumerate() {
             let tag = lvi.tag.to_bytes();
             let ext = lvi.app_data.external_payload.len();
-            let journal_len = lvi.instance_journal.len();
             eprintln!(
-                "    LVI {}: tag={:02x}{:02x}..., vk={:02x}{:02x}..., external_payload={}, instance_journal={} bytes",
+                "    LVI {}: tag={:02x}{:02x}..., vk={:02x}{:02x}..., external_payload={}",
                 li, tag[0], tag[1],
                 lvi.verifying_key.to_bytes()[0], lvi.verifying_key.to_bytes()[1],
-                ext, journal_len
+                ext
             );
         }
     }
@@ -1021,14 +1015,12 @@ mod tests {
             is_consumed: true,
             root,
             app_data: AppData::default(),
-            app_data_hash: AppData::default().compute_hash(),
         };
         let created_instance = LogicInstance {
             tag: created_cm,
             is_consumed: false,
             root,
             app_data: AppData::default(),
-            app_data_hash: AppData::default().compute_hash(),
         };
 
         let (cp, cj) = arm::proving_system::prove(
