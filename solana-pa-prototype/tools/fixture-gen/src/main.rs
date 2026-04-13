@@ -310,6 +310,7 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
         instruction_data: input,
         expected_output,
         output_mode: OutputMode::ReturnData,
+        num_accounts: 2, // block-time-forwarder: [program, clock_sysvar]
     }))
 }
 
@@ -319,6 +320,7 @@ fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
         instruction_data: vec![MODE_FAIL],
         expected_output: vec![],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 1, // test-forwarder: [program]
     }))
 }
 
@@ -328,6 +330,7 @@ fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
         instruction_data: vec![MODE_SILENT],
         expected_output: vec![],
         output_mode: OutputMode::ReturnData,
+        num_accounts: 1, // test-forwarder: [program]
     }))
 }
 
@@ -349,6 +352,7 @@ fn test_forwarder_output_account_payload_blob(
             offset: 0,
             len: expected_bytes.len() as u32,
         },
+        num_accounts: 2, // test-forwarder: [program, data_account]
     }))
 }
 
@@ -431,6 +435,7 @@ fn spl_token_forwarder_wrap_external_payload(
         instruction_data: input,
         expected_output,
         output_mode: OutputMode::ReturnData,
+        num_accounts: 12, // SPL wrap: [program, config, ix_sysvar, clock, user_ata, escrow_ata, escrow_pda, nonce_bitmap, token_program, system_program, payer, mint]
     });
 
     let metadata = SplTokenWrapMetadata {
@@ -487,6 +492,7 @@ fn spl_token_forwarder_unwrap_external_payload(
         instruction_data: input,
         expected_output,
         output_mode: OutputMode::ReturnData,
+        num_accounts: 9, // SPL unwrap: [program, config, ix_sysvar, clock, escrow_ata, recipient_ata, escrow_pda, token_program, mint]
     });
 
     let metadata = SplTokenUnwrapMetadata {
