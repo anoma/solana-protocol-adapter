@@ -9,21 +9,18 @@ use arm_core::Digest;
 use arm_core::constants::COMPLIANCE_VK_BYTES;
 use arm_core::utils::bytes_to_words;
 
-/// Compute the journal digest for verifying a *batch aggregation* proof.
+/// Compute the journal digest pinned by the batch aggregation Groth16 proof.
 ///
-/// This builds and serializes the exact same tuple as the circuit:
-/// `(Vec<ComplianceInstanceWords>, Digest, Vec<Vec<u32>>, Vec<Digest>)`
-/// Then hashes the serialized bytes.
+/// Per-LVI journal bytes are re-derived from `lvi.app_data` via
+/// `LogicInstance::to_journal()`, so any mutation of `app_data` flows into the
+/// digest and invalidates the proof (H-001 closure).
 pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Digest, PAError> {
     use anchor_lang::solana_program::hash::hash;
     use arm_core::compliance::ComplianceInstanceWords;
 
-    let total_cus: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
-    let total_tags = total_cus * 2;
-
-    let mut compliance_instances: Vec<ComplianceInstanceWords> = Vec::with_capacity(total_cus);
-    let mut logic_instances: Vec<Vec<u32>> = Vec::with_capacity(total_tags);
-    let mut logic_keys: Vec<Digest> = Vec::with_capacity(total_tags);
+    let mut compliance_instances: Vec<ComplianceInstanceWords> = Vec::new();
+    let mut logic_instances: Vec<Vec<u32>> = Vec::new();
+    let mut logic_keys: Vec<Digest> = Vec::new();
 
     for action in &tx.actions {
         for cu in &action.compliance_units {
@@ -31,32 +28,36 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
         }
 
         let (tags, expected_logic_refs) = extract_tags_and_logic_refs(action);
-
         if tags.len() != action.logic_verifier_inputs.len() {
             return Err(PAError::InvalidTransactionData);
         }
 
-        for (tag, expected_vk) in tags.iter().zip(expected_logic_refs.iter()) {
+        let action_tree_root = compute_action_tree_root(&tags)?;
+
+        // tags is [consumed_nullifier, created_commitment, ...] so even idx is consumed.
+        for (idx, (tag, expected_vk)) in tags.iter().zip(&expected_logic_refs).enumerate() {
             let input = find_logic_input(&action.logic_verifier_inputs, tag)?;
             if input.verifying_key != *expected_vk {
                 return Err(PAError::InvalidTransactionData);
             }
-
-            logic_instances.push(bytes_to_words(&input.instance_journal));
+            let journal_bytes = input
+                .to_instance(idx % 2 == 0, action_tree_root)
+                .to_journal()
+                .map_err(|_| PAError::InvalidTransactionData)?;
+            logic_instances.push(bytes_to_words(&journal_bytes));
             logic_keys.push(input.verifying_key);
         }
     }
 
-    // Serialize the tuple exactly as the circuit does, then hash
-    let compliance_key = Digest::from_bytes(COMPLIANCE_VK_BYTES);
+    // borsh and risc0_zkvm::serde agree byte-for-byte on this tuple shape:
+    // both use 4-byte LE length prefixes for Vec and identical [u32; N] layout.
     let output = (
         compliance_instances,
-        compliance_key,
+        Digest::from_bytes(COMPLIANCE_VK_BYTES),
         logic_instances,
         logic_keys,
     );
     let journal_bytes = borsh::to_vec(&output).map_err(|_| PAError::InvalidTransactionData)?;
-
     Ok(Digest::from_bytes(hash(&journal_bytes).to_bytes()))
 }
 

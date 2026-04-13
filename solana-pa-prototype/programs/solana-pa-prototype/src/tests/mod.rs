@@ -9,6 +9,7 @@ mod lib_tests;
 mod merkle_tests;
 mod nullifier_tests;
 mod root_tests;
+mod tag_uniqueness_tests;
 mod txdata_tests;
 
 pub mod proptests;

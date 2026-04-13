@@ -62,6 +62,7 @@ mod integration_tests {
             instruction_data: expected_time.to_le_bytes().to_vec(),
             expected_output: vec![RESULT_LT],
             output_mode: OutputMode::ReturnData,
+            num_accounts: 2,
         };
 
         let blob = encode_external_call(&call);
@@ -93,11 +94,11 @@ mod governance_tests {
 
     #[test]
     fn test_pa_state_account_space_calculation() {
-        assert_eq!(PAStateAccount::INITIAL_SPACE, 171);
-        assert_eq!(PAStateAccount::MAX_SPACE, 1163);
-        assert_eq!(PAStateAccount::space_for_depth(1), 171);
-        assert_eq!(PAStateAccount::space_for_depth(2), 203);
-        assert_eq!(PAStateAccount::space_for_depth(32), 1163);
+        assert_eq!(PAStateAccount::INITIAL_SPACE, 204);
+        assert_eq!(PAStateAccount::MAX_SPACE, 1196);
+        assert_eq!(PAStateAccount::space_for_depth(1), 204);
+        assert_eq!(PAStateAccount::space_for_depth(2), 236);
+        assert_eq!(PAStateAccount::space_for_depth(32), 1196);
     }
 }
 

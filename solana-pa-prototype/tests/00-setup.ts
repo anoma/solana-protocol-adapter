@@ -71,6 +71,6 @@ describe("00-setup", () => {
 
     // Verify initialization
     const state = await paProgram.account.paStateAccount.fetch(paStatePda);
-    console.log(`PA state initialized: authority=${state.authority.toBase58()}, paused=${state.paused}`);
+    console.log(`PA state initialized: authority=${state.authority.toBase58()}, lifecycle=${JSON.stringify(state.lifecycle)}`);
   });
 });

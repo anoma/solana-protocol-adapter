@@ -253,10 +253,11 @@ fn test_bitmap_undersized_handling() {
 
 #[test]
 fn test_is_pa_emergency_stopped_not_paused() {
-    // PA state layout: discriminator(8) + bump(1) + authority(32) + paused(1)
-    // paused is at offset 41 (PA_PAUSED_OFFSET)
-    let mut pa_state = vec![0u8; 50];
-    // paused = 0 (not stopped)
+    // PA state layout: discriminator(8) + bump(1) + authority(32) +
+    //   verifier_router(32) + proof_selector(4) + pending_authority(33) + lifecycle(1)
+    // lifecycle is at offset 110 (PA_PAUSED_OFFSET)
+    let mut pa_state = vec![0u8; PA_PAUSED_OFFSET + 1];
+    // lifecycle = 0 (Running, not stopped)
     pa_state[PA_PAUSED_OFFSET] = 0;
 
     assert!(!is_pa_emergency_stopped(&pa_state));
@@ -264,8 +265,8 @@ fn test_is_pa_emergency_stopped_not_paused() {
 
 #[test]
 fn test_is_pa_emergency_stopped_paused() {
-    let mut pa_state = vec![0u8; 50];
-    // paused = 1 (stopped)
+    let mut pa_state = vec![0u8; PA_PAUSED_OFFSET + 1];
+    // lifecycle = 1 (Stopped)
     pa_state[PA_PAUSED_OFFSET] = 1;
 
     assert!(is_pa_emergency_stopped(&pa_state));
@@ -273,9 +274,9 @@ fn test_is_pa_emergency_stopped_paused() {
 
 #[test]
 fn test_is_pa_emergency_stopped_any_nonzero_is_stopped() {
-    let mut pa_state = vec![0u8; 50];
+    let mut pa_state = vec![0u8; PA_PAUSED_OFFSET + 1];
 
-    // Any non-zero value at paused offset means stopped
+    // Any non-zero value at lifecycle offset means stopped
     pa_state[PA_PAUSED_OFFSET] = 255;
     assert!(is_pa_emergency_stopped(&pa_state));
 
@@ -285,7 +286,7 @@ fn test_is_pa_emergency_stopped_any_nonzero_is_stopped() {
 
 #[test]
 fn test_is_pa_emergency_stopped_undersized_data() {
-    // Data too small to contain paused field - should return false (not stopped)
+    // Data too small to contain lifecycle field - should return false (not stopped)
     let small_data = vec![0u8; PA_PAUSED_OFFSET]; // exactly at offset, not past it
     assert!(!is_pa_emergency_stopped(&small_data));
 
@@ -296,7 +297,8 @@ fn test_is_pa_emergency_stopped_undersized_data() {
 #[test]
 fn test_pa_paused_offset_value() {
     // Verify the offset constant matches expected layout
-    // discriminator(8) + bump(1) + authority(32) = 41
-    assert_eq!(PA_PAUSED_OFFSET, 8 + 1 + 32);
-    assert_eq!(PA_PAUSED_OFFSET, 41);
+    // discriminator(8) + bump(1) + authority(32) + verifier_router(32) +
+    // proof_selector(4) + pending_authority(1+32) = 110
+    assert_eq!(PA_PAUSED_OFFSET, 8 + 1 + 32 + 32 + 4 + 33);
+    assert_eq!(PA_PAUSED_OFFSET, 110);
 }

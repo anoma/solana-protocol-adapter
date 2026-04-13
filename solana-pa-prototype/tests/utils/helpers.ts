@@ -9,11 +9,15 @@ import {
 import { createHash } from "crypto";
 import { OP_WRAP, OP_UNWRAP } from "./constants";
 
+/**
+ * Fund a keypair from the provider wallet, topping up to the requested amount.
+ * Returns the keypair for tracking (caller can add to a drain list).
+ */
 export async function fundKeypair(
   provider: anchor.AnchorProvider,
   kp: Keypair,
   sol: number
-) {
+): Promise<void> {
   const needed = sol * LAMPORTS_PER_SOL;
   const balance = await provider.connection.getBalance(kp.publicKey);
   if (balance >= needed) return;

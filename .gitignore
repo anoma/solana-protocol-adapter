@@ -17,6 +17,9 @@ solana-pa-prototype/scripts/mainnet-nonce.json
 # Claude Code
 .claude/
 
+# Mainnet keypairs (secrets)
+solana-pa-prototype/scripts/mainnet-*.json
+
 # OS files
 .DS_Store
 

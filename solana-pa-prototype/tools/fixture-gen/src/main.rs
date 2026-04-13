@@ -106,6 +106,13 @@ enum CliCommand {
         fixture_path: PathBuf,
         program_id: [u8; 32],
     },
+    StripCalls {
+        input: PathBuf,
+        output: PathBuf,
+    },
+    Dump {
+        input: PathBuf,
+    },
 }
 
 struct CliArgs {
@@ -766,9 +773,107 @@ where
     Ok(result)
 }
 
+fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
+    let fixture_str =
+        fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
+
+    #[derive(serde::Deserialize, Serialize)]
+    struct RawFixture {
+        tx_b64: String,
+        #[serde(flatten)]
+        rest: serde_json::Map<String, serde_json::Value>,
+    }
+
+    let mut fixture: RawFixture =
+        serde_json::from_str(&fixture_str).context("parsing fixture JSON")?;
+    let tx_bytes = BASE64.decode(&fixture.tx_b64).context("decoding tx_b64")?;
+    let mut tx: Transaction =
+        bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
+
+    let mut stripped = 0usize;
+    for action in &mut tx.actions {
+        for lvi in &mut action.logic_verifier_inputs {
+            let count = lvi.app_data.external_payload.len();
+            if count > 0 {
+                eprintln!(
+                    "  Stripping {} external_payload blob(s) from LVI tag {:?}",
+                    count,
+                    &lvi.tag.to_bytes()[..4]
+                );
+                lvi.app_data.external_payload.clear();
+                stripped += count;
+            }
+        }
+    }
+    eprintln!("Stripped {} external call(s) total", stripped);
+
+    let modified_bytes = bincode::serialize(&tx).context("re-serializing Transaction")?;
+    fixture.tx_b64 = BASE64.encode(&modified_bytes);
+    fixture.rest.remove("forwarder_type");
+
+    let output_str = serde_json::to_string_pretty(&fixture).context("serializing fixture")?;
+    fs::write(output, output_str).with_context(|| format!("writing {}", output.display()))?;
+    eprintln!("Wrote fixture to {}", output.display());
+    Ok(())
+}
+
+fn dump_fixture(input: &Path) -> Result<()> {
+    let fixture_str =
+        fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
+    let raw: serde_json::Value =
+        serde_json::from_str(&fixture_str).context("parsing fixture JSON")?;
+    let tx_b64 = raw["tx_b64"]
+        .as_str()
+        .ok_or_else(|| anyhow!("missing tx_b64 field"))?;
+    let tx_bytes = BASE64.decode(tx_b64).context("decoding tx_b64")?;
+    let tx: Transaction =
+        bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
+
+    eprintln!("Transaction:");
+    eprintln!("  actions: {}", tx.actions.len());
+    for (ai, action) in tx.actions.iter().enumerate() {
+        eprintln!("  Action {}:", ai);
+        eprintln!("    compliance_units: {}", action.compliance_units.len());
+        for (ci, cu) in action.compliance_units.iter().enumerate() {
+            let nf = cu.instance.consumed_nullifier.to_bytes();
+            let cm = cu.instance.created_commitment.to_bytes();
+            eprintln!(
+                "    CU {}: nullifier={:02x}{:02x}..., commitment={:02x}{:02x}...",
+                ci, nf[0], nf[1], cm[0], cm[1]
+            );
+        }
+        eprintln!(
+            "    logic_verifier_inputs: {}",
+            action.logic_verifier_inputs.len()
+        );
+        for (li, lvi) in action.logic_verifier_inputs.iter().enumerate() {
+            let tag = lvi.tag.to_bytes();
+            let ext = lvi.app_data.external_payload.len();
+            eprintln!(
+                "    LVI {}: tag={:02x}{:02x}..., vk={:02x}{:02x}..., external_payload={}",
+                li,
+                tag[0],
+                tag[1],
+                lvi.verifying_key.to_bytes()[0],
+                lvi.verifying_key.to_bytes()[1],
+                ext
+            );
+        }
+    }
+    eprintln!(
+        "  delta_proof: {:?}",
+        std::mem::discriminant(&tx.delta_proof)
+    );
+    eprintln!(
+        "  aggregation_proof: {} bytes",
+        tx.aggregation_proof.as_ref().map_or(0, |p| p.len())
+    );
+    Ok(())
+}
+
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]\n  fixture-gen --validate FIXTURE_PATH --program-id PROGRAM_ID_B58\n\nForwarder types:\n  - (default) BlockTime forwarder\n  - --spl-token-wrap SPL Token wrap with Ed25519 signature\n  - --spl-token-unwrap SPL Token unwrap (escrow release)\n\nNotes:\n  - --threads N sets rayon thread pool size\n  - --validate checks fixture deserialization and program-id binding\n  - At most one forwarder mode flag may be set\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]\n  fixture-gen --validate FIXTURE_PATH --program-id PROGRAM_ID_B58\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n\nForwarder types:\n  - (default) BlockTime forwarder\n  - --spl-token-wrap SPL Token wrap with Ed25519 signature\n  - --spl-token-unwrap SPL Token unwrap (escrow release)\n\nNotes:\n  - --threads N sets rayon thread pool size\n  - --validate checks fixture deserialization and program-id binding\n  - At most one forwarder mode flag may be set\n"
     );
 }
 
@@ -951,6 +1056,26 @@ fn parse_args() -> Result<CliCommand> {
             std::process::exit(0);
         }
         "--validate" => parse_validate_args(args),
+        "strip-calls" => {
+            let args: Vec<String> = args.collect();
+            if args.len() != 2 {
+                return Err(anyhow!(
+                    "Usage: fixture-gen strip-calls <input.json> <output.json>"
+                ));
+            }
+            Ok(CliCommand::StripCalls {
+                input: PathBuf::from(&args[0]),
+                output: PathBuf::from(&args[1]),
+            })
+        }
+        "dump" => {
+            let input = args.next().ok_or_else(|| {
+                anyhow!("Usage: fixture-gen dump <input.json>")
+            })?;
+            Ok(CliCommand::Dump {
+                input: PathBuf::from(input),
+            })
+        }
         _ => {
             let generate_args = std::iter::once(first).chain(args);
             Ok(CliCommand::Generate(parse_generate_args(generate_args)?))
@@ -961,17 +1086,25 @@ fn parse_args() -> Result<CliCommand> {
 fn main() -> Result<()> {
     let command = parse_args()?;
 
-    if let CliCommand::Validate {
-        fixture_path,
-        program_id,
-    } = command
-    {
-        validate_fixture_file(&fixture_path, program_id)?;
-        eprintln!("fixture validation OK: {}", fixture_path.display());
-        return Ok(());
-    }
+    let args = match command {
+        CliCommand::Validate {
+            fixture_path,
+            program_id,
+        } => {
+            validate_fixture_file(&fixture_path, program_id)?;
+            eprintln!("fixture validation OK: {}", fixture_path.display());
+            return Ok(());
+        }
+        CliCommand::StripCalls { input, output } => {
+            return strip_calls_from_fixture(&input, &output);
+        }
+        CliCommand::Dump { input } => {
+            return dump_fixture(&input);
+        }
+        CliCommand::Generate(args) => args,
+    };
 
-    let CliCommand::Generate(CliArgs {
+    let CliArgs {
         threads,
         debug_assumptions,
         forwarder_mode,
@@ -979,10 +1112,7 @@ fn main() -> Result<()> {
         multi_external_call,
         error_variants_dir,
         out_path,
-    }) = command
-    else {
-        unreachable!();
-    };
+    } = args;
 
     let total_start = Instant::now();
 

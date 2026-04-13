@@ -20,25 +20,25 @@ export function derivePaStatePda(paProgramId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([PA_STATE_SEED], paProgramId);
 }
 
+export function deriveNullifierPda(
+  programId: PublicKey,
+  paState: PublicKey,
+  nullifier: Buffer
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [NULLIFIER_SEED, paState.toBuffer(), nullifier],
+    programId
+  );
+}
+
 export function deriveRootMarkerPda(
   paState: PublicKey,
   root: Buffer,
-  paProgramId: PublicKey
+  programId: PublicKey
 ): PublicKey {
   return PublicKey.findProgramAddressSync(
     [ROOT_MARKER_SEED, paState.toBuffer(), root],
-    paProgramId
-  )[0];
-}
-
-export function deriveNullifierPda(
-  paState: PublicKey,
-  nullifier: Buffer,
-  paProgramId: PublicKey
-): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [NULLIFIER_SEED, paState.toBuffer(), nullifier],
-    paProgramId
+    programId
   )[0];
 }
 
@@ -51,6 +51,22 @@ export function deriveTxDataPda(
     [TX_DATA_SEED, authority.toBuffer(), uploadIdLe],
     paProgramId
   )[0];
+}
+
+/**
+ * Derive nullifier marker account metas from base64-encoded nullifier bytes.
+ * Returns writable, non-signer account metas suitable for remaining_accounts.
+ */
+export function deriveNullifierAccounts(
+  nullifierB64s: string[],
+  paState: PublicKey,
+  programId: PublicKey
+): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
+  return nullifierB64s.map((nfB64) => {
+    const nf = Buffer.from(nfB64, "base64");
+    const [pubkey] = deriveNullifierPda(programId, paState, nf);
+    return { pubkey, isWritable: true, isSigner: false };
+  });
 }
 
 // SPL Token Forwarder PDAs
@@ -84,16 +100,6 @@ export function deriveNonceBitmapPda(
 }
 
 // Verifier router PDAs
-
-export function parseSelectorFromFixture(selectorHex: string): Buffer {
-  const hex = selectorHex.replace(/^0x/, "");
-  if (hex.length !== 8) {
-    throw new Error(
-      `Invalid selector format: ${selectorHex} (expected 8 hex chars)`
-    );
-  }
-  return Buffer.from(hex, "hex");
-}
 
 export function deriveRouterAccounts(
   verifierRouterId: PublicKey,

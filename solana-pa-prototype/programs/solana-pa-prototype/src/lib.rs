@@ -54,9 +54,10 @@ pub mod solana_pa_prototype {
         let state = &mut ctx.accounts.pa_state;
         state.bump = ctx.bumps.pa_state;
         state.authority = ctx.accounts.payer.key();
+        state.pending_authority = None;
         state.verifier_router = verifier_router;
         state.proof_selector = proof_selector;
-        state.paused = false;
+        state.lifecycle = PALifecycle::Running;
 
         state.current_depth = INITIAL_TREE_DEPTH as u8;
         state.frontier = vec![PADDING_LEAF.to_bytes()];
@@ -88,7 +89,10 @@ pub mod solana_pa_prototype {
         ctx: Context<'_, '_, '_, 'info, Settle<'info>>,
         transaction_data: Vec<u8>,
     ) -> Result<()> {
-        require!(!ctx.accounts.pa_state.paused, PAError::Paused);
+        require!(
+            ctx.accounts.pa_state.lifecycle == PALifecycle::Running,
+            PAError::Stopped
+        );
 
         let tx: Transaction = bincode::deserialize(&transaction_data)
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
@@ -256,7 +260,10 @@ pub mod solana_pa_prototype {
         ctx: Context<'_, '_, '_, 'info, SettleFromTxData<'info>>,
         _upload_id: u64,
     ) -> Result<()> {
-        require!(!ctx.accounts.pa_state.paused, PAError::Paused);
+        require!(
+            ctx.accounts.pa_state.lifecycle == PALifecycle::Running,
+            PAError::Stopped
+        );
 
         let txdata = &ctx.accounts.tx_data;
 
@@ -291,8 +298,11 @@ pub mod solana_pa_prototype {
     /// Emergency stop — permanently pause the protocol (requires upgrade to unpause).
     pub fn emergency_stop(ctx: Context<EmergencyStop>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
-        require!(!state.paused, PAError::AlreadyPaused);
-        state.paused = true;
+        require!(
+            state.lifecycle == PALifecycle::Running,
+            PAError::AlreadyStopped
+        );
+        state.lifecycle = PALifecycle::Stopped;
         msg!(
             "Emergency stop activated by {}",
             ctx.accounts.authority.key()
@@ -300,16 +310,33 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Transfer authority to a new account (single-step, no pending/accept).
-    pub fn transfer_authority(
-        ctx: Context<TransferAuthority>,
-        new_authority: Pubkey,
-    ) -> Result<()> {
+    /// Propose a new authority. The transfer is not effective until the
+    /// proposed authority calls `accept_authority`.
+    pub fn propose_authority(ctx: Context<ProposeAuthority>, new_authority: Pubkey) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
+        state.pending_authority = Some(new_authority);
+        msg!(
+            "Authority transfer proposed: {} -> {}",
+            state.authority,
+            new_authority
+        );
+        Ok(())
+    }
+
+    /// Accept a pending authority transfer. Must be signed by the proposed
+    /// authority. Completes the two-step transfer.
+    pub fn accept_authority(ctx: Context<AcceptAuthority>) -> Result<()> {
+        let state = &mut ctx.accounts.pa_state;
+        let new_authority = state.pending_authority.ok_or(PAError::NoPendingAuthority)?;
+        require!(
+            ctx.accounts.new_authority.key() == new_authority,
+            PAError::Unauthorized
+        );
         let old_authority = state.authority;
         state.authority = new_authority;
+        state.pending_authority = None;
         msg!(
-            "Authority transferred from {} to {}",
+            "Authority transferred: {} -> {}",
             old_authority,
             new_authority
         );
@@ -327,9 +354,8 @@ pub mod solana_pa_prototype {
         // Read authority from raw data: discriminator(8) + bump(1) + authority(32)
         let data = pa_state.try_borrow_data()?;
         require!(data.len() >= 41, PAError::InvalidTransactionData);
-        let stored_authority = Pubkey::new_from_array(
-            data[9..41].try_into().unwrap()
-        );
+        let stored_authority =
+            Pubkey::new_from_array(data[9..41].try_into().unwrap());
         drop(data);
 
         require!(stored_authority == authority.key(), PAError::Unauthorized);
@@ -337,14 +363,24 @@ pub mod solana_pa_prototype {
         // Close: transfer lamports, assign to system, zero data
         let pa_lamports = pa_state.lamports();
         **pa_state.lamports.borrow_mut() = 0;
-        **authority.lamports.borrow_mut() = authority
-            .lamports()
-            .checked_add(pa_lamports)
-            .unwrap();
+        **authority.lamports.borrow_mut() =
+            authority.lamports().checked_add(pa_lamports).unwrap();
         pa_state.assign(&anchor_lang::solana_program::system_program::ID);
         pa_state.realloc(0, false)?;
 
         msg!("PAState closed");
+        Ok(())
+    }
+
+    /// Cancel a pending authority transfer. Only callable by the current authority.
+    pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Result<()> {
+        let state = &mut ctx.accounts.pa_state;
+        require!(
+            state.pending_authority.is_some(),
+            PAError::NoPendingAuthority
+        );
+        state.pending_authority = None;
+        msg!("Pending authority transfer cancelled");
         Ok(())
     }
 
@@ -353,6 +389,10 @@ pub mod solana_pa_prototype {
     pub fn close_markers_batch<'info>(
         ctx: Context<'_, '_, '_, 'info, CloseMarkersBatch<'info>>,
     ) -> Result<()> {
+        require!(
+            ctx.accounts.pa_state.lifecycle == PALifecycle::Stopped,
+            PAError::NotStopped
+        );
         let authority_info = ctx.accounts.authority.to_account_info();
         for marker in ctx.remaining_accounts {
             require!(marker.owner == &crate::ID, PAError::InvalidMarker);
@@ -412,7 +452,7 @@ fn maybe_grow_account<'info>(
     let target_depth = required_depth.min(MAX_TREE_DEPTH);
 
     if target_depth <= state.depth() {
-        return Ok(()); // No growth needed
+        return Ok(());
     }
 
     let new_size = PAStateAccount::space_for_depth(target_depth);
@@ -463,6 +503,8 @@ fn execute_settlement<'info>(
     verifier: VerifierAccounts<'info>,
 ) -> Result<()> {
     let pa_state_key = pa_state_info.key;
+
+    require!(!tx.actions.is_empty(), PAError::InvalidTransactionData);
 
     // Deduplicate roots before validation to avoid redundant PDA derivations.
     // Each `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
@@ -639,7 +681,32 @@ pub struct EmergencyStop<'info> {
 }
 
 #[derive(Accounts)]
-pub struct TransferAuthority<'info> {
+pub struct ProposeAuthority<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        has_one = authority @ PAError::Unauthorized,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct AcceptAuthority<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    pub new_authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct CancelAuthorityTransfer<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],

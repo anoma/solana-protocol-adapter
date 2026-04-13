@@ -101,12 +101,12 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
     // Verify PA is initialized (done by 00-setup.ts)
     try {
       const paState = await paProgram.account.paStateAccount.fetch(paStatePda);
-      // PA should NOT be paused yet (other tests depend on it running)
-      if (paState.paused) {
-        throw new Error("PA is already paused - test order may be wrong");
+      // PA should NOT be stopped yet (other tests depend on it running)
+      if (JSON.stringify(paState.lifecycle) !== JSON.stringify({ running: {} })) {
+        throw new Error("PA is already stopped - test order may be wrong");
       }
     } catch (e: any) {
-      if (e.message.includes("already paused")) throw e;
+      if (e.message.includes("already stopped")) throw e;
       throw new Error("PA not initialized - 00-setup.ts should have initialized it");
     }
 
@@ -163,7 +163,7 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   // Mirrors: test_setEmergencyCaller_reverts_if_the_pa_is_not_stopped
   it("rejects set_emergency_caller when PA not stopped", async function() {
     const paState = await paProgram.account.paStateAccount.fetch(paStatePda);
-    assert.equal(paState.paused, false, "PA should not be paused initially");
+    assert.deepEqual(paState.lifecycle, { running: {} }, "PA should be Running initially");
 
     const newCaller = Keypair.generate();
 
@@ -185,7 +185,7 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   // Mirrors: _stopProtocolAdapter() helper in EVM tests
   it("stops Protocol Adapter for emergency operations", async function() {
     let paState = await paProgram.account.paStateAccount.fetch(paStatePda);
-    assert.equal(paState.paused, false, "PA should not be paused initially");
+    assert.deepEqual(paState.lifecycle, { running: {} }, "PA should be Running initially");
 
     // Stop the PA
     await paProgram.methods
@@ -196,9 +196,9 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
       })
       .rpc();
 
-    // Verify PA is now paused
+    // Verify PA is now stopped
     paState = await paProgram.account.paStateAccount.fetch(paStatePda);
-    assert.equal(paState.paused, true, "PA should be paused after emergency_stop");
+    assert.deepEqual(paState.lifecycle, { stopped: {} }, "PA should be Stopped after emergency_stop");
     paEmergencyStopped = true;
   });
 

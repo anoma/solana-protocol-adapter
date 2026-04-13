@@ -84,6 +84,25 @@ with open(\"$idl_file\", \"w\") as f: json.dump(d, f, indent=2)
 
   gen-fixtures)
     shift
+    # Verify all workspaces resolve arm-risc0 to the same commit.
+    # The PA, fixture-gen, and passthrough-logic guest each have independent
+    # Cargo.lock files. If they disagree, generated fixtures will produce
+    # proofs that don't verify against the PA's image IDs.
+    run_in_project '
+      pa_commit=$(grep -A2 "name = \"anoma-rm-core\"" Cargo.lock | grep "source" | grep -oP "#\K[a-f0-9]+")
+      fg_commit=$(grep -A2 "name = \"anoma-rm-core\"" tools/fixture-gen/Cargo.lock | grep "source" | grep -oP "#\K[a-f0-9]+")
+      guest_commit=$(grep -A2 "name = \"anoma-rm-core\"" tools/fixture-gen/passthrough-logic/methods/guest/Cargo.lock | grep "source" | grep -oP "#\K[a-f0-9]+")
+      if [[ "$pa_commit" != "$fg_commit" || "$pa_commit" != "$guest_commit" ]]; then
+        echo "❌ arm-risc0 lockfile skew detected:"
+        echo "  PA:          $pa_commit"
+        echo "  fixture-gen: $fg_commit"
+        echo "  guest:       $guest_commit"
+        echo ""
+        echo "Fix: run cargo update -p anoma-rm-core in each workspace"
+        exit 1
+      fi
+      echo "arm-risc0 lockfiles aligned: ${pa_commit:0:8}"
+    '
     run_in_project "cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- $*"
     ;;
 
@@ -215,7 +234,7 @@ PYEOF
     echo "  fmt          Check Rust formatting"
     echo "  clippy       Run clippy lints"
     echo "  anchor-build Build Anchor programs"
-    echo "  anchor-test  Run deterministic Anchor integration tests"
+    echo "  anchor-test    Run deterministic Anchor integration tests"
     echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
     echo "  fixture-test Run fixture-gen tests"
     echo "  validator    Start a local Solana validator"
