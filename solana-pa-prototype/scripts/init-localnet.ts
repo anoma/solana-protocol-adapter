@@ -29,6 +29,7 @@ import {
   createMint,
   getOrCreateAssociatedTokenAccount,
   mintTo,
+  createApproveInstruction,
 } from "@solana/spl-token";
 import { createHash } from "crypto";
 import { existsSync, readFileSync } from "fs";
@@ -94,10 +95,8 @@ async function main() {
     await paProgram.methods
       .initialize(verifierRouter, proofSelector)
       .accounts({
-        paState: paStatePda,
         payer: wallet.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
+      } as any)
       .remainingAccounts([
         {
           pubkey: genesisRootMarkerPda,
@@ -216,6 +215,19 @@ async function main() {
   } else {
     console.log("Sufficient tokens already minted");
   }
+
+  // 8. Approve escrow PDA as delegate on fee payer's ATA (for wrap operations)
+  const approveAmount = MINT_AMOUNT; // approve full balance
+  const approveTx = new anchor.web3.Transaction().add(
+    createApproveInstruction(
+      feePayerAta.address, // source ATA
+      escrowPda,           // delegate (escrow PDA)
+      wallet.publicKey,    // owner
+      approveAmount
+    )
+  );
+  await provider.sendAndConfirm(approveTx);
+  console.log(`Approved escrow PDA as delegate (${approveAmount} tokens)`);
 
   console.log("");
   console.log("=== Localnet initialized ===");
