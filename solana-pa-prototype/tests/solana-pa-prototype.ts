@@ -1550,7 +1550,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
     try {
       await program.methods
-        .txdataCloseExpired(uploadId, authority.publicKey)
+        .txdataCloseExpired()
         .accountsStrict({
           txData,
           payer: cleaner.publicKey,
@@ -1713,7 +1713,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     // because Anchor validates account constraints before running the handler body
     try {
       await program.methods
-        .txdataCloseExpired(uploadId, authority.publicKey)
+        .txdataCloseExpired()
         .accountsStrict({
           txData,
           payer: cleaner.publicKey,
@@ -1962,7 +1962,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
     // Third-party (cleaner) calls txdata_close_expired — permissionless
     await program.methods
-      .txdataCloseExpired(uploadId, authority.publicKey)
+      .txdataCloseExpired()
       .accountsStrict({
         txData,
         payer: cleaner.publicKey,

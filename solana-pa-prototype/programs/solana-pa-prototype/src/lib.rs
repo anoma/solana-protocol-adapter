@@ -200,19 +200,14 @@ pub mod solana_pa_prototype {
     }
 
     /// Close an expired TxData account. Anyone can call; rent goes to `refund`.
-    pub fn txdata_close_expired(
-        ctx: Context<TxDataCloseExpired>,
-        upload_id: u64,
-        _authority: Pubkey,
-    ) -> Result<()> {
+    pub fn txdata_close_expired(ctx: Context<TxDataCloseExpired>) -> Result<()> {
         let clock = Clock::get()?;
         let txdata = &ctx.accounts.tx_data;
 
         require!(clock.slot > txdata.expires_slot, PAError::TxDataNotExpired);
 
         msg!(
-            "Expired TxData closed: upload_id={}, expires_slot={}, current_slot={}",
-            upload_id,
+            "Expired TxData closed: expires_slot={}, current_slot={}",
             txdata.expires_slot,
             clock.slot
         );
@@ -855,14 +850,8 @@ pub struct TxDataExtend<'info> {
 }
 
 #[derive(Accounts)]
-#[instruction(upload_id: u64, authority: Pubkey)]
 pub struct TxDataCloseExpired<'info> {
-    #[account(
-        mut,
-        seeds = [TX_DATA_SEED, authority.as_ref(), &upload_id.to_le_bytes()],
-        bump = tx_data.bump,
-        close = refund
-    )]
+    #[account(mut, close = refund)]
     pub tx_data: Account<'info, TxDataAccount>,
 
     /// Anyone can call, pays tx fee.
