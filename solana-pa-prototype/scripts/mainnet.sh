@@ -163,7 +163,7 @@ init_forwarder() {
   echo "Initializing forwarder (idempotent)..."
 
   # TOKEN_TRANSFER_ID from transfer_library — must match the backend.
-  local logic_ref="8bceee49ac4646f7bf1ba20be658be5ab5699ce5cab58004f44efaa900717384"
+  local logic_ref="3fcc1fb95b4a61b7105e30b1c107024c72fb9bdb3f4c6755da0a39864db5ac23"
 
   ANCHOR_PROVIDER_URL="$MAINNET_URL" \
   ANCHOR_PROVIDER_CLUSTER=mainnet-beta \
