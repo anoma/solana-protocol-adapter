@@ -4,7 +4,7 @@ use crate::state::{
     derive_config_pda, derive_escrow_pda, derive_nonce_bitmap_pda, is_nonce_used,
     is_pa_emergency_stopped, nonce_to_word_and_bit, set_nonce_used, UnwrapInput, WrapInput,
     WrapMessage, CONFIG_SEED, ESCROW_SEED, NONCES_PER_WORD, NONCE_BITMAP_SEED, NONCE_BITMAP_SIZE,
-    PA_PAUSED_OFFSET,
+    PA_PENDING_AUTH_OFFSET,
 };
 use anchor_lang::prelude::Pubkey;
 
@@ -251,43 +251,63 @@ fn test_bitmap_undersized_handling() {
 // PA Emergency Stopped Tests
 // =============================================================================
 
-#[test]
-fn test_is_pa_emergency_stopped_not_paused() {
-    // PA state layout: discriminator(8) + bump(1) + authority(32) +
-    //   verifier_router(32) + proof_selector(4) + pending_authority(33) + lifecycle(1)
-    // lifecycle is at offset 110 (PA_PAUSED_OFFSET)
-    let mut pa_state = vec![0u8; PA_PAUSED_OFFSET + 1];
-    // lifecycle = 0 (Running, not stopped)
-    pa_state[PA_PAUSED_OFFSET] = 0;
+/// Build fake PA state data with pending_authority=None and the given lifecycle byte.
+fn make_pa_state_none(lifecycle: u8) -> Vec<u8> {
+    // Layout: discriminator(8) + bump(1) + authority(32) + verifier_router(32) +
+    //   proof_selector(4) + pending_authority(Option: 0x00 for None) + lifecycle(1)
+    let lifecycle_offset = PA_PENDING_AUTH_OFFSET + 1; // None tag = 1 byte
+    let mut data = vec![0u8; lifecycle_offset + 1];
+    data[PA_PENDING_AUTH_OFFSET] = 0x00; // None
+    data[lifecycle_offset] = lifecycle;
+    data
+}
 
+/// Build fake PA state data with pending_authority=Some and the given lifecycle byte.
+fn make_pa_state_some(lifecycle: u8) -> Vec<u8> {
+    // pending_authority = Some(Pubkey) → 0x01 + 32 bytes
+    let lifecycle_offset = PA_PENDING_AUTH_OFFSET + 33; // Some tag + 32-byte pubkey
+    let mut data = vec![0u8; lifecycle_offset + 1];
+    data[PA_PENDING_AUTH_OFFSET] = 0x01; // Some
+    data[lifecycle_offset] = lifecycle;
+    data
+}
+
+#[test]
+fn test_is_pa_emergency_stopped_not_paused_none() {
+    let pa_state = make_pa_state_none(0); // Running
     assert!(!is_pa_emergency_stopped(&pa_state));
 }
 
 #[test]
-fn test_is_pa_emergency_stopped_paused() {
-    let mut pa_state = vec![0u8; PA_PAUSED_OFFSET + 1];
-    // lifecycle = 1 (Stopped)
-    pa_state[PA_PAUSED_OFFSET] = 1;
+fn test_is_pa_emergency_stopped_paused_none() {
+    let pa_state = make_pa_state_none(1); // Stopped
+    assert!(is_pa_emergency_stopped(&pa_state));
+}
 
+#[test]
+fn test_is_pa_emergency_stopped_not_paused_some() {
+    let pa_state = make_pa_state_some(0); // Running, with pending authority
+    assert!(!is_pa_emergency_stopped(&pa_state));
+}
+
+#[test]
+fn test_is_pa_emergency_stopped_paused_some() {
+    let pa_state = make_pa_state_some(1); // Stopped, with pending authority
     assert!(is_pa_emergency_stopped(&pa_state));
 }
 
 #[test]
 fn test_is_pa_emergency_stopped_any_nonzero_is_stopped() {
-    let mut pa_state = vec![0u8; PA_PAUSED_OFFSET + 1];
+    let pa_state_255 = make_pa_state_none(255);
+    assert!(is_pa_emergency_stopped(&pa_state_255));
 
-    // Any non-zero value at lifecycle offset means stopped
-    pa_state[PA_PAUSED_OFFSET] = 255;
-    assert!(is_pa_emergency_stopped(&pa_state));
-
-    pa_state[PA_PAUSED_OFFSET] = 42;
-    assert!(is_pa_emergency_stopped(&pa_state));
+    let pa_state_42 = make_pa_state_none(42);
+    assert!(is_pa_emergency_stopped(&pa_state_42));
 }
 
 #[test]
 fn test_is_pa_emergency_stopped_undersized_data() {
-    // Data too small to contain lifecycle field - should return false (not stopped)
-    let small_data = vec![0u8; PA_PAUSED_OFFSET]; // exactly at offset, not past it
+    let small_data = vec![0u8; PA_PENDING_AUTH_OFFSET]; // too small for Option tag
     assert!(!is_pa_emergency_stopped(&small_data));
 
     let empty_data: Vec<u8> = vec![];
@@ -295,10 +315,8 @@ fn test_is_pa_emergency_stopped_undersized_data() {
 }
 
 #[test]
-fn test_pa_paused_offset_value() {
-    // Verify the offset constant matches expected layout
-    // discriminator(8) + bump(1) + authority(32) + verifier_router(32) +
-    // proof_selector(4) + pending_authority(1+32) = 110
-    assert_eq!(PA_PAUSED_OFFSET, 8 + 1 + 32 + 32 + 4 + 33);
-    assert_eq!(PA_PAUSED_OFFSET, 110);
+fn test_pa_pending_auth_offset_value() {
+    // discriminator(8) + bump(1) + authority(32) + verifier_router(32) + proof_selector(4)
+    assert_eq!(PA_PENDING_AUTH_OFFSET, 8 + 1 + 32 + 32 + 4);
+    assert_eq!(PA_PENDING_AUTH_OFFSET, 77);
 }

@@ -398,7 +398,10 @@ pub mod spl_token_forwarder {
         let authority_info = ctx.accounts.authority.to_account_info();
 
         for bitmap in ctx.remaining_accounts {
-            require!(bitmap.owner == ctx.program_id, ErrorCode::InvalidAccountOwner);
+            require!(
+                bitmap.owner == ctx.program_id,
+                ErrorCode::InvalidAccountOwner
+            );
             require!(
                 bitmap.data_len() == NONCE_BITMAP_SIZE,
                 ErrorCode::InvalidNonceBitmapPda
@@ -406,10 +409,8 @@ pub mod spl_token_forwarder {
 
             let lamports = bitmap.lamports();
             **bitmap.lamports.borrow_mut() = 0;
-            **authority_info.lamports.borrow_mut() = authority_info
-                .lamports()
-                .checked_add(lamports)
-                .unwrap();
+            **authority_info.lamports.borrow_mut() =
+                authority_info.lamports().checked_add(lamports).unwrap();
             bitmap.assign(&anchor_lang::solana_program::system_program::ID);
             bitmap.realloc(0, false)?;
         }
@@ -592,7 +593,11 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let mut si = 0;
     let mut di = 0;
     while si + 2 < 32 {
-        let (a, b, c) = (message_hash[si] as u32, message_hash[si + 1] as u32, message_hash[si + 2] as u32);
+        let (a, b, c) = (
+            message_hash[si] as u32,
+            message_hash[si + 1] as u32,
+            message_hash[si + 2] as u32,
+        );
         let triple = (a << 16) | (b << 8) | c;
         b64_bytes[di] = BASE64[((triple >> 18) & 0x3F) as usize];
         b64_bytes[di + 1] = BASE64[((triple >> 12) & 0x3F) as usize];
@@ -694,7 +699,12 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     debug_msg!("  escrow balance before: {}", escrow_balance_before);
 
     // Transfer tokens from user to escrow using delegate authority
-    let transfer_ix = spl_transfer_ix(user_ata.key, escrow_ata.key, escrow_pda.key, wrap_input.amount);
+    let transfer_ix = spl_transfer_ix(
+        user_ata.key,
+        escrow_ata.key,
+        escrow_pda.key,
+        wrap_input.amount,
+    );
 
     let escrow_seeds = &[ESCROW_SEED, wrap_input.token_mint.as_ref(), &[escrow_bump]];
     let signer_seeds = &[&escrow_seeds[..]];
@@ -855,7 +865,12 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     debug_msg!("  recipient balance before: {}", recipient_balance_before);
 
     // Transfer tokens from escrow to recipient
-    let transfer_ix = spl_transfer_ix(escrow_ata.key, recipient_ata.key, escrow_pda.key, unwrap_input.amount);
+    let transfer_ix = spl_transfer_ix(
+        escrow_ata.key,
+        recipient_ata.key,
+        escrow_pda.key,
+        unwrap_input.amount,
+    );
 
     let escrow_seeds = &[
         ESCROW_SEED,

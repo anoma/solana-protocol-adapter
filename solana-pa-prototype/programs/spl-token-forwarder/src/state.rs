@@ -56,24 +56,28 @@ pub struct Config {
 /// Seed used by PA to derive its state PDA.
 pub const PA_STATE_SEED: &[u8] = b"pa_state";
 
-/// Offset of the `lifecycle` field in PAStateAccount (after 8-byte discriminator).
-/// Layout: discriminator(8) + bump(1) + authority(32) + verifier_router(32) +
-///         proof_selector(4) + pending_authority(1+32) + lifecycle(1)
-pub const PA_PAUSED_OFFSET: usize = 8 + 1 + 32 + 32 + 4 + 33;
+/// Offset of the `pending_authority` Option tag in PAStateAccount.
+/// Layout: discriminator(8) + bump(1) + authority(32) + verifier_router(32) + proof_selector(4)
+pub const PA_PENDING_AUTH_OFFSET: usize = 8 + 1 + 32 + 32 + 4;
 
 /// Check if the Protocol Adapter is emergency stopped by reading its state account.
 ///
-/// # Arguments
-/// * `pa_state_account` - The PA state account (must be verified to be correct PDA)
+/// The lifecycle field follows `pending_authority: Option<Pubkey>` in Borsh layout.
+/// Borsh serializes Option as: None = [0x00] (1 byte), Some = [0x01, ..32 bytes..] (33 bytes).
+/// The lifecycle offset depends on the pending_authority variant.
 ///
 /// # Returns
 /// `true` if PA is paused/stopped, `false` otherwise.
 pub fn is_pa_emergency_stopped(pa_state_data: &[u8]) -> bool {
-    if pa_state_data.len() <= PA_PAUSED_OFFSET {
-        // Invalid data, treat as not stopped (will fail other checks)
+    if pa_state_data.len() <= PA_PENDING_AUTH_OFFSET {
         return false;
     }
-    pa_state_data[PA_PAUSED_OFFSET] != 0
+    let pending_auth_tag = pa_state_data[PA_PENDING_AUTH_OFFSET];
+    let lifecycle_offset = PA_PENDING_AUTH_OFFSET + if pending_auth_tag == 0 { 1 } else { 33 };
+    if pa_state_data.len() <= lifecycle_offset {
+        return false;
+    }
+    pa_state_data[lifecycle_offset] != 0
 }
 
 /// Derive the PA state PDA address from the PA program ID.

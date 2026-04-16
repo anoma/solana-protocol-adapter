@@ -346,20 +346,36 @@ pub mod solana_pa_prototype {
         let pa_state = &ctx.accounts.pa_state;
         let authority = &ctx.accounts.authority;
 
-        // Read authority from raw data: discriminator(8) + bump(1) + authority(32)
+        // Layout: discriminator(8) + bump(1) + authority(32) + verifier_router(32)
+        //       + proof_selector(4) + pending_authority(Option<Pubkey>) + lifecycle(1)
+        // Borsh Option: None = [0x00] (1 byte), Some = [0x01, ..32 bytes..] (33 bytes).
+        // Lifecycle offset depends on pending_authority variant.
+        const PENDING_AUTH_OFFSET: usize = 8 + 1 + 32 + 32 + 4;
         let data = pa_state.try_borrow_data()?;
-        require!(data.len() >= 41, PAError::InvalidTransactionData);
-        let stored_authority =
-            Pubkey::new_from_array(data[9..41].try_into().unwrap());
+        require!(
+            data.len() > PENDING_AUTH_OFFSET,
+            PAError::InvalidTransactionData
+        );
+        let stored_authority = Pubkey::new_from_array(data[9..41].try_into().unwrap());
+        let pending_auth_tag = data[PENDING_AUTH_OFFSET];
+        let lifecycle_offset = PENDING_AUTH_OFFSET + if pending_auth_tag == 0 { 1 } else { 33 };
+        require!(
+            data.len() > lifecycle_offset,
+            PAError::InvalidTransactionData
+        );
+        let lifecycle_byte = data[lifecycle_offset];
         drop(data);
 
         require!(stored_authority == authority.key(), PAError::Unauthorized);
+        require!(
+            lifecycle_byte == PALifecycle::Stopped as u8,
+            PAError::NotStopped
+        );
 
         // Close: transfer lamports, assign to system, zero data
         let pa_lamports = pa_state.lamports();
         **pa_state.lamports.borrow_mut() = 0;
-        **authority.lamports.borrow_mut() =
-            authority.lamports().checked_add(pa_lamports).unwrap();
+        **authority.lamports.borrow_mut() = authority.lamports().checked_add(pa_lamports).unwrap();
         pa_state.assign(&anchor_lang::solana_program::system_program::ID);
         pa_state.realloc(0, false)?;
 

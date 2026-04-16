@@ -2418,7 +2418,7 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
 // Verifies that teardown operations cannot be performed while the PA is
 // running. Must run BEFORE emergency_stop pauses the protocol.
 
-describe("solana-pa-prototype (close_markers_batch requires stopped state)", () => {
+describe("solana-pa-prototype (teardown requires stopped state)", () => {
   it("close_markers_batch fails when PA is not stopped", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.deepEqual(state.lifecycle, { running: {} }, "PA should be Running at start of test");
@@ -2441,6 +2441,24 @@ describe("solana-pa-prototype (close_markers_batch requires stopped state)", () 
         })))
         .rpc();
       assert.fail("close_markers_batch should fail when PA is not stopped");
+    } catch (e: any) {
+      assertPAError(e, "NotStopped");
+    }
+  });
+
+  it("close_pa_state fails when PA is not stopped", async () => {
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.deepEqual(state.lifecycle, { running: {} }, "PA should be Running at start of test");
+
+    try {
+      await program.methods
+        .closePaState()
+        .accounts({
+          paState,
+          authority: provider.wallet.publicKey,
+        })
+        .rpc();
+      assert.fail("close_pa_state should fail when PA is not stopped");
     } catch (e: any) {
       assertPAError(e, "NotStopped");
     }
