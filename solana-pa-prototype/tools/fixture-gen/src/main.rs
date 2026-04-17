@@ -2,9 +2,7 @@ use anchor_lang::prelude::AnchorDeserialize as BorshDeserialize;
 use anyhow::{anyhow, Context, Result};
 use arm::action::{Action, ActionExt};
 use arm::action_tree::MerkleTree;
-use arm::compliance::{
-    initial_root, ComplianceInstanceJournalExt, ComplianceWitness,
-};
+use arm::compliance::{initial_root, ComplianceWitness};
 use arm::compliance_unit::create_compliance_unit;
 use arm::delta_proof::DeltaWitness;
 use arm::logic_instance::ExpirableBlob;
