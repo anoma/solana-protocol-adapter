@@ -62,11 +62,16 @@ fn test_action_tree_root_three_tags_padded() {
 
 #[test]
 fn test_find_logic_input_by_tag() {
+    use arm_core::compliance::ComplianceInstance;
+
     let tx = create_minimal_transaction();
     let action = &tx.actions[0];
 
     let cu = &action.compliance_units[0];
-    let consumed_tag = cu.instance.consumed_nullifier;
+    // Wire format stores the instance as journal bytes — parse to read fields.
+    let instance = ComplianceInstance::from_journal(&cu.instance)
+        .expect("test fixture compliance instance should decode");
+    let consumed_tag = instance.consumed_nullifier;
 
     let found = find_logic_input(&action.logic_verifier_inputs, &consumed_tag)
         .expect("should find consumed tag");
@@ -131,9 +136,17 @@ fn test_batch_journal_digest_deterministic_and_sensitive() {
     );
 
     let mut tx_mutated = create_minimal_transaction();
-    tx_mutated.actions[0].compliance_units[0]
-        .instance
-        .consumed_nullifier = Digest::from_bytes([0xFF; 32]);
+    {
+        // Wire format: instance is journal bytes — parse, mutate, re-encode.
+        use arm_core::compliance::ComplianceInstance;
+        let cu = &mut tx_mutated.actions[0].compliance_units[0];
+        let mut instance = ComplianceInstance::from_journal(&cu.instance)
+            .expect("test fixture compliance instance should decode");
+        instance.consumed_nullifier = Digest::from_bytes([0xFF; 32]);
+        cu.instance = instance
+            .to_journal()
+            .expect("mutated compliance instance should re-encode");
+    }
     // Update the corresponding LVI tag so find_logic_input still succeeds.
     tx_mutated.actions[0].logic_verifier_inputs[0].tag = Digest::from_bytes([0xFF; 32]);
 

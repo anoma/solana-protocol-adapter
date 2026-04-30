@@ -93,6 +93,10 @@ pub enum PAError {
     // Close errors
     #[msg("Account is not owned by this program")]
     InvalidMarker,
+
+    // Compliance instance parsing
+    #[msg("Failed to parse compliance instance from journal bytes")]
+    ComplianceInstanceParseFailed,
 }
 
 impl From<SolanaArmError> for PAError {
@@ -103,6 +107,7 @@ impl From<SolanaArmError> for PAError {
             SolanaArmError::DeltaPointNotOnCurve => PAError::DeltaPointNotOnCurve,
             SolanaArmError::DeltaProofVerificationFailed => PAError::DeltaProofVerificationFailed,
             SolanaArmError::DeltaMismatch => PAError::DeltaMismatch,
+            SolanaArmError::ComplianceInstanceParseFailed => PAError::ComplianceInstanceParseFailed,
         }
     }
 }

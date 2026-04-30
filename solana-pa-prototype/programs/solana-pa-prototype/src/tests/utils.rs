@@ -68,7 +68,12 @@ pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction 
     let cus: Vec<ComplianceUnit> = instances
         .iter()
         .map(|inst| ComplianceUnit {
-            instance: inst.clone(),
+            // Wire format stores the instance as journal bytes; the test fixture
+            // is structured, so re-encode it the same way the queue worker
+            // expects to read it.
+            instance: inst
+                .to_journal()
+                .expect("test ComplianceInstance should encode to journal bytes"),
             proof: None,
         })
         .collect();

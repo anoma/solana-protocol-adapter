@@ -11,8 +11,8 @@ proptest! {
         instances in prop::collection::vec(arb_compliance_instance(), 1..10),
     ) {
         let tx = build_tx_from_instances(&instances);
-        let nullifiers = extract_nullifiers(&tx);
-        let commitments = extract_commitments(&tx);
+        let nullifiers = extract_nullifiers(&tx).expect("extract_nullifiers should not fail on test instances");
+        let commitments = extract_commitments(&tx).expect("extract_commitments should not fail on test instances");
 
         prop_assert_eq!(
             nullifiers.len(),
