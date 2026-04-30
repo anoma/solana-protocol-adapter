@@ -1,25 +1,29 @@
 use anchor_lang::prelude::AnchorDeserialize as BorshDeserialize;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use arm::action::{Action, ActionExt};
 use arm::action_tree::MerkleTree;
-use arm::compliance::{initial_root, ComplianceWitness};
-use arm::compliance_unit::create_compliance_unit;
+use arm::compliance::{initial_root, ComplianceInstance, ComplianceWitness};
+use arm::compliance_unit::ComplianceUnit;
+use arm::constants::{BATCH_AGGREGATION_PK, COMPLIANCE_PK, COMPLIANCE_VK};
 use arm::delta_proof::DeltaWitness;
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
 use arm::logic_proof::{LogicVerifier, LogicVerifierInputsExt};
 use arm::merkle_path::MerklePath;
 use arm::nullifier_key::{NullifierKey, NullifierKeyExt};
-use arm::proving_system::{encode_seal, ProofType};
+use arm::proving_system::encode_seal;
 use arm::resource::Resource;
 use arm::transaction::{Delta, Transaction, TransactionExt};
-use arm::utils::{bytes_to_words, core_to_risc0_digest};
+use arm::utils::core_to_risc0_digest;
 use arm::CoreDeltaWitness;
 use arm::Digest;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use heliax_ap_orchestrator_sdk::{
+    AggregateProofResult, BaseProofResult, GpuAggregationProofPayload, GpuComplianceProofPayload,
+    GpuLogicProofPayload, ProofPayload, ProofType, QueueClient,
+};
 use k256::Scalar;
-use rayon::ThreadPoolBuilder;
 use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
 use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
 use serde::{Deserialize, Serialize};
@@ -36,6 +40,115 @@ use passthrough_logic_methods::{PASSTHROUGH_LOGIC_GUEST_ELF, PASSTHROUGH_LOGIC_G
 fn hash_delta_msg(msg: &[u8]) -> [u8; 32] {
     use sha2::Digest as _;
     sha2::Sha256::digest(msg).into()
+}
+
+/// Per-HTTP-request timeout for queue calls. Queue-side job timeouts (5–10 min)
+/// are independent.
+const QUEUE_REQUEST_TIMEOUT: Duration = Duration::from_secs(65);
+/// How often to re-poll the queue while waiting for a job to finish.
+const QUEUE_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Build a queue client from `QUEUE_BASE_URL` + `QUEUE_AUTH_TOKEN`. Both are
+/// required — fixture-gen no longer has a local proving fallback.
+fn build_queue_client() -> Result<QueueClient> {
+    let base_url = env::var("QUEUE_BASE_URL")
+        .map_err(|_| anyhow!("QUEUE_BASE_URL must be set (workers queue endpoint)"))?;
+    let auth_token = env::var("QUEUE_AUTH_TOKEN")
+        .map_err(|_| anyhow!("QUEUE_AUTH_TOKEN must be set (workers queue bearer token)"))?;
+    QueueClient::builder(&base_url)
+        .timeout(QUEUE_REQUEST_TIMEOUT)
+        .auth_token(&auth_token)
+        .build()
+        .map_err(|e| anyhow!("failed to build queue client: {e}"))
+}
+
+/// Submit one compliance witness to the queue and return the resulting
+/// `ComplianceUnit`. Verifies the response was generated under the
+/// `COMPLIANCE_VK` we sent so we can't accept a proof for a different
+/// statement.
+async fn queue_compliance_proof(
+    client: &QueueClient,
+    witness: &ComplianceWitness,
+) -> Result<ComplianceUnit> {
+    let witness_words = risc0_zkvm::serde::to_vec(witness)
+        .map_err(|e| anyhow!("encode compliance witness: {e}"))?;
+    let payload = GpuComplianceProofPayload(ProofPayload {
+        witness: witness_words,
+        proving_key: COMPLIANCE_PK.to_vec(),
+        proof_type: ProofType::Succinct,
+        verifying_key: COMPLIANCE_VK.as_bytes().to_vec(),
+    });
+    let result: BaseProofResult = client
+        .submit_and_wait(payload, QUEUE_POLL_INTERVAL)
+        .await
+        .map_err(|e| anyhow!("queue compliance dispatch: {e}"))?;
+    if result.verifying_key != COMPLIANCE_VK.as_bytes() {
+        bail!("queue returned compliance proof for a different verifying key");
+    }
+    Ok(ComplianceUnit {
+        proof: Some(result.receipt),
+        instance: result.instance,
+    })
+}
+
+/// Submit one logic-proof job (any logic guest ELF) and return `(receipt,
+/// journal)` so the caller can plug into the existing `LogicVerifier` /
+/// journal-bytes plumbing.
+async fn queue_logic_proof<W: Serialize>(
+    client: &QueueClient,
+    proving_key: &[u8],
+    verifying_key: &Digest,
+    instance: &W,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    let witness_words =
+        risc0_zkvm::serde::to_vec(instance).map_err(|e| anyhow!("encode logic witness: {e}"))?;
+    let payload = GpuLogicProofPayload(ProofPayload {
+        witness: witness_words,
+        proving_key: proving_key.to_vec(),
+        proof_type: ProofType::Succinct,
+        verifying_key: verifying_key.as_bytes().to_vec(),
+    });
+    let result: BaseProofResult = client
+        .submit_and_wait(payload, QUEUE_POLL_INTERVAL)
+        .await
+        .map_err(|e| anyhow!("queue logic dispatch: {e}"))?;
+    if result.verifying_key != verifying_key.as_bytes() {
+        bail!("queue returned logic proof for a different verifying key");
+    }
+    Ok((result.receipt, result.instance))
+}
+
+/// Hand the transaction to the queue's GPU aggregation worker. Caller-supplied
+/// `BATCH_AGGREGATION_PK` and `COMPLIANCE_VK` pin the worker to our circuit
+/// images. Returns a transaction with `aggregation_proof` populated and the
+/// individual base proofs erased.
+async fn queue_aggregate_proof(client: &QueueClient, tx: Transaction) -> Result<Transaction> {
+    let serialized = bincode::serialize(&tx).context("serialize tx for aggregation")?;
+    let payload = GpuAggregationProofPayload {
+        transaction: serialized,
+        batch_aggregation_pk: Some(BATCH_AGGREGATION_PK.to_vec()),
+        compliance_vk: Some(COMPLIANCE_VK.as_bytes().to_vec()),
+    };
+    let result: AggregateProofResult = client
+        .submit_and_wait(payload, QUEUE_POLL_INTERVAL)
+        .await
+        .map_err(|e| anyhow!("queue aggregation dispatch: {e}"))?;
+    bincode::deserialize(&result.transaction).context("deserialize aggregated tx")
+}
+
+/// `ComplianceUnit::instance` is journal bytes on the wire — parse, mutate
+/// (via `f`), and re-encode in one place.
+fn mutate_compliance_instance<R>(
+    cu: &mut ComplianceUnit,
+    f: impl FnOnce(&mut ComplianceInstance) -> R,
+) -> Result<R> {
+    let mut inst =
+        ComplianceInstance::from_journal(&cu.instance).context("parse compliance instance")?;
+    let r = f(&mut inst);
+    cu.instance = inst
+        .to_journal()
+        .context("re-encode mutated compliance instance")?;
+    Ok(r)
 }
 
 use block_time_forwarder::{RESULT_GT, RESULT_LT};
@@ -114,7 +227,6 @@ enum CliCommand {
 }
 
 struct CliArgs {
-    threads: Option<usize>,
     debug_assumptions: bool,
     forwarder_mode: ForwarderMode,
     nonce_seed: Option<u8>,
@@ -156,14 +268,16 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
         .get_mut(0)
         .ok_or_else(|| anyhow!("tx has no compliance units"))?;
 
-    let old_created_commitment = cu.instance.created_commitment;
-
-    let mut new_bytes = [0u8; 32];
-    new_bytes.copy_from_slice(old_created_commitment.as_bytes());
-    new_bytes[0] ^= 1;
-    let new_created_commitment = Digest::from_bytes(new_bytes);
-
-    cu.instance.created_commitment = new_created_commitment;
+    let (old_created_commitment, new_created_commitment) =
+        mutate_compliance_instance(cu, |instance| {
+            let old = instance.created_commitment;
+            let mut new_bytes = [0u8; 32];
+            new_bytes.copy_from_slice(old.as_bytes());
+            new_bytes[0] ^= 1;
+            let new = Digest::from_bytes(new_bytes);
+            instance.created_commitment = new;
+            (old, new)
+        })?;
 
     // Update the corresponding created logic verifier input tag so decoding and
     // digest computation still succeeds (proof must then fail).
@@ -511,14 +625,12 @@ struct TransactionGenerationResult {
     spl_token_unwrap_metadata: Option<SplTokenUnwrapMetadata>,
 }
 
-fn generate_test_transaction_with_external_payload(
+async fn generate_test_transaction_with_external_payload(
+    queue: &QueueClient,
     forwarder_mode: ForwarderMode,
     nonce_seed: Option<u8>,
     multi_external_call: bool,
 ) -> Result<TransactionGenerationResult> {
-    // Inner proofs must be Succinct for aggregation.
-    let base_proof_type = ProofType::Succinct;
-
     // Use the passthrough logic circuit for both consumed and created resources.
     // This allows us to bind arbitrary `app_data.external_payload` into real proofs.
     let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
@@ -574,8 +686,9 @@ fn generate_test_transaction_with_external_payload(
         nf_key,
         ephemeral_root: initial_root(),
     };
-    let compliance_receipt =
-        create_compliance_unit(&compliance_witness, base_proof_type).context("prove compliance")?;
+    let compliance_receipt = queue_compliance_proof(queue, &compliance_witness)
+        .await
+        .context("prove compliance via workers queue")?;
 
     let tags = vec![consumed_nf, created_cm];
     let action_tree = MerkleTree::from(tags);
@@ -640,18 +753,22 @@ fn generate_test_transaction_with_external_payload(
         app_data: AppData::default(),
     };
 
-    let (consumed_proof, consumed_journal) = arm::proving_system::prove(
+    let (consumed_proof, consumed_journal) = queue_logic_proof(
+        queue,
         PASSTHROUGH_LOGIC_GUEST_ELF,
+        &passthrough_vk,
         &consumed_instance,
-        base_proof_type,
     )
-    .context("prove consumed passthrough logic")?;
-    let (created_proof, created_journal) = arm::proving_system::prove(
+    .await
+    .context("prove consumed passthrough logic via workers queue")?;
+    let (created_proof, created_journal) = queue_logic_proof(
+        queue,
         PASSTHROUGH_LOGIC_GUEST_ELF,
+        &passthrough_vk,
         &created_instance,
-        base_proof_type,
     )
-    .context("prove created passthrough logic")?;
+    .await
+    .context("prove created passthrough logic via workers queue")?;
 
     let consumed_logic = LogicVerifier {
         proof: Some(consumed_proof),
@@ -734,7 +851,9 @@ fn generate_error_variant_fixtures(
             .compliance_units
             .get_mut(0)
             .ok_or_else(|| anyhow!("tx has no compliance units"))?;
-        cu.instance.consumed_commitment_tree_root = Digest::from_bytes([1u8; 32]);
+        mutate_compliance_instance(cu, |instance| {
+            instance.consumed_commitment_tree_root = Digest::from_bytes([1u8; 32]);
+        })?;
         write_variant("wrong_root.json", &wrong_root)?;
     }
 
@@ -839,8 +958,10 @@ fn dump_fixture(input: &Path) -> Result<()> {
         eprintln!("  Action {}:", ai);
         eprintln!("    compliance_units: {}", action.compliance_units.len());
         for (ci, cu) in action.compliance_units.iter().enumerate() {
-            let nf = cu.instance.consumed_nullifier.to_bytes();
-            let cm = cu.instance.created_commitment.to_bytes();
+            let instance = ComplianceInstance::from_journal(&cu.instance)
+                .context("decode compliance instance for dump")?;
+            let nf = instance.consumed_nullifier.to_bytes();
+            let cm = instance.created_commitment.to_bytes();
             eprintln!(
                 "    CU {}: nullifier={:02x}{:02x}..., commitment={:02x}{:02x}...",
                 ci, nf[0], nf[1], cm[0], cm[1]
@@ -877,7 +998,7 @@ fn dump_fixture(input: &Path) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]\n  fixture-gen --validate FIXTURE_PATH --program-id PROGRAM_ID_B58\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n\nForwarder types:\n  - (default) BlockTime forwarder\n  - --spl-token-wrap SPL Token wrap with Ed25519 signature\n  - --spl-token-unwrap SPL Token unwrap (escrow release)\n\nNotes:\n  - --threads N sets rayon thread pool size\n  - --validate checks fixture deserialization and program-id binding\n  - At most one forwarder mode flag may be set\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen --validate FIXTURE_PATH --program-id PROGRAM_ID_B58\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-output-account  Test-forwarder with OutputAccount mode\n  --spl-token-wrap         SPL Token wrap with Ed25519 signature\n  --spl-token-unwrap       SPL Token unwrap (escrow release)\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof variants\n\nNotes:\n  - At most one forwarder mode flag may be set.\n  - --validate checks fixture deserialization and program-id binding.\n  - QUEUE_BASE_URL and QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - --error-variants writes to DIR from the final aggregated tx.\n"
     );
 }
 
@@ -925,7 +1046,6 @@ fn parse_validate_args(args: impl Iterator<Item = String>) -> Result<CliCommand>
 }
 
 fn parse_generate_args(mut args: impl Iterator<Item = String>) -> Result<CliArgs> {
-    let mut threads: Option<usize> = None;
     let mut debug_assumptions = false;
     let mut forwarder_mode: Option<ForwarderMode> = None;
     let mut nonce_seed: Option<u8> = None;
@@ -953,19 +1073,6 @@ fn parse_generate_args(mut args: impl Iterator<Item = String>) -> Result<CliArgs
             "-h" | "--help" => {
                 print_usage();
                 std::process::exit(0);
-            }
-            "--threads" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--threads requires a value"))?;
-                let parsed = value
-                    .parse::<usize>()
-                    .with_context(|| format!("invalid --threads value: {value}"))?;
-                if parsed == 0 {
-                    return Err(anyhow!("--threads must be >= 1"));
-                }
-                threads = Some(parsed);
             }
             "--debug-assumptions" => {
                 debug_assumptions = true;
@@ -1038,7 +1145,6 @@ fn parse_generate_args(mut args: impl Iterator<Item = String>) -> Result<CliArgs
     });
 
     Ok(CliArgs {
-        threads,
         debug_assumptions,
         forwarder_mode,
         nonce_seed,
@@ -1087,7 +1193,8 @@ fn parse_args() -> Result<CliCommand> {
     }
 }
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let command = parse_args()?;
 
     let args = match command {
@@ -1109,7 +1216,6 @@ fn main() -> Result<()> {
     };
 
     let CliArgs {
-        threads,
         debug_assumptions,
         forwarder_mode,
         nonce_seed,
@@ -1120,17 +1226,8 @@ fn main() -> Result<()> {
 
     let total_start = Instant::now();
 
-    // Configure rayon parallelism deterministically (helps avoid pegging/overheating/OOM).
-    // Must happen before any proving work starts.
-    if let Some(n) = threads {
-        ThreadPoolBuilder::new()
-            .num_threads(n)
-            .build_global()
-            .with_context(|| "failed to initialize global rayon thread pool")?;
-        eprintln!("using rayon threads: {n}");
-    } else if let Ok(n) = env::var("RAYON_NUM_THREADS") {
-        eprintln!("RAYON_NUM_THREADS={n}");
-    }
+    let queue_client = build_queue_client()?;
+    eprintln!("queue: {}", env::var("QUEUE_BASE_URL").unwrap_or_default());
 
     let forwarder_type_str = match &forwarder_mode {
         ForwarderMode::BlockTimeForwarder { .. } => "block_time",
@@ -1168,9 +1265,19 @@ fn main() -> Result<()> {
         eprintln!("error variants output dir: {}", dir.display());
     }
 
-    let gen_result = timed_phase("generate_test_transaction", || {
-        generate_test_transaction_with_external_payload(forwarder_mode, nonce_seed, multi_external_call)
-    })?;
+    eprintln!("phase: generate_test_transaction");
+    let gen_start = Instant::now();
+    let gen_result = generate_test_transaction_with_external_payload(
+        &queue_client,
+        forwarder_mode,
+        nonce_seed,
+        multi_external_call,
+    )
+    .await?;
+    eprintln!(
+        "phase done: generate_test_transaction ({})",
+        fmt_duration(gen_start.elapsed())
+    );
     let mut tx = gen_result.tx;
     let spl_token_wrap_metadata = gen_result.spl_token_wrap_metadata;
     let spl_token_unwrap_metadata = gen_result.spl_token_unwrap_metadata;
@@ -1182,10 +1289,15 @@ fn main() -> Result<()> {
         )?;
     }
 
-    timed_phase(
-        "aggregate_with_strategy(batch, groth16) (this is the expensive step)",
-        || tx.aggregate(ProofType::Groth16).context("aggregate tx (batch, groth16)"),
-    )?;
+    eprintln!("phase: aggregate_with_strategy(batch, groth16) (this is the expensive step)");
+    let agg_start = Instant::now();
+    tx = queue_aggregate_proof(&queue_client, tx)
+        .await
+        .context("aggregate tx (batch, groth16) via workers queue")?;
+    eprintln!(
+        "phase done: aggregate_with_strategy(batch, groth16) ({})",
+        fmt_duration(agg_start.elapsed())
+    );
 
     timed_phase("verify_aggregation", || {
         tx.verify_aggregation().context("verify aggregated proof")
@@ -1207,7 +1319,9 @@ fn main() -> Result<()> {
         let mut nuls = Vec::new();
         for action in &tx.actions {
             for cu in &action.compliance_units {
-                nuls.push(BASE64.encode(cu.instance.consumed_nullifier.as_bytes()));
+                let instance = ComplianceInstance::from_journal(&cu.instance)
+                    .context("decode compliance instance for nullifier extraction")?;
+                nuls.push(BASE64.encode(instance.consumed_nullifier.as_bytes()));
             }
         }
         Ok(nuls)
@@ -1302,10 +1416,8 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 
             let inner: InnerReceipt =
                 bincode::deserialize(proof_bytes).context("decode compliance InnerReceipt")?;
-            let journal = cu
-                .instance
-                .to_journal()
-                .context("serialize compliance journal")?;
+            // Wire instance is already journal bytes — no re-serialization needed.
+            let journal = cu.instance.clone();
             let receipt = Receipt::new(inner, journal.clone());
             let receipt_claim_digest = receipt.claim().context("read compliance claim")?.digest();
 
@@ -1325,7 +1437,9 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
     for (action_idx, action) in tx.actions.iter().enumerate() {
         // Mirror `arm::action::Action::get_logic_verifiers` to derive the logic instances that the
         // batch aggregation circuit verifies.
-        let (tags, logics) = solana_pa::encoding::extract_tags_and_logic_refs(action);
+        let (tags, logics): (Vec<Digest>, Vec<Digest>) =
+            solana_pa::encoding::extract_tags_and_logic_refs(action)
+                .map_err(|e| anyhow!("extract tags / logic refs: {e:?}"))?;
 
         let action_tree = arm::action_tree::MerkleTree::from(tags.clone());
         let root = action_tree.root().context("compute action tree root")?;
@@ -1389,6 +1503,12 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Tests build transactions via the local arm prover so we can produce real
+    // delta proofs without standing up the workers queue. Requires
+    // `RISC0_DEV_MODE=1` to run; the main fixture-gen path (queue-dispatched)
+    // does not.
+    use arm::compliance_unit::create_compliance_unit;
+    use arm::proving_system::ProofType as ArmProofType;
 
     #[test]
     fn decode_base58_32_system_program() {
@@ -1405,7 +1525,7 @@ mod tests {
     #[test]
     fn bytes_to_words_roundtrip() {
         let original = vec![1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
-        let words = bytes_to_words(&original);
+        let words = arm::utils::bytes_to_words(&original);
         let recovered = arm::utils::words_to_bytes(&words);
         assert_eq!(&recovered[..original.len()], &original[..]);
     }
@@ -1414,11 +1534,157 @@ mod tests {
     fn bytes_to_words_roundtrip_with_padding() {
         // 5 bytes: not a multiple of 4, so words_to_bytes will have 3 padding zeros
         let original = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE];
-        let words = bytes_to_words(&original);
+        let words = arm::utils::bytes_to_words(&original);
         let recovered = arm::utils::words_to_bytes(&words);
         assert_eq!(&recovered[..original.len()], &original[..]);
         for &b in &recovered[original.len()..] {
             assert_eq!(b, 0, "padding bytes should be zero");
         }
+    }
+
+    /// Helper: build a minimal valid transaction with a real delta proof.
+    /// Uses the passthrough logic circuit and ephemeral resources.
+    fn build_valid_tx_with_delta_proof(nonce_byte: u8) -> Transaction {
+        let nf_key = NullifierKey::default();
+        let nf_key_cm = nf_key.commit();
+        let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
+
+        let mut consumed = Resource {
+            logic_ref: passthrough_vk,
+            nk_commitment: nf_key_cm,
+            quantity: 1,
+            is_ephemeral: true,
+            ..Default::default()
+        };
+        consumed.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
+        let consumed_nf = consumed.nullifier(&nf_key).unwrap();
+
+        let mut created = consumed;
+        created.set_nonce(consumed_nf);
+
+        let witness = ComplianceWitness {
+            consumed_resource: consumed,
+            created_resource: created,
+            merkle_path: MerklePath::empty(),
+            rcv: Scalar::ONE.to_bytes().to_vec(),
+            nf_key,
+            ephemeral_root: initial_root(),
+        };
+        let cu = create_compliance_unit(&witness, ArmProofType::Succinct).unwrap();
+
+        let inst = ComplianceInstance::from_journal(&cu.instance).unwrap();
+        let consumed_nf = inst.consumed_nullifier;
+        let created_cm = inst.created_commitment;
+        let tags = vec![consumed_nf, created_cm];
+        let tree = MerkleTree::from(tags);
+        let root = tree.root().unwrap();
+
+        let consumed_instance = LogicInstance {
+            tag: consumed_nf,
+            is_consumed: true,
+            root,
+            app_data: AppData::default(),
+        };
+        let created_instance = LogicInstance {
+            tag: created_cm,
+            is_consumed: false,
+            root,
+            app_data: AppData::default(),
+        };
+
+        let (cp, cj) = arm::proving_system::prove(
+            PASSTHROUGH_LOGIC_GUEST_ELF, &consumed_instance, ArmProofType::Succinct,
+        ).unwrap();
+        let (crp, crj) = arm::proving_system::prove(
+            PASSTHROUGH_LOGIC_GUEST_ELF, &created_instance, ArmProofType::Succinct,
+        ).unwrap();
+
+        let consumed_logic = LogicVerifier {
+            proof: Some(cp),
+            instance: cj,
+            verifying_key: passthrough_vk,
+        };
+        let created_logic = LogicVerifier {
+            proof: Some(crp),
+            instance: crj,
+            verifying_key: passthrough_vk,
+        };
+
+        let action = Action::new(vec![cu], vec![consumed_logic, created_logic]).unwrap();
+
+        let delta_witness =
+            DeltaWitness::from_bytes_vec(&[witness.rcv]).unwrap();
+        let tx = Transaction::create(
+            vec![action],
+            Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
+        );
+        tx.generate_delta_proof(hash_delta_msg).unwrap()
+    }
+
+    #[test]
+    fn valid_tx_passes_delta_verification() {
+        let tx = build_valid_tx_with_delta_proof(100);
+        tx.verify(hash_delta_msg).unwrap();
+    }
+
+    /// Swapping the nullifier and commitment tags in the delta message
+    /// must invalidate the delta proof signature.
+    #[test]
+    fn swapped_tags_invalidate_delta_proof() {
+        let tx = build_valid_tx_with_delta_proof(101);
+        tx.clone().verify(hash_delta_msg).unwrap();
+
+        // Swap nullifier and commitment in the compliance instance.
+        // This changes the delta message (which is [nf, cm] → [cm, nf]),
+        // invalidating the signature over the original message hash.
+        let mut swapped = tx.clone();
+        mutate_compliance_instance(&mut swapped.actions[0].compliance_units[0], |inst| {
+            std::mem::swap(&mut inst.consumed_nullifier, &mut inst.created_commitment);
+        })
+        .unwrap();
+
+        let result = swapped.verify(hash_delta_msg);
+        assert!(
+            result.is_err(),
+            "swapped nf/cm must invalidate delta proof"
+        );
+    }
+
+    /// Mutating a single delta coordinate must invalidate the delta proof.
+    #[test]
+    fn mutated_delta_x_invalidates_proof() {
+        let mut tx = build_valid_tx_with_delta_proof(102);
+        tx.clone().verify(hash_delta_msg).unwrap();
+
+        // Flip a word in delta_x
+        mutate_compliance_instance(&mut tx.actions[0].compliance_units[0], |inst| {
+            inst.delta_x[0] ^= 0xFFFFFFFF;
+        })
+        .unwrap();
+
+        let result = tx.verify(hash_delta_msg);
+        assert!(
+            result.is_err(),
+            "mutated delta_x must invalidate delta proof"
+        );
+    }
+
+    /// Mutating a nullifier must invalidate the delta proof (changes the message hash).
+    #[test]
+    fn mutated_nullifier_invalidates_delta_proof() {
+        let mut tx = build_valid_tx_with_delta_proof(103);
+        tx.clone().verify(hash_delta_msg).unwrap();
+
+        // Corrupt the nullifier
+        mutate_compliance_instance(&mut tx.actions[0].compliance_units[0], |inst| {
+            inst.consumed_nullifier = Digest::from_bytes([0xFF; 32]);
+        })
+        .unwrap();
+
+        let result = tx.verify(hash_delta_msg);
+        assert!(
+            result.is_err(),
+            "mutated nullifier must invalidate delta proof"
+        );
     }
 }

@@ -2,6 +2,7 @@
 
 use crate::error::PAError;
 use crate::merkle::{hash_two, PADDING_LEAF};
+use crate::settle::COMPLIANCE_INSTANCE_BYTES;
 use arm_core::logic_instance::LogicVerifierInputs;
 use arm_core::transaction::Transaction;
 use arm_core::Digest;
@@ -9,25 +10,57 @@ use arm_core::Digest;
 use arm_core::constants::COMPLIANCE_VK_BYTES;
 use arm_core::utils::bytes_to_words;
 
+/// Read a `ComplianceInstanceWords` straight from journal bytes into a fixed
+/// `[u32; 56]` array. Avoids `bytes_to_words`'s capacity-doubling `Vec<u32>`
+/// growth — the BPF bump allocator never reclaims those intermediate buffers,
+/// which leaks ~500 bytes per compliance unit on multi-CU settlements.
+fn compliance_words_from_journal(
+    instance: &[u8],
+) -> Result<arm_core::compliance::ComplianceInstanceWords, PAError> {
+    if instance.len() < COMPLIANCE_INSTANCE_BYTES {
+        return Err(PAError::ComplianceInstanceParseFailed);
+    }
+    let mut u32_words = [0u32; 56];
+    for (i, chunk) in instance[..COMPLIANCE_INSTANCE_BYTES]
+        .chunks_exact(4)
+        .enumerate()
+    {
+        // chunks_exact(4) yields slices of exactly 4 bytes; try_into is infallible.
+        u32_words[i] = u32::from_le_bytes(chunk.try_into().unwrap());
+    }
+    Ok(arm_core::compliance::ComplianceInstanceWords { u32_words })
+}
+
 /// Compute the journal digest pinned by the batch aggregation Groth16 proof.
 ///
 /// Per-LVI journal bytes are re-derived from `lvi.app_data` via
 /// `LogicInstance::to_journal()`, so any mutation of `app_data` flows into the
 /// digest and invalidates the proof (H-001 closure).
+///
+/// Every output `Vec` is pre-sized to its final length so the bump allocator
+/// (no free) doesn't accumulate dead capacity-doubled buffers — the BPF heap
+/// is 256 KiB and split/transfer settlements fill it up fast.
 pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Digest, PAError> {
     use anchor_lang::solana_program::hash::hash;
     use arm_core::compliance::ComplianceInstanceWords;
 
-    let mut compliance_instances: Vec<ComplianceInstanceWords> = Vec::new();
-    let mut logic_instances: Vec<Vec<u32>> = Vec::new();
-    let mut logic_keys: Vec<Digest> = Vec::new();
+    let total_cus: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
+    let total_lvis: usize = tx
+        .actions
+        .iter()
+        .map(|a| a.logic_verifier_inputs.len())
+        .sum();
+
+    let mut compliance_instances: Vec<ComplianceInstanceWords> = Vec::with_capacity(total_cus);
+    let mut logic_instances: Vec<Vec<u32>> = Vec::with_capacity(total_lvis);
+    let mut logic_keys: Vec<Digest> = Vec::with_capacity(total_lvis);
 
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            compliance_instances.push(ComplianceInstanceWords::from(&cu.instance));
+            compliance_instances.push(compliance_words_from_journal(&cu.instance)?);
         }
 
-        let (tags, expected_logic_refs) = extract_tags_and_logic_refs(action);
+        let (tags, expected_logic_refs) = extract_tags_and_logic_refs(action)?;
         if tags.len() != action.logic_verifier_inputs.len() {
             return Err(PAError::InvalidTransactionData);
         }
@@ -86,26 +119,34 @@ pub fn compute_action_tree_root(tags: &[Digest]) -> Result<Digest, PAError> {
     Ok(layer[0])
 }
 
-/// Extract tags (nullifiers/commitments) and their expected logic refs from an action.
-/// Returns (tags, logic_refs) where:
+/// Extract tags (nullifiers/commitments) and their expected logic refs from an
+/// action by reading fields straight out of each compliance unit's journal
+/// bytes. Returns (tags, logic_refs) where:
 /// - tags[2i] = consumed_nullifier, tags[2i+1] = created_commitment
 /// - logic_refs[2i] = consumed_logic_ref, logic_refs[2i+1] = created_logic_ref
+///
+/// No `ComplianceInstance` is materialized — keeping on-chain heap usage
+/// minimal so multi-CU settlements (split, transfer) fit within the BPF
+/// heap budget.
 pub fn extract_tags_and_logic_refs(
     action: &arm_core::action::Action,
-) -> (Vec<Digest>, Vec<Digest>) {
+) -> Result<(Vec<Digest>, Vec<Digest>), PAError> {
+    use crate::settle::{
+        read_consumed_logic_ref, read_consumed_nullifier, read_created_commitment,
+        read_created_logic_ref,
+    };
     let cap = 2 * action.compliance_units.len();
     let mut tags = Vec::with_capacity(cap);
     let mut logic_refs = Vec::with_capacity(cap);
 
     for cu in &action.compliance_units {
-        let instance = &cu.instance;
-        tags.push(instance.consumed_nullifier);
-        tags.push(instance.created_commitment);
-        logic_refs.push(instance.consumed_logic_ref);
-        logic_refs.push(instance.created_logic_ref);
+        tags.push(read_consumed_nullifier(cu)?);
+        tags.push(read_created_commitment(cu)?);
+        logic_refs.push(read_consumed_logic_ref(cu)?);
+        logic_refs.push(read_created_logic_ref(cu)?);
     }
 
-    (tags, logic_refs)
+    Ok((tags, logic_refs))
 }
 
 /// Find a LogicVerifierInputs entry by its tag.

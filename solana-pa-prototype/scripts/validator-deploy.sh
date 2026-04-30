@@ -81,15 +81,14 @@ regenerate_fixture() {
   local fixture_path="$1"
   shift
 
-  if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-    echo "Docker is required to regenerate stale fixtures."
-    echo "Ensure Docker is installed/running, then rerun."
+  if [[ -z "${QUEUE_BASE_URL:-}" ]] || [[ -z "${QUEUE_AUTH_TOKEN:-}" ]]; then
+    echo "QUEUE_BASE_URL and QUEUE_AUTH_TOKEN must be set to regenerate stale fixtures."
+    echo "Set them in the environment, then rerun."
     exit 1
   fi
 
-  local threads="${FIXTURE_THREADS:-6}"
   echo "    Regenerating fixture: ${fixture_path}"
-  cargo run --release --locked --manifest-path tools/fixture-gen/Cargo.toml -- --threads "$threads" "$@" "$fixture_path"
+  cargo run --release --locked --manifest-path tools/fixture-gen/Cargo.toml -- "$@" "$fixture_path"
 }
 
 ensure_fixture_matches_program() {
