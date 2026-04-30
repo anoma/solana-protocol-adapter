@@ -26,7 +26,7 @@ const CONSUMED_LOGIC_REF_OFFSET: usize = 32;
 const CONSUMED_ROOT_OFFSET: usize = 64;
 const CREATED_COMMITMENT_OFFSET: usize = 96;
 const CREATED_LOGIC_REF_OFFSET: usize = 128;
-const COMPLIANCE_INSTANCE_BYTES: usize = 224;
+pub(crate) const COMPLIANCE_INSTANCE_BYTES: usize = 224;
 
 fn read_field(instance: &[u8], offset: usize) -> Result<Digest, PAError> {
     let chunk: [u8; 32] = instance
@@ -37,64 +37,48 @@ fn read_field(instance: &[u8], offset: usize) -> Result<Digest, PAError> {
     Ok(Digest::from_bytes(chunk))
 }
 
-/// Sanity-check that a CU's journal bytes are at least full ComplianceInstance
-/// size before letting callers index into them.
-fn check_instance_len(cu: &ComplianceUnit) -> Result<(), PAError> {
-    if cu.instance.len() < COMPLIANCE_INSTANCE_BYTES {
-        return Err(PAError::ComplianceInstanceParseFailed);
-    }
-    Ok(())
-}
-
 pub fn read_consumed_nullifier(cu: &ComplianceUnit) -> Result<Digest, PAError> {
-    check_instance_len(cu)?;
     read_field(&cu.instance, CONSUMED_NULLIFIER_OFFSET)
 }
 
 pub fn read_consumed_logic_ref(cu: &ComplianceUnit) -> Result<Digest, PAError> {
-    check_instance_len(cu)?;
     read_field(&cu.instance, CONSUMED_LOGIC_REF_OFFSET)
 }
 
 pub fn read_consumed_root(cu: &ComplianceUnit) -> Result<Digest, PAError> {
-    check_instance_len(cu)?;
     read_field(&cu.instance, CONSUMED_ROOT_OFFSET)
 }
 
 pub fn read_created_commitment(cu: &ComplianceUnit) -> Result<Digest, PAError> {
-    check_instance_len(cu)?;
     read_field(&cu.instance, CREATED_COMMITMENT_OFFSET)
 }
 
 pub fn read_created_logic_ref(cu: &ComplianceUnit) -> Result<Digest, PAError> {
-    check_instance_len(cu)?;
     read_field(&cu.instance, CREATED_LOGIC_REF_OFFSET)
 }
 
-fn total_compliance_units(tx: &Transaction) -> usize {
-    tx.actions.iter().map(|a| a.compliance_units.len()).sum()
+fn extract_field(
+    tx: &Transaction,
+    reader: fn(&ComplianceUnit) -> Result<Digest, PAError>,
+) -> Result<Vec<Digest>, PAError> {
+    let total: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
+    let mut out = Vec::with_capacity(total);
+    for action in &tx.actions {
+        for cu in &action.compliance_units {
+            out.push(reader(cu)?);
+        }
+    }
+    Ok(out)
 }
 
 /// Extract nullifiers across all actions, reading directly from journal bytes.
 /// Pre-sized to the exact number of CUs so the BPF bump allocator doesn't
 /// retain capacity-doubled buffers from `.collect()`'s growth.
 pub fn extract_nullifiers(tx: &Transaction) -> Result<Vec<Digest>, PAError> {
-    let mut out = Vec::with_capacity(total_compliance_units(tx));
-    for action in &tx.actions {
-        for cu in &action.compliance_units {
-            out.push(read_consumed_nullifier(cu)?);
-        }
-    }
-    Ok(out)
+    extract_field(tx, read_consumed_nullifier)
 }
 
 /// Extract commitments across all actions, reading directly from journal bytes.
 pub fn extract_commitments(tx: &Transaction) -> Result<Vec<Digest>, PAError> {
-    let mut out = Vec::with_capacity(total_compliance_units(tx));
-    for action in &tx.actions {
-        for cu in &action.compliance_units {
-            out.push(read_created_commitment(cu)?);
-        }
-    }
-    Ok(out)
+    extract_field(tx, read_created_commitment)
 }

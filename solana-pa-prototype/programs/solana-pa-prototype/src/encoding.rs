@@ -2,6 +2,7 @@
 
 use crate::error::PAError;
 use crate::merkle::{hash_two, PADDING_LEAF};
+use crate::settle::COMPLIANCE_INSTANCE_BYTES;
 use arm_core::logic_instance::LogicVerifierInputs;
 use arm_core::transaction::Transaction;
 use arm_core::Digest;
@@ -9,21 +10,13 @@ use arm_core::Digest;
 use arm_core::constants::COMPLIANCE_VK_BYTES;
 use arm_core::utils::bytes_to_words;
 
-/// Compute the journal digest pinned by the batch aggregation Groth16 proof.
-///
-/// Per-LVI journal bytes are re-derived from `lvi.app_data` via
-/// `LogicInstance::to_journal()`, so any mutation of `app_data` flows into the
-/// digest and invalidates the proof (H-001 closure).
-/// Construct a `ComplianceInstanceWords` from journal bytes without going
-/// through `bytes_to_words` — that helper allocates a growing `Vec<u32>`
-/// (capacity-doubled via push), and the BPF bump allocator never reclaims
-/// the intermediate buffers. Reading directly into the fixed-size array
-/// avoids ~500 bytes of leaked heap per compliance unit, which matters on
-/// multi-CU settlements (split, transfer).
+/// Read a `ComplianceInstanceWords` straight from journal bytes into a fixed
+/// `[u32; 56]` array. Avoids `bytes_to_words`'s capacity-doubling `Vec<u32>`
+/// growth — the BPF bump allocator never reclaims those intermediate buffers,
+/// which leaks ~500 bytes per compliance unit on multi-CU settlements.
 fn compliance_words_from_journal(
     instance: &[u8],
 ) -> Result<arm_core::compliance::ComplianceInstanceWords, PAError> {
-    const COMPLIANCE_INSTANCE_BYTES: usize = 4 * 56;
     if instance.len() < COMPLIANCE_INSTANCE_BYTES {
         return Err(PAError::ComplianceInstanceParseFailed);
     }
@@ -32,24 +25,25 @@ fn compliance_words_from_journal(
         .chunks_exact(4)
         .enumerate()
     {
-        u32_words[i] = u32::from_le_bytes(
-            chunk
-                .try_into()
-                .map_err(|_| PAError::ComplianceInstanceParseFailed)?,
-        );
+        // chunks_exact(4) yields slices of exactly 4 bytes; try_into is infallible.
+        u32_words[i] = u32::from_le_bytes(chunk.try_into().unwrap());
     }
     Ok(arm_core::compliance::ComplianceInstanceWords { u32_words })
 }
 
+/// Compute the journal digest pinned by the batch aggregation Groth16 proof.
+///
+/// Per-LVI journal bytes are re-derived from `lvi.app_data` via
+/// `LogicInstance::to_journal()`, so any mutation of `app_data` flows into the
+/// digest and invalidates the proof (H-001 closure).
+///
+/// Every output `Vec` is pre-sized to its final length so the bump allocator
+/// (no free) doesn't accumulate dead capacity-doubled buffers — the BPF heap
+/// is 256 KiB and split/transfer settlements fill it up fast.
 pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Digest, PAError> {
     use anchor_lang::solana_program::hash::hash;
     use arm_core::compliance::ComplianceInstanceWords;
 
-    // Pre-size every Vec to its final length so the bump allocator (no free)
-    // doesn't accumulate dead capacity-doubled buffers from the growths that
-    // would otherwise happen on each push. This matters here because the
-    // BPF heap is small (256 KiB) and split/transfer settlements fill it up
-    // fast.
     let total_cus: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
     let total_lvis: usize = tx
         .actions
@@ -63,9 +57,6 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
 
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            // Wire format stores the instance as journal bytes; read straight
-            // into the fixed [u32; 56] array (no Vec growth → no leaked heap
-            // capacity-doubling allocations on the BPF bump allocator).
             compliance_instances.push(compliance_words_from_journal(&cu.instance)?);
         }
 

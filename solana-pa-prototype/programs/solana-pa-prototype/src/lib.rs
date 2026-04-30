@@ -477,16 +477,9 @@ fn execute_settlement<'info>(
 
     // Deduplicate roots before validation to avoid redundant PDA derivations.
     // Each `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
-    // so deduplication saves significant compute when CUs share roots.
-    //
-    // ComplianceUnit::instance is journal bytes on the wire; the `settle::read_*`
-    // helpers index straight into the byte slice without materializing a
-    // ComplianceInstance, keeping BPF heap usage minimal on multi-CU
-    // settlements (split, transfer).
-    // Pre-sized to the worst case (one root per CU). In practice multi-CU
-    // settlements typically share roots; the dedupe just avoids redundant PDA
-    // derivations. Pre-allocation keeps the BPF bump allocator from leaving
-    // capacity-doubled dead buffers on the heap.
+    // so deduplication saves significant compute when CUs share roots. Pre-sized
+    // to the worst case (one root per CU) so the BPF bump allocator doesn't
+    // accumulate capacity-doubled buffers.
     let total_cu_count: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
     let mut unique_roots: Vec<arm_core::Digest> = Vec::with_capacity(total_cu_count);
     for action in &tx.actions {
