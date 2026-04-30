@@ -64,11 +64,39 @@ use groth_16_verifier::Proof;
 use verifier_router::Seal;
 use verifier_router::Selector;
 
+/// Decode a CU's journal-bytes instance back into a structured
+/// `ComplianceInstance` for tests. Wire format stores the instance as journal
+/// bytes; tests that need to read or mutate fields go through this helper.
+pub fn decode_cu_instance(cu: &ComplianceUnit) -> ComplianceInstance {
+    ComplianceInstance::from_journal(&cu.instance)
+        .expect("test fixture compliance instance should decode")
+}
+
+/// Mutate a CU's journal-bytes instance in-place: parse, hand the structured
+/// instance to `f`, then re-encode. Returns whatever `f` returns (the caller
+/// usually wants the post-mutation field values to update LVI tags).
+pub fn mutate_cu_instance<R>(
+    cu: &mut ComplianceUnit,
+    f: impl FnOnce(&mut ComplianceInstance) -> R,
+) -> R {
+    let mut instance = decode_cu_instance(cu);
+    let r = f(&mut instance);
+    cu.instance = instance
+        .to_journal()
+        .expect("mutated compliance instance should re-encode");
+    r
+}
+
 pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction {
     let cus: Vec<ComplianceUnit> = instances
         .iter()
         .map(|inst| ComplianceUnit {
-            instance: inst.clone(),
+            // Wire format stores the instance as journal bytes; the test fixture
+            // is structured, so re-encode it the same way the queue worker
+            // expects to read it.
+            instance: inst
+                .to_journal()
+                .expect("test ComplianceInstance should encode to journal bytes"),
             proof: None,
         })
         .collect();

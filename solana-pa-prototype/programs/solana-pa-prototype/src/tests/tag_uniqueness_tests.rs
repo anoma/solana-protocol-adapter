@@ -28,10 +28,10 @@ fn extra_lvi_rejected_by_count_check() {
 /// rejects the transaction before external calls can execute.
 #[test]
 fn duplicate_tag_external_calls_extracted_but_journal_digest_blocks() {
+    use crate::tests::utils::decode_cu_instance;
+
     let mut tx = create_minimal_transaction();
-    let consumed_tag = tx.actions[0].compliance_units[0]
-        .instance
-        .consumed_nullifier;
+    let consumed_tag = decode_cu_instance(&tx.actions[0].compliance_units[0]).consumed_nullifier;
 
     // LVI[0]: tag=consumed_nullifier, no external calls
     // LVI[1]: tag=consumed_nullifier (duplicate), has external call
