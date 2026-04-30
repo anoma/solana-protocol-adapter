@@ -486,14 +486,11 @@ Fixtures contain pre-generated RM transactions with valid Groth16 proofs. Requir
 
 ### Generating Fixtures
 
+Proofs are dispatched to the AnomaPay workers queue. Set `QUEUE_BASE_URL` and `QUEUE_AUTH_TOKEN` in your environment first.
+
 ```bash
 cd solana-pa-prototype
-cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- --threads 6 tests/fixtures/batch_groth16.json
-```
-
-**Dev mode** (fake proofs, fast, won't verify on-chain):
-```bash
-RISC0_DEV_MODE=1 cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- ...
+cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- tests/fixtures/batch_groth16.json
 ```
 
 Generate the mismatch fixture used by the `ExternalCallOutputMismatch` test:

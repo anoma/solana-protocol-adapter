@@ -174,7 +174,6 @@ enum Command {
 }
 
 struct GenerateArgs {
-    threads: Option<usize>,
     debug_assumptions: bool,
     forwarder_mode: ForwarderMode,
     nonce_seed: Option<u8>,
@@ -651,7 +650,7 @@ fn dump_fixture(input: &Path) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n\nGenerate options:\n  --threads N              No-op (kept for backwards compatibility; proofs run remotely)\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-output-account  Test-forwarder with OutputAccount mode\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof variants\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent, --forwarder-output-account.\n  - QUEUE_BASE_URL and QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - --error-variants writes to DIR from the final aggregated tx.\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-output-account  Test-forwarder with OutputAccount mode\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof variants\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent, --forwarder-output-account.\n  - QUEUE_BASE_URL and QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - --error-variants writes to DIR from the final aggregated tx.\n"
     );
 }
 
@@ -683,7 +682,6 @@ fn parse_args() -> Result<Command> {
     }
 
     let mut args = raw_args.into_iter();
-    let mut threads: Option<usize> = None;
     let mut debug_assumptions = false;
     let mut forwarder_mode: Option<ForwarderMode> = None;
     let mut nonce_seed: Option<u8> = None;
@@ -711,19 +709,6 @@ fn parse_args() -> Result<Command> {
             "-h" | "--help" => {
                 print_usage();
                 std::process::exit(0);
-            }
-            "--threads" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--threads requires a value"))?;
-                let parsed = value
-                    .parse::<usize>()
-                    .with_context(|| format!("invalid --threads value: {value}"))?;
-                if parsed == 0 {
-                    return Err(anyhow!("--threads must be >= 1"));
-                }
-                threads = Some(parsed);
             }
             "--debug-assumptions" => {
                 debug_assumptions = true;
@@ -786,7 +771,6 @@ fn parse_args() -> Result<Command> {
     });
 
     Ok(Command::Generate(GenerateArgs {
-        threads,
         debug_assumptions,
         forwarder_mode,
         nonce_seed,
@@ -799,7 +783,6 @@ fn parse_args() -> Result<Command> {
 #[tokio::main]
 async fn main() -> Result<()> {
     let GenerateArgs {
-        threads,
         debug_assumptions,
         forwarder_mode,
         nonce_seed,
@@ -813,17 +796,6 @@ async fn main() -> Result<()> {
     };
 
     let total_start = Instant::now();
-
-    // The `--threads N` flag predates the queue migration: it used to size the
-    // local CPU prover's rayon pool. Proofs now run remotely on the workers
-    // queue, so the flag has no effect — kept for backwards compatibility with
-    // existing scripts (validator-deploy.sh).
-    if let Some(n) = threads {
-        eprintln!(
-            "note: --threads {n} is accepted for backwards compatibility but has no effect — \
-             proofs run on the workers queue, not locally"
-        );
-    }
 
     let queue_client = build_queue_client()?;
     eprintln!("queue: {}", env::var("QUEUE_BASE_URL").unwrap_or_default());
