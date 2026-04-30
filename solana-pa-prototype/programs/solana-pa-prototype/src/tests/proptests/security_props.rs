@@ -41,12 +41,10 @@ fn missing_lvi_rejected() {
 /// `find_logic_input` returns `TagNotFound`.
 #[test]
 fn duplicate_lvi_tags_rejected() {
-    use arm_core::compliance::ComplianceInstance;
+    use crate::tests::utils::decode_cu_instance;
 
     let mut tx = create_minimal_transaction();
-    // Wire format stores the instance as journal bytes — parse to read fields.
-    let instance = ComplianceInstance::from_journal(&tx.actions[0].compliance_units[0].instance)
-        .expect("test fixture compliance instance should decode");
+    let instance = decode_cu_instance(&tx.actions[0].compliance_units[0]);
     tx.actions[0].logic_verifier_inputs[1].tag = instance.consumed_nullifier;
     tx.actions[0].logic_verifier_inputs[1].verifying_key = instance.consumed_logic_ref;
 

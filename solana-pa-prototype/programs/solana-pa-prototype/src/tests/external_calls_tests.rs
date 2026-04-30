@@ -109,17 +109,9 @@ fn test_extract_external_calls_logic_ref_association() {
 
     let verifying_key = Digest::from_bytes([0xBB; 32]);
     let mut tx = create_transaction_with_external_payload(vec![blob]);
-    {
-        // Wire format: instance is journal bytes — parse, mutate, re-encode.
-        use arm_core::compliance::ComplianceInstance;
-        let cu = &mut tx.actions[0].compliance_units[0];
-        let mut instance = ComplianceInstance::from_journal(&cu.instance)
-            .expect("test fixture compliance instance should decode");
-        instance.consumed_logic_ref = verifying_key;
-        cu.instance = instance
-            .to_journal()
-            .expect("mutated compliance instance should re-encode");
-    }
+    crate::tests::utils::mutate_cu_instance(&mut tx.actions[0].compliance_units[0], |inst| {
+        inst.consumed_logic_ref = verifying_key
+    });
     tx.actions[0].logic_verifier_inputs[0].verifying_key = verifying_key;
 
     let extracted = extract_external_calls(&tx).unwrap();
