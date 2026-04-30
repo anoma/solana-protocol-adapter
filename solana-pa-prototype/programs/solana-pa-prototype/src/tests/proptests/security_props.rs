@@ -41,14 +41,12 @@ fn missing_lvi_rejected() {
 /// `find_logic_input` returns `TagNotFound`.
 #[test]
 fn duplicate_lvi_tags_rejected() {
+    use crate::tests::utils::decode_cu_instance;
+
     let mut tx = create_minimal_transaction();
-    let nf = tx.actions[0].compliance_units[0]
-        .instance
-        .consumed_nullifier;
-    tx.actions[0].logic_verifier_inputs[1].tag = nf;
-    tx.actions[0].logic_verifier_inputs[1].verifying_key = tx.actions[0].compliance_units[0]
-        .instance
-        .consumed_logic_ref;
+    let instance = decode_cu_instance(&tx.actions[0].compliance_units[0]);
+    tx.actions[0].logic_verifier_inputs[1].tag = instance.consumed_nullifier;
+    tx.actions[0].logic_verifier_inputs[1].verifying_key = instance.consumed_logic_ref;
 
     assert!(compute_batch_aggregation_journal_digest(&tx).is_err());
 }

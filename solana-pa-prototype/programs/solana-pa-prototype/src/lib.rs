@@ -477,11 +477,14 @@ fn execute_settlement<'info>(
 
     // Deduplicate roots before validation to avoid redundant PDA derivations.
     // Each `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
-    // so deduplication saves significant compute when CUs share roots.
-    let mut unique_roots: Vec<&arm_core::Digest> = Vec::new();
+    // so deduplication saves significant compute when CUs share roots. Pre-sized
+    // to the worst case (one root per CU) so the BPF bump allocator doesn't
+    // accumulate capacity-doubled buffers.
+    let total_cu_count: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
+    let mut unique_roots: Vec<arm_core::Digest> = Vec::with_capacity(total_cu_count);
     for action in &tx.actions {
         for cu in &action.compliance_units {
-            let root = &cu.instance.consumed_commitment_tree_root;
+            let root = settle::read_consumed_root(cu)?;
             if !unique_roots.contains(&root) {
                 unique_roots.push(root);
             }
@@ -494,7 +497,7 @@ fn execute_settlement<'info>(
         );
     }
 
-    let nullifiers = settle::extract_nullifiers(tx);
+    let nullifiers = settle::extract_nullifiers(tx)?;
 
     require!(tx.aggregation_proof.is_some(), PAError::AggregationRequired);
 
@@ -531,7 +534,7 @@ fn execute_settlement<'info>(
     let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
 
     for action in &tx.actions {
-        let (tags, logic_refs) = extract_tags_and_logic_refs(action);
+        let (tags, logic_refs) = extract_tags_and_logic_refs(action)?;
         let action_tree_root =
             compute_action_tree_root(&tags).map_err(|_| error!(PAError::InvalidTransactionData))?;
 
@@ -584,7 +587,7 @@ fn execute_settlement<'info>(
         msg!("Created {} nullifier PDAs", nullifiers.len());
     }
 
-    let commitments = settle::extract_commitments(tx);
+    let commitments = settle::extract_commitments(tx)?;
     maybe_grow_account(
         pa_state_info,
         state,
