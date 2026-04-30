@@ -28,10 +28,14 @@ fn extra_lvi_rejected_by_count_check() {
 /// rejects the transaction before external calls can execute.
 #[test]
 fn duplicate_tag_external_calls_extracted_but_journal_digest_blocks() {
+    use arm_core::compliance::ComplianceInstance;
+
     let mut tx = create_minimal_transaction();
-    let consumed_tag = tx.actions[0].compliance_units[0]
-        .instance
-        .consumed_nullifier;
+    // Wire format stores the instance as journal bytes — parse to read fields.
+    let consumed_tag =
+        ComplianceInstance::from_journal(&tx.actions[0].compliance_units[0].instance)
+            .expect("test fixture compliance instance should decode")
+            .consumed_nullifier;
 
     // LVI[0]: tag=consumed_nullifier, no external calls
     // LVI[1]: tag=consumed_nullifier (duplicate), has external call
