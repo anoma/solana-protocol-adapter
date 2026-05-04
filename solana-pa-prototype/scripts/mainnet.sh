@@ -246,8 +246,8 @@ This will spend real SOL (~${min_sol} SOL) to deploy on-chain programs."
   done
 
   echo ""
-  echo "Update MAINNET_PA_PROGRAM_ID and MAINNET_FORWARDER_PROGRAM_ID in anomapay.sh"
-  echo "with the program IDs above to enable 'ANOMAPAY_NETWORK=mainnet' mode."
+  echo "Set MAINNET_PA_PROGRAM_ID and MAINNET_FORWARDER_PROGRAM_ID in your mainnet env file"
+  echo "before running './scripts/anomapay.sh demo setup'."
 }
 
 cmd_upgrade() {
