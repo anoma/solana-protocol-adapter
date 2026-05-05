@@ -9,8 +9,9 @@ crate-type = ["cdylib", "lib"]
 name = "solana_pa_prototype"
 
 [features]
-default = []
+default = ["custom-heap"]
 cpi = ["no-entrypoint"]
+custom-heap = []
 no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
