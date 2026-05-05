@@ -2059,6 +2059,27 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
   });
 });
 
+describe("solana-pa-prototype (AnomaPay imported transfer regression)", () => {
+  it("settles imported backend transfer TxData payload", async () => {
+    const fx = loadFixture<Fixture>("anomapay_transfer_0e345103.json");
+    const payload = Buffer.from(fx.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
+    const historicalRootMarkers = (fx.historical_roots_b64 ?? []).map((rootB64) =>
+      deriveRootPda(Buffer.from(rootB64, "base64"))
+    );
+    assert.isNotEmpty(
+      historicalRootMarkers,
+      "imported transfer fixture must include historical roots for localnet replay",
+    );
+
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts, {
+      additionalHistoricalRootMarkers: historicalRootMarkers,
+    });
+
+    await settleFixtureViaTxData(payload, remainingAccounts);
+  });
+});
+
 describe("solana-pa-prototype (External call error paths)", () => {
   it("rejects settlement when forwarder CPI accounts are wrong", async () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
