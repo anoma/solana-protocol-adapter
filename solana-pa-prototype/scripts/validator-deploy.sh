@@ -312,7 +312,7 @@ start_validator() {
     account_args+=(--account "$marker_addr" "$marker_file")
   done
 
-  solana-test-validator \
+  setsid solana-test-validator \
     --reset \
     --ledger "$VALIDATOR_LEDGER" \
     --rpc-port 8899 \
