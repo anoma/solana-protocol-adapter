@@ -446,6 +446,39 @@ Order: PA markers → PA state → forwarder bitmaps → forwarder escrow → fo
     npx ts-node -P tsconfig.json "${SCRIPT_DIR}/close-forwarder.ts"
 }
 
+cmd_close_expired_txdata() {
+  local args=("$@")
+  if (( ${#args[@]} > 1 )); then
+    echo "❌ Too many close-expired-txdata arguments: ${args[*]}"
+    echo "Usage: mainnet.sh close-expired-txdata [--dry-run]"
+    exit 1
+  fi
+
+  local dry_run="${args[0]:-}"
+  if [[ -n "$dry_run" && "$dry_run" != "--dry-run" ]]; then
+    echo "❌ Unknown close-expired-txdata argument: ${dry_run}"
+    echo "Usage: mainnet.sh close-expired-txdata [--dry-run]"
+    exit 1
+  fi
+
+  require_cmd npx
+
+  cd "$PROJECT_DIR"
+
+  require_mainnet_wallet
+
+  if [[ "$dry_run" == "--dry-run" ]]; then
+    ANCHOR_PROVIDER_URL="$MAINNET_URL" \
+    ANCHOR_WALLET="$MAINNET_WALLET" \
+      npx ts-node -P tsconfig.json "${SCRIPT_DIR}/close-expired-txdata.ts" --dry-run
+    return
+  fi
+
+  ANCHOR_PROVIDER_URL="$MAINNET_URL" \
+  ANCHOR_WALLET="$MAINNET_WALLET" \
+    npx ts-node -P tsconfig.json "${SCRIPT_DIR}/close-expired-txdata.ts"
+}
+
 # ---------- dispatch ----------
 
 case "${1:-}" in
@@ -470,6 +503,9 @@ case "${1:-}" in
   close-pdas)
     cmd_close_pdas
     ;;
+  close-expired-txdata)
+    cmd_close_expired_txdata "${@:2}"
+    ;;
   *)
     echo "Usage: mainnet.sh <command> [target]"
     echo ""
@@ -479,6 +515,7 @@ case "${1:-}" in
     echo "  init                            Initialize PA state (idempotent)"
     echo "  init-forwarder <mint>           Initialize forwarder + escrow for token mint"
     echo "  close-pdas                      Close all PA + forwarder PDAs, recover rent"
+    echo "  close-expired-txdata [--dry-run] Close expired TxData accounts only"
     echo "  status                          Show deployment status + wallet balance"
     echo "  balance                         Show wallet address and balance"
     echo ""
