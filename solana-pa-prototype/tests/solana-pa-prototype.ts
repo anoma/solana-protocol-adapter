@@ -44,13 +44,21 @@ import {
 const fundedKeypairs: Keypair[] = [];
 
 // TxData accounts created during tests, closed in afterEach() to recover rent.
-const openTxDataAccounts: { uploadId: anchor.BN; txData: PublicKey; authority: Keypair }[] = [];
+const openTxDataAccounts: {
+  uploadId: anchor.BN;
+  txData: PublicKey;
+  authority: Keypair;
+}[] = [];
 
 // Keypairs funded during PA tests, drained back in after().
 const paFundedKeypairs: Keypair[] = [];
 
 // Local fundKeypair wrapper that tracks keypairs for drain-back.
-async function paAirdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: number) {
+async function paAirdrop(
+  provider: anchor.AnchorProvider,
+  kp: Keypair,
+  sol: number
+) {
   await fundKeypair(provider, kp, sol);
   paFundedKeypairs.push(kp);
 }
@@ -58,32 +66,51 @@ async function paAirdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: numb
 let providerBalanceBefore = 0;
 let suiteStartBalance = 0;
 
-async function airdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: number) {
+async function airdrop(
+  provider: anchor.AnchorProvider,
+  kp: Keypair,
+  sol: number
+) {
   await fundKeypair(provider, kp, sol);
   fundedKeypairs.push(kp);
 }
 
-
-const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
+const IDL_PATH = path.resolve(
+  process.cwd(),
+  "target",
+  "idl",
+  "solana_pa_prototype.json"
+);
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
 
-const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+const program = anchor.workspace
+  .SolanaPaPrototype as Program<SolanaPaPrototype>;
 
-const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+const [paState] = PublicKey.findProgramAddressSync(
+  [PA_STATE_SEED],
+  program.programId
+);
 
 const fixture = loadFixture<Fixture>("batch_groth16.json");
 
 const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
 
-const { routerPda, verifierEntryPda } = deriveRouterAccounts(VERIFIER_ROUTER_ID, GROTH16_SELECTOR);
+const { routerPda, verifierEntryPda } = deriveRouterAccounts(
+  VERIFIER_ROUTER_ID,
+  GROTH16_SELECTOR
+);
 
 // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-const blockTimeForwarderId = new PublicKey("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf");
+const blockTimeForwarderId = new PublicKey(
+  "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
+);
 
 // Must match `programs/test-forwarder/src/lib.rs::declare_id!`.
-const testForwarderId = new PublicKey("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD");
+const testForwarderId = new PublicKey(
+  "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
+);
 
 function deriveRootPda(root: Buffer): PublicKey {
   return PublicKey.findProgramAddressSync(
@@ -92,12 +119,22 @@ function deriveRootPda(root: Buffer): PublicKey {
   )[0];
 }
 
-function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
-  return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
+function deriveNullifierAccounts(
+  nullifierB64s: string[]
+): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
+  return deriveNullifierAccountsFromB64(
+    nullifierB64s,
+    paState,
+    program.programId
+  );
 }
 
 function buildSettleRemainingAccounts(
-  nullifierAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+  nullifierAccounts: {
+    pubkey: PublicKey;
+    isWritable: boolean;
+    isSigner: boolean;
+  }[],
   options?: {
     additionalHistoricalRootMarkers?: PublicKey[];
     newRootMarkerPda?: PublicKey;
@@ -114,7 +151,11 @@ function buildSettleRemainingAccounts(
     }
   }
   if (options?.newRootMarkerPda) {
-    accounts.push({ pubkey: options.newRootMarkerPda, isWritable: true, isSigner: false });
+    accounts.push({
+      pubkey: options.newRootMarkerPda,
+      isWritable: true,
+      isSigner: false,
+    });
   }
   return accounts;
 }
@@ -124,11 +165,18 @@ async function uploadTxData(
   payload: Buffer,
   expiresSlotOverride?: anchor.BN
 ): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey }> {
-  const { uploadId, uploadIdLe, txData } = await initTxData(authority, payload.length, expiresSlotOverride);
+  const { uploadId, uploadIdLe, txData } = await initTxData(
+    authority,
+    payload.length,
+    expiresSlotOverride
+  );
 
   const chunkSize = 700;
   for (let offset = 0; offset < payload.length; offset += chunkSize) {
-    const chunk = payload.subarray(offset, Math.min(payload.length, offset + chunkSize));
+    const chunk = payload.subarray(
+      offset,
+      Math.min(payload.length, offset + chunkSize)
+    );
     await program.methods
       .txdataWrite(uploadId, offset, chunk)
       .accounts({
@@ -152,14 +200,20 @@ function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
 async function initTxData(
   authority: Keypair,
   payloadSize: number,
-  expiresSlotOverride?: anchor.BN,
-): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
+  expiresSlotOverride?: anchor.BN
+): Promise<{
+  uploadId: anchor.BN;
+  uploadIdLe: Buffer;
+  txData: PublicKey;
+  expiresSlot: anchor.BN;
+}> {
   const { uploadId, uploadIdLe } = freshUploadId();
   const [txData] = PublicKey.findProgramAddressSync(
     [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
     program.programId
   );
-  const expiresSlot = expiresSlotOverride ??
+  const expiresSlot =
+    expiresSlotOverride ??
     new anchor.BN((await provider.connection.getSlot("confirmed")) + 10_000);
   await program.methods
     .txdataInit(uploadId, payloadSize, expiresSlot)
@@ -177,11 +231,15 @@ async function initTxData(
 
 // Anchor assigns 6000 + enum_variant_index.
 const PA_ERRORS: Record<string, number> = Object.fromEntries(
-  (readJson<{ errors?: { name: string; code: number }[] }>(IDL_PATH).errors ?? [])
-    .map((e) => [e.name, e.code]),
+  (
+    readJson<{ errors?: { name: string; code: number }[] }>(IDL_PATH).errors ??
+    []
+  ).map((e) => [e.name, e.code])
 );
 
-const PA_ERROR_NAMES = new Map(Object.entries(PA_ERRORS).map(([k, v]) => [v, k]));
+const PA_ERROR_NAMES = new Map(
+  Object.entries(PA_ERRORS).map(([k, v]) => [v, k])
+);
 
 // For CPI errors, Solana propagates the inner program's error code —
 // the PA's failure line shows the inner code, not the PA's own error.
@@ -191,7 +249,9 @@ function extractPAErrorCode(e: any): number | null {
   // Find the PA's own failure line (not inner CPI programs)
   for (let i = logs.length - 1; i >= 0; i--) {
     if (!logs[i].includes(paId)) continue;
-    const match = logs[i].match(/failed: custom program error: 0x([0-9a-fA-F]+)/);
+    const match = logs[i].match(
+      /failed: custom program error: 0x([0-9a-fA-F]+)/
+    );
     if (match) return parseInt(match[1], 16);
   }
   return null;
@@ -202,7 +262,8 @@ function assertPAError(e: any, errorName: string): void {
   assert.isDefined(expectedCode, `Unknown PA error name: ${errorName}`);
 
   const actualCode = extractPAErrorCode(e);
-  const actualName = actualCode !== null ? PA_ERROR_NAMES.get(actualCode) : null;
+  const actualName =
+    actualCode !== null ? PA_ERROR_NAMES.get(actualCode) : null;
   const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
 
   assert.strictEqual(
@@ -210,7 +271,7 @@ function assertPAError(e: any, errorName: string): void {
     expectedCode,
     `Expected PA error ${errorName} (${expectedCode}), ` +
       `got ${actualName ?? "unknown"} (${actualCode})` +
-      `\nLogs:\n${logs.slice(-15).join("\n")}`,
+      `\nLogs:\n${logs.slice(-15).join("\n")}`
   );
 }
 
@@ -237,17 +298,21 @@ async function waitForSlotPast(
     if (slot > targetSlot) return;
     await new Promise((r) => setTimeout(r, 400));
   }
-  throw new Error(`Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`);
+  throw new Error(
+    `Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`
+  );
 }
 
 async function createDataAccount(
   space: number,
-  owner: PublicKey = testForwarderId,
+  owner: PublicKey = testForwarderId
 ): Promise<Keypair> {
   const funder = Keypair.generate();
   await paAirdrop(provider, funder, 2);
   const account = Keypair.generate();
-  const lamports = await provider.connection.getMinimumBalanceForRentExemption(space);
+  const lamports = await provider.connection.getMinimumBalanceForRentExemption(
+    space
+  );
   const tx = new anchor.web3.Transaction().add(
     SystemProgram.createAccount({
       fromPubkey: funder.publicKey,
@@ -255,7 +320,7 @@ async function createDataAccount(
       space,
       lamports,
       programId: owner,
-    }),
+    })
   );
   await provider.sendAndConfirm(tx, [funder, account]);
   return account;
@@ -269,7 +334,11 @@ function parseAnchorEvents(logs: string[]) {
 
 async function settleFixtureViaTxData(
   payload: Buffer,
-  remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+  remainingAccounts: {
+    pubkey: PublicKey;
+    isWritable: boolean;
+    isSigner: boolean;
+  }[]
 ): Promise<string> {
   const authority = Keypair.generate();
   await paAirdrop(provider, authority, 2);
@@ -299,14 +368,20 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   const tx = Buffer.from(fixture.tx_b64, "base64");
   const txTampered = Buffer.from(fixture.tx_tampered_b64, "base64");
 
-  const remainingAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
+  const remainingAccounts = deriveNullifierAccounts(
+    fixture.consumed_nullifiers_b64
+  );
   const nullifierPdas = remainingAccounts.map((a) => a.pubkey);
 
   async function settleViaTxData(
     authority: Keypair,
     payload: Buffer,
     options?: {
-      nullifierAccounts?: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[];
+      nullifierAccounts?: {
+        pubkey: PublicKey;
+        isWritable: boolean;
+        isSigner: boolean;
+      }[];
       newRootMarkerPda?: PublicKey;
       additionalHistoricalRootMarkers?: PublicKey[];
     }
@@ -371,16 +446,16 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       info!.owner.equals(program.programId),
       "Genesis root marker should be owned by PA program"
     );
-    assert.equal(info!.data.length, 0, "Root marker should be 0 bytes (existence-only)");
+    assert.equal(
+      info!.data.length,
+      0,
+      "Root marker should be 0 bytes (existence-only)"
+    );
   });
 
   it("maintains coherent variable-depth tree metadata", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.isAtLeast(
-      state.currentDepth,
-      1,
-      "Tree depth should be at least 1"
-    );
+    assert.isAtLeast(state.currentDepth, 1, "Tree depth should be at least 1");
     assert.equal(
       state.frontier.length,
       state.currentDepth,
@@ -402,7 +477,8 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     // BASE_SPACE includes pending_authority: Option<Pubkey> (+33 bytes over original 135)
     const BASE_SPACE = 168;
     const VEC_OVERHEAD = 4;
-    const spaceForDepth = (depth: number) => BASE_SPACE + VEC_OVERHEAD + 32 * depth;
+    const spaceForDepth = (depth: number) =>
+      BASE_SPACE + VEC_OVERHEAD + 32 * depth;
 
     const state = await program.account.paStateAccount.fetch(paState);
     const accountInfo = await provider.connection.getAccountInfo(paState);
@@ -413,7 +489,11 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     assert.equal(
       accountInfo!.data.length,
       expectedSize,
-      `Account size (${accountInfo!.data.length}) should match expected size for depth ${state.currentDepth} (${expectedSize})`
+      `Account size (${
+        accountInfo!.data.length
+      }) should match expected size for depth ${
+        state.currentDepth
+      } (${expectedSize})`
     );
   });
 
@@ -432,13 +512,25 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     // Search for the unique 12-byte pattern: variant(1) + length(65) to avoid
     // matching other [01 00 00 00] occurrences (e.g. Vec length at offset 0).
     const deltaProofHeader = Buffer.from([
-      0x01, 0x00, 0x00, 0x00, // variant index 1 (Proof)
-      0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // length prefix 65
+      0x01,
+      0x00,
+      0x00,
+      0x00, // variant index 1 (Proof)
+      0x41,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00,
+      0x00, // length prefix 65
     ]);
 
     const idx = txWitness.indexOf(deltaProofHeader);
     if (idx === -1) {
-      throw new Error("Could not find Delta::Proof variant+length tag in tx bytes");
+      throw new Error(
+        "Could not find Delta::Proof variant+length tag in tx bytes"
+      );
     }
 
     // Patch variant from 1 (Proof) to 0 (Witness)
@@ -458,7 +550,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
         [PA_ERRORS["ExpectedDeltaProof"], PA_ERRORS["InvalidTransactionData"]],
         code!,
         `Expected ExpectedDeltaProof (${PA_ERRORS["ExpectedDeltaProof"]}) or ` +
-          `InvalidTransactionData (${PA_ERRORS["InvalidTransactionData"]}), got ${code}`,
+          `InvalidTransactionData (${PA_ERRORS["InvalidTransactionData"]}), got ${code}`
       );
     }
   });
@@ -478,7 +570,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       assert.equal(
         code,
         6000,
-        "groth16 verifier's VerificationError (6000) should propagate through CPI",
+        "groth16 verifier's VerificationError (6000) should propagate through CPI"
       );
     }
   });
@@ -493,16 +585,28 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
 
     // On devnet, nullifiers from a previous run persist. If this fixture was already
     // settled, verify the existing state instead of re-settling.
-    const firstNullifier = await provider.connection.getAccountInfo(nullifierPdas[0]);
+    const firstNullifier = await provider.connection.getAccountInfo(
+      nullifierPdas[0]
+    );
     if (firstNullifier) {
       // Already settled — verify markers exist and state is consistent
       for (const pda of nullifierPdas) {
         const info = await provider.connection.getAccountInfo(pda);
-        assert.ok(info, "nullifier marker PDA should exist from prior settlement");
-        assert.ok(info!.owner.equals(program.programId), "nullifier marker PDA should be owned by PA program");
+        assert.ok(
+          info,
+          "nullifier marker PDA should exist from prior settlement"
+        );
+        assert.ok(
+          info!.owner.equals(program.programId),
+          "nullifier marker PDA should be owned by PA program"
+        );
       }
       const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 1, "nextIndex should reflect prior settlement(s)");
+      assert.isAtLeast(
+        state.nextIndex.toNumber(),
+        1,
+        "nextIndex should reflect prior settlement(s)"
+      );
       return;
     }
 
@@ -517,7 +621,10 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     for (const pda of nullifierPdas) {
       const info = await provider.connection.getAccountInfo(pda);
       assert.ok(info, "nullifier marker PDA should exist");
-      assert.ok(info!.owner.equals(program.programId), "nullifier marker PDA should be owned by PA program");
+      assert.ok(
+        info!.owner.equals(program.programId),
+        "nullifier marker PDA should be owned by PA program"
+      );
     }
 
     const stateAfter = await program.account.paStateAccount.fetch(paState);
@@ -540,7 +647,9 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     const mismatchFixture = loadFixture<Fixture>("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
-    const mismatchNullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
+    const mismatchNullifierAccounts = deriveNullifierAccounts(
+      mismatchFixture.consumed_nullifiers_b64
+    );
 
     try {
       await settleViaTxData(Keypair.generate(), mismatchTx, {
@@ -621,7 +730,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     // and dummy aggregation proof. Generated by security/challenges SEC-006.
     const emptyTx = Buffer.from(
       "000000000000000001000000410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-      "hex",
+      "hex"
     );
 
     try {
@@ -659,8 +768,11 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     const { uploadId, txData } = await uploadTxData(authority, tx);
 
     // The SAME nullifier PDAs (already created by T-06)
-    const nullifierAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
-    const allRemainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+    const nullifierAccounts = deriveNullifierAccounts(
+      fixture.consumed_nullifiers_b64
+    );
+    const allRemainingAccounts =
+      buildSettleRemainingAccounts(nullifierAccounts);
 
     try {
       await program.methods
@@ -761,12 +873,16 @@ describe("solana-pa-prototype (Settle error paths)", () => {
       // which check fails first.
       const code = extractPAErrorCode(e);
       const name = code !== null ? PA_ERROR_NAMES.get(code) : null;
-      const validErrors = ["NullifierPdaMismatch", "UnregisteredForwarder", "InvalidTransactionData"];
+      const validErrors = [
+        "NullifierPdaMismatch",
+        "UnregisteredForwarder",
+        "InvalidTransactionData",
+      ];
       assert.isNotNull(code, "Expected a PA error code");
       assert.include(
         validErrors,
         name,
-        `Expected one of ${validErrors.join("|")}, got ${name} (${code})`,
+        `Expected one of ${validErrors.join("|")}, got ${name} (${code})`
       );
     }
   });
@@ -784,7 +900,9 @@ describe("solana-pa-prototype (Settle error paths)", () => {
 
     const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
 
-    const nullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      mismatchFixture.consumed_nullifiers_b64
+    );
 
     // Build remaining_accounts manually with a FAKE forwarder instead of
     // the real blockTimeForwarderId
@@ -833,7 +951,11 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
   it("initializes with paused=false", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(JSON.stringify(state.lifecycle), JSON.stringify({ running: {} }), "State should be Running after initialize");
+    assert.equal(
+      JSON.stringify(state.lifecycle),
+      JSON.stringify({ running: {} }),
+      "State should be Running after initialize"
+    );
   });
 
   it("rejects emergency_stop from non-authority", async () => {
@@ -904,7 +1026,9 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     // Authority hasn't changed yet
-    const stateAfterPropose = await program.account.paStateAccount.fetch(paState);
+    const stateAfterPropose = await program.account.paStateAccount.fetch(
+      paState
+    );
     assert.ok(
       stateAfterPropose.authority.equals(currentAuthority),
       "Authority should NOT change after propose"
@@ -920,7 +1044,9 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .signers([newAuthority])
       .rpc();
 
-    const stateAfterAccept = await program.account.paStateAccount.fetch(paState);
+    const stateAfterAccept = await program.account.paStateAccount.fetch(
+      paState
+    );
     assert.ok(
       stateAfterAccept.authority.equals(newAuthority.publicKey),
       "Authority should be updated after accept"
@@ -1116,7 +1242,9 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
         })
         .signers([attacker])
         .rpc();
-      assert.fail("attacker should not be able to accept someone else's proposal");
+      assert.fail(
+        "attacker should not be able to accept someone else's proposal"
+      );
     } catch (e: any) {
       assertPAError(e, "Unauthorized");
     }
@@ -1165,7 +1293,9 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
         })
         .signers([firstCandidate])
         .rpc();
-      assert.fail("first candidate should not be able to accept after overwrite");
+      assert.fail(
+        "first candidate should not be able to accept after overwrite"
+      );
     } catch (e: any) {
       assertPAError(e, "Unauthorized");
     }
@@ -1356,7 +1486,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     await paAirdrop(provider, authority, 1);
 
     const slot = await provider.connection.getSlot("confirmed");
-    const expiresSlot = new anchor.BN(slot + Math.floor((MIN_EXPIRY_SLOTS + MAX_EXPIRY_SLOTS) / 2));
+    const expiresSlot = new anchor.BN(
+      slot + Math.floor((MIN_EXPIRY_SLOTS + MAX_EXPIRY_SLOTS) / 2)
+    );
     const { txData } = await initTxData(authority, 100, expiresSlot);
 
     const txDataAccount = await program.account.txDataAccount.fetch(txData);
@@ -1376,7 +1508,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const before = await provider.connection.getAccountInfo(txData);
     assert.ok(before, "TxData should exist before close");
 
-    const balanceBefore = await provider.connection.getBalance(authority.publicKey);
+    const balanceBefore = await provider.connection.getBalance(
+      authority.publicKey
+    );
 
     await program.methods
       .txdataClose(uploadId)
@@ -1391,7 +1525,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     const after = await provider.connection.getAccountInfo(txData);
     assert.ok(!after, "TxData should not exist after close");
 
-    const balanceAfter = await provider.connection.getBalance(authority.publicKey);
+    const balanceAfter = await provider.connection.getBalance(
+      authority.publicKey
+    );
     assert.ok(
       balanceAfter > balanceBefore,
       "Authority balance should increase after close (rent refund)"
@@ -1413,7 +1549,11 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       paAirdrop(provider, attacker, 1),
     ]);
 
-    const { uploadId, uploadIdLe, txData: authorityTxData } = await initTxData(authority, 100);
+    const {
+      uploadId,
+      uploadIdLe,
+      txData: authorityTxData,
+    } = await initTxData(authority, 100);
 
     // Attacker derives THEIR OWN PDA (different address because attacker.pubkey != authority.pubkey)
     const [attackerTxData] = PublicKey.findProgramAddressSync(
@@ -1456,7 +1596,11 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       paAirdrop(provider, attacker, 1),
     ]);
 
-    const { uploadId, uploadIdLe, txData: authorityTxData } = await initTxData(authority, 100);
+    const {
+      uploadId,
+      uploadIdLe,
+      txData: authorityTxData,
+    } = await initTxData(authority, 100);
 
     // Attacker tries to close AUTHORITY'S TxData by passing the address directly
     // Anchor will compute seeds with attacker.pubkey → different PDA → constraint fails
@@ -1464,7 +1608,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       await program.methods
         .txdataClose(uploadId)
         .accounts({
-          txData: authorityTxData,  // <-- Attacker passes authority's actual TxData
+          txData: authorityTxData, // <-- Attacker passes authority's actual TxData
           authority: attacker.publicKey,
           refund: attacker.publicKey,
         })
@@ -1488,10 +1632,17 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
     const slot = await provider.connection.getSlot("confirmed");
     const initialExpiry = new anchor.BN(slot + 1000);
-    const { uploadId, txData } = await initTxData(authority, 100, initialExpiry);
+    const { uploadId, txData } = await initTxData(
+      authority,
+      100,
+      initialExpiry
+    );
 
     let txDataAccount = await program.account.txDataAccount.fetch(txData);
-    assert.equal(txDataAccount.expiresSlot.toNumber(), initialExpiry.toNumber());
+    assert.equal(
+      txDataAccount.expiresSlot.toNumber(),
+      initialExpiry.toNumber()
+    );
 
     const currentSlot = await provider.connection.getSlot("confirmed");
     const newExpiry = new anchor.BN(currentSlot + 5000);
@@ -1507,7 +1658,11 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
       .rpc();
 
     txDataAccount = await program.account.txDataAccount.fetch(txData);
-    assert.equal(txDataAccount.expiresSlot.toNumber(), newExpiry.toNumber(), "expires_slot should be updated");
+    assert.equal(
+      txDataAccount.expiresSlot.toNumber(),
+      newExpiry.toNumber(),
+      "expires_slot should be updated"
+    );
   });
 
   it("rejects txdata_extend that doesn't increase expires_slot", async () => {
@@ -1516,7 +1671,11 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
     const slot = await provider.connection.getSlot("confirmed");
     const initialExpiry = new anchor.BN(slot + 10000);
-    const { uploadId, txData } = await initTxData(authority, 100, initialExpiry);
+    const { uploadId, txData } = await initTxData(
+      authority,
+      100,
+      initialExpiry
+    );
 
     const currentSlot = await provider.connection.getSlot("confirmed");
     const lowerExpiry = new anchor.BN(currentSlot + 500); // Less than current expires_slot
@@ -1531,7 +1690,9 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         })
         .signers([authority])
         .rpc();
-      assert.fail("expected txdata_extend to fail with TxDataExtendMustIncrease");
+      assert.fail(
+        "expected txdata_extend to fail with TxDataExtendMustIncrease"
+      );
     } catch (e: any) {
       assertPAError(e, "TxDataExtendMustIncrease");
     }
@@ -1546,7 +1707,11 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     ]);
 
     const slot = await provider.connection.getSlot("confirmed");
-    const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50000));
+    const { uploadId, txData } = await initTxData(
+      authority,
+      100,
+      new anchor.BN(slot + 50000)
+    );
 
     try {
       await program.methods
@@ -1558,16 +1723,16 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
         })
         .signers([cleaner])
         .rpc();
-      assert.fail("expected txdata_close_expired to fail with TxDataNotExpired");
+      assert.fail(
+        "expected txdata_close_expired to fail with TxDataNotExpired"
+      );
     } catch (e: any) {
       assertPAError(e, "TxDataNotExpired");
     }
   });
-
 });
 
 describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
-
   it("rejects txdata_write that exceeds payload capacity", async () => {
     const authority = Keypair.generate();
     await paAirdrop(provider, authority, 2);
@@ -1707,7 +1872,11 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     ]);
 
     const slot = await provider.connection.getSlot("confirmed");
-    const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50_000));
+    const { uploadId, txData } = await initTxData(
+      authority,
+      100,
+      new anchor.BN(slot + 50_000)
+    );
 
     // Hits ConstraintAddress before TxDataNotExpired
     // because Anchor validates account constraints before running the handler body
@@ -1789,13 +1958,18 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
   it("rejects max > SEVEN_DAYS_SLOTS", async () => {
     try {
       await program.methods
-        .updateExpiryConfig(new anchor.BN(50), new anchor.BN(SEVEN_DAYS_SLOTS + 1))
+        .updateExpiryConfig(
+          new anchor.BN(50),
+          new anchor.BN(SEVEN_DAYS_SLOTS + 1)
+        )
         .accounts({
           paState,
           authority: provider.wallet.publicKey,
         })
         .rpc();
-      assert.fail("expected update_expiry_config with max > SEVEN_DAYS_SLOTS to fail");
+      assert.fail(
+        "expected update_expiry_config with max > SEVEN_DAYS_SLOTS to fail"
+      );
     } catch (e: any) {
       assertPAError(e, "InvalidExpiryConfig");
     }
@@ -1835,8 +2009,16 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
       .rpc();
 
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(state.minExpirySlots.toNumber(), 100, "min_expiry_slots should be restored to 100");
-    assert.equal(state.maxExpirySlots.toNumber(), 216_000, "max_expiry_slots should be restored to 216_000");
+    assert.equal(
+      state.minExpirySlots.toNumber(),
+      100,
+      "min_expiry_slots should be restored to 100"
+    );
+    assert.equal(
+      state.maxExpirySlots.toNumber(),
+      216_000,
+      "max_expiry_slots should be restored to 216_000"
+    );
   });
 });
 
@@ -1912,8 +2094,11 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
     await waitForSlotPast(provider.connection, expiresSlot.toNumber());
 
-    const nullifierAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
-    const allRemainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+    const nullifierAccounts = deriveNullifierAccounts(
+      fixture.consumed_nullifiers_b64
+    );
+    const allRemainingAccounts =
+      buildSettleRemainingAccounts(nullifierAccounts);
 
     try {
       await program.methods
@@ -1956,7 +2141,9 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const before = await provider.connection.getAccountInfo(txData);
     assert.ok(before, "TxData should exist before close");
 
-    const refundBalanceBefore = await provider.connection.getBalance(authority.publicKey);
+    const refundBalanceBefore = await provider.connection.getBalance(
+      authority.publicKey
+    );
 
     await waitForSlotPast(provider.connection, expiresSlot.toNumber());
 
@@ -1974,7 +2161,9 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const after = await provider.connection.getAccountInfo(txData);
     assert.ok(!after, "TxData should not exist after close_expired");
 
-    const refundBalanceAfter = await provider.connection.getBalance(authority.publicKey);
+    const refundBalanceAfter = await provider.connection.getBalance(
+      authority.publicKey
+    );
     assert.ok(
       refundBalanceAfter > refundBalanceBefore,
       "Authority balance should increase after expired close (rent refund)"
@@ -1985,9 +2174,13 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const authority = Keypair.generate();
     await paAirdrop(provider, authority, 2);
 
-    const { uploadId, txData, expiresSlot } = await initTxData(authority, 100, new anchor.BN(
-      (await provider.connection.getSlot("confirmed")) + EXPIRY_OFFSET
-    ));
+    const { uploadId, txData, expiresSlot } = await initTxData(
+      authority,
+      100,
+      new anchor.BN(
+        (await provider.connection.getSlot("confirmed")) + EXPIRY_OFFSET
+      )
+    );
 
     // Wait for the original expiry to pass so the extend would need to
     // satisfy bounds from current slot. Then try extending to current_slot + 5
@@ -2017,12 +2210,16 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     const authority = Keypair.generate();
     await paAirdrop(provider, authority, 2);
 
-    const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(
-      (await provider.connection.getSlot("confirmed")) + 1000
-    ));
+    const { uploadId, txData } = await initTxData(
+      authority,
+      100,
+      new anchor.BN((await provider.connection.getSlot("confirmed")) + 1000)
+    );
 
     const currentSlot = await provider.connection.getSlot("confirmed");
-    const tooLateExpiry = new anchor.BN(currentSlot + MAX_EXPIRY_SLOTS + 100_000);
+    const tooLateExpiry = new anchor.BN(
+      currentSlot + MAX_EXPIRY_SLOTS + 100_000
+    );
 
     try {
       await program.methods
@@ -2045,7 +2242,9 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
   async function expectSettleError(fixtureName: string, expectedError: string) {
     const fx = loadFixture<Fixture>(fixtureName);
     const payload = Buffer.from(fx.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      fx.consumed_nullifiers_b64
+    );
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     try {
@@ -2069,6 +2268,29 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
   });
 });
 
+describe("solana-pa-prototype (AnomaPay imported transfer regression)", () => {
+  it("settles imported backend transfer TxData payload", async () => {
+    const fx = loadFixture<Fixture>("anomapay_transfer_0e345103.json");
+    const payload = Buffer.from(fx.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(
+      fx.consumed_nullifiers_b64
+    );
+    const historicalRootMarkers = (fx.historical_roots_b64 ?? []).map(
+      (rootB64) => deriveRootPda(Buffer.from(rootB64, "base64"))
+    );
+    assert.isNotEmpty(
+      historicalRootMarkers,
+      "imported transfer fixture must include historical roots for localnet replay"
+    );
+
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts, {
+      additionalHistoricalRootMarkers: historicalRootMarkers,
+    });
+
+    await settleFixtureViaTxData(payload, remainingAccounts);
+  });
+});
+
 describe("solana-pa-prototype (External call error paths)", () => {
   it("rejects settlement when forwarder CPI accounts are wrong", async () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
@@ -2076,7 +2298,9 @@ describe("solana-pa-prototype (External call error paths)", () => {
     // The inner CPI error propagates through (btf's AccountSysvarMismatch).
     const mismatchFixture = loadFixture<Fixture>("batch_groth16_mismatch.json");
     const payload = Buffer.from(mismatchFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      mismatchFixture.consumed_nullifiers_b64
+    );
     const randomAccount = Keypair.generate().publicKey;
     const remainingAccounts = [
       ...nullifierAccounts,
@@ -2094,15 +2318,20 @@ describe("solana-pa-prototype (External call error paths)", () => {
       // btf's AccountSysvarMismatch = Anchor error 3015 (0xBC7).
       const code = extractPAErrorCode(e);
       assert.isNotNull(code, "Expected a program error code in logs");
-      assert.notEqual(code, PA_ERRORS["ExternalCallCpiFailed"],
-        "Solana CPI error propagation: inner error code should appear, not PA's remapped code");
+      assert.notEqual(
+        code,
+        PA_ERRORS["ExternalCallCpiFailed"],
+        "Solana CPI error propagation: inner error code should appear, not PA's remapped code"
+      );
     }
   });
 
   it("rejects settlement when test-forwarder returns error", async () => {
     const failFixture = loadFixture<Fixture>("batch_forwarder_fail.json");
     const payload = Buffer.from(failFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(failFixture.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      failFixture.consumed_nullifiers_b64
+    );
 
     const remainingAccounts = [
       ...nullifierAccounts,
@@ -2117,15 +2346,20 @@ describe("solana-pa-prototype (External call error paths)", () => {
       // propagates through instead of PA's ExternalCallCpiFailed (6018).
       const code = extractPAErrorCode(e);
       assert.isNotNull(code, "Expected a program error code in logs");
-      assert.equal(code, 6000,
-        "test-forwarder's IntentionalFailure (6000) should propagate through CPI");
+      assert.equal(
+        code,
+        6000,
+        "test-forwarder's IntentionalFailure (6000) should propagate through CPI"
+      );
     }
   });
 
   it("rejects ExternalCallOutputMismatch when forwarder returns no data", async () => {
     const silentFixture = loadFixture<Fixture>("batch_forwarder_silent.json");
     const payload = Buffer.from(silentFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(silentFixture.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      silentFixture.consumed_nullifiers_b64
+    );
 
     const remainingAccounts = [
       ...nullifierAccounts,
@@ -2156,15 +2390,23 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   // Check the first nullifier; if it exists, the fixture was already settled.
   async function alreadySettled(fixtureName: string): Promise<boolean> {
     const f = loadFixture<Fixture>(fixtureName);
-    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
-    const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
+    const nullifierAccounts = deriveNullifierAccounts(
+      f.consumed_nullifiers_b64
+    );
+    const info = await provider.connection.getAccountInfo(
+      nullifierAccounts[0].pubkey
+    );
     return !!info;
   }
 
   it("settles v2 fixture (next_index increments by 1)", async () => {
     if (await alreadySettled("batch_groth16_v2.json")) {
       const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 2, "nextIndex should reflect prior v2 settlement");
+      assert.isAtLeast(
+        state.nextIndex.toNumber(),
+        2,
+        "nextIndex should reflect prior v2 settlement"
+      );
       return;
     }
 
@@ -2172,26 +2414,44 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     const sizeBefore = accountInfoBefore!.data.length;
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
+    const depthBefore = stateBefore.currentDepth;
 
     const v2Fixture = loadFixture<Fixture>("batch_groth16_v2.json");
     const payload = Buffer.from(v2Fixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(v2Fixture.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      v2Fixture.consumed_nullifiers_b64
+    );
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     v2TxSig = await settleFixtureViaTxData(payload, remainingAccounts);
 
     const state = await program.account.paStateAccount.fetch(paState);
     const nextIndexAfter = state.nextIndex.toNumber();
-    assert.equal(nextIndexAfter, nextIndexBefore + 1,
-      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`);
-    assert.equal(state.currentDepth, expectedDepth(nextIndexAfter),
-      `depth should be ${expectedDepth(nextIndexAfter)} for next_index=${nextIndexAfter}`);
-
-    const accountInfoAfter = await provider.connection.getAccountInfo(paState);
-    assert.ok(
-      accountInfoAfter!.data.length > sizeBefore,
-      `Account should grow when depth increases (${sizeBefore} → ${accountInfoAfter!.data.length})`
+    assert.equal(
+      nextIndexAfter,
+      nextIndexBefore + 1,
+      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`
     );
+    const depthAfter = state.currentDepth;
+    assert.equal(
+      depthAfter,
+      expectedDepth(nextIndexAfter),
+      `depth should be ${expectedDepth(
+        nextIndexAfter
+      )} for next_index=${nextIndexAfter}`
+    );
+
+    if (depthAfter > depthBefore) {
+      const accountInfoAfter = await provider.connection.getAccountInfo(
+        paState
+      );
+      assert.ok(
+        accountInfoAfter!.data.length > sizeBefore,
+        `Account should grow when depth increases (${sizeBefore} → ${
+          accountInfoAfter!.data.length
+        })`
+      );
+    }
   });
 
   it("verifies events from v2 settlement", async function () {
@@ -2217,24 +2477,47 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     assert.ok(
       Array.isArray(actionEvents[0].data.actionTreeRoot) &&
         actionEvents[0].data.actionTreeRoot.length === 32,
-      "action_tree_root should be 32 bytes",
+      "action_tree_root should be 32 bytes"
     );
-    assert.equal(actionEvents[0].data.actionTagCount, 2,
-      "action_tag_count should be 2 (consumed + created)");
+    assert.equal(
+      actionEvents[0].data.actionTagCount,
+      2,
+      "action_tag_count should be 2 (consumed + created)"
+    );
 
-    const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
-    assert.equal(txEvents.length, 1, "Should emit exactly one transactionExecutedEvent");
+    const txEvents = events.filter(
+      (e) => e.name === "transactionExecutedEvent"
+    );
+    assert.equal(
+      txEvents.length,
+      1,
+      "Should emit exactly one transactionExecutedEvent"
+    );
     assert.equal(txEvents[0].data.tags.length, 2, "Should have 2 tags");
-    assert.equal(txEvents[0].data.logicRefs.length, 2, "Should have 2 logic_refs");
+    assert.equal(
+      txEvents[0].data.logicRefs.length,
+      2,
+      "Should have 2 logic_refs"
+    );
 
-    const fwdEvents = events.filter((e) => e.name === "forwarderCallExecutedEvent");
-    assert.isAtLeast(fwdEvents.length, 1, "Should emit forwarderCallExecutedEvent");
+    const fwdEvents = events.filter(
+      (e) => e.name === "forwarderCallExecutedEvent"
+    );
+    assert.isAtLeast(
+      fwdEvents.length,
+      1,
+      "Should emit forwarderCallExecutedEvent"
+    );
     assert.ok(
       fwdEvents[0].data.forwarder.equals(blockTimeForwarderId),
-      `forwarder should be ${blockTimeForwarderId}`,
+      `forwarder should be ${blockTimeForwarderId}`
     );
     const outputBytes = Buffer.from(fwdEvents[0].data.output);
-    assert.deepEqual(outputBytes, Buffer.from([0x00]), "output should be RESULT_LT (0x00)");
+    assert.deepEqual(
+      outputBytes,
+      Buffer.from([0x00]),
+      "output should be RESULT_LT (0x00)"
+    );
   });
 
   it("does not create root marker when PDA not passed", async () => {
@@ -2247,14 +2530,18 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     const info = await provider.connection.getAccountInfo(rootMarkerPda);
     assert.isNull(
       info,
-      "Root marker should NOT exist when PDA was not passed in remaining_accounts",
+      "Root marker should NOT exist when PDA was not passed in remaining_accounts"
     );
   });
 
   it("settles v3 fixture (next_index increments by 1)", async () => {
     if (await alreadySettled("batch_groth16_v3.json")) {
       const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 3, "nextIndex should reflect prior v3 settlement");
+      assert.isAtLeast(
+        state.nextIndex.toNumber(),
+        3,
+        "nextIndex should reflect prior v3 settlement"
+      );
       return;
     }
 
@@ -2266,24 +2553,38 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
     const v3Fixture = loadFixture<Fixture>("batch_groth16_v3.json");
     const payload = Buffer.from(v3Fixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(v3Fixture.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      v3Fixture.consumed_nullifiers_b64
+    );
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     await settleFixtureViaTxData(payload, remainingAccounts);
 
     const state = await program.account.paStateAccount.fetch(paState);
     const nextIndexAfter = state.nextIndex.toNumber();
-    assert.equal(nextIndexAfter, nextIndexBefore + 1,
-      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`);
+    assert.equal(
+      nextIndexAfter,
+      nextIndexBefore + 1,
+      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`
+    );
     const depthAfter = state.currentDepth;
-    assert.equal(depthAfter, expectedDepth(nextIndexAfter),
-      `depth should be ${expectedDepth(nextIndexAfter)} for next_index=${nextIndexAfter}`);
+    assert.equal(
+      depthAfter,
+      expectedDepth(nextIndexAfter),
+      `depth should be ${expectedDepth(
+        nextIndexAfter
+      )} for next_index=${nextIndexAfter}`
+    );
 
     if (depthAfter > depthBefore) {
-      const accountInfoAfter = await provider.connection.getAccountInfo(paState);
+      const accountInfoAfter = await provider.connection.getAccountInfo(
+        paState
+      );
       assert.ok(
         accountInfoAfter!.data.length > sizeBefore,
-        `Account should grow when depth increases (${sizeBefore} → ${accountInfoAfter!.data.length})`
+        `Account should grow when depth increases (${sizeBefore} → ${
+          accountInfoAfter!.data.length
+        })`
       );
     }
   });
@@ -2291,7 +2592,11 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   it("settles multi-call fixture with two external calls (next_index increments by 1)", async () => {
     if (await alreadySettled("batch_groth16_multi_call.json")) {
       const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 4, "nextIndex should reflect prior multi-call settlement");
+      assert.isAtLeast(
+        state.nextIndex.toNumber(),
+        4,
+        "nextIndex should reflect prior multi-call settlement"
+      );
       return;
     }
 
@@ -2300,7 +2605,9 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
     const multiFixture = loadFixture<Fixture>("batch_groth16_multi_call.json");
     const payload = Buffer.from(multiFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(multiFixture.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      multiFixture.consumed_nullifiers_b64
+    );
 
     // Two external call segments: [btf, clock, btf, clock]
     const remainingAccounts = [
@@ -2315,19 +2622,23 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
     const state = await program.account.paStateAccount.fetch(paState);
     const nextIndexAfter = state.nextIndex.toNumber();
-    assert.equal(nextIndexAfter, nextIndexBefore + 1,
-      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`);
+    assert.equal(
+      nextIndexAfter,
+      nextIndexBefore + 1,
+      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`
+    );
   });
 });
 
 describe("solana-pa-prototype (OutputAccount mode)", () => {
   it("settles forwarder-output fixture via OutputAccount mode (next_index increments by 1)", async () => {
-    const stateBefore = await program.account.paStateAccount.fetch(paState);
-    const nextIndexBefore = stateBefore.nextIndex.toNumber();
-
     const outputFixture = loadFixture<Fixture>("batch_forwarder_output.json");
     const payload = Buffer.from(outputFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      outputFixture.consumed_nullifiers_b64
+    );
+    const stateBefore = await program.account.paStateAccount.fetch(paState);
+    const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
     // Create a data account owned by test-forwarder for writing output
     const dataAccount = await createDataAccount(10);
@@ -2343,12 +2654,16 @@ describe("solana-pa-prototype (OutputAccount mode)", () => {
     await settleFixtureViaTxData(payload, remainingAccounts);
 
     const state = await program.account.paStateAccount.fetch(paState);
-    const nextIndexAfter = state.nextIndex.toNumber();
-    assert.equal(nextIndexAfter, nextIndexBefore + 1,
-      `next_index should increment by 1 (${nextIndexBefore} → ${nextIndexAfter})`);
+    assert.equal(
+      state.nextIndex.toNumber(),
+      nextIndexBefore + 1,
+      "next_index should increment after output-account settlement"
+    );
 
     // Verify the data account was written by the forwarder
-    const dataAccountInfo = await provider.connection.getAccountInfo(dataAccount.publicKey);
+    const dataAccountInfo = await provider.connection.getAccountInfo(
+      dataAccount.publicKey
+    );
     assert.ok(dataAccountInfo, "Data account should still exist");
     const writtenBytes = dataAccountInfo!.data.subarray(0, 4);
     assert.deepEqual(
@@ -2368,7 +2683,9 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
 
   it("rejects OutputAccount when index is out of bounds", async () => {
     const payload = Buffer.from(outputFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      outputFixture.consumed_nullifiers_b64
+    );
 
     // Fixture expects remaining_accounts[2] (index=2), but we only provide
     // [nullifier_pda, test_forwarder] — index 2 does not exist.
@@ -2392,7 +2709,9 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
 
   it("rejects OutputAccount when data is shorter than offset+len", async () => {
     const payload = Buffer.from(outputFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
+    const nullifierAccounts = deriveNullifierAccounts(
+      outputFixture.consumed_nullifiers_b64
+    );
 
     // Create a data account with only 2 bytes — fixture expects len=4.
     // The forwarder writes min(payload.len(), data.len()) = 2 bytes.
@@ -2421,13 +2740,23 @@ describe("solana-pa-prototype (OutputAccount error paths)", () => {
 describe("solana-pa-prototype (teardown requires stopped state)", () => {
   it("close_markers_batch fails when PA is not stopped", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.deepEqual(state.lifecycle, { running: {} }, "PA should be Running at start of test");
+    assert.deepEqual(
+      state.lifecycle,
+      { running: {} },
+      "PA should be Running at start of test"
+    );
 
     // Find any existing markers (genesis root marker + settlement markers)
-    const markers = await provider.connection.getProgramAccounts(program.programId, {
-      filters: [{ dataSize: 0 }],
-    });
-    assert.ok(markers.length > 0, "Should have markers to close (genesis root marker at minimum)");
+    const markers = await provider.connection.getProgramAccounts(
+      program.programId,
+      {
+        filters: [{ dataSize: 0 }],
+      }
+    );
+    assert.ok(
+      markers.length > 0,
+      "Should have markers to close (genesis root marker at minimum)"
+    );
 
     try {
       await program.methods
@@ -2436,9 +2765,13 @@ describe("solana-pa-prototype (teardown requires stopped state)", () => {
           paState,
           authority: provider.wallet.publicKey,
         })
-        .remainingAccounts(markers.map(({ pubkey }) => ({
-          pubkey, isWritable: true, isSigner: false,
-        })))
+        .remainingAccounts(
+          markers.map(({ pubkey }) => ({
+            pubkey,
+            isWritable: true,
+            isSigner: false,
+          }))
+        )
         .rpc();
       assert.fail("close_markers_batch should fail when PA is not stopped");
     } catch (e: any) {
@@ -2448,7 +2781,11 @@ describe("solana-pa-prototype (teardown requires stopped state)", () => {
 
   it("close_pa_state fails when PA is not stopped", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.deepEqual(state.lifecycle, { running: {} }, "PA should be Running at start of test");
+    assert.deepEqual(
+      state.lifecycle,
+      { running: {} },
+      "PA should be Running at start of test"
+    );
 
     try {
       await program.methods
@@ -2469,12 +2806,20 @@ describe("solana-pa-prototype (teardown requires stopped state)", () => {
 // Close instruction tests live in zzz-pa-teardown.ts (runs after emergency stop).
 
 before(async () => {
-  suiteStartBalance = await provider.connection.getBalance(provider.wallet.publicKey);
-  console.log(`  [sol] suite start: wallet ${(suiteStartBalance / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
+  suiteStartBalance = await provider.connection.getBalance(
+    provider.wallet.publicKey
+  );
+  console.log(
+    `  [sol] suite start: wallet ${(
+      suiteStartBalance / LAMPORTS_PER_SOL
+    ).toFixed(4)} SOL`
+  );
 });
 
 beforeEach(async () => {
-  providerBalanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
+  providerBalanceBefore = await provider.connection.getBalance(
+    provider.wallet.publicKey
+  );
 });
 
 // After each PA test, close TxData accounts and drain funded keypairs to recover SOL.
@@ -2504,12 +2849,15 @@ afterEach(async () => {
 
 // End-of-suite: audit SOL usage.
 after(async () => {
-
-  const suiteEndBalance = await provider.connection.getBalance(provider.wallet.publicKey);
+  const suiteEndBalance = await provider.connection.getBalance(
+    provider.wallet.publicKey
+  );
   const totalSpent = suiteStartBalance - suiteEndBalance;
 
   // Query all accounts owned by the PA program
-  const allAccounts = await provider.connection.getProgramAccounts(program.programId);
+  const allAccounts = await provider.connection.getProgramAccounts(
+    program.programId
+  );
 
   // PAState is identifiable: it's the only account with data (non-zero-byte).
   // Nullifier and root markers are 0-byte accounts.
@@ -2539,13 +2887,48 @@ after(async () => {
   const txFees = totalSpent - accountRent;
 
   console.log(`\n  [sol] ═══ Suite SOL Audit ═══`);
-  console.log(`  [sol]   start balance:     ${(suiteStartBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
-  console.log(`  [sol]   end balance:       ${(suiteEndBalance / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
-  console.log(`  [sol]   total spent:       ${(totalSpent / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+  console.log(
+    `  [sol]   start balance:     ${(
+      suiteStartBalance / LAMPORTS_PER_SOL
+    ).toFixed(6)} SOL`
+  );
+  console.log(
+    `  [sol]   end balance:       ${(
+      suiteEndBalance / LAMPORTS_PER_SOL
+    ).toFixed(6)} SOL`
+  );
+  console.log(
+    `  [sol]   total spent:       ${(totalSpent / LAMPORTS_PER_SOL).toFixed(
+      6
+    )} SOL`
+  );
   console.log(`  [sol]   breakdown:`);
-  console.log(`  [sol]     PAState rent:    ${(paStateRent / LAMPORTS_PER_SOL).toFixed(6)} SOL (${allAccounts.length - markerCount - txdataCount} accounts)`);
-  console.log(`  [sol]     marker rent:     ${(markerRent / LAMPORTS_PER_SOL).toFixed(6)} SOL (${markerCount} nullifier/root markers × ${markerCount > 0 ? allAccounts.find(a => a.account.data.length === 0)!.account.lamports : 0} lamports each)`);
-  console.log(`  [sol]     unclosed TxData: ${(txdataRent / LAMPORTS_PER_SOL).toFixed(6)} SOL (${txdataCount} accounts)`);
-  console.log(`  [sol]     tx fees + dust:  ${(txFees / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
-  console.log(`  [sol]   total accounted:   ${((accountRent + txFees) / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+  console.log(
+    `  [sol]     PAState rent:    ${(paStateRent / LAMPORTS_PER_SOL).toFixed(
+      6
+    )} SOL (${allAccounts.length - markerCount - txdataCount} accounts)`
+  );
+  console.log(
+    `  [sol]     marker rent:     ${(markerRent / LAMPORTS_PER_SOL).toFixed(
+      6
+    )} SOL (${markerCount} nullifier/root markers × ${
+      markerCount > 0
+        ? allAccounts.find((a) => a.account.data.length === 0)!.account.lamports
+        : 0
+    } lamports each)`
+  );
+  console.log(
+    `  [sol]     unclosed TxData: ${(txdataRent / LAMPORTS_PER_SOL).toFixed(
+      6
+    )} SOL (${txdataCount} accounts)`
+  );
+  console.log(
+    `  [sol]     tx fees + dust:  ${(txFees / LAMPORTS_PER_SOL).toFixed(6)} SOL`
+  );
+  console.log(
+    `  [sol]   total accounted:   ${(
+      (accountRent + txFees) /
+      LAMPORTS_PER_SOL
+    ).toFixed(6)} SOL`
+  );
 });

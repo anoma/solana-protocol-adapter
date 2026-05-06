@@ -1,4 +1,4 @@
-use anchor_lang::prelude::AnchorDeserialize as BorshDeserialize;
+use anchor_lang::prelude::{AnchorDeserialize as BorshDeserialize, Pubkey};
 use anyhow::{anyhow, bail, Context, Result};
 use arm::action::{Action, ActionExt};
 use arm::action_tree::MerkleTree;
@@ -19,6 +19,7 @@ use arm::CoreDeltaWitness;
 use arm::Digest;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
 use heliax_ap_orchestrator_sdk::{
     AggregateProofResult, BaseProofResult, GpuAggregationProofPayload, GpuComplianceProofPayload,
     GpuLogicProofPayload, ProofPayload, ProofType, QueueClient,
@@ -28,7 +29,7 @@ use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
 use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as Sha256Digest, Sha256};
-use ed25519_dalek::{Signer, SigningKey};
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -154,7 +155,7 @@ fn mutate_compliance_instance<R>(
 use block_time_forwarder::{RESULT_GT, RESULT_LT};
 use solana_pa::external_calls::encode_external_call;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
-use spl_token_forwarder::{OP_WRAP, OP_UNWRAP, RESULT_SUCCESS as SPL_RESULT_SUCCESS};
+use spl_token_forwarder::{OP_UNWRAP, OP_WRAP, RESULT_SUCCESS as SPL_RESULT_SUCCESS};
 use test_forwarder::{MODE_FAIL, MODE_SILENT, MODE_WRITE_ACCOUNT};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -189,10 +190,13 @@ struct Fixture {
     /// Groth16 verifier selector extracted from the proof's verifier_parameters.
     /// Format: "0x" + 4-byte hex (e.g., "0x73c457ba").
     selector: String,
-    forwarder_type: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    forwarder_type: Option<&'static str>,
     tx_b64: String,
     tx_tampered_b64: String,
     consumed_nullifiers_b64: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    historical_roots_b64: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     spl_token_wrap: Option<SplTokenWrapMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -223,6 +227,12 @@ enum CliCommand {
     },
     Dump {
         input: PathBuf,
+    },
+    ImportBackendResult {
+        input: PathBuf,
+        output: PathBuf,
+        root_account_dir: Option<PathBuf>,
+        program_id: [u8; 32],
     },
 }
 
@@ -324,8 +334,9 @@ fn validate_selector(selector: &str) -> Result<()> {
 }
 
 fn deserialize_tx_for_validation(bytes: &[u8], field_name: &str) -> Result<Transaction> {
-    bincode::deserialize::<Transaction>(bytes)
-        .with_context(|| format!("{field_name} does not deserialize with current Transaction layout"))
+    bincode::deserialize::<Transaction>(bytes).with_context(|| {
+        format!("{field_name} does not deserialize with current Transaction layout")
+    })
 }
 
 fn validate_fixture_file(path: &PathBuf, expected_program_id: [u8; 32]) -> Result<()> {
@@ -375,7 +386,9 @@ fn validate_fixture_file(path: &PathBuf, expected_program_id: [u8; 32]) -> Resul
         .context("tx_tampered_b64 aggregation_proof is not a valid verifier_router Seal")?;
 
     if fixture.consumed_nullifiers_b64.is_empty() {
-        return Err(anyhow!("fixture must include consumed_nullifiers_b64 entries"));
+        return Err(anyhow!(
+            "fixture must include consumed_nullifiers_b64 entries"
+        ));
     }
     for (idx, nf_b64) in fixture.consumed_nullifiers_b64.iter().enumerate() {
         let bytes = BASE64
@@ -467,7 +480,6 @@ fn test_forwarder_output_account_payload_blob(
         num_accounts: 2, // test-forwarder: [program, data_account]
     }))
 }
-
 
 const SPL_TOKEN_FORWARDER_PROGRAM_ID: &str = "3cLKSYBijunpCc2F2gzizUkhYtyFrLr4RVdNiaK79b48";
 
@@ -703,7 +715,9 @@ async fn generate_test_transaction_with_external_payload(
         ForwarderMode::BlockTimeForwarder { output_mismatch } => {
             consumed_app_data
                 .external_payload
-                .push(block_time_forwarder_external_payload_blob(*output_mismatch)?);
+                .push(block_time_forwarder_external_payload_blob(
+                    *output_mismatch,
+                )?);
         }
         ForwarderMode::TestForwarderFail => {
             consumed_app_data
@@ -718,7 +732,10 @@ async fn generate_test_transaction_with_external_payload(
         ForwarderMode::TestForwarderOutputAccount => {
             consumed_app_data
                 .external_payload
-                .push(test_forwarder_output_account_payload_blob(b"\x01\x02\x03\x04", 2)?);
+                .push(test_forwarder_output_account_payload_blob(
+                    b"\x01\x02\x03\x04",
+                    2,
+                )?);
         }
         ForwarderMode::SplTokenWrap { output_mismatch } => {
             let (blob, metadata) =
@@ -827,10 +844,11 @@ fn generate_error_variant_fixtures(
             aggregation_strategy: "batch",
             aggregation_proof_type: "groth16",
             selector: selector.to_owned(),
-            forwarder_type: "block_time",
+            forwarder_type: Some("block_time"),
             tx_b64: BASE64.encode(tx_bytes),
             tx_tampered_b64: String::new(),
             consumed_nullifiers_b64: nullifiers_b64.to_vec(),
+            historical_roots_b64: Vec::new(),
             spl_token_wrap: None,
             spl_token_unwrap: None,
         };
@@ -864,6 +882,146 @@ fn generate_error_variant_fixtures(
 
         agg_variant.aggregation_proof = Some(vec![0xDE; 64]);
         write_variant("garbage_proof.json", &agg_variant)?;
+    }
+
+    Ok(())
+}
+
+fn compliance_instances(tx: &Transaction) -> Result<Vec<ComplianceInstance>> {
+    tx.actions
+        .iter()
+        .flat_map(|action| action.compliance_units.iter())
+        .map(|cu| {
+            ComplianceInstance::from_journal(&cu.instance)
+                .context("decode compliance instance from journal bytes")
+        })
+        .collect()
+}
+
+fn consumed_nullifiers_b64(tx: &Transaction) -> Result<Vec<String>> {
+    Ok(compliance_instances(tx)?
+        .into_iter()
+        .map(|instance| BASE64.encode(instance.consumed_nullifier.as_bytes()))
+        .collect())
+}
+
+fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
+    let initial = initial_root();
+    let mut roots = BTreeSet::new();
+    for instance in compliance_instances(tx)? {
+        let root = instance.consumed_commitment_tree_root;
+        if root != initial {
+            roots.insert(root.to_bytes());
+        }
+    }
+    Ok(roots.into_iter().collect())
+}
+
+#[derive(Serialize)]
+struct ValidatorAccountFixture {
+    pubkey: String,
+    account: ValidatorAccount,
+}
+
+#[derive(Serialize)]
+struct ValidatorAccount {
+    lamports: u64,
+    data: [String; 2],
+    owner: String,
+    executable: bool,
+    #[serde(rename = "rentEpoch")]
+    rent_epoch: u64,
+    space: u64,
+}
+
+fn write_root_marker_accounts(
+    roots: &[[u8; 32]],
+    program_id: [u8; 32],
+    out_dir: &Path,
+) -> Result<()> {
+    fs::create_dir_all(out_dir)
+        .with_context(|| format!("create root marker account dir {}", out_dir.display()))?;
+
+    let pa_program_id = Pubkey::new_from_array(program_id);
+    let (pa_state, _) =
+        Pubkey::find_program_address(&[solana_pa::state::PA_STATE_SEED], &pa_program_id);
+
+    for root in roots {
+        let (marker, _) = solana_pa::root::derive_root_pda(&pa_program_id, &pa_state, root);
+        let account = ValidatorAccountFixture {
+            pubkey: marker.to_string(),
+            account: ValidatorAccount {
+                lamports: 1_000_000,
+                data: [String::new(), "base64".to_string()],
+                owner: pa_program_id.to_string(),
+                executable: false,
+                rent_epoch: u64::MAX,
+                space: 0,
+            },
+        };
+        let out_path = out_dir.join(format!("root-marker-{marker}.json"));
+        fs::write(&out_path, serde_json::to_vec_pretty(&account)?)
+            .with_context(|| format!("write root marker account {}", out_path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn import_backend_result_fixture(
+    input: &Path,
+    output: &Path,
+    root_account_dir: Option<&Path>,
+    program_id: [u8; 32],
+) -> Result<()> {
+    let raw = fs::read(input).with_context(|| format!("read {}", input.display()))?;
+    let mut tx: Transaction = serde_json::from_slice(&raw)
+        .with_context(|| format!("decode backend Transaction JSON {}", input.display()))?;
+
+    tx.verify_aggregation()
+        .context("verify imported backend aggregation proof")?;
+
+    let roots = historical_roots(&tx).context("extract imported historical roots")?;
+    let historical_roots_b64 = roots.iter().map(|root| BASE64.encode(root)).collect();
+    let consumed_nullifiers_b64 =
+        consumed_nullifiers_b64(&tx).context("extract imported nullifiers")?;
+
+    let agg_proof_bytes = tx
+        .aggregation_proof
+        .as_ref()
+        .ok_or_else(|| anyhow!("imported transaction is missing aggregation_proof"))?;
+    tx.aggregation_proof = Some(encode_seal(agg_proof_bytes).context("encode imported seal")?);
+
+    let selector = extract_selector(&tx).context("extract imported selector")?;
+    let tx_bytes = bincode::serialize(&tx).context("serialize imported transaction")?;
+
+    let mut tx_tampered = tx.clone();
+    mutate_created_commitment_keep_structure(&mut tx_tampered)
+        .context("tamper imported transaction")?;
+    let tx_tampered_bytes =
+        bincode::serialize(&tx_tampered).context("serialize tampered imported transaction")?;
+
+    let fixture = Fixture {
+        format: FIXTURE_FORMAT,
+        aggregation_strategy: "batch",
+        aggregation_proof_type: "groth16",
+        selector,
+        forwarder_type: Some("anomapay_transfer"),
+        tx_b64: BASE64.encode(tx_bytes),
+        tx_tampered_b64: BASE64.encode(tx_tampered_bytes),
+        consumed_nullifiers_b64,
+        historical_roots_b64,
+        spl_token_wrap: None,
+        spl_token_unwrap: None,
+    };
+
+    if let Some(parent) = output.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create dir {parent:?}"))?;
+    }
+    fs::write(output, serde_json::to_vec_pretty(&fixture)?)
+        .with_context(|| format!("write imported fixture {}", output.display()))?;
+
+    if let Some(root_account_dir) = root_account_dir {
+        write_root_marker_accounts(&roots, program_id, root_account_dir)?;
     }
 
     Ok(())
@@ -998,7 +1156,7 @@ fn dump_fixture(input: &Path) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen --validate FIXTURE_PATH --program-id PROGRAM_ID_B58\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-output-account  Test-forwarder with OutputAccount mode\n  --spl-token-wrap         SPL Token wrap with Ed25519 signature\n  --spl-token-unwrap       SPL Token unwrap (escrow release)\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof variants\n\nNotes:\n  - At most one forwarder mode flag may be set.\n  - --validate checks fixture deserialization and program-id binding.\n  - QUEUE_BASE_URL and QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - --error-variants writes to DIR from the final aggregated tx.\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen --validate FIXTURE_PATH --program-id PROGRAM_ID_B58\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-output-account  Test-forwarder with OutputAccount mode\n  --spl-token-wrap         SPL Token wrap with Ed25519 signature\n  --spl-token-unwrap       SPL Token unwrap (escrow release)\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof variants\n\nNotes:\n  - At most one forwarder mode flag may be set.\n  - --validate checks fixture deserialization and program-id binding.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - QUEUE_BASE_URL and QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - --error-variants writes to DIR from the final aggregated tx.\n"
     );
 }
 
@@ -1045,6 +1203,64 @@ fn parse_validate_args(args: impl Iterator<Item = String>) -> Result<CliCommand>
     })
 }
 
+fn parse_import_backend_result_args(args: impl Iterator<Item = String>) -> Result<CliCommand> {
+    let mut args = args;
+    let mut root_account_dir: Option<PathBuf> = None;
+    let mut program_id_b58: Option<String> = None;
+    let mut positionals: Vec<PathBuf> = Vec::new();
+
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--root-account-dir" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--root-account-dir requires a value"))?;
+                root_account_dir = Some(PathBuf::from(value));
+            }
+            "--program-id" => {
+                let value = args
+                    .next()
+                    .ok_or_else(|| anyhow!("--program-id requires a value"))?;
+                program_id_b58 = Some(value);
+            }
+            _ if arg.starts_with("--root-account-dir=") => {
+                let value = arg
+                    .split_once('=')
+                    .map(|(_, value)| value)
+                    .ok_or_else(|| anyhow!("--root-account-dir requires a value"))?;
+                root_account_dir = Some(PathBuf::from(value));
+            }
+            _ if arg.starts_with("--program-id=") => {
+                let value = arg
+                    .split_once('=')
+                    .map(|(_, value)| value)
+                    .ok_or_else(|| anyhow!("--program-id requires a value"))?;
+                program_id_b58 = Some(value.to_string());
+            }
+            _ if arg.starts_with('-') => {
+                return Err(anyhow!("unknown flag in import-backend-result mode: {arg}"));
+            }
+            _ => positionals.push(PathBuf::from(arg)),
+        }
+    }
+
+    if positionals.len() != 2 {
+        return Err(anyhow!(
+            "Usage: fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>"
+        ));
+    }
+    let program_id_b58 = program_id_b58
+        .ok_or_else(|| anyhow!("import-backend-result requires --program-id PROGRAM_ID_B58"))?;
+    let program_id = decode_base58_32(&program_id_b58).context("invalid --program-id")?;
+
+    Ok(CliCommand::ImportBackendResult {
+        input: positionals.remove(0),
+        output: positionals.remove(0),
+        root_account_dir,
+        program_id,
+    })
+}
+
 fn parse_generate_args(mut args: impl Iterator<Item = String>) -> Result<CliArgs> {
     let mut debug_assumptions = false;
     let mut forwarder_mode: Option<ForwarderMode> = None;
@@ -1077,12 +1293,14 @@ fn parse_generate_args(mut args: impl Iterator<Item = String>) -> Result<CliArgs
             "--debug-assumptions" => {
                 debug_assumptions = true;
             }
-            "--output-mismatch" | "--forwarder-fail" | "--forwarder-silent"
-            | "--forwarder-output-account" | "--spl-token-wrap" | "--spl-token-unwrap" => {
+            "--output-mismatch"
+            | "--forwarder-fail"
+            | "--forwarder-silent"
+            | "--forwarder-output-account"
+            | "--spl-token-wrap"
+            | "--spl-token-unwrap" => {
                 if forwarder_mode.is_some() {
-                    return Err(anyhow!(
-                        "at most one forwarder mode flag may be set"
-                    ));
+                    return Err(anyhow!("at most one forwarder mode flag may be set"));
                 }
                 forwarder_mode = Some(match flag {
                     "--output-mismatch" => ForwarderMode::BlockTimeForwarder {
@@ -1157,7 +1375,9 @@ fn parse_generate_args(mut args: impl Iterator<Item = String>) -> Result<CliArgs
 fn parse_args() -> Result<CliCommand> {
     let mut args = env::args().skip(1);
     let Some(first) = args.next() else {
-        return Ok(CliCommand::Generate(parse_generate_args(std::iter::empty())?));
+        return Ok(CliCommand::Generate(parse_generate_args(
+            std::iter::empty(),
+        )?));
     };
 
     match first.as_str() {
@@ -1166,6 +1386,7 @@ fn parse_args() -> Result<CliCommand> {
             std::process::exit(0);
         }
         "--validate" => parse_validate_args(args),
+        "import-backend-result" => parse_import_backend_result_args(args),
         "strip-calls" => {
             let args: Vec<String> = args.collect();
             if args.len() != 2 {
@@ -1179,9 +1400,9 @@ fn parse_args() -> Result<CliCommand> {
             })
         }
         "dump" => {
-            let input = args.next().ok_or_else(|| {
-                anyhow!("Usage: fixture-gen dump <input.json>")
-            })?;
+            let input = args
+                .next()
+                .ok_or_else(|| anyhow!("Usage: fixture-gen dump <input.json>"))?;
             Ok(CliCommand::Dump {
                 input: PathBuf::from(input),
             })
@@ -1211,6 +1432,19 @@ async fn main() -> Result<()> {
         }
         CliCommand::Dump { input } => {
             return dump_fixture(&input);
+        }
+        CliCommand::ImportBackendResult {
+            input,
+            output,
+            root_account_dir,
+            program_id,
+        } => {
+            return import_backend_result_fixture(
+                &input,
+                &output,
+                root_account_dir.as_deref(),
+                program_id,
+            );
         }
         CliCommand::Generate(args) => args,
     };
@@ -1330,8 +1564,7 @@ async fn main() -> Result<()> {
     let (tx_tampered_bytes, selector) = timed_phase("tamper_and_extract_selector", || {
         let mut tx_tampered = tx.clone();
         mutate_created_commitment_keep_structure(&mut tx_tampered)?;
-        let tampered_bytes =
-            bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
+        let tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
         eprintln!("  tampered: {} bytes", tampered_bytes.len());
 
         let sel = extract_selector(&tx).context("extract selector from proof")?;
@@ -1344,10 +1577,11 @@ async fn main() -> Result<()> {
         aggregation_strategy: "batch",
         aggregation_proof_type: "groth16",
         selector,
-        forwarder_type: forwarder_type_str,
+        forwarder_type: Some(forwarder_type_str),
         tx_b64: BASE64.encode(tx_bytes),
         tx_tampered_b64: BASE64.encode(tx_tampered_bytes),
         consumed_nullifiers_b64,
+        historical_roots_b64: Vec::new(),
         spl_token_wrap: spl_token_wrap_metadata,
         spl_token_unwrap: spl_token_unwrap_metadata,
     };
@@ -1380,10 +1614,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-fn compute_expected_claim_digest(
-    journal: &[u8],
-    vk: &Digest,
-) -> risc0_zkvm::sha::Digest {
+fn compute_expected_claim_digest(journal: &[u8], vk: &Digest) -> risc0_zkvm::sha::Digest {
     let words = arm::utils::bytes_to_words(journal);
     let padded_bytes = arm::utils::words_to_bytes(&words);
     let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
@@ -1593,11 +1824,17 @@ mod tests {
         };
 
         let (cp, cj) = arm::proving_system::prove(
-            PASSTHROUGH_LOGIC_GUEST_ELF, &consumed_instance, ArmProofType::Succinct,
-        ).unwrap();
+            PASSTHROUGH_LOGIC_GUEST_ELF,
+            &consumed_instance,
+            ArmProofType::Succinct,
+        )
+        .unwrap();
         let (crp, crj) = arm::proving_system::prove(
-            PASSTHROUGH_LOGIC_GUEST_ELF, &created_instance, ArmProofType::Succinct,
-        ).unwrap();
+            PASSTHROUGH_LOGIC_GUEST_ELF,
+            &created_instance,
+            ArmProofType::Succinct,
+        )
+        .unwrap();
 
         let consumed_logic = LogicVerifier {
             proof: Some(cp),
@@ -1612,8 +1849,7 @@ mod tests {
 
         let action = Action::new(vec![cu], vec![consumed_logic, created_logic]).unwrap();
 
-        let delta_witness =
-            DeltaWitness::from_bytes_vec(&[witness.rcv]).unwrap();
+        let delta_witness = DeltaWitness::from_bytes_vec(&[witness.rcv]).unwrap();
         let tx = Transaction::create(
             vec![action],
             Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
@@ -1644,10 +1880,7 @@ mod tests {
         .unwrap();
 
         let result = swapped.verify(hash_delta_msg);
-        assert!(
-            result.is_err(),
-            "swapped nf/cm must invalidate delta proof"
-        );
+        assert!(result.is_err(), "swapped nf/cm must invalidate delta proof");
     }
 
     /// Mutating a single delta coordinate must invalidate the delta proof.

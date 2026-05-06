@@ -301,6 +301,17 @@ start_validator() {
 
   mkdir -p "$VALIDATOR_LEDGER"
 
+  local account_args=()
+  local marker_glob="tests/fixtures/anomapay-root-markers/root-marker-"*.json
+  for marker_file in $marker_glob; do
+    [[ -e "$marker_file" ]] || continue
+    local marker_base marker_addr
+    marker_base="$(basename "$marker_file")"
+    marker_addr="${marker_base#root-marker-}"
+    marker_addr="${marker_addr%.json}"
+    account_args+=(--account "$marker_addr" "$marker_file")
+  done
+
   solana-test-validator \
     --reset \
     --ledger "$VALIDATOR_LEDGER" \
@@ -313,6 +324,7 @@ start_validator() {
     --clone-upgradeable-program "$GROTH16_VERIFIER" \
     --clone "$ROUTER_PDA" \
     --clone "$VERIFIER_ENTRY_PDA" \
+    "${account_args[@]}" \
     --log \
     >"$VALIDATOR_LOG" 2>&1 &
   VALIDATOR_PID=$!

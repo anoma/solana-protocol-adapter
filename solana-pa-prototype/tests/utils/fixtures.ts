@@ -6,13 +6,17 @@ export function readJson<T>(filePath: string): T {
 }
 
 export function loadFixture<T = Fixture>(filename: string): T {
-  return readJson<T>(path.resolve(process.cwd(), "tests", "fixtures", filename));
+  return readJson<T>(
+    path.resolve(process.cwd(), "tests", "fixtures", filename)
+  );
 }
 
 export function parseSelectorFromFixture(selectorHex: string): Buffer {
   const hex = selectorHex.replace(/^0x/, "");
   if (hex.length !== 8) {
-    throw new Error(`Invalid selector format: ${selectorHex} (expected 8 hex chars)`);
+    throw new Error(
+      `Invalid selector format: ${selectorHex} (expected 8 hex chars)`
+    );
   }
   return Buffer.from(hex, "hex");
 }
@@ -50,6 +54,7 @@ export type Fixture = {
   tx_b64: string;
   tx_tampered_b64?: string;
   consumed_nullifiers_b64: string[];
+  historical_roots_b64?: string[];
   spl_token_wrap?: SplTokenWrapMetadata;
   spl_token_unwrap?: SplTokenUnwrapMetadata;
 };
