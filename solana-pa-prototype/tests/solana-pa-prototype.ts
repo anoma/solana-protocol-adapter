@@ -2059,6 +2059,27 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
   });
 });
 
+describe("solana-pa-prototype (AnomaPay imported transfer regression)", () => {
+  it("settles imported backend transfer TxData payload", async () => {
+    const fx = loadFixture<Fixture>("anomapay_transfer_0e345103.json");
+    const payload = Buffer.from(fx.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
+    const historicalRootMarkers = (fx.historical_roots_b64 ?? []).map((rootB64) =>
+      deriveRootPda(Buffer.from(rootB64, "base64"))
+    );
+    assert.isNotEmpty(
+      historicalRootMarkers,
+      "imported transfer fixture must include historical roots for localnet replay",
+    );
+
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts, {
+      additionalHistoricalRootMarkers: historicalRootMarkers,
+    });
+
+    await settleFixtureViaTxData(payload, remainingAccounts);
+  });
+});
+
 describe("solana-pa-prototype (External call error paths)", () => {
   it("rejects settlement when forwarder CPI accounts are wrong", async () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
@@ -2275,10 +2296,12 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 });
 
 describe("solana-pa-prototype (OutputAccount mode)", () => {
-  it("settles forwarder-output fixture via OutputAccount mode (next_index 4→5)", async () => {
+  it("settles forwarder-output fixture via OutputAccount mode", async () => {
     const outputFixture = loadFixture("batch_forwarder_output.json");
     const payload = Buffer.from(outputFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
+    const stateBefore = await program.account.paStateAccount.fetch(paState);
+    const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
     // Create a data account owned by test-forwarder for writing output
     const dataAccount = await createDataAccount(10);
@@ -2294,7 +2317,11 @@ describe("solana-pa-prototype (OutputAccount mode)", () => {
     await settleFixtureViaTxData(payload, remainingAccounts);
 
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(state.nextIndex.toNumber(), 5, "next_index should be 5 after output-account settlement");
+    assert.equal(
+      state.nextIndex.toNumber(),
+      nextIndexBefore + 1,
+      "next_index should increment after output-account settlement",
+    );
 
     // Verify the data account was written by the forwarder
     const dataAccountInfo = await provider.connection.getAccountInfo(dataAccount.publicKey);

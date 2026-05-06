@@ -10,6 +10,7 @@ export type Fixture = {
   tx_b64: string;
   tx_tampered_b64?: string;
   consumed_nullifiers_b64: string[];
+  historical_roots_b64?: string[];
 };
 
 export function readJson<T>(filePath: string): T {
