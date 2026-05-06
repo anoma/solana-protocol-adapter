@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+# shellcheck source=token-transfer-logic-ref.sh
+source "${SCRIPT_DIR}/token-transfer-logic-ref.sh"
+
 DEVNET_URL="${DEVNET_URL:-https://api.devnet.solana.com}"
 DEVNET_WALLET="${PROJECT_DIR}/scripts/devnet-wallet.json"
 
@@ -142,13 +145,12 @@ init_forwarder() {
 
   echo "Initializing forwarder (idempotent)..."
 
-  # TOKEN_TRANSFER_ID from transfer_library — must match the backend.
-  local logic_ref="3fcc1fb95b4a61b7105e30b1c107024c72fb9bdb3f4c6755da0a39864db5ac23"
+  require_token_transfer_logic_ref
 
   ANCHOR_PROVIDER_URL="$DEVNET_URL" \
   ANCHOR_PROVIDER_CLUSTER=devnet \
   ANCHOR_WALLET="$DEVNET_WALLET" \
-  LOGIC_REF="$logic_ref" \
+  LOGIC_REF="$TOKEN_TRANSFER_LOGIC_REF" \
   TOKEN_MINT="$token_mint" \
     npx ts-node -P tsconfig.json "${SCRIPT_DIR}/devnet-init-forwarder.ts"
 }
