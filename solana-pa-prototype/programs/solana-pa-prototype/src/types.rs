@@ -1,28 +1,8 @@
 //! Solana-specific type definitions for the Protocol Adapter.
+//!
+//! These types are owned by `anoma-pa-solana-client` and re-exported here so
+//! existing imports inside the PA crate (`crate::types::SolanaExternalCall`)
+//! continue to compile without rewriting every call site. The canonical
+//! definitions and bincode wire-format guarantees live in the client crate.
 
-use serde::{Deserialize, Serialize};
-
-/// Solana-specific external call structure.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct SolanaExternalCall {
-    pub program_id: [u8; 32],
-    pub instruction_data: Vec<u8>,
-    pub expected_output: Vec<u8>,
-    pub output_mode: OutputMode,
-    /// Number of accounts in this call's segment (including the forwarder program account).
-    /// Committed in the ZK proof, making segment boundaries unambiguous.
-    pub num_accounts: u8,
-}
-
-/// How to read external call output.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum OutputMode {
-    ReturnData,
-    /// `index` is relative to the full `remaining_accounts` slice (including nullifier PDAs),
-    /// not relative to the forwarder's account segment.
-    OutputAccount {
-        index: u8,
-        offset: u32,
-        len: u32,
-    },
-}
+pub use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};

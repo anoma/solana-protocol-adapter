@@ -175,6 +175,30 @@ init_forwarder() {
     npx ts-node -P tsconfig.json "${SCRIPT_DIR}/devnet-init-forwarder.ts"
 }
 
+close_forwarder_config() {
+  require_token_transfer_logic_ref
+
+  ANCHOR_PROVIDER_URL="$MAINNET_URL" \
+  ANCHOR_PROVIDER_CLUSTER=mainnet-beta \
+  ANCHOR_WALLET="$MAINNET_WALLET" \
+  TARGET_LOGIC_REF="$TOKEN_TRANSFER_LOGIC_REF" \
+  EXPECTED_FORWARDER_PROGRAM_ID="${MAINNET_FORWARDER_PROGRAM_ID:-}" \
+    npx ts-node -P tsconfig.json "${SCRIPT_DIR}/close-forwarder-config.ts"
+}
+
+recover_forwarder_escrow() {
+  local token_mint="${1:?TOKEN_MINT is required (base58 mint address)}"
+  local recipient_owner="${2:?RECIPIENT_OWNER is required (base58 wallet address)}"
+
+  ANCHOR_PROVIDER_URL="$MAINNET_URL" \
+  ANCHOR_PROVIDER_CLUSTER=mainnet-beta \
+  ANCHOR_WALLET="$MAINNET_WALLET" \
+  TOKEN_MINT="$token_mint" \
+  RECIPIENT_OWNER="$recipient_owner" \
+  EXPECTED_FORWARDER_PROGRAM_ID="${MAINNET_FORWARDER_PROGRAM_ID:-}" \
+    npx ts-node -P tsconfig.json "${SCRIPT_DIR}/recover-forwarder-escrow.ts"
+}
+
 resolve_targets() {
   local target="${1:-all}"
   case "$target" in
@@ -406,6 +430,80 @@ This creates the forwarder config PDA and escrow ATA."
   init_forwarder "$token_mint"
 }
 
+cmd_reset_forwarder_config() {
+  local token_mint="${1:-}"
+  if [[ -z "$token_mint" ]]; then
+    echo "❌ TOKEN_MINT argument is required"
+    echo "Usage: mainnet.sh reset-forwarder-config <token_mint>"
+    echo "Mainnet USDC: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    exit 1
+  fi
+
+  require_cmd solana
+  require_cmd solana-keygen
+  require_cmd npx
+
+  cd "$PROJECT_DIR"
+
+  require_mainnet_wallet
+
+  local pid
+  pid="$(get_program_id "spl_token_forwarder")"
+  if ! is_deployed "$pid"; then
+    echo "❌ Forwarder (${pid}) is not deployed on mainnet"
+    echo "Run: ./scripts/dev.sh mainnet deploy anomapay-forwarder"
+    exit 1
+  fi
+
+  confirm "Reset forwarder config on MAINNET for token mint: ${token_mint}
+This closes only the forwarder Config PDA if its logic_ref is not the target
+value, then re-initializes the forwarder config with the target logic_ref.
+It does not close escrow accounts, drain tokens, close nonce bitmaps, upgrade
+programs, or touch PA state."
+
+  close_forwarder_config
+  init_forwarder "$token_mint"
+}
+
+cmd_recover_forwarder_escrow() {
+  local token_mint="${1:-}"
+  local recipient_owner="${2:-}"
+  if [[ -z "$token_mint" || -z "$recipient_owner" ]]; then
+    echo "❌ TOKEN_MINT and RECIPIENT_OWNER arguments are required"
+    echo "Usage: mainnet.sh recover-forwarder-escrow <token_mint> <recipient_owner>"
+    echo "Mainnet USDC: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    exit 1
+  fi
+
+  require_cmd solana
+  require_cmd solana-keygen
+  require_cmd npx
+
+  cd "$PROJECT_DIR"
+
+  require_mainnet_wallet
+
+  local pid
+  pid="$(get_program_id "spl_token_forwarder")"
+  if ! is_deployed "$pid"; then
+    echo "❌ Forwarder (${pid}) is not deployed on mainnet"
+    echo "Run: ./scripts/dev.sh mainnet deploy anomapay-forwarder"
+    exit 1
+  fi
+
+  confirm "Recover one forwarder escrow on MAINNET.
+Token mint:      ${token_mint}
+Recipient owner: ${recipient_owner}
+
+This drains the entire token escrow for that mint to the recipient owner,
+closes that escrow ATA, then recreates an empty escrow ATA. It does not close
+the forwarder config, close nonce bitmaps, change logic_ref, upgrade programs,
+or touch PA state."
+
+  recover_forwarder_escrow "$token_mint" "$recipient_owner"
+  init_forwarder "$token_mint"
+}
+
 cmd_balance() {
   require_cmd solana
   require_cmd solana-keygen
@@ -499,6 +597,12 @@ case "${1:-}" in
   init-forwarder)
     cmd_init_forwarder "${2:-}"
     ;;
+  reset-forwarder-config)
+    cmd_reset_forwarder_config "${2:-}"
+    ;;
+  recover-forwarder-escrow)
+    cmd_recover_forwarder_escrow "${2:-}" "${3:-}"
+    ;;
   balance)
     cmd_balance
     ;;
@@ -516,6 +620,9 @@ case "${1:-}" in
     echo "  upgrade [pa|anomapay-forwarder|all]       Rebuild + deploy over existing programs"
     echo "  init                            Initialize PA state (idempotent)"
     echo "  init-forwarder <mint>           Initialize forwarder + escrow for token mint"
+    echo "  reset-forwarder-config <mint>   Close/re-init only the forwarder config PDA"
+    echo "  recover-forwarder-escrow <mint> <recipient_owner>"
+    echo "                                  Drain one escrow, then recreate it empty"
     echo "  close-pdas                      Close all PA + forwarder PDAs, recover rent"
     echo "  close-expired-txdata [--dry-run] Close expired TxData accounts only"
     echo "  status                          Show deployment status + wallet balance"

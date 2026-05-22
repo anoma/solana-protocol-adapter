@@ -9,7 +9,11 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
-import { derivePaStatePda, deriveRootMarkerPda, parseSelectorFromFixture } from "./utils";
+import {
+  derivePaStatePda,
+  deriveRootMarkerPda,
+  parseSelectorFromFixture,
+} from "./utils";
 import { EMPTY_TREE_ROOT_INITIAL } from "./utils";
 import { readJson, Fixture } from "./utils";
 import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
@@ -25,7 +29,8 @@ describe("00-setup", () => {
 
   before(async () => {
     try {
-      paProgram = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+      paProgram = anchor.workspace
+        .SolanaPaPrototype as Program<SolanaPaPrototype>;
     } catch (e) {
       console.log("PA program not found in workspace, skipping setup");
       return;
@@ -46,9 +51,18 @@ describe("00-setup", () => {
       // Not initialized, proceed with initialization
     }
 
-    const genesisRootMarkerPda = deriveRootMarkerPda(paStatePda, EMPTY_TREE_ROOT_INITIAL, paProgram.programId);
+    const genesisRootMarkerPda = deriveRootMarkerPda(
+      paStatePda,
+      EMPTY_TREE_ROOT_INITIAL,
+      paProgram.programId
+    );
 
-    const fixturePath = path.resolve(process.cwd(), "tests", "fixtures", "batch_groth16.json");
+    const fixturePath = path.resolve(
+      process.cwd(),
+      "tests",
+      "fixtures",
+      "batch_groth16.json"
+    );
     let proofSelector: number[];
     if (existsSync(fixturePath)) {
       const fixture = readJson<Fixture>(fixturePath);
@@ -71,6 +85,10 @@ describe("00-setup", () => {
 
     // Verify initialization
     const state = await paProgram.account.paStateAccount.fetch(paStatePda);
-    console.log(`PA state initialized: authority=${state.authority.toBase58()}, lifecycle=${JSON.stringify(state.lifecycle)}`);
+    console.log(
+      `PA state initialized: authority=${state.authority.toBase58()}, lifecycle=${JSON.stringify(
+        state.lifecycle
+      )}`
+    );
   });
 });

@@ -39,7 +39,6 @@ import {
 } from "./utils";
 import { OP_WRAP, OP_UNWRAP } from "./utils";
 
-
 describe("spl-token-forwarder", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -83,8 +82,10 @@ describe("spl-token-forwarder", () => {
   before(async () => {
     // Load programs
     try {
-      program = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
-      paProgram = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+      program = anchor.workspace
+        .SplTokenForwarder as Program<SplTokenForwarder>;
+      paProgram = anchor.workspace
+        .SolanaPaPrototype as Program<SolanaPaPrototype>;
     } catch (e) {
       console.log("Programs not found in workspace, skipping tests");
       return;
@@ -93,8 +94,12 @@ describe("spl-token-forwarder", () => {
     // Generate keypairs
     // Use deterministic keypairs for emergency committee/caller so they match across test files
     authority = Keypair.generate();
-    emergencyCommittee = Keypair.fromSeed(createHash("sha256").update("emergency_committee_seed").digest());
-    emergencyCaller = Keypair.fromSeed(createHash("sha256").update("emergency_caller_seed").digest());
+    emergencyCommittee = Keypair.fromSeed(
+      createHash("sha256").update("emergency_committee_seed").digest()
+    );
+    emergencyCaller = Keypair.fromSeed(
+      createHash("sha256").update("emergency_caller_seed").digest()
+    );
     user = Keypair.generate();
     recipient = Keypair.generate();
 
@@ -115,13 +120,20 @@ describe("spl-token-forwarder", () => {
       await paProgram.account.paStateAccount.fetch(paStatePda);
       paInitialized = true;
     } catch {
-      throw new Error("PA not initialized - 00-setup.ts should have initialized it");
+      throw new Error(
+        "PA not initialized - 00-setup.ts should have initialized it"
+      );
     }
 
     // Set logic_ref for standalone tests - must match fixture-gen's value
     // fixture-gen uses PASSTHROUGH_LOGIC_GUEST_ID (RISC0 image ID)
     // Read from fixture to ensure consistency across all test files
-    const wrapFixturePath = path.resolve(process.cwd(), "tests", "fixtures", "spl_token_wrap.json");
+    const wrapFixturePath = path.resolve(
+      process.cwd(),
+      "tests",
+      "fixtures",
+      "spl_token_wrap.json"
+    );
     if (existsSync(wrapFixturePath)) {
       const fixture = JSON.parse(readFileSync(wrapFixturePath, "utf8"));
       const logicRefB64 = fixture.spl_token_wrap?.logic_ref_b64;
@@ -147,7 +159,12 @@ describe("spl-token-forwarder", () => {
     [escrowPda, escrowBump] = deriveEscrowPda(program.programId, tokenMint);
 
     // Create token accounts
-    userAta = await createAccount(provider.connection, user, tokenMint, user.publicKey);
+    userAta = await createAccount(
+      provider.connection,
+      user,
+      tokenMint,
+      user.publicKey
+    );
 
     // Create escrow ATA owned by escrow PDA (allowOwnerOffCurve for PDA owner)
     const escrowAtaInfo = await getOrCreateAssociatedTokenAccount(
@@ -167,7 +184,14 @@ describe("spl-token-forwarder", () => {
     );
 
     // Mint tokens to user
-    await mintTo(provider.connection, authority, tokenMint, userAta, authority, 1000_000_000); // 1000 tokens
+    await mintTo(
+      provider.connection,
+      authority,
+      tokenMint,
+      userAta,
+      authority,
+      1000_000_000
+    ); // 1000 tokens
   });
 
   describe("initialize", () => {
@@ -178,7 +202,11 @@ describe("spl-token-forwarder", () => {
 
       try {
         await program.methods
-          .initialize(PublicKey.default, Array.from(logicRef), emergencyCommittee.publicKey)
+          .initialize(
+            PublicKey.default,
+            Array.from(logicRef),
+            emergencyCommittee.publicKey
+          )
           .accounts({
             authority: authority.publicKey,
           })
@@ -199,7 +227,11 @@ describe("spl-token-forwarder", () => {
 
       try {
         await program.methods
-          .initialize(paProgram.programId, zeroLogicRef, emergencyCommittee.publicKey)
+          .initialize(
+            paProgram.programId,
+            zeroLogicRef,
+            emergencyCommittee.publicKey
+          )
           .accounts({
             authority: authority.publicKey,
           })
@@ -218,7 +250,11 @@ describe("spl-token-forwarder", () => {
 
       try {
         await program.methods
-          .initialize(paProgram.programId, Array.from(logicRef), PublicKey.default)
+          .initialize(
+            paProgram.programId,
+            Array.from(logicRef),
+            PublicKey.default
+          )
           .accounts({
             authority: authority.publicKey,
           })
@@ -234,7 +270,11 @@ describe("spl-token-forwarder", () => {
       if (!program) return;
 
       await program.methods
-        .initialize(paProgram.programId, Array.from(logicRef), emergencyCommittee.publicKey)
+        .initialize(
+          paProgram.programId,
+          Array.from(logicRef),
+          emergencyCommittee.publicKey
+        )
         .accounts({
           authority: authority.publicKey,
           // config: auto-derived from PDA seeds
@@ -294,16 +334,34 @@ describe("spl-token-forwarder", () => {
       actionTreeRoot.fill(0xaa);
 
       // Create message hash (includes forwarder program ID for domain separation)
-      const messageHash = createWrapMessageHash(program.programId, tokenMint, amount, nonce, deadline, actionTreeRoot);
+      const messageHash = createWrapMessageHash(
+        program.programId,
+        tokenMint,
+        amount,
+        nonce,
+        deadline,
+        actionTreeRoot
+      );
 
       // Sign with user's Ed25519 keypair
       const signature = nacl.sign.detached(messageHash, user.secretKey);
 
       // Approve escrow PDA as delegate
-      await approve(provider.connection, user, userAta, escrowPda, user, Number(amount));
+      await approve(
+        provider.connection,
+        user,
+        userAta,
+        escrowPda,
+        user,
+        Number(amount)
+      );
 
       // Derive nonce PDA
-      const [nonceBitmapPda] = deriveNonceBitmapPda(program.programId, user.publicKey, nonce);
+      const [nonceBitmapPda] = deriveNonceBitmapPda(
+        program.programId,
+        user.publicKey,
+        nonce
+      );
 
       // Create Ed25519 verify instruction (must be first in transaction)
       const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
@@ -338,7 +396,11 @@ describe("spl-token-forwarder", () => {
           { pubkey: escrowPda, isSigner: false, isWritable: false },
           { pubkey: nonceBitmapPda, isSigner: false, isWritable: true },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          {
+            pubkey: SystemProgram.programId,
+            isSigner: false,
+            isWritable: false,
+          },
           { pubkey: user.publicKey, isSigner: true, isWritable: true }, // payer for nonce PDA
           { pubkey: tokenMint, isSigner: false, isWritable: false },
         ])
@@ -365,12 +427,30 @@ describe("spl-token-forwarder", () => {
       const deadline = BigInt(Math.floor(Date.now() / 1000) - 3600); // 1 hour ago (expired)
       const actionTreeRoot = Buffer.alloc(32);
 
-      const messageHash = createWrapMessageHash(program.programId, tokenMint, amount, nonce, deadline, actionTreeRoot);
+      const messageHash = createWrapMessageHash(
+        program.programId,
+        tokenMint,
+        amount,
+        nonce,
+        deadline,
+        actionTreeRoot
+      );
       const signature = nacl.sign.detached(messageHash, user.secretKey);
 
-      await approve(provider.connection, user, userAta, escrowPda, user, Number(amount));
+      await approve(
+        provider.connection,
+        user,
+        userAta,
+        escrowPda,
+        user,
+        Number(amount)
+      );
 
-      const [nonceBitmapPda] = deriveNonceBitmapPda(program.programId, user.publicKey, nonce);
+      const [nonceBitmapPda] = deriveNonceBitmapPda(
+        program.programId,
+        user.publicKey,
+        nonce
+      );
 
       const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
         publicKey: user.publicKey.toBytes(),
@@ -401,7 +481,11 @@ describe("spl-token-forwarder", () => {
           { pubkey: escrowPda, isSigner: false, isWritable: false },
           { pubkey: nonceBitmapPda, isSigner: false, isWritable: true },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          {
+            pubkey: SystemProgram.programId,
+            isSigner: false,
+            isWritable: false,
+          },
           { pubkey: user.publicKey, isSigner: true, isWritable: true },
           { pubkey: tokenMint, isSigner: false, isWritable: false },
         ])
@@ -427,12 +511,30 @@ describe("spl-token-forwarder", () => {
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
       const actionTreeRoot = Buffer.alloc(32);
 
-      const messageHash = createWrapMessageHash(program.programId, tokenMint, amount, nonce, deadline, actionTreeRoot);
+      const messageHash = createWrapMessageHash(
+        program.programId,
+        tokenMint,
+        amount,
+        nonce,
+        deadline,
+        actionTreeRoot
+      );
       const signature = nacl.sign.detached(messageHash, user.secretKey);
 
-      await approve(provider.connection, user, userAta, escrowPda, user, Number(amount));
+      await approve(
+        provider.connection,
+        user,
+        userAta,
+        escrowPda,
+        user,
+        Number(amount)
+      );
 
-      const [nonceBitmapPda] = deriveNonceBitmapPda(program.programId, user.publicKey, nonce);
+      const [nonceBitmapPda] = deriveNonceBitmapPda(
+        program.programId,
+        user.publicKey,
+        nonce
+      );
 
       const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
         publicKey: user.publicKey.toBytes(),
@@ -463,7 +565,11 @@ describe("spl-token-forwarder", () => {
           { pubkey: escrowPda, isSigner: false, isWritable: false },
           { pubkey: nonceBitmapPda, isSigner: false, isWritable: true },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          {
+            pubkey: SystemProgram.programId,
+            isSigner: false,
+            isWritable: false,
+          },
           { pubkey: user.publicKey, isSigner: true, isWritable: true },
           { pubkey: tokenMint, isSigner: false, isWritable: false },
         ])
@@ -489,13 +595,24 @@ describe("spl-token-forwarder", () => {
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
       const actionTreeRoot = Buffer.alloc(32);
 
-      const messageHash = createWrapMessageHash(program.programId, tokenMint, amount, nonce, deadline, actionTreeRoot);
+      const messageHash = createWrapMessageHash(
+        program.programId,
+        tokenMint,
+        amount,
+        nonce,
+        deadline,
+        actionTreeRoot
+      );
       const signature = nacl.sign.detached(messageHash, user.secretKey);
 
       // Approve escrow PDA as delegate (even though amount is 0)
       await approve(provider.connection, user, userAta, escrowPda, user, 0);
 
-      const [nonceBitmapPda] = deriveNonceBitmapPda(program.programId, user.publicKey, nonce);
+      const [nonceBitmapPda] = deriveNonceBitmapPda(
+        program.programId,
+        user.publicKey,
+        nonce
+      );
 
       const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
         publicKey: user.publicKey.toBytes(),
@@ -514,8 +631,11 @@ describe("spl-token-forwarder", () => {
         0
       );
 
-      const userBalanceBefore = (await getAccount(provider.connection, userAta)).amount;
-      const escrowBalanceBefore = (await getAccount(provider.connection, escrowAta)).amount;
+      const userBalanceBefore = (await getAccount(provider.connection, userAta))
+        .amount;
+      const escrowBalanceBefore = (
+        await getAccount(provider.connection, escrowAta)
+      ).amount;
 
       const tx = new Transaction();
       tx.add(ed25519Ix);
@@ -529,7 +649,11 @@ describe("spl-token-forwarder", () => {
           { pubkey: escrowPda, isSigner: false, isWritable: false },
           { pubkey: nonceBitmapPda, isSigner: false, isWritable: true },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          {
+            pubkey: SystemProgram.programId,
+            isSigner: false,
+            isWritable: false,
+          },
           { pubkey: user.publicKey, isSigner: true, isWritable: true },
           { pubkey: tokenMint, isSigner: false, isWritable: false },
         ])
@@ -583,11 +707,18 @@ describe("spl-token-forwarder", () => {
       const amount = BigInt(50_000_000); // 50 tokens
 
       // Create unwrap input
-      const unwrapInput = encodeUnwrapInput(tokenMint, amount, recipient.publicKey);
+      const unwrapInput = encodeUnwrapInput(
+        tokenMint,
+        amount,
+        recipient.publicKey
+      );
 
       // Get balances before
       const escrowBefore = await getAccount(provider.connection, escrowAta);
-      const recipientBefore = await getAccount(provider.connection, recipientAta);
+      const recipientBefore = await getAccount(
+        provider.connection,
+        recipientAta
+      );
 
       // Direct calls to forward_call are rejected — CPI introspection requires the PA as caller
       try {
@@ -615,10 +746,17 @@ describe("spl-token-forwarder", () => {
 
       const amount = BigInt(0); // Zero amount
 
-      const unwrapInput = encodeUnwrapInput(tokenMint, amount, recipient.publicKey);
+      const unwrapInput = encodeUnwrapInput(
+        tokenMint,
+        amount,
+        recipient.publicKey
+      );
 
       const escrowBefore = await getAccount(provider.connection, escrowAta);
-      const recipientBefore = await getAccount(provider.connection, recipientAta);
+      const recipientBefore = await getAccount(
+        provider.connection,
+        recipientAta
+      );
 
       // Direct calls to forward_call are rejected — CPI introspection requires the PA as caller
       try {
@@ -679,7 +817,11 @@ describe("spl-token-forwarder", () => {
       const wrongLogicRef = Buffer.alloc(32);
       wrongLogicRef.fill(0x99);
 
-      const unwrapInput = encodeUnwrapInput(tokenMint, BigInt(1000), recipient.publicKey);
+      const unwrapInput = encodeUnwrapInput(
+        tokenMint,
+        BigInt(1000),
+        recipient.publicKey
+      );
 
       try {
         await program.methods
@@ -704,7 +846,11 @@ describe("spl-token-forwarder", () => {
     it("rejects forward_call from non-PA caller", async () => {
       if (!program) return;
 
-      const unwrapInput = encodeUnwrapInput(tokenMint, BigInt(1000), recipient.publicKey);
+      const unwrapInput = encodeUnwrapInput(
+        tokenMint,
+        BigInt(1000),
+        recipient.publicKey
+      );
 
       // All direct calls fail — CPI introspection rejects anything not called via CPI from the PA
       try {
@@ -771,19 +917,37 @@ describe("spl-token-forwarder", () => {
         tokenMint,
         newUser.publicKey
       );
-      await mintTo(provider.connection, authority, tokenMint, newUserAta, authority, 100_000_000);
+      await mintTo(
+        provider.connection,
+        authority,
+        tokenMint,
+        newUserAta,
+        authority,
+        100_000_000
+      );
 
       const amount = BigInt(50_000_000);
       const nonce = BigInt(999); // Fresh nonce
       const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
       const actionTreeRoot = Buffer.alloc(32);
 
-      const messageHash = createWrapMessageHash(program.programId, tokenMint, amount, nonce, deadline, actionTreeRoot);
+      const messageHash = createWrapMessageHash(
+        program.programId,
+        tokenMint,
+        amount,
+        nonce,
+        deadline,
+        actionTreeRoot
+      );
       const signature = nacl.sign.detached(messageHash, newUser.secretKey);
 
       // Note: NOT approving escrow PDA as delegate
 
-      const [nonceBitmapPda] = deriveNonceBitmapPda(program.programId, newUser.publicKey, nonce);
+      const [nonceBitmapPda] = deriveNonceBitmapPda(
+        program.programId,
+        newUser.publicKey,
+        nonce
+      );
 
       const ed25519Ix = Ed25519Program.createInstructionWithPublicKey({
         publicKey: newUser.publicKey.toBytes(),
@@ -814,7 +978,11 @@ describe("spl-token-forwarder", () => {
           { pubkey: escrowPda, isSigner: false, isWritable: false },
           { pubkey: nonceBitmapPda, isSigner: false, isWritable: true },
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+          {
+            pubkey: SystemProgram.programId,
+            isSigner: false,
+            isWritable: false,
+          },
           { pubkey: newUser.publicKey, isSigner: true, isWritable: true },
           { pubkey: tokenMint, isSigner: false, isWritable: false },
         ])

@@ -38,18 +38,30 @@ import {
   deriveNullifierAccounts,
 } from "../utils";
 
-const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
+const IDL_PATH = path.resolve(
+  process.cwd(),
+  "target",
+  "idl",
+  "solana_pa_prototype.json"
+);
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
 
-const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+const program = anchor.workspace
+  .SolanaPaPrototype as Program<SolanaPaPrototype>;
+const [paState] = PublicKey.findProgramAddressSync(
+  [PA_STATE_SEED],
+  program.programId
+);
 
 const fixture = loadFixture("batch_groth16.json");
 const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
 const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
-const [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, VERIFIER_ROUTER_ID);
+const [verifierEntryPda] = getVerifierEntryPda(
+  GROTH16_SELECTOR,
+  VERIFIER_ROUTER_ID
+);
 
 const fundedKeypairs: Keypair[] = [];
 
@@ -60,18 +72,24 @@ async function airdrop(kp: Keypair, sol: number) {
 
 // Anchor error codes from IDL
 const PA_ERRORS: Record<string, number> = Object.fromEntries(
-  (readJson<{ errors?: { name: string; code: number }[] }>(IDL_PATH).errors ?? [])
-    .map((e) => [e.name, e.code]),
+  (
+    readJson<{ errors?: { name: string; code: number }[] }>(IDL_PATH).errors ??
+    []
+  ).map((e) => [e.name, e.code])
 );
 
-const PA_ERROR_NAMES = new Map(Object.entries(PA_ERRORS).map(([k, v]) => [v, k]));
+const PA_ERROR_NAMES = new Map(
+  Object.entries(PA_ERRORS).map(([k, v]) => [v, k])
+);
 
 function extractPAErrorCode(e: any): number | null {
   const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
   const paId = program.programId.toBase58();
   for (let i = logs.length - 1; i >= 0; i--) {
     if (!logs[i].includes(paId)) continue;
-    const match = logs[i].match(/failed: custom program error: 0x([0-9a-fA-F]+)/);
+    const match = logs[i].match(
+      /failed: custom program error: 0x([0-9a-fA-F]+)/
+    );
     if (match) return parseInt(match[1], 16);
   }
   return null;
@@ -81,14 +99,15 @@ function assertPAError(e: any, errorName: string): void {
   const expectedCode = PA_ERRORS[errorName];
   assert.isDefined(expectedCode, `Unknown PA error name: ${errorName}`);
   const actualCode = extractPAErrorCode(e);
-  const actualName = actualCode !== null ? PA_ERROR_NAMES.get(actualCode) : null;
+  const actualName =
+    actualCode !== null ? PA_ERROR_NAMES.get(actualCode) : null;
   const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
   assert.strictEqual(
     actualCode,
     expectedCode,
     `Expected PA error ${errorName} (${expectedCode}), ` +
       `got ${actualName ?? "unknown"} (${actualCode})` +
-      `\nLogs:\n${logs.slice(-15).join("\n")}`,
+      `\nLogs:\n${logs.slice(-15).join("\n")}`
   );
 }
 
@@ -97,7 +116,11 @@ function assertPAError(e: any, errorName: string): void {
  */
 async function settleRaw(
   payload: Buffer,
-  remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] = [],
+  remainingAccounts: {
+    pubkey: PublicKey;
+    isWritable: boolean;
+    isSigner: boolean;
+  }[] = []
 ): Promise<string> {
   const payer = Keypair.generate();
   await airdrop(payer, 2);
@@ -140,7 +163,7 @@ function truncate(buf: Buffer, len: number): Buffer {
  */
 async function assertRejects(
   fn: () => Promise<any>,
-  description: string,
+  description: string
 ): Promise<void> {
   try {
     await fn();
@@ -159,29 +182,26 @@ describe("Security: mutation-based settle tests", () => {
   const nullifierAccounts = deriveNullifierAccounts(
     fixture.consumed_nullifiers_b64,
     paState,
-    program.programId,
+    program.programId
   );
 
   // --- Empty / truncated payloads ---
 
   it("rejects empty payload", async () => {
-    await assertRejects(
-      () => settleRaw(Buffer.alloc(0)),
-      "empty payload",
-    );
+    await assertRejects(() => settleRaw(Buffer.alloc(0)), "empty payload");
   });
 
   it("rejects single-byte payload", async () => {
     await assertRejects(
       () => settleRaw(Buffer.from([0x00])),
-      "single-byte payload",
+      "single-byte payload"
     );
   });
 
   it("rejects truncated valid transaction", async () => {
     await assertRejects(
       () => settleRaw(truncate(validTx, 64)),
-      "truncated transaction",
+      "truncated transaction"
     );
   });
 
@@ -190,12 +210,9 @@ describe("Security: mutation-based settle tests", () => {
   it("rejects zero-action transaction", async () => {
     const emptyTx = Buffer.from(
       "000000000000000001000000410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-      "hex",
+      "hex"
     );
-    await assertRejects(
-      () => settleRaw(emptyTx),
-      "zero-action transaction",
-    );
+    await assertRejects(() => settleRaw(emptyTx), "zero-action transaction");
   });
 
   // --- Proof mutations ---
@@ -204,14 +221,14 @@ describe("Security: mutation-based settle tests", () => {
     const corrupted = flipByte(validTx, validTx.length - 10);
     await assertRejects(
       () => settleRaw(corrupted, nullifierAccounts),
-      "corrupted proof",
+      "corrupted proof"
     );
   });
 
   it("rejects all-zero payload of valid length", async () => {
     await assertRejects(
       () => settleRaw(Buffer.alloc(validTx.length), nullifierAccounts),
-      "all-zero payload",
+      "all-zero payload"
     );
   });
 
@@ -220,7 +237,7 @@ describe("Security: mutation-based settle tests", () => {
   it("rejects settlement with no remaining accounts", async () => {
     await assertRejects(
       () => settleRaw(validTx, []),
-      "missing remaining accounts",
+      "missing remaining accounts"
     );
   });
 
@@ -232,7 +249,7 @@ describe("Security: mutation-based settle tests", () => {
     }));
     await assertRejects(
       () => settleRaw(validTx, randomAccounts),
-      "random remaining accounts",
+      "random remaining accounts"
     );
   });
 });

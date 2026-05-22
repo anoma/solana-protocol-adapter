@@ -19,7 +19,9 @@ export const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
 );
 
 // Program IDs
-export const SPL_TOKEN_FORWARDER_PROGRAM_ID = new PublicKey("3cLKSYBijunpCc2F2gzizUkhYtyFrLr4RVdNiaK79b48");
+export const SPL_TOKEN_FORWARDER_PROGRAM_ID = new PublicKey(
+  "3cLKSYBijunpCc2F2gzizUkhYtyFrLr4RVdNiaK79b48"
+);
 
 // SPL Token Forwarder operation codes
 export const OP_WRAP = 0;
@@ -32,6 +34,8 @@ export const MAX_EXPIRY_SLOTS = 216_000;
 export const SEVEN_DAYS_SLOTS = 1_512_000;
 
 // Anchor constraint error patterns for assertion matching
-export const AUTHORITY_MISMATCH_PATTERN = /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i;
-export const SEED_MISMATCH_PATTERN = /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint|Unauthorized/i;
+export const AUTHORITY_MISMATCH_PATTERN =
+  /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i;
+export const SEED_MISMATCH_PATTERN =
+  /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint|Unauthorized/i;
 export const ADDRESS_MISMATCH_PATTERN = /ConstraintAddress|address constraint/i;

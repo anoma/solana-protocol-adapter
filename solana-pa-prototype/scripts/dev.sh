@@ -30,6 +30,33 @@ run_in_project() {
   fi
 }
 
+positive_integer_or_die() {
+  local name="$1"
+  local value="$2"
+  if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "$name must be a positive integer." >&2
+    exit 1
+  fi
+}
+
+fixture_build_jobs() {
+  local jobs="${CARGO_BUILD_JOBS:-10}"
+  positive_integer_or_die "CARGO_BUILD_JOBS" "$jobs"
+  printf '%s' "$jobs"
+}
+
+fixture_test_threads() {
+  local threads="${RUST_TEST_THREADS:-10}"
+  positive_integer_or_die "RUST_TEST_THREADS" "$threads"
+  printf '%s' "$threads"
+}
+
+fixture_worker_threads() {
+  local threads="${RAYON_NUM_THREADS:-10}"
+  positive_integer_or_die "RAYON_NUM_THREADS" "$threads"
+  printf '%s' "$threads"
+}
+
 case "${1:-}" in
   shell)
     if [[ -n "${IN_NIX_SHELL:-}" ]]; then
@@ -84,6 +111,10 @@ with open(\"$idl_file\", \"w\") as f: json.dump(d, f, indent=2)
 
   gen-fixtures)
     shift
+    build_jobs="$(fixture_build_jobs)"
+    worker_threads="$(fixture_worker_threads)"
+    echo "Fixture build jobs: $build_jobs"
+    echo "Fixture worker threads: $worker_threads"
     # Verify all workspaces resolve arm-risc0 to the same commit.
     # The PA, fixture-gen, and passthrough-logic guest each have independent
     # Cargo.lock files. If they disagree, generated fixtures will produce
@@ -103,11 +134,17 @@ with open(\"$idl_file\", \"w\") as f: json.dump(d, f, indent=2)
       fi
       echo "arm-risc0 lockfiles aligned: ${pa_commit:0:8}"
     '
-    run_in_project "cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- $*"
+    run_in_project "CARGO_BUILD_JOBS=$build_jobs RAYON_NUM_THREADS=$worker_threads cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- $*"
     ;;
 
   fixture-test)
-    run_in_project "RISC0_SKIP_BUILD=1 cargo test --manifest-path tools/fixture-gen/Cargo.toml"
+    build_jobs="$(fixture_build_jobs)"
+    test_threads="$(fixture_test_threads)"
+    worker_threads="$(fixture_worker_threads)"
+    echo "Fixture build jobs: $build_jobs"
+    echo "Fixture test threads: $test_threads"
+    echo "Fixture worker threads: $worker_threads"
+    run_in_project "RISC0_SKIP_BUILD=1 CARGO_BUILD_JOBS=$build_jobs RUST_TEST_THREADS=$test_threads RAYON_NUM_THREADS=$worker_threads cargo test --manifest-path tools/fixture-gen/Cargo.toml -- --test-threads=$test_threads"
     ;;
 
   update-deps)

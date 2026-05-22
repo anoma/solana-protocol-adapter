@@ -17,11 +17,7 @@
  */
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import {
-  PublicKey,
-  Keypair,
-  LAMPORTS_PER_SOL,
-} from "@solana/web3.js";
+import { PublicKey, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import {
   createMint,
   getOrCreateAssociatedTokenAccount,
@@ -64,8 +60,7 @@ describe("zzz-forwarder-teardown (runs last - destroys forwarder state)", () => 
   const ESCROW_MINT_AMOUNT = 500_000_000n; // 500 tokens (6 decimals)
 
   before(async () => {
-    program = anchor.workspace
-      .SplTokenForwarder as Program<SplTokenForwarder>;
+    program = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
 
     emergencyCommittee = Keypair.fromSeed(EMERGENCY_COMMITTEE_SEED);
     await localAirdrop(emergencyCommittee, 5);
@@ -271,7 +266,9 @@ describe("zzz-forwarder-teardown (runs last - destroys forwarder state)", () => 
     const actualRecovery = committeeAfter - committeeBefore;
     console.log(
       `  Recovered ${(actualRecovery / LAMPORTS_PER_SOL).toFixed(6)} SOL ` +
-        `(expected ~${(expectedRecovery / LAMPORTS_PER_SOL).toFixed(6)} minus tx fees)`
+        `(expected ~${(expectedRecovery / LAMPORTS_PER_SOL).toFixed(
+          6
+        )} minus tx fees)`
     );
     assert.ok(actualRecovery > 0, "Should recover more rent than tx fees");
   });
@@ -343,8 +340,7 @@ describe("zzz-forwarder-teardown (runs last - destroys forwarder state)", () => 
       .rpc();
 
     // Escrow ATA no longer exists
-    const escrowAfterInfo =
-      await provider.connection.getAccountInfo(escrowAta);
+    const escrowAfterInfo = await provider.connection.getAccountInfo(escrowAta);
     assert.isNull(escrowAfterInfo, "Escrow ATA should be closed");
 
     // Tokens drained to recipient
@@ -399,10 +395,7 @@ describe("zzz-forwarder-teardown (runs last - destroys forwarder state)", () => 
     );
 
     // Verify escrow is empty
-    const escrowAccount = await getAccount(
-      provider.connection,
-      emptyEscrowAta
-    );
+    const escrowAccount = await getAccount(provider.connection, emptyEscrowAta);
     assert.equal(escrowAccount.amount.toString(), "0");
 
     await program.methods
@@ -420,8 +413,7 @@ describe("zzz-forwarder-teardown (runs last - destroys forwarder state)", () => 
       .rpc();
 
     // Escrow ATA gone
-    const afterInfo =
-      await provider.connection.getAccountInfo(emptyEscrowAta);
+    const afterInfo = await provider.connection.getAccountInfo(emptyEscrowAta);
     assert.isNull(afterInfo, "Empty escrow ATA should be closed");
   });
 
@@ -457,7 +449,9 @@ describe("zzz-forwarder-teardown (runs last - destroys forwarder state)", () => 
     );
     const recovered = committeeSolAfter - committeeSolBefore;
     console.log(
-      `  Config closed, recovered ${(recovered / LAMPORTS_PER_SOL).toFixed(6)} SOL ` +
+      `  Config closed, recovered ${(recovered / LAMPORTS_PER_SOL).toFixed(
+        6
+      )} SOL ` +
         `(config was ${(configLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL)`
     );
     assert.ok(recovered > 0, "Should recover rent from config close");

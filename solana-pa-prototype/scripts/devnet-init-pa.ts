@@ -16,7 +16,8 @@ async function main() {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+  const program = anchor.workspace
+    .SolanaPaPrototype as Program<SolanaPaPrototype>;
 
   const [paState] = PublicKey.findProgramAddressSync(
     [PA_STATE_SEED],

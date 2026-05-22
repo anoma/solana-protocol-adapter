@@ -56,10 +56,14 @@ export async function drainKeypairs(
           lamports: drainAmount,
         })
       );
-      drainTx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
+      drainTx.recentBlockhash = (
+        await provider.connection.getLatestBlockhash()
+      ).blockhash;
       drainTx.feePayer = kp.publicKey;
       drainTx.sign(kp);
-      const sig = await provider.connection.sendRawTransaction(drainTx.serialize());
+      const sig = await provider.connection.sendRawTransaction(
+        drainTx.serialize()
+      );
       await provider.connection.confirmTransaction(sig);
       recovered += drainAmount;
       drained++;
@@ -68,8 +72,9 @@ export async function drainKeypairs(
     }
   }
   console.log(
-    `  [sol] ${label}: recovered ${(recovered / LAMPORTS_PER_SOL).toFixed(4)} SOL ` +
-      `(${drained} keypairs)`
+    `  [sol] ${label}: recovered ${(recovered / LAMPORTS_PER_SOL).toFixed(
+      4
+    )} SOL ` + `(${drained} keypairs)`
   );
 }
 

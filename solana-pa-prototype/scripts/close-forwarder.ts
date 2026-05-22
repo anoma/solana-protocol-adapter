@@ -115,8 +115,9 @@ async function main() {
 
   if (bitmaps.length > 0) {
     const BATCH_SIZE = 20;
-    const bitmapRent =
-      await connection.getMinimumBalanceForRentExemption(NONCE_BITMAP_SIZE);
+    const bitmapRent = await connection.getMinimumBalanceForRentExemption(
+      NONCE_BITMAP_SIZE
+    );
     console.log(`Closing in batches of ${BATCH_SIZE}...`);
 
     const bitmapPubkeys = bitmaps.map(({ pubkey }) => pubkey);
@@ -142,7 +143,9 @@ async function main() {
         totalRecovered += batchLamports;
         console.log(
           `  Batch ${Math.floor(i / BATCH_SIZE) + 1}: ` +
-            `${batch.length} bitmaps (~${(batchLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL)`
+            `${batch.length} bitmaps (~${(
+              batchLamports / LAMPORTS_PER_SOL
+            ).toFixed(6)} SOL)`
         );
       } catch (e: any) {
         console.error(
@@ -188,7 +191,9 @@ async function main() {
 
       totalRecovered += escrowAtaLamports;
       console.log(
-        `  ✅ Escrow closed (~${(escrowAtaLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL rent recovered)`
+        `  ✅ Escrow closed (~${(escrowAtaLamports / LAMPORTS_PER_SOL).toFixed(
+          6
+        )} SOL rent recovered)`
       );
     } catch (e: any) {
       console.error(`  ❌ Failed to close escrow: ${e.message}`);
@@ -211,14 +216,18 @@ async function main() {
 
     totalRecovered += configLamports;
     console.log(
-      `  ✅ Config closed (${(configLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL)`
+      `  ✅ Config closed (${(configLamports / LAMPORTS_PER_SOL).toFixed(
+        6
+      )} SOL)`
     );
   } catch (e: any) {
     console.error(`  ❌ Failed to close config: ${e.message}`);
   }
 
   console.log(
-    `\n✅ Total recovered: ${(totalRecovered / LAMPORTS_PER_SOL).toFixed(6)} SOL`
+    `\n✅ Total recovered: ${(totalRecovered / LAMPORTS_PER_SOL).toFixed(
+      6
+    )} SOL`
   );
 }
 

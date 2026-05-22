@@ -114,7 +114,9 @@ async function main() {
   if (logicRefHex) {
     logicRef = Buffer.from(logicRefHex, "hex");
     if (logicRef.length !== 32) {
-      throw new Error(`LOGIC_REF must be 32 bytes (64 hex chars), got ${logicRef.length}`);
+      throw new Error(
+        `LOGIC_REF must be 32 bytes (64 hex chars), got ${logicRef.length}`
+      );
     }
     console.log("Using LOGIC_REF from environment");
   } else {
@@ -221,8 +223,8 @@ async function main() {
   const approveTx = new anchor.web3.Transaction().add(
     createApproveInstruction(
       feePayerAta.address, // source ATA
-      escrowPda,           // delegate (escrow PDA)
-      wallet.publicKey,    // owner
+      escrowPda, // delegate (escrow PDA)
+      wallet.publicKey, // owner
       approveAmount
     )
   );

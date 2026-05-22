@@ -4,7 +4,10 @@ import * as fs from "fs";
 import * as path from "path";
 
 async function main() {
-  const idlPath = path.resolve(__dirname, "../target/idl/solana_pa_prototype.json");
+  const idlPath = path.resolve(
+    __dirname,
+    "../target/idl/solana_pa_prototype.json"
+  );
   const idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));
   const programId = new PublicKey(idl.address);
 
@@ -12,7 +15,10 @@ async function main() {
   anchor.setProvider(provider);
   const program = new anchor.Program(idl, provider);
 
-  const [paStatePda] = PublicKey.findProgramAddressSync([Buffer.from("pa_state")], programId);
+  const [paStatePda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("pa_state")],
+    programId
+  );
   console.log(`PA program: ${programId.toBase58()}`);
   console.log(`PAState PDA: ${paStatePda.toBase58()}`);
 

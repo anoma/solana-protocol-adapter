@@ -16,10 +16,7 @@
  */
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import {
-  PublicKey,
-  LAMPORTS_PER_SOL,
-} from "@solana/web3.js";
+import { PublicKey, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 import { PA_STATE_SEED } from "../tests/utils/constants";
 
@@ -29,7 +26,8 @@ async function main() {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+  const program = anchor.workspace
+    .SolanaPaPrototype as Program<SolanaPaPrototype>;
   const connection = provider.connection;
   const wallet = provider.wallet as anchor.Wallet;
 
@@ -54,7 +52,7 @@ async function main() {
   if (!authority.equals(wallet.publicKey)) {
     console.error(
       `❌ Wallet ${wallet.publicKey.toBase58()} is not the PA authority ` +
-      `(${authority.toBase58()})`
+        `(${authority.toBase58()})`
     );
     process.exit(1);
   }
@@ -96,10 +94,14 @@ async function main() {
           totalRecovered += batchLamports;
           console.log(
             `  Batch ${Math.floor(i / BATCH_SIZE) + 1}: ` +
-            `${batch.length} markers (~${(batchLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL)`
+              `${batch.length} markers (~${(
+                batchLamports / LAMPORTS_PER_SOL
+              ).toFixed(6)} SOL)`
           );
         } catch (e: any) {
-          console.error(`  ❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed: ${e.message}`);
+          console.error(
+            `  ❌ Batch ${Math.floor(i / BATCH_SIZE) + 1} failed: ${e.message}`
+          );
         }
       }
     }
@@ -109,17 +111,22 @@ async function main() {
   console.log("\nClosing PAState...");
   const paStateLamports = paStateInfo.lamports;
   try {
-    await program.methods
-      .closePaState()
-      .accounts({})
-      .rpc();
+    await program.methods.closePaState().accounts({}).rpc();
     totalRecovered += paStateLamports;
-    console.log(`  ✅ PAState closed (${(paStateLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL)`);
+    console.log(
+      `  ✅ PAState closed (${(paStateLamports / LAMPORTS_PER_SOL).toFixed(
+        6
+      )} SOL)`
+    );
   } catch (e: any) {
     console.error(`  ❌ Failed to close PAState: ${e.message}`);
   }
 
-  console.log(`\n✅ Total recovered: ${(totalRecovered / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+  console.log(
+    `\n✅ Total recovered: ${(totalRecovered / LAMPORTS_PER_SOL).toFixed(
+      6
+    )} SOL`
+  );
 }
 
 main().catch((err) => {

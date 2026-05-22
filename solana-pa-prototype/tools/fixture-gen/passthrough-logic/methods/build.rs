@@ -11,12 +11,14 @@ const TARGET_TRIPLE: &str = "riscv32im-risc0-zkvm-elf";
 const HOST_PKG: &str = "passthrough-logic-methods";
 const GUEST_PKG: &str = "passthrough-logic-guest";
 const DEFAULT_DOCKER_TAG: &str = "r0.1.88.0";
+const DEFAULT_CARGO_BUILD_JOBS: &str = "10";
 const USER_TEXT_START: u32 = 0x0020_0800;
 
 fn main() {
     println!("cargo:rerun-if-changed=guest/Cargo.toml");
     println!("cargo:rerun-if-changed=guest/Cargo.lock");
     println!("cargo:rerun-if-changed=guest/src/main.rs");
+    println!("cargo:rerun-if-env-changed=CARGO_BUILD_JOBS");
     println!("cargo:rerun-if-env-changed=RISC0_DOCKER_CONTAINER_TAG");
 
     let manifest_dir = PathBuf::from(
@@ -132,6 +134,7 @@ fn run_docker_cargo(
 ) {
     let image = format!("risczero/risc0-guest-builder:{}", docker_tag());
     let volume = format!("{}:/src", docker_root.display());
+    let build_jobs = cargo_build_jobs();
     let mut cargo_args = vec![
         "cargo".to_string(),
         "+risc0".to_string(),
@@ -145,6 +148,10 @@ fn run_docker_cargo(
     if subcommand != "fetch" {
         cargo_args.push("--target-dir".to_string());
         cargo_args.push(target_dir_rel.to_string());
+    }
+    if subcommand == "build" {
+        cargo_args.push("--jobs".to_string());
+        cargo_args.push(build_jobs.clone());
     }
     cargo_args.extend(extra.iter().map(|arg| (*arg).to_string()));
     let docker_command = cargo_args.join(" ");
@@ -177,6 +184,8 @@ fn run_docker_cargo(
         .arg("CFLAGS_riscv32im_risc0_zkvm_elf=-march=rv32im -nostdlib")
         .arg("--env")
         .arg(format!("CARGO_ENCODED_RUSTFLAGS={encoded_rustflags}"))
+        .arg("--env")
+        .arg(format!("CARGO_BUILD_JOBS={build_jobs}"))
         .arg(&image)
         .arg("-c")
         .arg(&docker_command);
@@ -190,6 +199,20 @@ fn run_docker_cargo(
     if !status.success() {
         panic!("docker {} failed for guest build", subcommand);
     }
+}
+
+fn cargo_build_jobs() -> String {
+    let build_jobs =
+        env::var("CARGO_BUILD_JOBS").unwrap_or_else(|_| DEFAULT_CARGO_BUILD_JOBS.to_string());
+    if build_jobs
+        .parse::<usize>()
+        .ok()
+        .filter(|jobs| *jobs > 0)
+        .is_none()
+    {
+        panic!("CARGO_BUILD_JOBS must be a positive integer, got {build_jobs:?}");
+    }
+    build_jobs
 }
 
 fn normalize_output_ownership(docker_root: &Path, target_dir_rel: &str, use_podman: bool) {

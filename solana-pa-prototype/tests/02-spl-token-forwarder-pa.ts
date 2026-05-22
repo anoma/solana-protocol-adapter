@@ -72,8 +72,10 @@ describe("SPL Token Forwarder PA Integration", function () {
     localFundedKeypairs.push(kp);
   }
 
-  const paProgram = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
-  const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
+  const paProgram = anchor.workspace
+    .SolanaPaPrototype as Program<SolanaPaPrototype>;
+  const forwarderProgram = anchor.workspace
+    .SplTokenForwarder as Program<SplTokenForwarder>;
 
   const groth16VerifierId = GROTH16_VERIFIER_ID;
   const verifierRouterId = VERIFIER_ROUTER_ID;
@@ -89,15 +91,56 @@ describe("SPL Token Forwarder PA Integration", function () {
     return deriveEscrowPda(forwarderProgram.programId, tokenMint);
   }
 
-  function localDeriveNonceBitmapPda(user: PublicKey, nonce: bigint): [PublicKey, number] {
+  function localDeriveNonceBitmapPda(
+    user: PublicKey,
+    nonce: bigint
+  ): [PublicKey, number] {
     return deriveNonceBitmapPda(forwarderProgram.programId, user, nonce);
   }
 
-  // Check if fixtures exist before running tests
-  const wrapFixturePath = path.resolve(process.cwd(), "tests", "fixtures", "spl_token_wrap.json");
-  const unwrapFixturePath = path.resolve(process.cwd(), "tests", "fixtures", "spl_token_unwrap.json");
-  const wrapFixtureExists = existsSync(wrapFixturePath);
-  const unwrapFixtureExists = existsSync(unwrapFixturePath);
+  const wrapFixturePath = path.resolve(
+    process.cwd(),
+    "tests",
+    "fixtures",
+    "spl_token_wrap.json"
+  );
+  const unwrapFixturePath = path.resolve(
+    process.cwd(),
+    "tests",
+    "fixtures",
+    "spl_token_unwrap.json"
+  );
+  const requiredFixtures = [
+    {
+      name: "SPL token wrap",
+      path: wrapFixturePath,
+      command:
+        "./scripts/dev.sh gen-fixtures --spl-token-wrap tests/fixtures/spl_token_wrap.json",
+    },
+    {
+      name: "SPL token unwrap",
+      path: unwrapFixturePath,
+      command:
+        "./scripts/dev.sh gen-fixtures --spl-token-unwrap tests/fixtures/spl_token_unwrap.json",
+    },
+  ];
+
+  function requireFixtures() {
+    const missing = requiredFixtures.filter(
+      (fixture) => !existsSync(fixture.path)
+    );
+    if (missing.length === 0) return;
+
+    throw new Error(
+      [
+        "Missing required SPL Token Forwarder PA fixture(s):",
+        ...missing.map(
+          (fixture) =>
+            `  - ${fixture.name}: ${fixture.path}\n    Generate with: ${fixture.command}`
+        ),
+      ].join("\n")
+    );
+  }
 
   // Shared state
   let routerPda: PublicKey;
@@ -107,15 +150,9 @@ describe("SPL Token Forwarder PA Integration", function () {
   let emergencyCommittee: Keypair;
 
   before(async () => {
-    // Skip if no fixtures (they take ~30min to generate)
-    if (!wrapFixtureExists && !unwrapFixtureExists) {
-      console.log("    ⚠ No SPL Token Forwarder fixtures found. Skipping PA integration tests.");
-      console.log("    Run fixture-gen with --spl-token-wrap and --spl-token-unwrap to generate.");
-      return;
-    }
+    requireFixtures();
 
-    // Use wrap fixture for setup (or unwrap if wrap doesn't exist)
-    const fixture = readJson<Fixture>(wrapFixtureExists ? wrapFixturePath : unwrapFixturePath);
+    const fixture = readJson<Fixture>(wrapFixturePath);
     const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
 
     // Derive PDAs
@@ -152,7 +189,9 @@ describe("SPL Token Forwarder PA Integration", function () {
       await forwarderProgram.account.config.fetch(forwarderConfigPda);
     } catch {
       // Get logic_ref from fixture
-      const logicRefB64 = fixture.spl_token_wrap?.logic_ref_b64 || fixture.spl_token_unwrap?.logic_ref_b64;
+      const logicRefB64 =
+        fixture.spl_token_wrap?.logic_ref_b64 ||
+        fixture.spl_token_unwrap?.logic_ref_b64;
       if (!logicRefB64) {
         throw new Error("No logic_ref found in fixture metadata");
       }
@@ -173,13 +212,20 @@ describe("SPL Token Forwarder PA Integration", function () {
   async function settleViaTxData(
     authority: Keypair,
     fixture: Fixture,
-    forwarderAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+    forwarderAccounts: {
+      pubkey: PublicKey;
+      isWritable: boolean;
+      isSigner: boolean;
+    }[],
     preInstructions?: TransactionInstruction[],
     options?: { newRootMarkerPda?: PublicKey }
   ) {
     const payload = Buffer.from(fixture.tx_b64, "base64");
     const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
-    const { routerPda, verifierEntryPda } = deriveRouterAccounts(verifierRouterId, GROTH16_SELECTOR);
+    const { routerPda, verifierEntryPda } = deriveRouterAccounts(
+      verifierRouterId,
+      GROTH16_SELECTOR
+    );
 
     await localAirdrop(authority, 2);
 
@@ -209,7 +255,10 @@ describe("SPL Token Forwarder PA Integration", function () {
 
     const chunkSize = 700;
     for (let offset = 0; offset < payload.length; offset += chunkSize) {
-      const chunk = payload.subarray(offset, Math.min(payload.length, offset + chunkSize));
+      const chunk = payload.subarray(
+        offset,
+        Math.min(payload.length, offset + chunkSize)
+      );
       await paProgram.methods
         .txdataWrite(uploadId, offset, Buffer.from(chunk))
         .accounts({
@@ -277,30 +326,25 @@ describe("SPL Token Forwarder PA Integration", function () {
   // ==========================================================================
 
   describe("Wrap PA Integration", function () {
-    // Skip if no wrap fixture
-    before(function () {
-      if (!wrapFixtureExists) {
-        console.log("    ⚠ spl_token_wrap.json not found, skipping wrap tests");
-        this.skip();
-      }
-    });
-
     // Mirrors: test_wrap_pulls_funds_from_user (via PA settlement)
     // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
     it("settles wrap through PA with Ed25519 signature verification", async function () {
-      if (!wrapFixtureExists) this.skip();
-
       const fixture = readJson<Fixture>(wrapFixturePath);
       const metadata = fixture.spl_token_wrap!;
 
       // Decode test data from fixture
       const userSecretKey = Buffer.from(metadata.user_secret_key_b64, "base64");
-      const userPubkey = new PublicKey(Buffer.from(metadata.user_pubkey_b64, "base64"));
+      const userPubkey = new PublicKey(
+        Buffer.from(metadata.user_pubkey_b64, "base64")
+      );
       const mintSeed = Buffer.from(metadata.mint_seed_b64, "base64");
       const amount = BigInt(metadata.amount);
       const nonce = BigInt(metadata.nonce);
       const deadline = BigInt(metadata.deadline);
-      const actionTreeRoot = Buffer.from(metadata.action_tree_root_b64, "base64");
+      const actionTreeRoot = Buffer.from(
+        metadata.action_tree_root_b64,
+        "base64"
+      );
       const signature = Buffer.from(metadata.signature_b64, "base64");
 
       // Create deterministic keypairs from fixture seeds
@@ -399,9 +443,17 @@ describe("SPL Token Forwarder PA Integration", function () {
       // CPI caller verification uses instruction introspection (no caller account needed).
       // Remaining accounts order: user_ata, escrow_ata, escrow_pda, nonce_bitmap, token_program, system_program, payer, mint
       const forwarderAccounts = [
-        { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
+        {
+          pubkey: forwarderProgram.programId,
+          isWritable: false,
+          isSigner: false,
+        },
         { pubkey: forwarderConfigPda, isWritable: false, isSigner: false },
-        { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
+        {
+          pubkey: SYSVAR_INSTRUCTIONS_PUBKEY,
+          isWritable: false,
+          isSigner: false,
+        },
         { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
         { pubkey: userAta.address, isWritable: true, isSigner: false },
         { pubkey: escrowAta, isWritable: true, isSigner: false },
@@ -414,13 +466,18 @@ describe("SPL Token Forwarder PA Integration", function () {
       ];
 
       // Record balances before
-      const userBalanceBefore = (await getAccount(provider.connection, userAta.address)).amount;
+      const userBalanceBefore = (
+        await getAccount(provider.connection, userAta.address)
+      ).amount;
 
       await settleViaTxData(authority, fixture, forwarderAccounts, [ed25519Ix]);
 
       // Verify tokens were transferred to escrow
-      const userBalanceAfter = (await getAccount(provider.connection, userAta.address)).amount;
-      const escrowBalance = (await getAccount(provider.connection, escrowAta)).amount;
+      const userBalanceAfter = (
+        await getAccount(provider.connection, userAta.address)
+      ).amount;
+      const escrowBalance = (await getAccount(provider.connection, escrowAta))
+        .amount;
 
       assert.equal(
         userBalanceAfter.toString(),
@@ -440,18 +497,9 @@ describe("SPL Token Forwarder PA Integration", function () {
   // ==========================================================================
 
   describe("Unwrap PA Integration", function () {
-    before(function () {
-      if (!unwrapFixtureExists) {
-        console.log("    ⚠ spl_token_unwrap.json not found, skipping unwrap tests");
-        this.skip();
-      }
-    });
-
     // Mirrors: test_unwrap_sends_funds_to_the_user (via PA settlement)
     // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/ERC20Forwarder.t.sol
     it("settles unwrap through PA (escrow release)", async function () {
-      if (!unwrapFixtureExists) this.skip();
-
       const fixture = readJson<Fixture>(unwrapFixturePath);
       const metadata = fixture.spl_token_unwrap!;
 
@@ -466,7 +514,9 @@ describe("SPL Token Forwarder PA Integration", function () {
 
       // Verify derived pubkeys match fixture (sanity check)
       const expectedMint = new PublicKey(bs58.decode(metadata.token_mint_b58));
-      const expectedRecipient = new PublicKey(bs58.decode(metadata.recipient_b58));
+      const expectedRecipient = new PublicKey(
+        bs58.decode(metadata.recipient_b58)
+      );
       assert.ok(
         mintKeypair.publicKey.equals(expectedMint),
         "Derived mint pubkey should match fixture"
@@ -496,7 +546,10 @@ describe("SPL Token Forwarder PA Integration", function () {
           6, // decimals
           mintKeypair // deterministic mint keypair
         );
-        assert.ok(mint.equals(expectedMint), "Created mint should match fixture");
+        assert.ok(
+          mint.equals(expectedMint),
+          "Created mint should match fixture"
+        );
       }
 
       // Create escrow ATA and fund it (simulating prior wraps)
@@ -525,7 +578,9 @@ describe("SPL Token Forwarder PA Integration", function () {
         } else {
           // Mint was created by wrap test - skip minting and use existing escrow balance
           // The wrap test should have deposited tokens to escrow
-          assert.fail("Escrow doesn't have enough tokens and we can't mint (wrap test didn't run or failed)");
+          assert.fail(
+            "Escrow doesn't have enough tokens and we can't mint (wrap test didn't run or failed)"
+          );
         }
       }
 
@@ -540,9 +595,17 @@ describe("SPL Token Forwarder PA Integration", function () {
       // Forwarder accounts for CPI
       // Order: forwarder_program (segment marker) | config | ix_sysvar | clock | ...remaining
       const forwarderAccounts = [
-        { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
+        {
+          pubkey: forwarderProgram.programId,
+          isWritable: false,
+          isSigner: false,
+        },
         { pubkey: forwarderConfigPda, isWritable: false, isSigner: false },
-        { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
+        {
+          pubkey: SYSVAR_INSTRUCTIONS_PUBKEY,
+          isWritable: false,
+          isSigner: false,
+        },
         { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
         { pubkey: escrowAta.address, isWritable: true, isSigner: false },
         { pubkey: recipientAta.address, isWritable: true, isSigner: false },
@@ -552,15 +615,23 @@ describe("SPL Token Forwarder PA Integration", function () {
       ];
 
       // Record balances before
-      const escrowBalanceBefore = (await getAccount(provider.connection, escrowAta.address)).amount;
-      const recipientBalanceBefore = (await getAccount(provider.connection, recipientAta.address)).amount;
+      const escrowBalanceBefore = (
+        await getAccount(provider.connection, escrowAta.address)
+      ).amount;
+      const recipientBalanceBefore = (
+        await getAccount(provider.connection, recipientAta.address)
+      ).amount;
 
       const authority = Keypair.generate();
       await settleViaTxData(authority, fixture, forwarderAccounts);
 
       // Verify tokens were transferred from escrow to recipient
-      const escrowBalanceAfter = (await getAccount(provider.connection, escrowAta.address)).amount;
-      const recipientBalanceAfter = (await getAccount(provider.connection, recipientAta.address)).amount;
+      const escrowBalanceAfter = (
+        await getAccount(provider.connection, escrowAta.address)
+      ).amount;
+      const recipientBalanceAfter = (
+        await getAccount(provider.connection, recipientAta.address)
+      ).amount;
 
       assert.equal(
         escrowBalanceAfter.toString(),

@@ -6,6 +6,7 @@ resolver = "2"
 
 [workspace.dependencies]
 anchor-lang = "0.31.1"
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", branch = "main" }
 
 [profile.release]
 overflow-checks = true

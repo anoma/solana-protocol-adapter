@@ -8,17 +8,10 @@
  */
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import {
-  PublicKey,
-  Keypair,
-  LAMPORTS_PER_SOL,
-} from "@solana/web3.js";
+import { PublicKey, Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { assert } from "chai";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
-import {
-  PA_STATE_SEED,
-  AUTHORITY_MISMATCH_PATTERN,
-} from "./utils";
+import { PA_STATE_SEED, AUTHORITY_MISMATCH_PATTERN } from "./utils";
 import { fundKeypair } from "./utils";
 
 describe("zzz-pa-teardown (close PA PDAs — runs after emergency tests)", () => {
@@ -77,7 +70,10 @@ describe("zzz-pa-teardown (close PA PDAs — runs after emergency tests)", () =>
       "Authority should have received rent refund"
     );
     console.log(
-      `    Closed ${markersBefore} markers, recovered ${((balanceAfter - balanceBefore) / LAMPORTS_PER_SOL).toFixed(6)} SOL`
+      `    Closed ${markersBefore} markers, recovered ${(
+        (balanceAfter - balanceBefore) /
+        LAMPORTS_PER_SOL
+      ).toFixed(6)} SOL`
     );
   });
 
@@ -146,7 +142,10 @@ describe("zzz-pa-teardown (close PA PDAs — runs after emergency tests)", () =>
       "Authority should have received rent refund"
     );
     console.log(
-      `    PAState closed, recovered ${((balanceAfter - balanceBefore) / LAMPORTS_PER_SOL).toFixed(6)} SOL`
+      `    PAState closed, recovered ${(
+        (balanceAfter - balanceBefore) /
+        LAMPORTS_PER_SOL
+      ).toFixed(6)} SOL`
     );
   });
 });

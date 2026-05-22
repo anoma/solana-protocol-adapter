@@ -35,8 +35,12 @@ import { deriveConfigPda, deriveEscrowPda, derivePaStatePda } from "./utils";
 import { fundKeypair, drainKeypairs } from "./utils";
 
 // Deterministic keypair seeds - must match 01-spl-token-forwarder.ts
-const EMERGENCY_COMMITTEE_SEED = createHash("sha256").update("emergency_committee_seed").digest();
-const EMERGENCY_CALLER_SEED = createHash("sha256").update("emergency_caller_seed").digest();
+const EMERGENCY_COMMITTEE_SEED = createHash("sha256")
+  .update("emergency_committee_seed")
+  .digest();
+const EMERGENCY_CALLER_SEED = createHash("sha256")
+  .update("emergency_caller_seed")
+  .digest();
 
 describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   const provider = anchor.AnchorProvider.env();
@@ -76,8 +80,10 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   before(async () => {
     // Load programs
     try {
-      program = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
-      paProgram = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+      program = anchor.workspace
+        .SplTokenForwarder as Program<SplTokenForwarder>;
+      paProgram = anchor.workspace
+        .SolanaPaPrototype as Program<SolanaPaPrototype>;
     } catch (e) {
       throw new Error("Programs not found in workspace");
     }
@@ -102,16 +108,22 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
     try {
       const paState = await paProgram.account.paStateAccount.fetch(paStatePda);
       // PA should NOT be stopped yet (other tests depend on it running)
-      if (JSON.stringify(paState.lifecycle) !== JSON.stringify({ running: {} })) {
+      if (
+        JSON.stringify(paState.lifecycle) !== JSON.stringify({ running: {} })
+      ) {
         throw new Error("PA is already stopped - test order may be wrong");
       }
     } catch (e: any) {
       if (e.message.includes("already stopped")) throw e;
-      throw new Error("PA not initialized - 00-setup.ts should have initialized it");
+      throw new Error(
+        "PA not initialized - 00-setup.ts should have initialized it"
+      );
     }
 
     // Set logic_ref - must match what was used in forwarder initialization
-    logicRef = Array.from(createHash("sha256").update("spl_token_forwarder_test_logic_ref").digest());
+    logicRef = Array.from(
+      createHash("sha256").update("spl_token_forwarder_test_logic_ref").digest()
+    );
 
     // Create token mint
     tokenMint = await createMint(
@@ -144,7 +156,14 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
     );
 
     // Mint tokens to escrow (simulating prior wraps)
-    await mintTo(provider.connection, authority, tokenMint, escrowAta, authority, 100_000_000);
+    await mintTo(
+      provider.connection,
+      authority,
+      tokenMint,
+      escrowAta,
+      authority,
+      100_000_000
+    );
 
     // Initialize forwarder config if not already done
     try {
@@ -161,9 +180,13 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   });
 
   // Mirrors: test_setEmergencyCaller_reverts_if_the_pa_is_not_stopped
-  it("rejects set_emergency_caller when PA not stopped", async function() {
+  it("rejects set_emergency_caller when PA not stopped", async function () {
     const paState = await paProgram.account.paStateAccount.fetch(paStatePda);
-    assert.deepEqual(paState.lifecycle, { running: {} }, "PA should be Running initially");
+    assert.deepEqual(
+      paState.lifecycle,
+      { running: {} },
+      "PA should be Running initially"
+    );
 
     const newCaller = Keypair.generate();
 
@@ -183,9 +206,13 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   });
 
   // Mirrors: _stopProtocolAdapter() helper in EVM tests
-  it("stops Protocol Adapter for emergency operations", async function() {
+  it("stops Protocol Adapter for emergency operations", async function () {
     let paState = await paProgram.account.paStateAccount.fetch(paStatePda);
-    assert.deepEqual(paState.lifecycle, { running: {} }, "PA should be Running initially");
+    assert.deepEqual(
+      paState.lifecycle,
+      { running: {} },
+      "PA should be Running initially"
+    );
 
     // Stop the PA
     await paProgram.methods
@@ -198,16 +225,24 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
 
     // Verify PA is now stopped
     paState = await paProgram.account.paStateAccount.fetch(paStatePda);
-    assert.deepEqual(paState.lifecycle, { stopped: {} }, "PA should be Stopped after emergency_stop");
+    assert.deepEqual(
+      paState.lifecycle,
+      { stopped: {} },
+      "PA should be Stopped after emergency_stop"
+    );
     paEmergencyStopped = true;
   });
 
   // Mirrors: test_forwardEmergencyCall_reverts_if_the_pa_is_stopped_but_the_emergency_caller_is_not_set
-  it("rejects forward_emergency_call when emergency caller not set", async function() {
-    if (!paEmergencyStopped) throw new Error("PA not stopped - previous test failed");
+  it("rejects forward_emergency_call when emergency caller not set", async function () {
+    if (!paEmergencyStopped)
+      throw new Error("PA not stopped - previous test failed");
 
     const config = await program.account.config.fetch(configPda);
-    assert.ok(config.emergencyCaller.equals(PublicKey.default), "Emergency caller should not be set yet");
+    assert.ok(
+      config.emergencyCaller.equals(PublicKey.default),
+      "Emergency caller should not be set yet"
+    );
 
     const input = Buffer.alloc(73);
     input.writeUInt8(0, 0);
@@ -237,8 +272,9 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   });
 
   // Mirrors: test_setEmergencyCaller_sets_the_emergency_caller
-  it("allows emergency committee to set emergency caller (when stopped)", async function() {
-    if (!paEmergencyStopped) throw new Error("PA not stopped - previous test failed");
+  it("allows emergency committee to set emergency caller (when stopped)", async function () {
+    if (!paEmergencyStopped)
+      throw new Error("PA not stopped - previous test failed");
 
     await program.methods
       .setEmergencyCaller(emergencyCaller.publicKey)
@@ -255,8 +291,9 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
 
   // Mirrors: test_emergencyCaller_returns_the_emergency_caller_after_it_has_been_set
   // https://github.com/anoma/anomapay-backend/blob/main/contracts/test/bases/EmergencyMigratableForwarderBase.t.sol
-  it("emergency_caller returns the caller after it has been set", async function() {
-    if (!paEmergencyStopped) throw new Error("PA not stopped - previous test failed");
+  it("emergency_caller returns the caller after it has been set", async function () {
+    if (!paEmergencyStopped)
+      throw new Error("PA not stopped - previous test failed");
 
     const config = await program.account.config.fetch(configPda);
     assert.ok(
@@ -270,8 +307,9 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   });
 
   // Mirrors: test_setEmergencyCaller_reverts_if_the_emergency_caller_has_already_been_set
-  it("rejects setting emergency caller twice", async function() {
-    if (!paEmergencyStopped) throw new Error("PA not stopped - previous test failed");
+  it("rejects setting emergency caller twice", async function () {
+    if (!paEmergencyStopped)
+      throw new Error("PA not stopped - previous test failed");
 
     const anotherCaller = Keypair.generate();
 
@@ -291,8 +329,9 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   });
 
   // Mirrors: test_forwardEmergencyCall_reverts_if_the_pa_is_stopped_but_the_caller_is_not_the_emergency_caller
-  it("rejects forward_emergency_call from wrong caller", async function() {
-    if (!paEmergencyStopped) throw new Error("PA not stopped - previous test failed");
+  it("rejects forward_emergency_call from wrong caller", async function () {
+    if (!paEmergencyStopped)
+      throw new Error("PA not stopped - previous test failed");
 
     const wrongCaller = Keypair.generate();
     await localAirdrop(wrongCaller, 1);
@@ -325,8 +364,9 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   });
 
   // Mirrors: test_forwardEmergencyCall_forwards_calls_if_the_pa_is_stopped_and_the_caller_is_the_emergency_caller
-  it("allows emergency caller to withdraw", async function() {
-    if (!paEmergencyStopped) throw new Error("PA not stopped - previous test failed");
+  it("allows emergency caller to withdraw", async function () {
+    if (!paEmergencyStopped)
+      throw new Error("PA not stopped - previous test failed");
 
     const amount = BigInt(25_000_000); // 25 tokens
 
@@ -368,8 +408,9 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
   });
 
   // Mirrors: test_setEmergencyCaller_reverts_if_the_new_emergency_caller_is_the_zero_address
-  it("rejects set_emergency_caller with zero address", async function() {
-    if (!paEmergencyStopped) throw new Error("PA not stopped - previous test failed");
+  it("rejects set_emergency_caller with zero address", async function () {
+    if (!paEmergencyStopped)
+      throw new Error("PA not stopped - previous test failed");
 
     try {
       await program.methods
@@ -385,7 +426,8 @@ describe("zz-forwarder-emergency (runs last - stops PA)", () => {
       // Could be ZeroAddressNotAllowed or EmergencyCallerAlreadySet (if already set)
       const errorStr = e.toString();
       assert.ok(
-        errorStr.includes("ZeroAddressNotAllowed") || errorStr.includes("EmergencyCallerAlreadySet"),
+        errorStr.includes("ZeroAddressNotAllowed") ||
+          errorStr.includes("EmergencyCallerAlreadySet"),
         `Expected ZeroAddressNotAllowed or EmergencyCallerAlreadySet, got: ${errorStr}`
       );
     }

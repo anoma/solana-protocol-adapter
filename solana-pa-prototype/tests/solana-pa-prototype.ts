@@ -2456,8 +2456,9 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
   it("verifies events from v2 settlement", async function () {
     if (!v2TxSig) {
-      this.skip(); // v2 was already settled in a prior run
-      return;
+      assert.fail(
+        "Cannot verify v2 settlement events: batch_groth16_v2.json was already settled before this test run, so no fresh transaction signature was produced. Run against fresh validator state."
+      );
     }
 
     await provider.connection.confirmTransaction(v2TxSig, "confirmed");
