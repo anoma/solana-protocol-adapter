@@ -249,7 +249,7 @@ pub struct SolanaExternalCall {
     pub program_id: [u8; 32],       // Forwarder program ID
     pub instruction_data: Vec<u8>,  // Passed as `input` to forward_call
     pub expected_output: Vec<u8>,   // Must match return data
-    pub output_mode: OutputMode,
+    pub output_mode: OutputMode,    // ReturnData (only variant)
 }
 ```
 
