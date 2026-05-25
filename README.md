@@ -437,8 +437,6 @@ pub struct SolanaExternalCall {
     pub output_mode: OutputMode,
 }
 
-// Retained as a single-variant enum so the bincode wire format is stable;
-// tag-1 (the removed `OutputAccount` variant) now fails to deserialize.
 #[derive(Serialize, Deserialize)]
 pub enum OutputMode {
     ReturnData,  // Read via get_return_data() (≤1024 bytes)

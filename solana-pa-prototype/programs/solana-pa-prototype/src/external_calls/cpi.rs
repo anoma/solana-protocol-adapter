@@ -42,8 +42,6 @@ fn invoke_forwarder(
     Ok(())
 }
 
-/// Read forwarder output. `OutputMode` currently has a single `ReturnData`
-/// variant; the enum is retained for bincode wire-format compatibility.
 fn read_forwarder_output(
     output_mode: &OutputMode,
     program_id: &Pubkey,
