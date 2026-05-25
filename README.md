@@ -146,9 +146,7 @@ pub struct ForwardCall<'info> {
    [input: N bytes]
    ```
 
-3. **Output via return data**: Use `set_return_data(&output)`. The PA reads this immediately after CPI and verifies it matches `expected_output` from `LogicVerifierInputs.app_data.external_payload`.
-
-4. **Output account mode**: For outputs >1024 bytes, write to an account and use `OutputMode::OutputAccount` in the external call encoding.
+3. **Output via return data**: Use `set_return_data(&output)`. The PA reads this immediately after CPI and verifies it matches `expected_output` from `LogicVerifierInputs.app_data.external_payload`. Solana caps return data at 1024 bytes — forwarders that need to surface more must commit a digest in return data and place the full payload elsewhere (e.g. an event or PDA).
 
 ---
 
@@ -251,7 +249,7 @@ pub struct SolanaExternalCall {
     pub program_id: [u8; 32],       // Forwarder program ID
     pub instruction_data: Vec<u8>,  // Passed as `input` to forward_call
     pub expected_output: Vec<u8>,   // Must match return data
-    pub output_mode: OutputMode,    // ReturnData or OutputAccount
+    pub output_mode: OutputMode,    // ReturnData (only variant)
 }
 ```
 
@@ -439,14 +437,11 @@ pub struct SolanaExternalCall {
     pub output_mode: OutputMode,
 }
 
+// Retained as a single-variant enum so the bincode wire format is stable;
+// tag-1 (the removed `OutputAccount` variant) now fails to deserialize.
 #[derive(Serialize, Deserialize)]
 pub enum OutputMode {
     ReturnData,  // Read via get_return_data() (≤1024 bytes)
-    OutputAccount {
-        index: u8,    // Index into remaining_accounts
-        offset: u32,
-        len: u32,
-    },
 }
 ```
 
