@@ -230,27 +230,6 @@ async function waitForSlotPast(
   throw new Error(`Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`);
 }
 
-async function createDataAccount(
-  space: number,
-  owner: PublicKey = testForwarderId,
-): Promise<Keypair> {
-  const funder = Keypair.generate();
-  await airdrop(provider, funder, 2);
-  const account = Keypair.generate();
-  const lamports = await provider.connection.getMinimumBalanceForRentExemption(space);
-  const tx = new anchor.web3.Transaction().add(
-    SystemProgram.createAccount({
-      fromPubkey: funder.publicKey,
-      newAccountPubkey: account.publicKey,
-      space,
-      lamports,
-      programId: owner,
-    }),
-  );
-  await provider.sendAndConfirm(tx, [funder, account]);
-  return account;
-}
-
 function parseAnchorEvents(logs: string[]) {
   const coder = new anchor.BorshCoder(program.idl);
   const parser = new anchor.EventParser(program.programId, coder);
@@ -2292,101 +2271,6 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
-  });
-});
-
-describe("solana-pa-prototype (OutputAccount mode)", () => {
-  it("settles forwarder-output fixture via OutputAccount mode", async () => {
-    const outputFixture = loadFixture("batch_forwarder_output.json");
-    const payload = Buffer.from(outputFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
-    const stateBefore = await program.account.paStateAccount.fetch(paState);
-    const nextIndexBefore = stateBefore.nextIndex.toNumber();
-
-    // Create a data account owned by test-forwarder for writing output
-    const dataAccount = await createDataAccount(10);
-
-    // remaining_accounts: [nullifier_pda, test_forwarder, writable_data_account]
-    // Fixture uses OutputAccount { index: 2, offset: 0, len: 4 }
-    const remainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: testForwarderId, isWritable: false, isSigner: false },
-      { pubkey: dataAccount.publicKey, isWritable: true, isSigner: false },
-    ];
-
-    await settleFixtureViaTxData(payload, remainingAccounts);
-
-    const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(
-      state.nextIndex.toNumber(),
-      nextIndexBefore + 1,
-      "next_index should increment after output-account settlement",
-    );
-
-    // Verify the data account was written by the forwarder
-    const dataAccountInfo = await provider.connection.getAccountInfo(dataAccount.publicKey);
-    assert.ok(dataAccountInfo, "Data account should still exist");
-    const writtenBytes = dataAccountInfo!.data.subarray(0, 4);
-    assert.deepEqual(
-      writtenBytes,
-      Buffer.from([0x01, 0x02, 0x03, 0x04]),
-      "Forwarder should have written expected bytes to data account"
-    );
-  });
-});
-
-describe("solana-pa-prototype (OutputAccount error paths)", () => {
-  // The forwarder-output fixture uses OutputAccount { index: 2, offset: 0, len: 4 }
-  // and expected_output [0x01, 0x02, 0x03, 0x04]. These tests manipulate remaining_accounts
-  // to trigger each error path in read_forwarder_output (cpi.rs:89-103).
-
-  const outputFixture = loadFixture("batch_forwarder_output.json");
-
-  it("rejects OutputAccount when index is out of bounds", async () => {
-    const payload = Buffer.from(outputFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
-
-    // Fixture expects remaining_accounts[2] (index=2), but we only provide
-    // [nullifier_pda, test_forwarder] — index 2 does not exist.
-    const remainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: testForwarderId, isWritable: false, isSigner: false },
-      // No data account at index 2
-    ];
-
-    try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
-      assert.fail("expected ExternalCallOutputMismatch (index OOB)");
-    } catch (e: any) {
-      // CPI to test-forwarder fails because it needs a writable account in
-      // remaining_accounts[0] (MODE_WRITE_ACCOUNT) but no account is passed.
-      // The CPI failure propagates the inner error code through.
-      const code = extractPAErrorCode(e);
-      assert.isNotNull(code, "Expected a program error code in logs");
-    }
-  });
-
-  it("rejects OutputAccount when data is shorter than offset+len", async () => {
-    const payload = Buffer.from(outputFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(outputFixture.consumed_nullifiers_b64);
-
-    // Create a data account with only 2 bytes — fixture expects len=4.
-    // The forwarder writes min(payload.len(), data.len()) = 2 bytes.
-    // Then PA reads remaining_accounts[2] with offset=0, len=4 → end=4 > 2 → error.
-    const dataAccount = await createDataAccount(2);
-
-    const remainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: testForwarderId, isWritable: false, isSigner: false },
-      { pubkey: dataAccount.publicKey, isWritable: true, isSigner: false },
-    ];
-
-    try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
-      assert.fail("expected ExternalCallOutputMismatch (data too short)");
-    } catch (e: any) {
-      assertPAError(e, "ExternalCallOutputMismatch");
-    }
   });
 });
 

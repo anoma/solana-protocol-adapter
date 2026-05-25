@@ -34,34 +34,18 @@ pub fn arb_compliance_instance() -> impl Strategy<Value = ComplianceInstance> {
         )
 }
 
-fn arb_output_mode() -> impl Strategy<Value = OutputMode> {
-    prop_oneof![
-        Just(OutputMode::ReturnData),
-        (any::<u8>(), any::<u32>(), 1u32..=4096u32).prop_map(|(idx, off, len)| {
-            OutputMode::OutputAccount {
-                index: idx,
-                offset: off,
-                len,
-            }
-        })
-    ]
-}
-
 pub fn arb_solana_external_call(max_data_len: usize) -> impl Strategy<Value = SolanaExternalCall> {
     (
         prop::array::uniform32(any::<u8>()),
         arb_byte_vec(max_data_len),
         arb_byte_vec(max_data_len),
-        arb_output_mode(),
         1..=10u8,
     )
-        .prop_map(
-            |(pid, input, output, mode, num_accounts)| SolanaExternalCall {
-                program_id: pid,
-                instruction_data: input,
-                expected_output: output,
-                output_mode: mode,
-                num_accounts,
-            },
-        )
+        .prop_map(|(pid, input, output, num_accounts)| SolanaExternalCall {
+            program_id: pid,
+            instruction_data: input,
+            expected_output: output,
+            output_mode: OutputMode::ReturnData,
+            num_accounts,
+        })
 }

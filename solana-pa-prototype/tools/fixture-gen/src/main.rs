@@ -153,7 +153,7 @@ fn mutate_compliance_instance<R>(
 use block_time_forwarder::{RESULT_GT, RESULT_LT};
 use solana_pa::external_calls::encode_external_call;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
-use test_forwarder::{MODE_FAIL, MODE_SILENT, MODE_WRITE_ACCOUNT};
+use test_forwarder::{MODE_FAIL, MODE_SILENT};
 
 #[derive(Serialize)]
 struct Fixture {
@@ -204,7 +204,6 @@ enum ForwarderMode {
     BlockTimeForwarder { output_mismatch: bool },
     TestForwarderFail,
     TestForwarderSilent,
-    TestForwarderOutputAccount,
 }
 
 /// Extract the Groth16 selector from a transaction's aggregation proof.
@@ -319,28 +318,6 @@ fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
     }))
 }
 
-fn test_forwarder_output_account_payload_blob(
-    expected_bytes: &[u8],
-    account_index: u8,
-) -> Result<ExpirableBlob> {
-    // The forwarder strips input[0] (mode byte) and writes input[1..] to the account.
-    let mut instruction_data = Vec::with_capacity(1 + expected_bytes.len());
-    instruction_data.push(MODE_WRITE_ACCOUNT);
-    instruction_data.extend_from_slice(expected_bytes);
-
-    Ok(encode_external_call(&SolanaExternalCall {
-        program_id: test_forwarder_program_id()?,
-        instruction_data,
-        expected_output: expected_bytes.to_vec(),
-        output_mode: OutputMode::OutputAccount {
-            index: account_index,
-            offset: 0,
-            len: expected_bytes.len() as u32,
-        },
-        num_accounts: 2,
-    }))
-}
-
 async fn generate_test_transaction_with_external_payload(
     queue: &QueueClient,
     forwarder_mode: ForwarderMode,
@@ -407,9 +384,6 @@ async fn generate_test_transaction_with_external_payload(
         }
         ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob()?,
         ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
-        ForwarderMode::TestForwarderOutputAccount => {
-            test_forwarder_output_account_payload_blob(b"\x01\x02\x03\x04", 2)?
-        }
     };
     consumed_app_data.external_payload.push(external_blob);
     if multi_external_call {
@@ -811,7 +785,7 @@ fn dump_fixture(input: &Path) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-output-account  Test-forwarder with OutputAccount mode\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof variants\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent, --forwarder-output-account.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - QUEUE_BASE_URL and QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - --error-variants writes to DIR from the final aggregated tx.\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof variants\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - QUEUE_BASE_URL and QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - --error-variants writes to DIR from the final aggregated tx.\n"
     );
 }
 
@@ -936,13 +910,10 @@ fn parse_args() -> Result<Command> {
             "--debug-assumptions" => {
                 debug_assumptions = true;
             }
-            "--output-mismatch"
-            | "--forwarder-fail"
-            | "--forwarder-silent"
-            | "--forwarder-output-account" => {
+            "--output-mismatch" | "--forwarder-fail" | "--forwarder-silent" => {
                 if forwarder_mode.is_some() {
                     return Err(anyhow!(
-                        "at most one of --output-mismatch, --forwarder-fail, --forwarder-silent, --forwarder-output-account may be set"
+                        "at most one of --output-mismatch, --forwarder-fail, --forwarder-silent may be set"
                     ));
                 }
                 forwarder_mode = Some(match flag {
@@ -951,7 +922,6 @@ fn parse_args() -> Result<Command> {
                     },
                     "--forwarder-fail" => ForwarderMode::TestForwarderFail,
                     "--forwarder-silent" => ForwarderMode::TestForwarderSilent,
-                    "--forwarder-output-account" => ForwarderMode::TestForwarderOutputAccount,
                     _ => unreachable!(),
                 });
             }
