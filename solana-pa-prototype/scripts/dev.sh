@@ -30,6 +30,89 @@ run_in_project() {
   fi
 }
 
+# Packages whose commit hash must match across every Cargo.lock in the project.
+# Each entry is a workspace dep that appears in all three lockfiles (workspace,
+# fixture-gen, guest). Skew silently produces proofs that don't verify on chain
+# (arm-risc0) or compile errors that look like unrelated bugs (anoma-pa-solana-client).
+LOCK_SYNC_PACKAGES=(anoma-rm-core anoma-pa-solana-client)
+
+# Every Cargo.lock that participates in the build. New independent workspaces
+# (a fresh tools/* crate, a separate guest, etc.) must be added here AND the
+# script must keep working when one of these lockfiles is absent on a branch.
+LOCK_FILES=(
+  Cargo.lock
+  tools/fixture-gen/Cargo.lock
+  tools/fixture-gen/passthrough-logic/methods/guest/Cargo.lock
+)
+
+# Print the locked commit of <pkg> in <lockfile>, or empty string if absent.
+lock_commit_for() {
+  local lockfile="$1"
+  local pkg="$2"
+  if [[ ! -f "$lockfile" ]]; then
+    printf ''
+    return
+  fi
+  grep -A2 "^name = \"${pkg}\"$" "$lockfile" \
+    | grep "^source" \
+    | grep -oP '#\K[a-f0-9]+' \
+    | head -1
+}
+
+# Verify every package in LOCK_SYNC_PACKAGES resolves to the same commit
+# across every present lockfile. Exits non-zero if any skew is detected.
+ensure_lockfile_sync() {
+  local pkg lockfile commit ref_commit ref_file mismatch=0
+  for pkg in "${LOCK_SYNC_PACKAGES[@]}"; do
+    ref_commit=''
+    ref_file=''
+    for lockfile in "${LOCK_FILES[@]}"; do
+      local full="$PROJECT_DIR/$lockfile"
+      [[ -f "$full" ]] || continue
+      commit="$(lock_commit_for "$full" "$pkg")"
+      [[ -n "$commit" ]] || continue
+      if [[ -z "$ref_commit" ]]; then
+        ref_commit="$commit"
+        ref_file="$lockfile"
+      elif [[ "$commit" != "$ref_commit" ]]; then
+        if [[ $mismatch -eq 0 ]]; then
+          echo "❌ Cargo.lock skew detected:" >&2
+        fi
+        echo "  ${pkg}:" >&2
+        echo "    ${ref_file}: ${ref_commit:0:12}" >&2
+        echo "    ${lockfile}: ${commit:0:12}" >&2
+        mismatch=1
+        ref_commit="$commit"
+        ref_file="$lockfile"
+      fi
+    done
+  done
+  if [[ $mismatch -ne 0 ]]; then
+    echo "" >&2
+    echo "Fix: ./scripts/dev.sh lock-sync <package>" >&2
+    return 1
+  fi
+}
+
+# Run `cargo update -p <pkg>` against every present lockfile so all three stay
+# pinned to the same commit. Use after bumping a git-dep branch HEAD.
+sync_lockfiles_for_package() {
+  local pkg="$1"
+  if [[ -z "$pkg" ]]; then
+    echo "Usage: $0 lock-sync <package>" >&2
+    exit 1
+  fi
+  local lockfile manifest_rel
+  for lockfile in "${LOCK_FILES[@]}"; do
+    manifest_rel="${lockfile%Cargo.lock}Cargo.toml"
+    if [[ ! -f "${PROJECT_DIR}/${manifest_rel}" ]]; then
+      continue
+    fi
+    echo "==> ${lockfile}"
+    run_in_project "cargo update --manifest-path '${manifest_rel}' -p '${pkg}'"
+  done
+}
+
 case "${1:-}" in
   shell)
     if [[ -n "${IN_NIX_SHELL:-}" ]]; then
@@ -50,6 +133,7 @@ case "${1:-}" in
     ;;
 
   anchor-test)
+    ensure_lockfile_sync
     run_in_project "./scripts/anchor-test.sh"
     ;;
 
@@ -59,26 +143,17 @@ case "${1:-}" in
 
   gen-fixtures)
     shift
-    # Verify all workspaces resolve arm-risc0 to the same commit.
-    # The PA, fixture-gen, and passthrough-logic guest each have independent
-    # Cargo.lock files. If they disagree, generated fixtures will produce
-    # proofs that don't verify against the PA's image IDs.
-    run_in_project '
-      pa_commit=$(grep -A2 "name = \"anoma-rm-core\"" Cargo.lock | grep "source" | grep -oP "#\K[a-f0-9]+")
-      fg_commit=$(grep -A2 "name = \"anoma-rm-core\"" tools/fixture-gen/Cargo.lock | grep "source" | grep -oP "#\K[a-f0-9]+")
-      guest_commit=$(grep -A2 "name = \"anoma-rm-core\"" tools/fixture-gen/passthrough-logic/methods/guest/Cargo.lock | grep "source" | grep -oP "#\K[a-f0-9]+")
-      if [[ "$pa_commit" != "$fg_commit" || "$pa_commit" != "$guest_commit" ]]; then
-        echo "❌ arm-risc0 lockfile skew detected:"
-        echo "  PA:          $pa_commit"
-        echo "  fixture-gen: $fg_commit"
-        echo "  guest:       $guest_commit"
-        echo ""
-        echo "Fix: run cargo update -p anoma-rm-core in each workspace"
-        exit 1
-      fi
-      echo "arm-risc0 lockfiles aligned: ${pa_commit:0:8}"
-    '
+    ensure_lockfile_sync
     run_in_project "cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- $*"
+    ;;
+
+  lock-sync)
+    shift
+    sync_lockfiles_for_package "${1:-}"
+    ;;
+
+  lock-check)
+    ensure_lockfile_sync && echo "All Cargo.lock files are in sync."
     ;;
 
   fixture-test)
@@ -206,6 +281,8 @@ PYEOF
     echo "  update-deps  Regenerate yarn.lock"
     echo "  coverage     Run unit tests with kcov and report line coverage"
     echo "  clean        Remove local validator/test artifacts"
+    echo "  lock-check   Verify Cargo.lock files agree on shared git deps"
+    echo "  lock-sync <pkg>  Update <pkg> in every Cargo.lock so they re-align"
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
     echo ""
     echo "Devnet commands:"
