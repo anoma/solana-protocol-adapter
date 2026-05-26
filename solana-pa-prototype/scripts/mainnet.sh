@@ -8,6 +8,12 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${SCRIPT_DIR}/token-transfer-logic-ref.sh"
 
 MAINNET_URL="${MAINNET_RPC_URL:-https://api.mainnet-beta.solana.com}"
+# Optional secondary RPC URL. Used by `solana_cli` below when the primary
+# returns a 429 or other transient failure. Only shell-side `solana` calls
+# honor this — the TS scripts under solana-pa-prototype/scripts/ use a
+# single AnchorProvider URL and need their own Connection wrapper to fall
+# back. See scripts/mainnet.env.example for the env var documentation.
+MAINNET_URL_FALLBACK="${MAINNET_RPC_URL_FALLBACK:-}"
 MAINNET_WALLET="${MAINNET_WALLET:-${PROJECT_DIR}/scripts/mainnet-wallet.json}"
 
 # Program registry — btf excluded (test utility, not needed on mainnet).
@@ -26,6 +32,25 @@ require_cmd() {
     echo "Run this inside the Nix dev shell: nix develop"
     exit 1
   fi
+}
+
+# Run `solana <args>` with --url $MAINNET_URL. On non-zero exit, retry once
+# with --url $MAINNET_URL_FALLBACK if set. Each url-bearing solana call in
+# this script that we care about routing should use this wrapper instead of
+# `solana ... --url "$MAINNET_URL"` directly.
+#
+# Subcommands like `program deploy` take --url as a positional flag at the
+# end; this wrapper appends it. Callers MUST NOT pass --url themselves.
+solana_cli() {
+  if solana "$@" --url "$MAINNET_URL"; then
+    return 0
+  fi
+  local rc=$?
+  if [[ -z "$MAINNET_URL_FALLBACK" ]]; then
+    return $rc
+  fi
+  echo "  ↻ primary RPC failed (exit $rc), retrying via fallback…" >&2
+  solana "$@" --url "$MAINNET_URL_FALLBACK"
 }
 
 confirm() {
@@ -82,7 +107,7 @@ get_wallet_pubkey() {
 }
 
 get_balance() {
-  solana balance --keypair "$MAINNET_WALLET" --url "$MAINNET_URL" | awk '{print $1}'
+  solana_cli balance --keypair "$MAINNET_WALLET" | awk '{print $1}'
 }
 
 require_balance() {
@@ -108,7 +133,7 @@ get_program_id() {
 
 is_deployed() {
   local program_id="$1"
-  solana program show "$program_id" --url "$MAINNET_URL" >/dev/null 2>&1
+  solana_cli program show "$program_id" >/dev/null 2>&1
 }
 
 deploy_program() {
@@ -117,11 +142,10 @@ deploy_program() {
   program_id="$(get_program_id "$name")"
 
   echo "Deploying ${name} (${program_id})..."
-  if ! solana program deploy \
+  if ! solana_cli program deploy \
     "target/deploy/${name}.so" \
     --keypair "$MAINNET_WALLET" \
-    --program-id "target/deploy/${name}-keypair.json" \
-    --url "$MAINNET_URL" 2>&1; then
+    --program-id "target/deploy/${name}-keypair.json" 2>&1; then
     echo ""
     echo "❌ Deploy failed for ${name}."
     echo "If the program was previously closed, the ID is permanently burned."
@@ -194,8 +218,8 @@ pa_state_account_exists() {
   local pa_pid
   pa_pid="$(get_program_id "solana_pa_prototype")"
   local pa_state_addr
-  pa_state_addr="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$MAINNET_URL" 2>/dev/null | head -1 | awk '{print $1}')"
-  [[ -n "$pa_state_addr" ]] && solana account "$pa_state_addr" --url "$MAINNET_URL" >/dev/null 2>&1
+  pa_state_addr="$(solana_cli find-program-derived-address "$pa_pid" string:pa_state 2>/dev/null | head -1 | awk '{print $1}')"
+  [[ -n "$pa_state_addr" ]] && solana_cli account "$pa_state_addr" >/dev/null 2>&1
 }
 
 # Call emergency_stop on the PA. Idempotent: AlreadyStopped is treated as success
@@ -396,11 +420,11 @@ cmd_status() {
     local pa_pid
     pa_pid="$(get_program_id "solana_pa_prototype")"
     local pa_state
-    pa_state="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$MAINNET_URL" 2>/dev/null | head -1 || true)"
+    pa_state="$(solana_cli find-program-derived-address "$pa_pid" string:pa_state 2>/dev/null | head -1 || true)"
     if [[ -n "$pa_state" ]]; then
       local pa_state_addr
       pa_state_addr="$(echo "$pa_state" | awk '{print $1}')"
-      if solana account "$pa_state_addr" --url "$MAINNET_URL" >/dev/null 2>&1; then
+      if solana_cli account "$pa_state_addr" >/dev/null 2>&1; then
         echo "PAState PDA: ✅ initialized — ${pa_state_addr}"
       else
         echo "PAState PDA: not initialized — ${pa_state_addr}"
@@ -767,9 +791,10 @@ case "${1:-}" in
     echo "Mainnet USDC: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
     echo ""
     echo "Environment variables:"
-    echo "  MAINNET_RPC_URL         RPC endpoint (default: https://api.mainnet-beta.solana.com)"
-    echo "  MAINNET_WALLET          Keypair file (default: scripts/mainnet-wallet.json)"
-    echo "  MAINNET_AUTO_CONFIRM=1  Skip all interactive 'Type yes to proceed' prompts"
+    echo "  MAINNET_RPC_URL          RPC endpoint (default: https://api.mainnet-beta.solana.com)"
+    echo "  MAINNET_RPC_URL_FALLBACK Secondary RPC tried on primary failure (shell-side solana calls only)"
+    echo "  MAINNET_WALLET           Keypair file (default: scripts/mainnet-wallet.json)"
+    echo "  MAINNET_AUTO_CONFIRM=1   Skip all interactive 'Type yes to proceed' prompts"
     exit 1
     ;;
 esac
