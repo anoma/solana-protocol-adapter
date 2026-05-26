@@ -34,6 +34,10 @@ confirm() {
   echo "⚠️  MAINNET OPERATION"
   echo "$msg"
   echo ""
+  if [[ "${MAINNET_AUTO_CONFIRM:-}" == "1" ]]; then
+    echo "[MAINNET_AUTO_CONFIRM=1 — skipping interactive prompt]"
+    return 0
+  fi
   read -r -p "Type 'yes' to proceed: " answer
   if [[ "$answer" != "yes" ]]; then
     echo "Aborted."
@@ -184,6 +188,35 @@ close_forwarder_config() {
   TARGET_LOGIC_REF="$TOKEN_TRANSFER_LOGIC_REF" \
   EXPECTED_FORWARDER_PROGRAM_ID="${MAINNET_FORWARDER_PROGRAM_ID:-}" \
     npx ts-node -P tsconfig.json "${SCRIPT_DIR}/close-forwarder-config.ts"
+}
+
+pa_state_account_exists() {
+  local pa_pid
+  pa_pid="$(get_program_id "solana_pa_prototype")"
+  local pa_state_addr
+  pa_state_addr="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$MAINNET_URL" 2>/dev/null | head -1 | awk '{print $1}')"
+  [[ -n "$pa_state_addr" ]] && solana account "$pa_state_addr" --url "$MAINNET_URL" >/dev/null 2>&1
+}
+
+# Call emergency_stop on the PA. Idempotent: AlreadyStopped is treated as success
+# so callers (full-reset, close-pdas precheck) don't need to know the lifecycle.
+stop_pa() {
+  echo "Calling emergency_stop on PA..."
+  local output rc
+  set +e
+  output=$(ANCHOR_PROVIDER_URL="$MAINNET_URL" \
+    ANCHOR_WALLET="$MAINNET_WALLET" \
+    npx ts-node "${SCRIPT_DIR}/stop-pa.ts" 2>&1)
+  rc=$?
+  set -e
+  echo "$output"
+  if [[ $rc -ne 0 ]]; then
+    if echo "$output" | grep -qE "AlreadyStopped|already stopped"; then
+      echo "  (PA was already stopped — proceeding)"
+      return 0
+    fi
+    return $rc
+  fi
 }
 
 recover_forwarder_escrow() {
@@ -526,6 +559,17 @@ cmd_close_pdas() {
 
   require_mainnet_wallet
 
+  # close-pdas's marker + PAState close operations require PA lifecycle = Stopped.
+  # Ensure that first so we don't run close-forwarder.ts after a half-failed PA close.
+  if pa_state_account_exists; then
+    echo "Ensuring PA is stopped before close-pdas..."
+    confirm "Run emergency_stop on PA first?
+close-pdas requires the PA to be in Stopped lifecycle. emergency_stop is
+irreversible — the only way back to Running is a program upgrade."
+    stop_pa
+    echo ""
+  fi
+
   confirm "Close ALL PA and forwarder PDA accounts on MAINNET.
 This recovers rent SOL but is irreversible — you will need to re-initialize
 PA state and forwarder config to use these programs again.
@@ -544,6 +588,90 @@ Order: PA markers → PA state → forwarder bitmaps → forwarder escrow → fo
   ANCHOR_WALLET="$MAINNET_WALLET" \
   TOKEN_MINT="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" \
     npx ts-node -P tsconfig.json "${SCRIPT_DIR}/close-forwarder.ts"
+}
+
+cmd_stop() {
+  require_cmd npx
+
+  cd "$PROJECT_DIR"
+
+  require_mainnet_wallet
+
+  local pid
+  pid="$(get_program_id "solana_pa_prototype")"
+  if ! is_deployed "$pid"; then
+    echo "❌ PA (${pid}) is not deployed on mainnet"
+    exit 1
+  fi
+
+  confirm "Call emergency_stop on the PA on MAINNET.
+This is IRREVERSIBLE — the only way back to Running is a program upgrade.
+Stopped state: rejects settle, txdata_init, txdata_write, etc.
+Required before close-pdas."
+
+  stop_pa
+}
+
+cmd_full_reset() {
+  local token_mint="${1:-}"
+  if [[ -z "$token_mint" ]]; then
+    echo "❌ TOKEN_MINT argument is required"
+    echo "Usage: mainnet.sh full-reset <token_mint>"
+    echo "Mainnet USDC: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    exit 1
+  fi
+
+  require_cmd anchor
+  require_cmd solana
+  require_cmd solana-keygen
+  require_cmd npx
+
+  cd "$PROJECT_DIR"
+
+  require_mainnet_wallet
+
+  local pa_pid
+  pa_pid="$(get_program_id "solana_pa_prototype")"
+  if ! is_deployed "$pa_pid"; then
+    echo "❌ PA (${pa_pid}) is not deployed on mainnet"
+    exit 1
+  fi
+
+  local fwd_pid
+  fwd_pid="$(get_program_id "spl_token_forwarder")"
+  if ! is_deployed "$fwd_pid"; then
+    echo "❌ Forwarder (${fwd_pid}) is not deployed on mainnet"
+    exit 1
+  fi
+
+  confirm "Full reset of mainnet PA + forwarder state.
+Token mint: ${token_mint}
+
+Will run, with no further prompts:
+  1. emergency_stop on PA (irreversible — pauses settlement)
+  2. close all PA markers + PAState
+  3. close all forwarder nonce bitmaps + escrow ATA + config
+  4. init a fresh PA state (new empty commitment tree)
+  5. init forwarder config + escrow ATA for ${token_mint}
+
+After completion the PA + forwarder are usable again with a clean slate.
+All historical shielded resources are orphaned — their commitments are no
+longer in the PA's Merkle tree."
+
+  echo ""
+  echo "=== 1/5  emergency_stop ==="
+  MAINNET_AUTO_CONFIRM=1 stop_pa
+  echo ""
+  echo "=== 2/5 + 3/5  close-pdas (PA + forwarder) ==="
+  MAINNET_AUTO_CONFIRM=1 cmd_close_pdas
+  echo ""
+  echo "=== 4/5  init PA ==="
+  MAINNET_AUTO_CONFIRM=1 init_pa
+  echo ""
+  echo "=== 5/5  init forwarder for ${token_mint} ==="
+  MAINNET_AUTO_CONFIRM=1 init_forwarder "$token_mint"
+  echo ""
+  echo "✅ Full reset complete"
 }
 
 cmd_close_expired_txdata() {
@@ -612,6 +740,12 @@ case "${1:-}" in
   close-expired-txdata)
     cmd_close_expired_txdata "${@:2}"
     ;;
+  stop)
+    cmd_stop
+    ;;
+  full-reset)
+    cmd_full_reset "${2:-}"
+    ;;
   *)
     echo "Usage: mainnet.sh <command> [target]"
     echo ""
@@ -625,14 +759,17 @@ case "${1:-}" in
     echo "                                  Drain one escrow, then recreate it empty"
     echo "  close-pdas                      Close all PA + forwarder PDAs, recover rent"
     echo "  close-expired-txdata [--dry-run] Close expired TxData accounts only"
+    echo "  stop                            emergency_stop the PA (irreversible)"
+    echo "  full-reset <mint>               stop → close all PDAs → init PA → init forwarder"
     echo "  status                          Show deployment status + wallet balance"
     echo "  balance                         Show wallet address and balance"
     echo ""
     echo "Mainnet USDC: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
     echo ""
     echo "Environment variables:"
-    echo "  MAINNET_RPC_URL   RPC endpoint (default: https://api.mainnet-beta.solana.com)"
-    echo "  MAINNET_WALLET    Keypair file (default: scripts/mainnet-wallet.json)"
+    echo "  MAINNET_RPC_URL         RPC endpoint (default: https://api.mainnet-beta.solana.com)"
+    echo "  MAINNET_WALLET          Keypair file (default: scripts/mainnet-wallet.json)"
+    echo "  MAINNET_AUTO_CONFIRM=1  Skip all interactive 'Type yes to proceed' prompts"
     exit 1
     ;;
 esac
