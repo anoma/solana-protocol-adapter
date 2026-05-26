@@ -231,7 +231,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.1.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?branch=main#d99458aa966b0d0555a97fa016697d507b5aa12b"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?branch=main#d622391e79a9b2d1b17bf0601de476b6da55f384"
 dependencies = [
  "anchor-lang",
  "base64 0.22.1",
@@ -241,6 +241,7 @@ dependencies = [
  "serde",
  "sha2 0.10.9",
  "solana-program",
+ "solana-sdk-ids",
  "thiserror 2.0.18",
 ]
 

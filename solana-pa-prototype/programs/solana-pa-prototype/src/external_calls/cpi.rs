@@ -42,11 +42,9 @@ fn invoke_forwarder(
     Ok(())
 }
 
-/// Read forwarder output based on the output mode.
 fn read_forwarder_output(
     output_mode: &OutputMode,
     program_id: &Pubkey,
-    remaining_accounts: &[AccountInfo<'_>],
 ) -> Result<Vec<u8>, PAError> {
     match output_mode {
         OutputMode::ReturnData => {
@@ -57,21 +55,6 @@ fn read_forwarder_output(
             }
             Ok(return_data)
         }
-        OutputMode::OutputAccount { index, offset, len } => {
-            let idx = *index as usize;
-            if idx >= remaining_accounts.len() {
-                return Err(PAError::ExternalCallOutputMismatch);
-            }
-            let data = remaining_accounts[idx].data.borrow();
-            let start = *offset as usize;
-            let end = start
-                .checked_add(*len as usize)
-                .ok_or(PAError::ExternalCallOutputMismatch)?;
-            if end > data.len() {
-                return Err(PAError::ExternalCallOutputMismatch);
-            }
-            Ok(data[start..end].to_vec())
-        }
     }
 }
 
@@ -80,12 +63,11 @@ fn execute_forwarder_call<'info>(
     logic_ref: &arm_core::Digest,
     call: SolanaExternalCall,
     segment: &[AccountInfo<'info>],
-    remaining_accounts: &[AccountInfo<'info>],
 ) -> Result<(), PAError> {
     invoke_forwarder(&logic_ref.to_bytes(), &call.instruction_data, segment)?;
 
     let forwarder = *segment[0].key;
-    let actual_output = read_forwarder_output(&call.output_mode, &forwarder, remaining_accounts)?;
+    let actual_output = read_forwarder_output(&call.output_mode, &forwarder)?;
 
     super::verify_output(&call.expected_output, &actual_output)?;
 
@@ -130,12 +112,7 @@ pub fn execute_external_calls(
             return Err(PAError::UnregisteredForwarder);
         }
 
-        execute_forwarder_call(
-            &logic_ref,
-            call,
-            &external_accounts[cursor..seg_end],
-            remaining_accounts,
-        )?;
+        execute_forwarder_call(&logic_ref, call, &external_accounts[cursor..seg_end])?;
 
         cursor = seg_end;
     }
