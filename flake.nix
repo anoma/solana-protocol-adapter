@@ -171,22 +171,22 @@
           solanaRelease = {
             "x86_64-linux" = {
               target = "x86_64-unknown-linux-gnu";
-              releaseHash = "sha256-Xf1CqPSixjGcTc9HkFgqooVzgl/hy4R1xw5Jf/oKq9Y=";
-              platformToolsHash = "sha256-CTPgXdlkgm6OLbXFjDSuJV47rwzhcRVoVS3KgbVAems=";
+              releaseHash = "sha256-Bvl8BlzJd8vsLxP/ybydO5L+9IVDH8s3Ciad5pUy71E=";
+              platformToolsHash = "sha256-izhh6T2vCF7BK2XE+sN02b7EWHo94Whx2msIqwwdkH4=";
               criterionVersion = "v2.3.3";
               criterionHash = "sha256-7n+S1yaFY4SKo66Qu/XfhmBLjQ+w5JQrDs+/YgFZZVA=";
             };
             "x86_64-darwin" = {
               target = "x86_64-apple-darwin";
-              releaseHash = "sha256-tS392kyJjkkIATHKh+/azodnZN3mtAurnGaizS/nVS8=";
-              platformToolsHash = "sha256-8efC4kD1eC8ONU/5CQDsTmNjogA7xGoPwZ2dMQhoyeA=";
+              releaseHash = "sha256-43aO0B2qHjz8Aq8+PrOWzsLUipns+AzV173/UQ+AjR8=";
+              platformToolsHash = "sha256-HdTysfe1MWwvGJjzfHXtSV7aoIMzM0kVP+lV5Wg3kdE=";
               criterionVersion = "v2.3.2";
               criterionHash = "sha256-pw12DJO7CgNk1HaZxJgTFxF8oTX6vskURIvqAu3c7fI=";
             };
             "aarch64-darwin" = {
               target = "aarch64-apple-darwin";
-              releaseHash = "sha256-T4gOyql5D5Q/NwCKa1HzDIlokgZI/s5hTIQ+gfePNjE=";
-              platformToolsHash = "sha256-oeMrMTf+gZn6dtqBxD7AEivb0nrPEnnzjY0mX3pubLM=";
+              releaseHash = "sha256-VM/CaAvWQm/aBGGe4Bkz9ApknIBW86Ybog3FTdQn6+0=";
+              platformToolsHash = "sha256-Fyffsx6DPOd30B5wy0s869JrN2vwnYBSfwJFfUz2/QA=";
               criterionVersion = "v2.3.2";
               criterionHash = "sha256-pw12DJO7CgNk1HaZxJgTFxF8oTX6vskURIvqAu3c7fI=";
             };
@@ -196,7 +196,7 @@
           platformToolsArch = if system == "aarch64-darwin" then "aarch64" else "x86_64";
 
           platformToolsSrc = pkgs.fetchurl {
-            url = "https://github.com/anza-xyz/platform-tools/releases/download/v1.51/platform-tools-${platformToolsMachine}-${platformToolsArch}.tar.bz2";
+            url = "https://github.com/anza-xyz/platform-tools/releases/download/v1.52/platform-tools-${platformToolsMachine}-${platformToolsArch}.tar.bz2";
             hash = solanaRelease.platformToolsHash;
           };
 
@@ -205,7 +205,7 @@
             hash = solanaRelease.criterionHash;
           };
 
-          solanaVersion = "3.0.13";
+          solanaVersion = "3.1.14";
 
           solanaToolchain = pkgs.stdenvNoCC.mkDerivation {
             pname = "agave-release";
@@ -248,7 +248,7 @@ exec "$(dirname "$0")/../llvm/bin/lldb" "$@"
 EOF
               chmod +x "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/bin/lldb-argdumper"
               ln -sfn llvm/lib "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/lib"
-              touch "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools-v1.51.md"
+              touch "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools-v1.52.md"
 
               mkdir -p "$out/bin/platform-tools-sdk/sbf/dependencies/criterion"
               tar -xjf "${criterionSrc}" --strip-components=1 -C "$out/bin/platform-tools-sdk/sbf/dependencies/criterion"
