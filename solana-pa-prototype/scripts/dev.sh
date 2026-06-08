@@ -50,13 +50,17 @@ lock_commit_for() {
   local lockfile="$1"
   local pkg="$2"
   if [[ ! -f "$lockfile" ]]; then
-    printf ''
-    return
+    return 0
   fi
+  # `grep` returns 1 when this lockfile doesn't include $pkg — a legitimate
+  # case (different lockfiles have different dep sets, e.g. the guest lockfile
+  # doesn't include workspace-only deps like anoma-pa-solana-client). Suppress
+  # so callers under `set -e` see the empty string instead of an early exit.
   grep -A2 "^name = \"${pkg}\"$" "$lockfile" \
     | grep "^source" \
     | grep -oP '#\K[a-f0-9]+' \
-    | head -1
+    | head -1 \
+    || true
 }
 
 # Verify every package in LOCK_SYNC_PACKAGES resolves to the same commit
