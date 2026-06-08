@@ -37,9 +37,9 @@ groth_16_verifier = { git = "https://github.com/risc0/risc0-solana.git", tag = "
 hex-literal = "0.4"
 
 # ARM core types (no zkvm dependency, Borsh serialization)
-arm-core = { package = "anoma-rm-core", git = "https://github.com/anoma/arm-risc0", branch = "anthony/arm-solana-crate-split", features = ["borsh"] }
+arm-core = { package = "anoma-rm-core", git = "https://github.com/anoma/arm-risc0", branch = "solana", features = ["borsh"] }
 # ARM Solana-specific types (Borsh, syscalls, delta verification)
-arm-solana = { package = "anoma-rm-solana", git = "https://github.com/anoma/arm-risc0", branch = "anthony/arm-solana-crate-split" }
+arm-solana = { package = "anoma-rm-solana", git = "https://github.com/anoma/arm-risc0", branch = "solana" }
 
 
 [dev-dependencies]
