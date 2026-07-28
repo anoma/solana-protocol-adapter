@@ -62,6 +62,14 @@ const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>
 
 const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
+const BPF_LOADER_UPGRADEABLE = new PublicKey(
+  "BPFLoaderUpgradeab1e11111111111111111111111"
+);
+const [programData] = PublicKey.findProgramAddressSync(
+  [program.programId.toBuffer()],
+  BPF_LOADER_UPGRADEABLE
+);
+
 const fixture = loadFixture("batch_groth16.json");
 
 const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
@@ -330,6 +338,69 @@ async function settleFixtureViaTxData(
   return buildSettle(newRootMarker).rpc();
 }
 
+async function paStateExists(): Promise<boolean> {
+  const info = await provider.connection.getAccountInfo(paState);
+  return info !== null;
+}
+
+describe("solana-pa-prototype (AUTH-01: initialization authority)", () => {
+  it("rejects initialization by a non-upgrade-authority signer", async () => {
+    // Must run before PAState is initialized anywhere else in the suite —
+    // otherwise the `init` constraint on `pa_state` would fail with
+    // "already in use" before the AUTH-01 constraint on `program_data` is
+    // ever reached, which would prove nothing about this fix.
+    assert.isFalse(
+      await paStateExists(),
+      "PAState was already initialized before the AUTH-01 rejection test ran; " +
+        "this test must execute first so it observes an uninitialized state"
+    );
+
+    const stranger = Keypair.generate();
+    await airdrop(provider, stranger, 2);
+
+    let caught: any = null;
+    try {
+      await program.methods
+        .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
+        .accounts({
+          paState,
+          payer: stranger.publicKey,
+          systemProgram: SystemProgram.programId,
+          program: program.programId,
+          programData,
+        })
+        .signers([stranger])
+        .rpc();
+    } catch (e: any) {
+      caught = e;
+    }
+    assert.isNotNull(
+      caught,
+      "expected initialization by a non-upgrade-authority signer to fail"
+    );
+
+    // The error must be our Unauthorized code, and it must have been raised by
+    // the `program_data` account's upgrade-authority constraint specifically —
+    // not by account resolution, not by the `program` constraint, and not by
+    // any earlier check. Anchor names the offending account in its log line,
+    // which is what distinguishes "rejected for the right reason" from
+    // "rejected before the constraint was ever evaluated".
+    assertPAError(caught, "Unauthorized");
+    assert.match(
+      errorHaystack(caught),
+      /AnchorError caused by account: program_data/,
+      "Unauthorized must originate from the program_data upgrade-authority " +
+        `constraint. Got:\n${errorHaystack(caught)}`
+    );
+
+    // The rejected transaction must not have left PAState initialized.
+    assert.isFalse(
+      await paStateExists(),
+      "PAState must remain uninitialized after the rejected call"
+    );
+  });
+});
+
 describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   const tx = Buffer.from(fixture.tx_b64, "base64");
   const txTampered = Buffer.from(fixture.tx_tampered_b64, "base64");
@@ -391,6 +462,8 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
           paState,
           payer: provider.wallet.publicKey,
           systemProgram: SystemProgram.programId,
+          program: program.programId,
+          programData,
         })
         .rpc();
     }
@@ -587,6 +660,8 @@ describe("solana-pa-prototype (Re-initialization guard)", () => {
           paState,
           payer: provider.wallet.publicKey,
           systemProgram: SystemProgram.programId,
+          program: program.programId,
+          programData,
         })
         .rpc();
       assert.fail("expected re-initialization to fail");

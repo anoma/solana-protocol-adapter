@@ -698,6 +698,22 @@ pub struct Initialize<'info> {
     pub payer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// The program account is required so `program_data` is proven to be
+    /// *this* program's ProgramData address rather than merely an account
+    /// shaped like one: the constraint reads the programdata address the
+    /// loader recorded inside this very program account and requires it to
+    /// match the supplied `program_data` account.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ PAError::Unauthorized)]
+    pub program: Program<'info, crate::program::SolanaPaPrototype>,
+
+    /// The loader records the upgrade authority here at deploy time, which is the
+    /// only trust anchor available before the adapter has any state of its own.
+    #[account(
+        constraint = program_data.upgrade_authority_address == Some(payer.key())
+            @ PAError::Unauthorized
+    )]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 #[derive(Accounts)]

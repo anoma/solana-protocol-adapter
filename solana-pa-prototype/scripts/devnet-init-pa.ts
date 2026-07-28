@@ -4,6 +4,9 @@ import { PublicKey } from "@solana/web3.js";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 
 const PA_STATE_SEED = Buffer.from("pa_state");
+const BPF_LOADER_UPGRADEABLE = new PublicKey(
+  "BPFLoaderUpgradeab1e11111111111111111111111"
+);
 
 async function main() {
   const provider = anchor.AnchorProvider.env();
@@ -14,6 +17,10 @@ async function main() {
   const [paState] = PublicKey.findProgramAddressSync(
     [PA_STATE_SEED],
     program.programId
+  );
+  const [programData] = PublicKey.findProgramAddressSync(
+    [program.programId.toBuffer()],
+    BPF_LOADER_UPGRADEABLE
   );
 
   // Idempotent: skip if PAState already exists
@@ -30,6 +37,13 @@ async function main() {
 
   await program.methods
     .initialize()
+    .accounts({
+      paState,
+      payer: provider.wallet.publicKey,
+      systemProgram: anchor.web3.SystemProgram.programId,
+      program: program.programId,
+      programData,
+    })
     .rpc();
 
   console.log("✅ PA initialized");
