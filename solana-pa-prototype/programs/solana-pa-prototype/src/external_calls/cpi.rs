@@ -20,14 +20,7 @@ fn invoke_forwarder(
 ) -> Result<(), PAError> {
     let ix_data = build_forwarder_instruction_data(logic_ref, instruction_data);
 
-    let ix_accounts: Vec<AccountMeta> = segment[1..]
-        .iter()
-        .map(|ai| AccountMeta {
-            pubkey: *ai.key,
-            is_signer: ai.is_signer,
-            is_writable: ai.is_writable,
-        })
-        .collect();
+    let ix_accounts: Vec<AccountMeta> = super::build_account_metas(segment);
 
     let ix = Instruction {
         program_id: *segment[0].key,

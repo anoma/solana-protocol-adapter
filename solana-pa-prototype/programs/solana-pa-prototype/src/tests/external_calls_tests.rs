@@ -1,13 +1,14 @@
 use crate::error::PAError;
 use crate::external_calls::{
-    build_forwarder_instruction_data, decode_external_call, encode_external_call,
-    extract_external_calls, FORWARD_CALL_DISCRIMINATOR,
+    build_account_metas, build_forwarder_instruction_data, decode_external_call,
+    encode_external_call, extract_external_calls, FORWARD_CALL_DISCRIMINATOR,
 };
 use crate::tests::utils::{
     create_minimal_transaction, create_tag_consistent_payload_tx,
-    create_transaction_with_external_payload,
+    create_transaction_with_external_payload, make_account_info,
 };
 use crate::types::{OutputMode, SolanaExternalCall};
+use anchor_lang::prelude::Pubkey;
 use arm_core::logic_instance::ExpirableBlob;
 use arm_core::Digest;
 
@@ -208,4 +209,34 @@ fn test_decode_accepts_non_empty_expected_output() {
     let decoded = decode_external_call(&blob).expect("non-empty output must decode");
 
     assert_eq!(decoded, call);
+}
+
+/// Signer authority must never reach a forwarder. Solana unions privileges
+/// across the message, so an outer signer can appear in a forwarded position
+/// without that position requesting it.
+#[test]
+fn test_build_account_metas_never_propagates_signer() {
+    let program_id = Pubkey::new_unique();
+    let forwarder_key = Pubkey::new_unique();
+    let payer_key = Pubkey::new_unique();
+
+    make_account_info!(forwarder, &forwarder_key, owner: &program_id,
+        lamports: 0, signer: false, writable: false, executable: true);
+    // The outer payer: signer and writable by virtue of the outer message.
+    make_account_info!(payer, &payer_key, owner: &program_id,
+        lamports: 1_000_000, signer: true, writable: true, executable: false);
+
+    let segment = [forwarder.clone(), payer.clone()];
+    let metas = build_account_metas(&segment);
+
+    assert_eq!(metas.len(), 1, "metas cover segment[1..], not the program");
+    assert_eq!(metas[0].pubkey, payer_key);
+    assert!(
+        !metas[0].is_signer,
+        "signer authority must never be forwarded to proof-selected code"
+    );
+    assert!(
+        metas[0].is_writable,
+        "writability is preserved; only signer authority is withheld"
+    );
 }

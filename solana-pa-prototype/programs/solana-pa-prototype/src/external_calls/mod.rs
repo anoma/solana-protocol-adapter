@@ -9,6 +9,8 @@ pub use cpi::execute_external_calls;
 
 use crate::error::PAError;
 use crate::types::SolanaExternalCall;
+use anchor_lang::prelude::AccountInfo;
+use anchor_lang::solana_program::instruction::AccountMeta;
 use arm_core::logic_instance::ExpirableBlob;
 use arm_core::transaction::Transaction;
 use arm_core::utils::bytes_to_words;
@@ -95,6 +97,27 @@ pub fn extract_external_calls(
     }
 
     Ok(calls)
+}
+
+/// Build the account metas for a forwarder CPI from its segment.
+///
+/// `segment[0]` is the forwarder program itself; the metas cover the rest.
+///
+/// Signer authority is never propagated. Solana grants an account the highest
+/// privilege it holds anywhere in the message, so an outer signer appearing in a
+/// forwarded position would otherwise reach the forwarder as a signer. Signing a
+/// settlement authorizes submission, not action by whatever program the proof
+/// names. Writability is passed through: forwarders legitimately need writable
+/// accounts, and the proof does not yet bind which (finding EXT-06).
+pub fn build_account_metas(segment: &[AccountInfo<'_>]) -> Vec<AccountMeta> {
+    segment[1..]
+        .iter()
+        .map(|ai| AccountMeta {
+            pubkey: *ai.key,
+            is_signer: false,
+            is_writable: ai.is_writable,
+        })
+        .collect()
 }
 
 /// Anchor discriminator for BlockTimeForwarder::forward_call (sha256("global:forward_call")[..8])
