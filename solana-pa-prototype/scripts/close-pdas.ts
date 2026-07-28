@@ -23,6 +23,35 @@ import {
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
 import { PA_STATE_SEED } from "../tests/utils/constants";
 
+/**
+ * Fail loudly with an actionable message when the deployed program's IDL
+ * doesn't define `instructionName`, instead of letting `program.methods.*`
+ * throw an opaque "is not a function" TypeError deep inside a batch loop.
+ *
+ * An instruction can be absent either because the program was built without
+ * the Cargo feature that defines it (e.g. `close_markers_batch` requires
+ * `dev-teardown`), or because it doesn't exist on this branch at all (e.g.
+ * `close_pa_state` only exists on `solana/anomapay`).
+ */
+function requireInstruction(
+  program: Program<SolanaPaPrototype>,
+  instructionName: string
+): void {
+  const present = program.idl.instructions.some(
+    (ix) => ix.name === instructionName
+  );
+  if (!present) {
+    console.error(
+      `❌ Instruction '${instructionName}' is not present in the deployed ` +
+      `program's IDL (target/idl/solana_pa_prototype.json).\n` +
+      `   Either the program was built without the Cargo feature that ` +
+      `defines it (e.g. 'dev-teardown' for close_markers_batch), or the ` +
+      `instruction does not exist on this branch. This script cannot proceed.`
+    );
+    process.exit(1);
+  }
+}
+
 async function main() {
   const paStateOnly = process.argv.includes("--pa-state-only");
 
@@ -59,6 +88,8 @@ async function main() {
   let totalRecovered = 0;
 
   if (!paStateOnly) {
+    requireInstruction(program, "close_markers_batch");
+
     // Find all 0-byte marker accounts (nullifier + root markers)
     const markers = await connection.getProgramAccounts(program.programId, {
       filters: [{ dataSize: 0 }],
@@ -103,6 +134,7 @@ async function main() {
   }
 
   // Close PAState last
+  requireInstruction(program, "close_pa_state");
   console.log("\nClosing PAState...");
   const paStateLamports = paStateInfo.lamports;
   try {

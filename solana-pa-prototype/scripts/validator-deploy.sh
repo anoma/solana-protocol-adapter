@@ -173,7 +173,12 @@ sync_program_ids() {
       git checkout HEAD -- target/deploy/ 2>/dev/null || true
     else
       echo "    Generating program keypairs (first build)..."
-      build_with_filtered_output anchor build --no-idl
+      # dev-teardown is a solana-pa-prototype-only Cargo feature; scope it
+      # with -p so the other programs' builds don't get an unknown-feature
+      # error (they don't define dev-teardown).
+      build_with_filtered_output anchor build -p solana-pa-prototype --no-idl -- --features dev-teardown
+      build_with_filtered_output anchor build -p block-time-forwarder --no-idl
+      build_with_filtered_output anchor build -p test-forwarder --no-idl
     fi
   fi
 
@@ -215,7 +220,15 @@ build_programs() {
   rm -rf target/debug/incremental target/debug/build
 
   echo "    Building programs..."
-  build_with_filtered_output anchor build
+  # dev-teardown enables close_markers_batch (development-only marker PDA
+  # reclamation). This script only runs the local integration test suite, so
+  # the dev build is always what's under test — production builds run plain
+  # `anchor build` without this flag (see dev.sh's anchor-build command).
+  # It's a solana-pa-prototype-only Cargo feature, so it must be scoped with
+  # -p rather than passed to the whole-workspace build.
+  build_with_filtered_output anchor build -p solana-pa-prototype -- --features dev-teardown
+  build_with_filtered_output anchor build -p block-time-forwarder
+  build_with_filtered_output anchor build -p test-forwarder
 
   # Validate required fixture contains the correct program ID.
   local REQUIRED_FIXTURE="tests/fixtures/batch_groth16.json"

@@ -16,6 +16,10 @@ no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
+# Development-only teardown tooling (marker PDA reclamation). Deliberately
+# excluded from `default` — see `close_markers_batch` in src/lib.rs. Must
+# never be enabled in a production build.
+dev-teardown = []
 
 [dependencies]
 anchor-lang = { workspace = true }

@@ -133,7 +133,14 @@ case "${1:-}" in
     ;;
 
   anchor-build)
-    run_in_project "anchor build --no-idl"
+    # dev-teardown enables close_markers_batch, development-only marker
+    # reclamation tooling. It's a solana-pa-prototype-only Cargo feature, so
+    # it must be scoped to that program (`-p`) rather than passed to the
+    # whole-workspace build — the other programs don't define this feature
+    # and `anchor build -- --features dev-teardown` would fail on them.
+    # A production build runs plain `anchor build` without this flag so the
+    # instruction is absent from the deployed binary.
+    run_in_project "anchor build -p solana-pa-prototype --no-idl -- --features dev-teardown && anchor build -p block-time-forwarder --no-idl && anchor build -p test-forwarder --no-idl"
     ;;
 
   anchor-test)

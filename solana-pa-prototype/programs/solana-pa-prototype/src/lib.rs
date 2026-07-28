@@ -347,7 +347,17 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Emergency stop — permanently pause the protocol (requires upgrade to unpause).
+    /// Emergency stop — terminal. Retires this deployment permanently.
+    ///
+    /// There is no resume instruction: `Running` is set only at initialization
+    /// and this is the only transition out of it. Recovery from a stop is
+    /// migration to a new deployment, matching the EVM adapter, which has no
+    /// unpause and whose contract is not upgradeable.
+    ///
+    /// Solana programs are upgradeable, so the runtime does not enforce this the
+    /// way EVM immutability does. Teardown must set the program's upgrade
+    /// authority to `None` before `close_markers_batch` reclaims marker rent,
+    /// because closing markers destroys replay protection and root history.
     pub fn emergency_stop(ctx: Context<EmergencyStop>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         require!(
@@ -407,8 +417,14 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Close multiple marker PDAs (nullifier or root) in one transaction.
-    /// Markers are passed as remaining_accounts.
+    /// Close marker PDAs and reclaim their rent. Development tooling only.
+    ///
+    /// Deleting nullifier markers destroys replay protection, and re-initializing
+    /// reuses the same `pa_state` address and therefore the same marker
+    /// addresses, so previously spent nullifiers become spendable again. That is
+    /// the point during development and must be impossible in production, so this
+    /// instruction is absent unless `dev-teardown` is enabled.
+    #[cfg(feature = "dev-teardown")]
     pub fn close_markers_batch<'info>(
         ctx: Context<'_, '_, '_, 'info, CloseMarkersBatch<'info>>,
     ) -> Result<()> {
@@ -947,6 +963,7 @@ pub struct UpdateExpiryConfig<'info> {
     pub authority: Signer<'info>,
 }
 
+#[cfg(feature = "dev-teardown")]
 #[derive(Accounts)]
 pub struct CloseMarkersBatch<'info> {
     #[account(
