@@ -123,7 +123,15 @@ close_program() {
 
 build_programs() {
   echo "Building programs..."
-  anchor build --no-idl
+  # Devnet is a development network, and this script's teardown/close-pdas
+  # commands exist to reset it — so devnet builds carry dev-teardown, which
+  # enables close_markers_batch (marker PDA reclamation). Without it,
+  # cmd_teardown/cmd_close_pdas cannot reclaim marker rent at all.
+  # dev-teardown is a solana-pa-prototype-only Cargo feature, so it must be
+  # scoped with -p rather than passed to the whole-workspace build.
+  anchor build -p solana-pa-prototype --no-idl -- --features dev-teardown
+  anchor build -p block-time-forwarder --no-idl
+  anchor build -p test-forwarder --no-idl
 }
 
 init_pa() {
