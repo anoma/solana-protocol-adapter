@@ -136,8 +136,10 @@ fn test_create_root_marker_pda_mismatch() {
     assert_anchor_err!(result, RootPdaMismatch);
 }
 
+/// A repeated produced root means the tree stopped advancing. Fail loudly rather
+/// than silently reusing the marker.
 #[test]
-fn test_create_root_marker_idempotent_existing() {
+fn test_create_root_marker_rejects_existing_marker() {
     let program_id = Pubkey::new_unique();
     let pa_state_key = Pubkey::new_unique();
     let root_bytes = [0xDD; 32];
@@ -147,7 +149,6 @@ fn test_create_root_marker_idempotent_existing() {
 
     make_account_info!(payer, &pa_state_key, owner: &system_program_id,
         lamports: 1_000_000, signer: true, writable: false, executable: false);
-    // Already owned by program → idempotent success
     make_account_info!(marker, &expected_pda, owner: &program_id,
         lamports: 1, signer: false, writable: true, executable: false);
     make_account_info!(system_program, &system_program_id, owner: &system_program_id,
@@ -162,10 +163,7 @@ fn test_create_root_marker_idempotent_existing() {
         &system_program,
         1,
     );
-    assert!(
-        result.is_ok(),
-        "Should return Ok when marker already exists (idempotent)"
-    );
+    assert_anchor_err!(result, RootMarkerAlreadyExists);
 }
 
 #[test]

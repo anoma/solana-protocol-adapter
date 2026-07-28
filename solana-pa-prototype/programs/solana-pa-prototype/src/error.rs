@@ -107,6 +107,10 @@ pub enum PAError {
     MarkerUnexpectedOwner,
     #[msg("Marker address already contains data")]
     MarkerUnexpectedData,
+
+    // Root retention
+    #[msg("Root marker already exists: the commitment tree produced a repeated root")]
+    RootMarkerAlreadyExists,
 }
 
 impl From<SolanaArmError> for PAError {

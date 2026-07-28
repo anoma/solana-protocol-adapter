@@ -180,6 +180,7 @@ pub mod solana_pa_prototype {
             ctx.remaining_accounts,
             &payer,
             &ctx.accounts.system_program.to_account_info(),
+            &ctx.accounts.new_root_marker.to_account_info(),
             VerifierAccounts {
                 router_program: ctx.accounts.verifier_router_program.to_account_info(),
                 router: ctx.accounts.router.to_account_info(),
@@ -356,6 +357,7 @@ pub mod solana_pa_prototype {
             ctx.remaining_accounts,
             &payer,
             &ctx.accounts.system_program.to_account_info(),
+            &ctx.accounts.new_root_marker.to_account_info(),
             VerifierAccounts {
                 router_program: ctx.accounts.verifier_router_program.to_account_info(),
                 router: ctx.accounts.router.to_account_info(),
@@ -534,9 +536,15 @@ fn maybe_grow_account<'info>(
 /// `remaining_accounts` layout:
 ///   [0..nullifier_count]  — nullifier marker PDAs (created by this function)
 ///   [nullifier_count..N]  — external call forwarder segments (program + CPI accounts)
-///   [last]                — (optional) new root marker PDA
 ///
 /// Historical root marker PDAs are found by key scan, so they may appear at any index.
+/// The marker for the root this settlement produces is a separate named account
+/// (`new_root_marker`), not part of `remaining_accounts`.
+///
+/// The account parameters are individually threaded (rather than grouped into a
+/// struct) because each is used independently and at a different point in the
+/// function body; grouping would not reduce the real complexity, only relocate it.
+#[allow(clippy::too_many_arguments)]
 fn execute_settlement<'info>(
     state: &mut PAStateAccount,
     pa_state_info: &AccountInfo<'info>,
@@ -544,6 +552,7 @@ fn execute_settlement<'info>(
     remaining_accounts: &[AccountInfo<'info>],
     payer: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
+    new_root_marker: &AccountInfo<'info>,
     verifier: VerifierAccounts<'info>,
 ) -> Result<()> {
     let pa_state_key = pa_state_info.key;
@@ -677,22 +686,22 @@ fn execute_settlement<'info>(
 
     let new_root = state.root;
 
-    // Root markers enable parallel transaction construction against historical roots.
+    // Every state-changing settlement must retain its resulting root so that
+    // concurrently constructed transactions remain valid after the tree advances.
+    // Solana cannot create an undeclared account, so the marker is required and a
+    // settlement that omits it is rejected.
     let (expected_pda, _) = root::derive_root_pda(&crate::ID, pa_state_key, &new_root);
-    if let Some(last_account) = remaining_accounts.last() {
-        if last_account.key == &expected_pda {
-            root::create_root_marker(
-                &crate::ID,
-                pa_state_key,
-                &new_root,
-                payer,
-                last_account,
-                system_program,
-                ml,
-            )?;
-            msg!("Created root marker for new root");
-        }
-    }
+    require_keys_eq!(expected_pda, *new_root_marker.key, PAError::RootPdaMismatch);
+    root::create_root_marker(
+        &crate::ID,
+        pa_state_key,
+        &new_root,
+        payer,
+        new_root_marker,
+        system_program,
+        ml,
+    )?;
+    msg!("Created root marker for new root");
 
     Ok(())
 }
@@ -778,6 +787,12 @@ pub struct Settle<'info> {
     pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
 
+    /// CHECK: Validated at runtime against the root produced by this settlement.
+    /// Cannot use a seeds constraint: the address depends on the resulting root,
+    /// which is only known after commitments are appended.
+    #[account(mut)]
+    pub new_root_marker: UncheckedAccount<'info>,
+
     /// CHECK: Validated against verifier_router stored in PAStateAccount.
     #[account(constraint = verifier_router_program.key() == pa_state.verifier_router @ PAError::VerifierRouterFailed)]
     pub verifier_router_program: UncheckedAccount<'info>,
@@ -812,6 +827,12 @@ pub struct SettleFromTxData<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Validated at runtime against the root produced by this settlement.
+    /// Cannot use a seeds constraint: the address depends on the resulting root,
+    /// which is only known after commitments are appended.
+    #[account(mut)]
+    pub new_root_marker: UncheckedAccount<'info>,
 
     /// CHECK: Validated against verifier_router stored in PAStateAccount.
     #[account(constraint = verifier_router_program.key() == pa_state.verifier_router @ PAError::VerifierRouterFailed)]

@@ -26,12 +26,11 @@ pub fn derive_root_pda(
     Pubkey::find_program_address(&[ROOT_SEED, pa_state.as_ref(), root_bytes], program_id)
 }
 
-/// Create a root marker PDA if it doesn't already exist.
-///
-/// Returns Ok(()) if marker was created or already exists (idempotent).
+/// Create a root marker PDA for a newly produced root.
 ///
 /// # Errors
 /// * `PAError::RootPdaMismatch` - Provided marker doesn't match expected PDA
+/// * `PAError::RootMarkerAlreadyExists` - Marker already recorded (repeated root)
 pub fn create_root_marker<'info>(
     program_id: &Pubkey,
     pa_state_key: &Pubkey,
@@ -46,10 +45,12 @@ pub fn create_root_marker<'info>(
     // Verify the provided account matches expected PDA
     require_keys_eq!(expected_key, *marker.key, PAError::RootPdaMismatch);
 
-    // Already ours: the root was recorded by an earlier settlement. Task 6
-    // replaces this with an error; today it stays idempotent.
+    // A repeated produced root is unreachable in normal operation: every
+    // settlement appends at least one commitment and next_index strictly
+    // increases. Reaching this means a hash collision or a tree-accounting bug,
+    // both of which must surface rather than pass quietly.
     if marker.owner == program_id {
-        return Ok(());
+        return err!(PAError::RootMarkerAlreadyExists);
     }
 
     let signer_seeds: &[&[u8]] = &[

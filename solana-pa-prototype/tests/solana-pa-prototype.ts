@@ -82,6 +82,69 @@ function deriveRootPda(root: Buffer): PublicKey {
   )[0];
 }
 
+// `newRootMarker` is a required named account, so every settle/settleFromTxdata
+// call needs a value even when the test expects settlement to fail before the
+// account is ever read. This reuses the well-known genesis marker PDA purely
+// as a syntactically valid placeholder — its address is irrelevant for those
+// tests since the instruction fails earlier.
+const DUMMY_ROOT_MARKER = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
+
+// Predict the produced-root marker PDA for a settlement whose resulting root is
+// only known after commitments are appended on-chain.
+//
+// The address depends on the post-settlement root, so it cannot be derived from
+// instruction inputs. Rather than reimplementing the merkle append (and the
+// bincode commitment extraction it needs) in TypeScript, this runs the real
+// instruction as a simulation against a throwaway marker address. The program
+// reaches the runtime check, `require_keys_eq!(expected_pda, provided)` fails,
+// and Anchor logs both compared pubkeys — "Left:" followed by the expected
+// address, "Right:" followed by the one supplied. Reading "Left:" back out
+// yields the exact address the real send must use. Simulation commits nothing.
+//
+// Uses connection.simulateTransaction directly rather than Anchor's .simulate():
+// Anchor wraps failures in an error whose shape varies by failure mode, while
+// the connection call returns {value: {err, logs}} unconditionally and never
+// throws on program failure.
+//
+// Only valid for settlements expected to succeed. One that fails earlier never
+// reaches the comparison, and this throws rather than returning a wrong address.
+async function predictRootMarkerPda(
+  buildSettle: (marker: PublicKey) => { transaction: () => Promise<Transaction> },
+  feePayer: PublicKey,
+): Promise<PublicKey> {
+  const probeMarker = Keypair.generate().publicKey;
+  const probeTx = await buildSettle(probeMarker).transaction();
+  probeTx.feePayer = feePayer;
+
+  const sim = await provider.connection.simulateTransaction(probeTx);
+  const logs = sim.value.logs ?? [];
+  const tail = logs.slice(-20).join("\n");
+
+  if (!sim.value.err) {
+    throw new Error(
+      "Probe settlement unexpectedly succeeded against a random marker address; " +
+        "the produced-root marker check did not run.\n" + tail,
+    );
+  }
+
+  const errIdx = logs.findIndex((l) => l.includes("Error Code: RootPdaMismatch"));
+  if (errIdx === -1) {
+    throw new Error(
+      "Could not predict root marker: the probe settlement failed before reaching " +
+        `the produced-root marker check. Simulation error: ${JSON.stringify(sim.value.err)}\n${tail}`,
+    );
+  }
+  const leftIdx = logs.findIndex((l, i) => i > errIdx && l.includes("Left:"));
+  if (leftIdx === -1 || leftIdx + 1 >= logs.length) {
+    throw new Error(`Could not predict root marker: no "Left:" pubkey after RootPdaMismatch.\n${tail}`);
+  }
+  const match = logs[leftIdx + 1].match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);
+  if (!match) {
+    throw new Error(`Could not parse pubkey from simulation log line: "${logs[leftIdx + 1]}"`);
+  }
+  return new PublicKey(match[0]);
+}
+
 function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
   return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
 }
@@ -90,7 +153,6 @@ function buildSettleRemainingAccounts(
   nullifierAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
   options?: {
     additionalHistoricalRootMarkers?: PublicKey[];
-    newRootMarkerPda?: PublicKey;
   }
 ): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
   const accounts = [
@@ -102,9 +164,6 @@ function buildSettleRemainingAccounts(
     for (const marker of options.additionalHistoricalRootMarkers) {
       accounts.push({ pubkey: marker, isWritable: false, isSigner: false });
     }
-  }
-  if (options?.newRootMarkerPda) {
-    accounts.push({ pubkey: options.newRootMarkerPda, isWritable: true, isSigner: false });
   }
   return accounts;
 }
@@ -239,29 +298,36 @@ function parseAnchorEvents(logs: string[]) {
 async function settleFixtureViaTxData(
   payload: Buffer,
   remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+  options?: { newRootMarker?: PublicKey },
 ): Promise<string> {
   const authority = Keypair.generate();
   await airdrop(provider, authority, 2);
   const { uploadId, txData } = await uploadTxData(authority, payload);
-  return program.methods
-    .settleFromTxdata(uploadId)
-    .accounts({
-      paState,
-      txData,
-      authority: authority.publicKey,
-      systemProgram: SystemProgram.programId,
-      verifierRouterProgram: VERIFIER_ROUTER_ID,
-      router: routerPda,
-      verifierEntry: verifierEntryPda,
-      verifierProgram: GROTH16_VERIFIER_ID,
-    })
-    .remainingAccounts(remainingAccounts)
-    .preInstructions([
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-    ])
-    .signers([authority])
-    .rpc();
+
+  const buildSettle = (newRootMarker: PublicKey) =>
+    program.methods
+      .settleFromTxdata(uploadId)
+      .accounts({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+        newRootMarker,
+        verifierRouterProgram: VERIFIER_ROUTER_ID,
+        router: routerPda,
+        verifierEntry: verifierEntryPda,
+        verifierProgram: GROTH16_VERIFIER_ID,
+      })
+      .remainingAccounts(remainingAccounts)
+      .preInstructions([
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+      ])
+      .signers([authority]);
+
+  const newRootMarker =
+    options?.newRootMarker ?? (await predictRootMarkerPda(buildSettle, authority.publicKey));
+  return buildSettle(newRootMarker).rpc();
 }
 
 describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
@@ -276,7 +342,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     payload: Buffer,
     options?: {
       nullifierAccounts?: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[];
-      newRootMarkerPda?: PublicKey;
+      newRootMarker?: PublicKey;
       additionalHistoricalRootMarkers?: PublicKey[];
     }
   ) {
@@ -289,25 +355,30 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       options
     );
 
-    return program.methods
-      .settleFromTxdata(uploadId)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-        verifierRouterProgram: VERIFIER_ROUTER_ID,
-        router: routerPda,
-        verifierEntry: verifierEntryPda,
-        verifierProgram: GROTH16_VERIFIER_ID,
-      })
-      .remainingAccounts(allRemainingAccounts)
-      .preInstructions([
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-      ])
-      .signers([authority])
-      .rpc();
+    const buildSettle = (newRootMarker: PublicKey) =>
+      program.methods
+        .settleFromTxdata(uploadId)
+        .accounts({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          newRootMarker,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: GROTH16_VERIFIER_ID,
+        })
+        .remainingAccounts(allRemainingAccounts)
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+        ])
+        .signers([authority]);
+
+    const newRootMarker =
+      options?.newRootMarker ?? (await predictRootMarkerPda(buildSettle, authority.publicKey));
+    return buildSettle(newRootMarker).rpc();
   }
 
   let genesisRootMarkerPda: PublicKey;
@@ -414,7 +485,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     txWitness.writeUInt32LE(0, idx);
 
     try {
-      await settleViaTxData(Keypair.generate(), txWitness);
+      await settleViaTxData(Keypair.generate(), txWitness, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected settle to fail");
     } catch (e: any) {
       // Patching the Delta variant from Proof→Witness corrupts the Borsh layout.
@@ -434,7 +505,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
 
   it("rejects a tampered tx (proof binding)", async () => {
     try {
-      await settleViaTxData(Keypair.generate(), txTampered);
+      await settleViaTxData(Keypair.generate(), txTampered, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected settle to fail");
     } catch (e: any) {
       // The PA calls the verifier router via CPI, which calls the groth16 verifier.
@@ -514,6 +585,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     try {
       await settleViaTxData(Keypair.generate(), mismatchTx, {
         nullifierAccounts: mismatchNullifierAccounts,
+        newRootMarker: DUMMY_ROOT_MARKER,
       });
       assert.fail("expected settle to fail with ExternalCallOutputMismatch");
     } catch (e: any) {
@@ -565,6 +637,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -600,6 +673,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -639,6 +713,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -672,6 +747,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: fakeRouter,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -710,6 +786,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -772,6 +849,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -1617,6 +1695,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
           txData,
           authority: wrongAuthority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -1892,6 +1971,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -2018,7 +2098,7 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
+      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail(`expected ${expectedError} error`);
     } catch (e: any) {
       assertPAError(e, expectedError);
@@ -2075,7 +2155,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
     ];
 
     try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
+      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected CPI failure");
     } catch (e: any) {
       // CPI error propagation: Solana records the INNER program's error code,
@@ -2100,7 +2180,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
     ];
 
     try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
+      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected CPI failure from test-forwarder");
     } catch (e: any) {
       // CPI error propagation: test-forwarder's IntentionalFailure (6000)
@@ -2123,7 +2203,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
     ];
 
     try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
+      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected ExternalCallOutputMismatch error");
     } catch (e: any) {
       assertPAError(e, "ExternalCallOutputMismatch");
@@ -2209,17 +2289,19 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     assert.deepEqual(outputBytes, Buffer.from([0x00]), "output should be RESULT_LT (0x00)");
   });
 
-  it("does not create root marker when PDA not passed", async () => {
-    // Verify the PA's current root does NOT have a root marker — the PA only
-    // creates markers when the correct PDA is provided as the last remaining_account.
+  it("creates a root marker for every settlement (mandatory retention)", async () => {
+    // The marker is now a required named account, so there is no longer an
+    // "omitted marker" case: the v2 settlement above could not have succeeded
+    // without retaining its resulting root.
     const state = await program.account.paStateAccount.fetch(paState);
     const currentRoot = Buffer.from(state.root as number[]);
     const rootMarkerPda = deriveRootPda(currentRoot);
 
     const info = await provider.connection.getAccountInfo(rootMarkerPda);
-    assert.isNull(
-      info,
-      "Root marker should NOT exist when PDA was not passed in remaining_accounts",
+    assert.ok(info, "Root marker should exist for the current root after settlement");
+    assert.ok(
+      info!.owner.equals(program.programId),
+      "Root marker should be owned by the PA program",
     );
   });
 
@@ -2354,6 +2436,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -2385,6 +2468,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
