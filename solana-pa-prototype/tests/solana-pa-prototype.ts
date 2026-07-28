@@ -649,6 +649,53 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   });
 });
 
+// ── Historical-root marker with a real Merkle-inclusion proof ───────────────
+// Every fixture above consumes an `is_ephemeral: true` resource: the compliance
+// circuit reports its consumed_commitment_tree_root as an unconstrained
+// `ephemeral_root` (here, always PADDING_LEAF), never a real Merkle path. Since
+// PADDING_LEAF is accepted by `is_root_valid` unconditionally, before the
+// marker lookup ever runs, none of those settlements exercise the
+// historical-root-marker branch.
+//
+// `is_ephemeral` is itself part of the resource's commitment hash, so a
+// resource created as `is_ephemeral: true` (as every one above is) can never
+// later be consumed through a genuine Merkle path -- flipping the flag would
+// change the commitment and no longer match the leaf actually recorded
+// on-chain. Proving the marker mechanism with a real inclusion proof therefore
+// requires a purpose-built "committer" transaction whose created resource is
+// genuinely non-ephemeral.
+//
+// The committer's Merkle path is baked to leaf index 1, so it must settle
+// immediately after batch_groth16.json (leaf 0) and before any other
+// settlement -- hence this block's position. The matching "consumer", which
+// spends that leaf through the real path, runs much later (see STATE-03 part
+// 2), by which point further settlements have advanced the tree and the
+// committer's root is genuinely historical.
+describe("solana-pa-prototype (STATE-03 part 1: commit a non-ephemeral leaf)", () => {
+  async function alreadySettledLocal(fixtureName: string): Promise<boolean> {
+    const f = loadFixture(fixtureName);
+    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
+    const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
+    return !!info;
+  }
+
+  it("settles the historical-root committer (its created resource is genuinely non-ephemeral)", async () => {
+    if (await alreadySettledLocal("batch_groth16_historical_root_committer.json")) {
+      return;
+    }
+
+    const committerFixture = loadFixture("batch_groth16_historical_root_committer.json");
+    const payload = Buffer.from(committerFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(committerFixture.consumed_nullifiers_b64);
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+
+    const nextIndexBefore = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
+    await settleFixtureViaTxData(payload, remainingAccounts);
+    const nextIndexAfter = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
+    assert.equal(nextIndexAfter, nextIndexBefore + 1);
+  });
+});
+
 describe("solana-pa-prototype (Re-initialization guard)", () => {
   it("rejects re-initialization of PAState", async () => {
     // PAState was already initialized in the E2E before() hook.
@@ -2407,6 +2454,111 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
   });
 });
+
+// ── STATE-03 part 2: spend the committed leaf via its retained root ────────
+// By now several settlements have advanced the commitment tree well past the
+// root the committer produced, so that root is genuinely historical: it is
+// neither the current root nor PADDING_LEAF. The only branch of
+// `is_root_valid` that can still admit it is the root-marker lookup, which is
+// exactly the branch no maintained test had ever exercised on a validator.
+describe("solana-pa-prototype (STATE-03 part 2: settle against a retained historical root)", () => {
+  async function alreadySettledLocal(fixtureName: string): Promise<boolean> {
+    const f = loadFixture(fixtureName);
+    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
+    const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
+    return !!info;
+  }
+  // The consumer's root must be genuinely superseded before either of the two
+  // tests below runs, otherwise `is_root_valid` would return true on its
+  // *first* branch (root == current root) and the marker branch would again go
+  // untested. Asserted explicitly rather than assumed from test ordering.
+  function consumerHistoricalRoot(): { rootB64: string; marker: PublicKey } {
+    const consumerFixture = loadFixture("batch_groth16_historical_root.json");
+    const historicalRoots = consumerFixture.historical_roots_b64 ?? [];
+    assert.lengthOf(
+      historicalRoots,
+      1,
+      "consumer fixture must carry exactly one historical (non-current) root",
+    );
+    const rootB64 = historicalRoots[0];
+
+    // The exact trap every other fixture falls into: if the claimed root were
+    // PADDING_LEAF, is_root_valid would accept it unconditionally, before the
+    // marker lookup ever runs, and these tests would prove nothing about root
+    // retention.
+    assert.notEqual(
+      rootB64,
+      EMPTY_TREE_ROOT_INITIAL.toString("base64"),
+      "consumer's historical root must not be PADDING_LEAF -- otherwise is_root_valid " +
+        "admits it unconditionally and this test would not exercise the marker path",
+    );
+
+    return { rootB64, marker: deriveRootPda(Buffer.from(rootB64, "base64")) };
+  }
+
+  async function assertRootIsHistoricalNotCurrent(rootB64: string) {
+    const state = await program.account.paStateAccount.fetch(paState);
+    const currentRootB64 = Buffer.from(state.root as number[]).toString("base64");
+    assert.notEqual(
+      rootB64,
+      currentRootB64,
+      "consumer's root is still the current root -- is_root_valid would accept it on its " +
+        "first branch, so the marker path would remain untested",
+    );
+  }
+
+  // Runs before the success case: at this point the consumer has never
+  // settled, so a rejection here is unambiguous. Its root is neither current
+  // nor PADDING_LEAF, so withholding the marker leaves is_root_valid no branch
+  // that can admit it. This is the half that proves the marker is load-bearing
+  // rather than some other path letting the transaction through.
+  it("rejects the consumer when its historical root marker is withheld (NonExistingRoot)", async () => {
+    const { rootB64 } = consumerHistoricalRoot();
+    await assertRootIsHistoricalNotCurrent(rootB64);
+
+    const consumerFixture = loadFixture("batch_groth16_historical_root.json");
+    const payload = Buffer.from(consumerFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(consumerFixture.consumed_nullifiers_b64);
+    // Deliberately no additionalHistoricalRootMarkers.
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+
+    try {
+      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
+      assert.fail("expected settle to fail with NonExistingRoot");
+    } catch (e: any) {
+      assertPAError(e, "NonExistingRoot");
+    }
+  });
+
+  it("settles the consumer when its historical root marker is supplied (retention works)", async () => {
+    const { rootB64, marker } = consumerHistoricalRoot();
+    await assertRootIsHistoricalNotCurrent(rootB64);
+
+    const markerInfo = await provider.connection.getAccountInfo(marker);
+    assert.ok(markerInfo, "historical root marker should exist from the committer's settlement");
+    assert.ok(
+      markerInfo!.owner.equals(program.programId),
+      "root marker should be owned by the PA program",
+    );
+
+    if (await alreadySettledLocal("batch_groth16_historical_root.json")) {
+      return;
+    }
+
+    const consumerFixture = loadFixture("batch_groth16_historical_root.json");
+    const payload = Buffer.from(consumerFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(consumerFixture.consumed_nullifiers_b64);
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts, {
+      additionalHistoricalRootMarkers: [marker],
+    });
+
+    const nextIndexBefore = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
+    await settleFixtureViaTxData(payload, remainingAccounts);
+    const nextIndexAfter = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
+    assert.equal(nextIndexAfter, nextIndexBefore + 1, "consumer settlement should append its commitment");
+  });
+});
+
 
 // ── Close-while-running guard ────────────────────────────────────────────
 // Verifies that teardown operations cannot be performed while the PA is

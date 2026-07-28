@@ -180,11 +180,11 @@ case "${1:-}" in
     ;;
 
   fmt)
-    run_in_project "cargo fmt -p solana-pa-prototype -p block-time-forwarder -- --check"
+    run_in_project "cargo fmt -p solana-pa-prototype -p block-time-forwarder -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
     ;;
 
   clippy)
-    run_in_project "cargo clippy -p solana-pa-prototype -p block-time-forwarder --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
+    run_in_project "cargo clippy -p solana-pa-prototype -p block-time-forwarder --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
     ;;
 
   devnet)
