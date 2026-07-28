@@ -81,6 +81,7 @@ pub mod encoding;
 pub mod error;
 pub mod external_calls;
 pub mod groth16;
+pub mod marker;
 pub mod merkle;
 pub mod nullifier;
 pub mod root;

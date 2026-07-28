@@ -101,6 +101,12 @@ pub enum PAError {
     // External call encoding
     #[msg("External call expected_output must be non-empty: Solana cannot represent an explicit empty return")]
     EmptyExpectedOutput,
+
+    // Marker creation
+    #[msg("Marker address is held by an unexpected owner")]
+    MarkerUnexpectedOwner,
+    #[msg("Marker address already contains data")]
+    MarkerUnexpectedData,
 }
 
 impl From<SolanaArmError> for PAError {

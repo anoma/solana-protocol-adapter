@@ -12,9 +12,7 @@ use crate::error::PAError;
 use crate::merkle::PADDING_LEAF;
 use crate::state::PAStateAccount;
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::invoke_signed;
 use arm_core::Digest;
-use solana_system_interface::instruction as system_instruction;
 
 /// Seeds prefix for root marker PDA derivation.
 pub const ROOT_SEED: &[u8] = b"root";
@@ -48,15 +46,11 @@ pub fn create_root_marker<'info>(
     // Verify the provided account matches expected PDA
     require_keys_eq!(expected_key, *marker.key, PAError::RootPdaMismatch);
 
-    // If already owned by this program, marker already exists - success (idempotent)
+    // Already ours: the root was recorded by an earlier settlement. Task 6
+    // replaces this with an error; today it stays idempotent.
     if marker.owner == program_id {
         return Ok(());
     }
-
-    let ix = system_instruction::create_account(
-        payer.key, marker.key, lamports, 0, // 0 bytes - existence alone indicates valid
-        program_id,
-    );
 
     let signer_seeds: &[&[u8]] = &[
         ROOT_SEED,
@@ -65,13 +59,14 @@ pub fn create_root_marker<'info>(
         &[bump],
     ];
 
-    invoke_signed(
-        &ix,
-        &[payer.clone(), marker.clone(), system_program.clone()],
-        &[signer_seeds],
-    )?;
-
-    Ok(())
+    crate::marker::create_or_adopt_marker(
+        program_id,
+        signer_seeds,
+        payer,
+        marker,
+        system_program,
+        lamports,
+    )
 }
 
 /// Check if a root is valid for transaction construction.

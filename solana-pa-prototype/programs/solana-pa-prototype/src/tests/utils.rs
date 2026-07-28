@@ -24,6 +24,28 @@ macro_rules! make_account_info {
 }
 pub(crate) use make_account_info;
 
+/// Like `make_account_info!` but with caller-supplied account data, for testing
+/// the reject-on-data branch of marker creation.
+macro_rules! make_account_info_with_data {
+    ($name:ident, $key:expr, owner: $owner:expr, lamports: $lamports:expr,
+     data: $data:expr, signer: $signer:expr, writable: $writable:expr,
+     executable: $executable:expr) => {
+        #[allow(unused_mut)]
+        let mut $name = ($lamports as u64, $data);
+        let $name = ::anchor_lang::prelude::AccountInfo::new(
+            $key,
+            $signer,
+            $writable,
+            &mut $name.0,
+            &mut $name.1,
+            $owner,
+            $executable,
+            0,
+        );
+    };
+}
+pub(crate) use make_account_info_with_data;
+
 /// Assert that a Result is an AnchorError whose `error_name` matches the given PAError variant.
 ///
 /// Anchor wraps `#[error_code]` variants into `AnchorError { error_name, error_code_number, .. }`.
