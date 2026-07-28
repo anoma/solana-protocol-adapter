@@ -1,6 +1,7 @@
+use crate::error::PAError;
 use crate::external_calls::{
-    build_forwarder_instruction_data, encode_external_call, extract_external_calls,
-    FORWARD_CALL_DISCRIMINATOR,
+    build_forwarder_instruction_data, decode_external_call, encode_external_call,
+    extract_external_calls, FORWARD_CALL_DISCRIMINATOR,
 };
 use crate::tests::utils::{
     create_minimal_transaction, create_transaction_with_external_payload,
@@ -141,4 +142,43 @@ fn test_build_forwarder_instruction_data_byte_layout() {
         "input length (Borsh u32 LE)"
     );
     assert_eq!(&data[44..], &input, "input payload");
+}
+
+/// Solana cannot distinguish an explicit empty return from silence, so a call
+/// authorizing an empty output can never settle. Reject it at decode.
+#[test]
+fn test_decode_rejects_empty_expected_output() {
+    let call = SolanaExternalCall {
+        program_id: [7u8; 32],
+        instruction_data: vec![1, 2, 3],
+        expected_output: vec![],
+        output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
+    };
+    let blob = encode_external_call(&call);
+
+    let result = decode_external_call(&blob);
+
+    assert!(
+        matches!(result, Err(PAError::EmptyExpectedOutput)),
+        "expected EmptyExpectedOutput, got {:?}",
+        result
+    );
+}
+
+/// A non-empty expected output remains valid and decodes unchanged.
+#[test]
+fn test_decode_accepts_non_empty_expected_output() {
+    let call = SolanaExternalCall {
+        program_id: [7u8; 32],
+        instruction_data: vec![1, 2, 3],
+        expected_output: vec![0x2a],
+        output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
+    };
+    let blob = encode_external_call(&call);
+
+    let decoded = decode_external_call(&blob).expect("non-empty output must decode");
+
+    assert_eq!(decoded, call);
 }

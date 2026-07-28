@@ -228,7 +228,7 @@ pub fn make_external_call(
     crate::types::SolanaExternalCall {
         program_id,
         instruction_data,
-        expected_output: vec![],
+        expected_output: vec![0x00],
         output_mode: crate::types::OutputMode::ReturnData,
         num_accounts: 1,
     }

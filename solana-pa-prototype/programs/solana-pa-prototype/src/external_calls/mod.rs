@@ -29,7 +29,18 @@ pub fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
 /// Decode an external call from its word-array blob.
 pub fn decode_external_call(blob: &ExpirableBlob) -> Result<SolanaExternalCall, PAError> {
     let bytes = words_to_bytes(&blob.blob);
-    bincode::deserialize(bytes).map_err(|_| PAError::InvalidExternalCallBlob)
+    let call: SolanaExternalCall =
+        bincode::deserialize(bytes).map_err(|_| PAError::InvalidExternalCallBlob)?;
+
+    // Solana reports no return-data record for both `set_return_data(&[])` and a
+    // silent return, so an authorized empty output is unrepresentable. Reject it
+    // here rather than failing later as an output mismatch. Absence of return
+    // data must stay an error, never another spelling of empty.
+    if call.expected_output.is_empty() {
+        return Err(PAError::EmptyExpectedOutput);
+    }
+
+    Ok(call)
 }
 
 /// Verify that actual output matches expected output.

@@ -97,6 +97,10 @@ pub enum PAError {
     // Compliance instance parsing
     #[msg("Failed to parse compliance instance from journal bytes")]
     ComplianceInstanceParseFailed,
+
+    // External call encoding
+    #[msg("External call expected_output must be non-empty: Solana cannot represent an explicit empty return")]
+    EmptyExpectedOutput,
 }
 
 impl From<SolanaArmError> for PAError {
