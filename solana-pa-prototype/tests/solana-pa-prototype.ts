@@ -381,15 +381,10 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     return buildSettle(newRootMarker).rpc();
   }
 
-  let genesisRootMarkerPda: PublicKey;
-
   before(async () => {
-    genesisRootMarkerPda = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
-
     try {
       await program.account.paStateAccount.fetch(paState);
     } catch {
-      // Initialize with genesis root marker in remaining_accounts
       await program.methods
         .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
         .accounts({
@@ -397,21 +392,8 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
           payer: provider.wallet.publicKey,
           systemProgram: SystemProgram.programId,
         })
-        .remainingAccounts([
-          { pubkey: genesisRootMarkerPda, isWritable: true, isSigner: false },
-        ])
         .rpc();
     }
-  });
-
-  it("creates genesis root marker on initialize", async () => {
-    const info = await provider.connection.getAccountInfo(genesisRootMarkerPda);
-    assert.ok(info, "Genesis root marker PDA should exist after initialize");
-    assert.ok(
-      info!.owner.equals(program.programId),
-      "Genesis root marker should be owned by PA program"
-    );
-    assert.equal(info!.data.length, 0, "Root marker should be 0 bytes (existence-only)");
   });
 
   it("initializes with depth 1 (variable-depth tree)", async () => {
@@ -598,8 +580,6 @@ describe("solana-pa-prototype (Re-initialization guard)", () => {
   it("rejects re-initialization of PAState", async () => {
     // PAState was already initialized in the E2E before() hook.
     // A second initialize call must fail because the account already exists.
-    const genesisRootMarkerPda = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
-
     try {
       await program.methods
         .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
@@ -608,9 +588,6 @@ describe("solana-pa-prototype (Re-initialization guard)", () => {
           payer: provider.wallet.publicKey,
           systemProgram: SystemProgram.programId,
         })
-        .remainingAccounts([
-          { pubkey: genesisRootMarkerPda, isWritable: true, isSigner: false },
-        ])
         .rpc();
       assert.fail("expected re-initialization to fail");
     } catch (e: any) {
@@ -2365,11 +2342,11 @@ describe("solana-pa-prototype (close_markers_batch requires stopped state)", () 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.deepEqual(state.lifecycle, { running: {} }, "PA should be Running at start of test");
 
-    // Find any existing markers (genesis root marker + settlement markers)
+    // Find any existing markers (settlement root markers from prior settle calls)
     const markers = await provider.connection.getProgramAccounts(program.programId, {
       filters: [{ dataSize: 0 }],
     });
-    assert.ok(markers.length > 0, "Should have markers to close (genesis root marker at minimum)");
+    assert.ok(markers.length > 0, "Should have markers to close");
 
     try {
       await program.methods

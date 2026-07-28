@@ -249,3 +249,31 @@ fn test_create_root_marker_rejects_account_with_data() {
     );
     assert_anchor_err!(result, MarkerUnexpectedData);
 }
+
+/// The empty-tree root is accepted permanently through the PADDING_LEAF branch,
+/// with no marker account, even after the tree has advanced. This is why
+/// initialization does not create a genesis marker.
+#[test]
+fn test_empty_tree_root_valid_without_marker_after_tree_advances() {
+    use crate::merkle::EMPTY_TREE_ROOT_INITIAL;
+
+    // The tree has moved on: current root is something else entirely.
+    let state = state_with_root([0x99; 32]);
+    let program_id = Pubkey::new_unique();
+    let pa_state_key = Pubkey::new_unique();
+
+    assert_eq!(
+        EMPTY_TREE_ROOT_INITIAL, PADDING_LEAF,
+        "genesis root must equal PADDING_LEAF for the branch to cover it"
+    );
+    assert!(
+        is_root_valid(
+            &state,
+            &program_id,
+            &pa_state_key,
+            &EMPTY_TREE_ROOT_INITIAL,
+            &[]
+        ),
+        "empty-tree root must remain valid with no marker supplied"
+    );
+}

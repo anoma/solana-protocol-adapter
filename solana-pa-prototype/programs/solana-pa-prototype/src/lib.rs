@@ -107,23 +107,14 @@ pub mod solana_pa_prototype {
 
     /// Initialize a new PAState account.
     ///
-    /// remaining_accounts[0]: genesis root marker PDA (REQUIRED - will be created)
-    ///
-    /// The genesis root marker is required so that transactions built against the
-    /// initial empty tree remain valid after subsequent transactions update the root.
+    /// Takes no remaining accounts. The empty-tree root equals `PADDING_LEAF`,
+    /// which `is_root_valid` accepts unconditionally, so transactions built
+    /// against the initial tree stay valid without a genesis marker.
     pub fn initialize<'info>(
         ctx: Context<'_, '_, '_, 'info, Initialize<'info>>,
         verifier_router: Pubkey,
         proof_selector: [u8; 4],
     ) -> Result<()> {
-        // Genesis root marker is required
-        require!(
-            !ctx.remaining_accounts.is_empty(),
-            PAError::InvalidTransactionData
-        );
-
-        let pa_state_key = ctx.accounts.pa_state.key();
-
         let state = &mut ctx.accounts.pa_state;
         state.bump = ctx.bumps.pa_state;
         state.authority = ctx.accounts.payer.key();
@@ -138,20 +129,6 @@ pub mod solana_pa_prototype {
         state.next_index = 0;
         state.min_expiry_slots = MIN_EXPIRY_SLOTS;
         state.max_expiry_slots = MAX_EXPIRY_SLOTS;
-
-        // Create root marker for genesis root (so historical root check works from start)
-        let genesis_root = state.root;
-        let rent = Rent::get()?;
-        root::create_root_marker(
-            &crate::ID,
-            &pa_state_key,
-            &genesis_root,
-            &ctx.accounts.payer.to_account_info(),
-            &ctx.remaining_accounts[0],
-            &ctx.accounts.system_program.to_account_info(),
-            marker_lamports(&rent),
-        )?;
-        msg!("Created genesis root marker");
 
         msg!("PAState initialized with empty commitment tree");
         Ok(())
