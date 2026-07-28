@@ -1,5 +1,6 @@
-//! Tests that duplicate tags in LogicVerifierInputs are rejected by journal
-//! digest computation before external calls can execute.
+//! Tests that duplicate tags in LogicVerifierInputs are rejected both by
+//! external call extraction and by journal digest computation, so a
+//! duplicate-tag transaction can never reach execution.
 
 use crate::encoding::compute_batch_aggregation_journal_digest;
 use crate::error::PAError;
@@ -24,10 +25,12 @@ fn extra_lvi_rejected_by_count_check() {
     );
 }
 
-/// External calls are extracted from all LVIs, but journal digest computation
-/// rejects the transaction before external calls can execute.
+/// Both external call extraction and journal digest computation reject a
+/// duplicate-tag transaction. Extraction now traverses by compliance tag
+/// (same order the journal uses), so a repeated tag is ambiguous there too —
+/// it is no longer sufficient for journal digest computation alone to block it.
 #[test]
-fn duplicate_tag_external_calls_extracted_but_journal_digest_blocks() {
+fn duplicate_tag_rejected_by_extraction_and_journal_digest() {
     use crate::tests::utils::decode_cu_instance;
 
     let mut tx = create_minimal_transaction();
@@ -44,15 +47,20 @@ fn duplicate_tag_external_calls_extracted_but_journal_digest_blocks() {
             vec![1, 2, 3],
         )));
 
-    // extract_external_calls iterates all LVIs regardless of tag uniqueness.
-    let calls = extract_external_calls(&tx).unwrap();
-    assert_eq!(calls.len(), 1, "Call is extracted from app_data");
+    // extract_external_calls now traverses by compliance tag and rejects an
+    // ambiguous (repeated) tag before decoding any payload.
+    let extraction_result = extract_external_calls(&tx);
+    assert!(
+        matches!(extraction_result, Err(PAError::InvalidTransactionData)),
+        "Extraction must reject duplicate LVI tags: {:?}",
+        extraction_result
+    );
 
-    // But compute_batch_aggregation_journal_digest rejects it.
+    // Journal digest computation independently rejects it too.
     let result = compute_batch_aggregation_journal_digest(&tx);
     assert!(
         matches!(result, Err(PAError::TagNotFound)),
-        "Journal digest computation blocks before external calls can execute: {:?}",
+        "Journal digest computation must also block on the duplicate tag: {:?}",
         result
     );
 }

@@ -51,13 +51,13 @@ pub fn verify_output(expected: &[u8], actual: &[u8]) -> Result<(), PAError> {
     Ok(())
 }
 
-/// Extract external calls from a transaction.
+/// Extract external calls from a transaction in compliance-tag order.
 ///
-/// Iterates through all actions and their LogicVerifierInputs, decoding each
-/// external_payload blob as a SolanaExternalCall.
-///
-/// Returns a vec of (logic_ref, call) tuples where logic_ref is the verifying_key
-/// from the LogicVerifierInputs containing the call.
+/// The aggregation journal is built by walking each action's compliance units and
+/// looking up the matching logic input by tag (`encoding.rs`). Execution order
+/// must come from that same traversal, otherwise the serialized order of
+/// `logic_verifier_inputs` becomes a second authority over effects that the proof
+/// does not bind.
 pub fn extract_external_calls(
     tx: &Transaction,
 ) -> Result<Vec<(Digest, SolanaExternalCall)>, PAError> {
@@ -68,15 +68,32 @@ pub fn extract_external_calls(
         .map(|lvi| lvi.app_data.external_payload.len())
         .sum();
     let mut calls = Vec::with_capacity(total);
+
     for action in &tx.actions {
-        for lvi in &action.logic_verifier_inputs {
-            let logic_ref = lvi.verifying_key;
+        let (tags, _logic_refs) = crate::encoding::extract_tags_and_logic_refs(action)?;
+        if tags.len() != action.logic_verifier_inputs.len() {
+            return Err(PAError::InvalidTransactionData);
+        }
+
+        // The tag lookup must be unambiguous: a repeated tag would let one input
+        // stand in for another and make the traversal non-bijective.
+        for (i, lvi) in action.logic_verifier_inputs.iter().enumerate() {
+            if action.logic_verifier_inputs[i + 1..]
+                .iter()
+                .any(|other| other.tag == lvi.tag)
+            {
+                return Err(PAError::InvalidTransactionData);
+            }
+        }
+
+        for tag in &tags {
+            let lvi = crate::encoding::find_logic_input(&action.logic_verifier_inputs, tag)?;
             for blob in &lvi.app_data.external_payload {
-                let call = decode_external_call(blob)?;
-                calls.push((logic_ref, call));
+                calls.push((lvi.verifying_key, decode_external_call(blob)?));
             }
         }
     }
+
     Ok(calls)
 }
 
