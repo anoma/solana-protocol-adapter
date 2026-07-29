@@ -4,15 +4,19 @@
  * Usage:
  *   ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
  *   ANCHOR_WALLET=scripts/devnet-wallet.json \
- *   npx ts-node -P tsconfig.json scripts/close-pdas.ts [--pa-state-only]
+ *   npx ts-node -P tsconfig.json scripts/close-pdas.ts
  *
  * What it does:
  *   1. Finds all 0-byte marker accounts via getProgramAccounts
  *   2. Closes markers in batches (via close_markers_batch)
- *   3. Closes PAState (via close_pa_state) — last, since markers reference it
  *
- * Flags:
- *   --pa-state-only   Only close the PAState account (for re-initialization after upgrade)
+ * The PAState account is deliberately NOT closed and there is no instruction to
+ * close it. Closing it would allow re-initialization, and because the PA state
+ * PDA derives from a fixed seed, a re-initialized adapter reuses the same marker
+ * addresses — so previously closed nullifier markers would become spendable
+ * again. `close_pa_state` was removed for exactly this reason (commit deefa91,
+ * "remove close_pa_state ... preventing the reinit bypass"). Its rent is left
+ * unrecovered on purpose.
  */
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
@@ -28,10 +32,9 @@ import { PA_STATE_SEED } from "../tests/utils/constants";
  * doesn't define `instructionName`, instead of letting `program.methods.*`
  * throw an opaque "is not a function" TypeError deep inside a batch loop.
  *
- * An instruction can be absent either because the program was built without
- * the Cargo feature that defines it (e.g. `close_markers_batch` requires
- * `dev-teardown`), or because it doesn't exist on this branch at all (e.g.
- * `close_pa_state` only exists on `solana/anomapay`).
+ * An instruction is absent when the program was built without the Cargo feature
+ * that defines it — `close_markers_batch` requires `dev-teardown`, which
+ * production builds do not enable.
  */
 function requireInstruction(
   program: Program<SolanaPaPrototype>,
@@ -53,8 +56,6 @@ function requireInstruction(
 }
 
 async function main() {
-  const paStateOnly = process.argv.includes("--pa-state-only");
-
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
@@ -87,7 +88,7 @@ async function main() {
 
   let totalRecovered = 0;
 
-  if (!paStateOnly) {
+  {
     requireInstruction(program, "close_markers_batch");
 
     // Find all 0-byte marker accounts (nullifier + root markers)
@@ -133,23 +134,9 @@ async function main() {
     }
   }
 
-  // Close PAState last
-  requireInstruction(program, "close_pa_state");
-  console.log("\nClosing PAState...");
-  const paStateLamports = paStateInfo.lamports;
-  try {
-    await program.methods
-      .closePaState()
-      .accounts({
-        paState: paStatePda,
-        authority: wallet.publicKey,
-      })
-      .rpc();
-    totalRecovered += paStateLamports;
-    console.log(`  ✅ PAState closed (${(paStateLamports / LAMPORTS_PER_SOL).toFixed(6)} SOL)`);
-  } catch (e: any) {
-    console.error(`  ❌ Failed to close PAState: ${e.message}`);
-  }
+  console.log(
+    "\nPAState left open by design — closing it would permit a re-init bypass."
+  );
 
   console.log(`\n✅ Total recovered: ${(totalRecovered / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
 }

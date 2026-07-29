@@ -502,9 +502,6 @@ case "${1:-}" in
   close-pdas)
     cmd_close_pdas "${2:-}"
     ;;
-  close-pa-state)
-    cmd_close_pdas "--pa-state-only"
-    ;;
   *)
     echo "Usage: devnet.sh <command> [target]"
     echo ""
@@ -513,7 +510,6 @@ case "${1:-}" in
     echo "  upgrade [pa|btf|all]     Rebuild + deploy over existing programs"
     echo "  teardown [pa|btf|all]    PERMANENT: close programs, reclaim rent"
     echo "  close-pdas               Close all PA PDA accounts, reclaim rent"
-    echo "  close-pa-state           Close only PAState (for re-init after upgrade)"
     echo "  test                     Run integration tests against devnet"
     echo "  init                     Initialize PA state (idempotent)"
     echo "  status                   Show deployment status + wallet balance"

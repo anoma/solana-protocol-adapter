@@ -357,7 +357,6 @@ PYEOF
     echo "  devnet upgrade [pa|btf|all]   Rebuild + deploy over existing programs"
     echo "  devnet teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent"
     echo "  devnet close-pdas            Close all PA PDA accounts, reclaim rent"
-    echo "  devnet close-pa-state        Close only PAState (for re-init after upgrade)"
     echo "  devnet test                   Run integration tests against devnet"
     echo "  devnet init                   Initialize PA state (idempotent)"
     echo "  devnet status                 Show deployment status + wallet balance"
