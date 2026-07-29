@@ -33,6 +33,7 @@ import {
   ADDRESS_MISMATCH_PATTERN,
   readJson,
   loadFixture,
+  type Fixture,
   parseSelectorFromFixture,
   fundKeypair,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
@@ -215,7 +216,7 @@ async function uploadTxData(
     const chunk = payload.subarray(offset, Math.min(payload.length, offset + chunkSize));
     await program.methods
       .txdataWrite(uploadId, offset, chunk)
-      .accounts({
+      .accountsPartial({
         txData,
         authority: authority.publicKey,
       })
@@ -247,7 +248,7 @@ async function initTxData(
     new anchor.BN((await provider.connection.getSlot("confirmed")) + 10_000);
   await program.methods
     .txdataInit(uploadId, payloadSize, expiresSlot)
-    .accounts({
+    .accountsPartial({
       paState,
       txData,
       authority: authority.publicKey,
@@ -342,7 +343,7 @@ async function settleFixtureViaTxData(
   const buildSettle = (newRootMarker: PublicKey) =>
     program.methods
       .settleFromTxdata(uploadId)
-      .accounts({
+      .accountsPartial({
         paState,
         txData,
         authority: authority.publicKey,
@@ -389,7 +390,7 @@ describe("solana-pa-prototype (AUTH-01: initialization authority)", () => {
     try {
       await program.methods
         .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: stranger.publicKey,
           systemProgram: SystemProgram.programId,
@@ -456,7 +457,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     const buildSettle = (newRootMarker: PublicKey) =>
       program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
@@ -485,7 +486,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     } catch {
       await program.methods
         .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: provider.wallet.publicKey,
           systemProgram: SystemProgram.programId,
@@ -716,7 +717,7 @@ describe("solana-pa-prototype (Re-initialization guard)", () => {
     try {
       await program.methods
         .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: provider.wallet.publicKey,
           systemProgram: SystemProgram.programId,
@@ -745,7 +746,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     try {
       await program.methods
         .settle(Buffer.from([0, 1, 2, 3]))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
@@ -781,7 +782,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     try {
       await program.methods
         .settle(emptyTx)
-        .accounts({
+        .accountsPartial({
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
@@ -820,7 +821,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
@@ -855,7 +856,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     try {
       await program.methods
         .settle(Buffer.from([0, 1, 2, 3]))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
@@ -893,7 +894,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
@@ -956,7 +957,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
@@ -1002,7 +1003,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .emergencyStop()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: nonAuthority.publicKey,
         })
@@ -1029,7 +1030,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .proposeAuthority(newAuthority.publicKey)
-        .accounts({
+        .accountsPartial({
           paState,
           authority: nonAuthority.publicKey,
         })
@@ -1056,7 +1057,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Step 1: propose
     await program.methods
       .proposeAuthority(newAuthority.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1072,7 +1073,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Step 2: accept (signed by new authority)
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: newAuthority.publicKey,
       })
@@ -1088,7 +1089,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Restore: propose back, accept with provider wallet
     await program.methods
       .proposeAuthority(currentAuthority)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: newAuthority.publicKey,
       })
@@ -1097,7 +1098,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: provider.wallet.publicKey,
       })
@@ -1120,14 +1121,14 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Two-step transfer
     await program.methods
       .proposeAuthority(newAuthority.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
       .rpc();
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: newAuthority.publicKey,
       })
@@ -1137,7 +1138,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .emergencyStop()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -1155,7 +1156,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Restore
     await program.methods
       .proposeAuthority(originalAuthority)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: newAuthority.publicKey,
       })
@@ -1163,7 +1164,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .rpc();
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: provider.wallet.publicKey,
       })
@@ -1174,7 +1175,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Propose transfer to zero address
     await program.methods
       .proposeAuthority(PublicKey.default)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1193,7 +1194,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .proposeAuthority(realCandidate.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1201,7 +1202,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: realCandidate.publicKey,
       })
@@ -1217,7 +1218,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Restore
     await program.methods
       .proposeAuthority(provider.wallet.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: realCandidate.publicKey,
       })
@@ -1225,7 +1226,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .rpc();
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: provider.wallet.publicKey,
       })
@@ -1239,7 +1240,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .acceptAuthority()
-        .accounts({
+        .accountsPartial({
           paState,
           newAuthority: random.publicKey,
         })
@@ -1259,7 +1260,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Propose the intended authority
     await program.methods
       .proposeAuthority(intended.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1269,7 +1270,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .acceptAuthority()
-        .accounts({
+        .accountsPartial({
           paState,
           newAuthority: attacker.publicKey,
         })
@@ -1283,7 +1284,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Cancel the proposal
     await program.methods
       .cancelAuthorityTransfer()
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1299,7 +1300,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Propose first candidate
     await program.methods
       .proposeAuthority(firstCandidate.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1308,7 +1309,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Overwrite with second candidate
     await program.methods
       .proposeAuthority(secondCandidate.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1318,7 +1319,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .acceptAuthority()
-        .accounts({
+        .accountsPartial({
           paState,
           newAuthority: firstCandidate.publicKey,
         })
@@ -1332,7 +1333,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Cancel
     await program.methods
       .cancelAuthorityTransfer()
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1345,7 +1346,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .proposeAuthority(candidate.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1353,7 +1354,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: candidate.publicKey,
       })
@@ -1364,7 +1365,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .acceptAuthority()
-        .accounts({
+        .accountsPartial({
           paState,
           newAuthority: candidate.publicKey,
         })
@@ -1378,7 +1379,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Restore authority
     await program.methods
       .proposeAuthority(provider.wallet.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: candidate.publicKey,
       })
@@ -1386,7 +1387,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .rpc();
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: provider.wallet.publicKey,
       })
@@ -1399,7 +1400,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .proposeAuthority(candidate.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1407,7 +1408,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .cancelAuthorityTransfer()
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1417,7 +1418,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .acceptAuthority()
-        .accounts({
+        .accountsPartial({
           paState,
           newAuthority: candidate.publicKey,
         })
@@ -1433,7 +1434,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .cancelAuthorityTransfer()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -1464,7 +1465,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     try {
       await program.methods
         .txdataInit(uploadId, 100, expiresSlot)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
@@ -1496,7 +1497,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     try {
       await program.methods
         .txdataInit(uploadId, 100, expiresSlot)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
@@ -1539,7 +1540,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
     await program.methods
       .txdataClose(uploadId)
-      .accounts({
+      .accountsPartial({
         txData,
         authority: authority.publicKey,
         refund: authority.publicKey,
@@ -1584,7 +1585,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     try {
       await program.methods
         .txdataClose(uploadId)
-        .accounts({
+        .accountsPartial({
           txData: attackerTxData,
           authority: attacker.publicKey,
           refund: attacker.publicKey,
@@ -1622,7 +1623,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     try {
       await program.methods
         .txdataClose(uploadId)
-        .accounts({
+        .accountsPartial({
           txData: authorityTxData,  // <-- Attacker passes authority's actual TxData
           authority: attacker.publicKey,
           refund: attacker.publicKey,
@@ -1736,7 +1737,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     try {
       await program.methods
         .txdataWrite(uploadId, 0, Buffer.alloc(200))
-        .accounts({
+        .accountsPartial({
           txData,
           authority: authority.publicKey,
         })
@@ -1763,7 +1764,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     try {
       await program.methods
         .txdataWrite(uploadId, 0, Buffer.alloc(10))
-        .accounts({
+        .accountsPartial({
           txData,
           authority: wrongAuthority.publicKey,
         })
@@ -1792,7 +1793,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
 
     await program.methods
       .txdataWrite(uploadId, 0, Buffer.alloc(50))
-      .accounts({
+      .accountsPartial({
         txData,
         authority: authority.publicKey,
       })
@@ -1802,7 +1803,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: wrongAuthority.publicKey,
@@ -1839,7 +1840,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     try {
       await program.methods
         .txdataClose(uploadId)
-        .accounts({
+        .accountsPartial({
           txData,
           authority: authority.publicKey,
           refund: otherPubkey,
@@ -1897,7 +1898,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
   it("updates expiry config successfully", async () => {
     await program.methods
       .updateExpiryConfig(new anchor.BN(50), new anchor.BN(5000))
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1920,7 +1921,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
     try {
       await program.methods
         .updateExpiryConfig(new anchor.BN(5000), new anchor.BN(100))
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -1935,7 +1936,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
     try {
       await program.methods
         .updateExpiryConfig(new anchor.BN(5), new anchor.BN(1000))
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -1950,7 +1951,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
     try {
       await program.methods
         .updateExpiryConfig(new anchor.BN(50), new anchor.BN(SEVEN_DAYS_SLOTS + 1))
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -1968,7 +1969,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
     try {
       await program.methods
         .updateExpiryConfig(new anchor.BN(50), new anchor.BN(5000))
-        .accounts({
+        .accountsPartial({
           paState,
           authority: nonAuthority.publicKey,
         })
@@ -1988,7 +1989,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
   it("restores default config", async () => {
     await program.methods
       .updateExpiryConfig(new anchor.BN(100), new anchor.BN(216_000))
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -2009,7 +2010,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     // Lower min_expiry_slots so we can create short-lived TxData
     await program.methods
       .updateExpiryConfig(new anchor.BN(10), new anchor.BN(216_000))
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -2019,7 +2020,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
   after(async () => {
     await program.methods
       .updateExpiryConfig(new anchor.BN(100), new anchor.BN(216_000))
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -2036,7 +2037,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
     await program.methods
       .txdataWrite(uploadId, 0, Buffer.alloc(10))
-      .accounts({
+      .accountsPartial({
         txData,
         authority: authority.publicKey,
       })
@@ -2048,7 +2049,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     try {
       await program.methods
         .txdataWrite(uploadId, 10, Buffer.alloc(10))
-        .accounts({
+        .accountsPartial({
           txData,
           authority: authority.publicKey,
         })
@@ -2078,7 +2079,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
@@ -2567,7 +2568,7 @@ describe("solana-pa-prototype (close_markers_batch requires stopped state)", () 
     try {
       await program.methods
         .closeMarkersBatch()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -2591,7 +2592,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
 
     await program.methods
       .emergencyStop()
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -2605,7 +2606,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
     try {
       await program.methods
         .emergencyStop()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -2625,7 +2626,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
     try {
       await program.methods
         .settle(Buffer.from([0, 1, 2, 3]))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
@@ -2656,7 +2657,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
@@ -2706,7 +2707,7 @@ describe("solana-pa-prototype (Close instructions)", () => {
 
     await program.methods
       .closeMarkersBatch()
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -2731,7 +2732,7 @@ describe("solana-pa-prototype (Close instructions)", () => {
     try {
       await program.methods
         .closeMarkersBatch()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: fakeAuthority.publicKey,
         })
@@ -2765,7 +2766,7 @@ afterEach(async () => {
       if (!info) continue; // already closed by settle or explicit close
       await program.methods
         .txdataClose(entry.uploadId)
-        .accounts({
+        .accountsPartial({
           txData: entry.txData,
           authority: entry.authority.publicKey,
           refund: entry.authority.publicKey,

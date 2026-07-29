@@ -37,4 +37,4 @@ address = "9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"
 address = "4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
 
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+test = "yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 tests/**/*.ts"

@@ -104,7 +104,7 @@ async function settleRaw(
 
   return program.methods
     .settle(payload)
-    .accounts({
+    .accountsPartial({
       paState,
       payer: payer.publicKey,
       systemProgram: SystemProgram.programId,

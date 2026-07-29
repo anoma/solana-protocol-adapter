@@ -86,7 +86,7 @@ async function main() {
 
   await program.methods
     .initialize(verifierRouter, proofSelector)
-    .accounts({
+    .accountsPartial({
       paState,
       payer: provider.wallet.publicKey,
       systemProgram: anchor.web3.SystemProgram.programId,
