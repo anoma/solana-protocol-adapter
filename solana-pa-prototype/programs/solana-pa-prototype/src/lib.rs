@@ -656,7 +656,13 @@ fn execute_settlement<'info>(
         all_logic_refs.extend(logic_refs.iter().map(|d| d.to_bytes()));
     }
 
-    // Runs before nullifier/commitment state changes so failures don't leave partial state.
+    // Runs before nullifier and commitment state changes so that a forwarder
+    // cannot observe them. Solana reverts every account write when the
+    // instruction returns Err, so partial state on failure is impossible
+    // regardless of ordering — that is not what this ordering protects. The
+    // forwarder is chosen by the proof and runs while the transaction is still
+    // in flight, and it can read any account it is handed; running it first
+    // bounds what this settlement has written by the time it executes.
     #[cfg(not(test))]
     external_calls::execute_external_calls(tx, remaining_accounts, nullifiers.len())
         .map_err(anchor_lang::error::Error::from)?;
