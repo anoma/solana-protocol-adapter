@@ -97,6 +97,20 @@ pub enum PAError {
     // Compliance instance parsing
     #[msg("Failed to parse compliance instance from journal bytes")]
     ComplianceInstanceParseFailed,
+
+    // External call encoding
+    #[msg("External call expected_output must be non-empty: Solana cannot represent an explicit empty return")]
+    EmptyExpectedOutput,
+
+    // Marker creation
+    #[msg("Marker address is held by an unexpected owner")]
+    MarkerUnexpectedOwner,
+    #[msg("Marker address already contains data")]
+    MarkerUnexpectedData,
+
+    // Root retention
+    #[msg("Root marker already exists: the commitment tree produced a repeated root")]
+    RootMarkerAlreadyExists,
 }
 
 impl From<SolanaArmError> for PAError {

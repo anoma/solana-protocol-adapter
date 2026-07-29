@@ -33,6 +33,7 @@ import {
   ADDRESS_MISMATCH_PATTERN,
   readJson,
   loadFixture,
+  type Fixture,
   parseSelectorFromFixture,
   fundKeypair,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
@@ -62,6 +63,14 @@ const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>
 
 const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
+const BPF_LOADER_UPGRADEABLE = new PublicKey(
+  "BPFLoaderUpgradeab1e11111111111111111111111"
+);
+const [programData] = PublicKey.findProgramAddressSync(
+  [program.programId.toBuffer()],
+  BPF_LOADER_UPGRADEABLE
+);
+
 const fixture = loadFixture("batch_groth16.json");
 
 const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
@@ -82,15 +91,104 @@ function deriveRootPda(root: Buffer): PublicKey {
   )[0];
 }
 
+// `newRootMarker` is a required named account, so every settle/settleFromTxdata
+// call needs a value even when the test expects settlement to fail before the
+// account is ever read. `initialize` never creates a root marker for the
+// empty-tree root — `is_root_valid` accepts it directly, without a marker —
+// so this PDA never exists on-chain. It's used purely as a syntactically
+// valid placeholder address; its value is irrelevant for those tests since
+// the instruction fails earlier.
+const DUMMY_ROOT_MARKER = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
+
+// Predict the produced-root marker PDA for a settlement whose resulting root is
+// only known after commitments are appended on-chain.
+//
+// The address depends on the post-settlement root, so it cannot be derived from
+// instruction inputs. Rather than reimplementing the merkle append (and the
+// bincode commitment extraction it needs) in TypeScript, this runs the real
+// instruction as a simulation against a throwaway marker address. The program
+// reaches the runtime check, `require_keys_eq!(expected_pda, provided)` fails,
+// and Anchor logs both compared pubkeys — "Left:" followed by the expected
+// address, "Right:" followed by the one supplied. Reading "Left:" back out
+// yields the exact address the real send must use. Simulation commits nothing.
+//
+// Uses connection.simulateTransaction directly rather than Anchor's .simulate():
+// Anchor wraps failures in an error whose shape varies by failure mode, while
+// the connection call returns {value: {err, logs}} unconditionally and never
+// throws on program failure.
+//
+// Only valid for settlements expected to succeed. One that fails earlier never
+// reaches the comparison, and this throws rather than returning a wrong address.
+async function predictRootMarkerPda(
+  buildSettle: (marker: PublicKey) => { transaction: () => Promise<Transaction> },
+  feePayer: PublicKey,
+): Promise<PublicKey> {
+  const probeMarker = Keypair.generate().publicKey;
+  const probeTx = await buildSettle(probeMarker).transaction();
+  probeTx.feePayer = feePayer;
+
+  const sim = await provider.connection.simulateTransaction(probeTx);
+  const logs = sim.value.logs ?? [];
+  const tail = logs.slice(-20).join("\n");
+
+  if (!sim.value.err) {
+    throw new Error(
+      "Probe settlement unexpectedly succeeded against a random marker address; " +
+        "the produced-root marker check did not run.\n" + tail,
+    );
+  }
+
+  const errIdx = logs.findIndex((l) => l.includes("Error Code: RootPdaMismatch"));
+  if (errIdx === -1) {
+    throw new Error(
+      "Could not predict root marker: the probe settlement failed before reaching " +
+        `the produced-root marker check. Simulation error: ${JSON.stringify(sim.value.err)}\n${tail}`,
+    );
+  }
+  const leftIdx = logs.findIndex((l, i) => i > errIdx && l.includes("Left:"));
+  if (leftIdx === -1 || leftIdx + 1 >= logs.length) {
+    throw new Error(`Could not predict root marker: no "Left:" pubkey after RootPdaMismatch.\n${tail}`);
+  }
+  const match = logs[leftIdx + 1].match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);
+  if (!match) {
+    throw new Error(`Could not parse pubkey from simulation log line: "${logs[leftIdx + 1]}"`);
+  }
+  return new PublicKey(match[0]);
+}
+
 function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
   return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
+}
+
+/**
+ * Assert that `fixtureName` has not already been settled on this validator.
+ *
+ * Every test that settles a fixture asserts an exact state transition
+ * (next_index before -> after, a specific resulting root, specific markers).
+ * Those assertions are only meaningful on a fresh ledger. If a fixture's
+ * nullifiers already exist, the ledger is not fresh and the rest of the test is
+ * measuring something else.
+ *
+ * This fails loudly rather than skipping or degrading to a weaker check: a
+ * silently retired test reports as pending, which reads as green, and a
+ * weakened one reports as passing while verifying materially less.
+ */
+async function assertFixtureUnsettled(fixtureName: string): Promise<void> {
+  const f = loadFixture(fixtureName);
+  const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
+  const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
+  assert.isNull(
+    info,
+    `${fixtureName} is already settled on this validator (its first nullifier ` +
+    `marker exists). These tests require a fresh ledger. Reset it with ` +
+    `'./scripts/dev.sh clean' and re-run, or deploy to a fresh devnet.`
+  );
 }
 
 function buildSettleRemainingAccounts(
   nullifierAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
   options?: {
     additionalHistoricalRootMarkers?: PublicKey[];
-    newRootMarkerPda?: PublicKey;
   }
 ): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
   const accounts = [
@@ -102,9 +200,6 @@ function buildSettleRemainingAccounts(
     for (const marker of options.additionalHistoricalRootMarkers) {
       accounts.push({ pubkey: marker, isWritable: false, isSigner: false });
     }
-  }
-  if (options?.newRootMarkerPda) {
-    accounts.push({ pubkey: options.newRootMarkerPda, isWritable: true, isSigner: false });
   }
   return accounts;
 }
@@ -121,7 +216,7 @@ async function uploadTxData(
     const chunk = payload.subarray(offset, Math.min(payload.length, offset + chunkSize));
     await program.methods
       .txdataWrite(uploadId, offset, chunk)
-      .accounts({
+      .accountsPartial({
         txData,
         authority: authority.publicKey,
       })
@@ -153,7 +248,7 @@ async function initTxData(
     new anchor.BN((await provider.connection.getSlot("confirmed")) + 10_000);
   await program.methods
     .txdataInit(uploadId, payloadSize, expiresSlot)
-    .accounts({
+    .accountsPartial({
       paState,
       txData,
       authority: authority.publicKey,
@@ -239,30 +334,100 @@ function parseAnchorEvents(logs: string[]) {
 async function settleFixtureViaTxData(
   payload: Buffer,
   remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+  options?: { newRootMarker?: PublicKey },
 ): Promise<string> {
   const authority = Keypair.generate();
   await airdrop(provider, authority, 2);
   const { uploadId, txData } = await uploadTxData(authority, payload);
-  return program.methods
-    .settleFromTxdata(uploadId)
-    .accounts({
-      paState,
-      txData,
-      authority: authority.publicKey,
-      systemProgram: SystemProgram.programId,
-      verifierRouterProgram: VERIFIER_ROUTER_ID,
-      router: routerPda,
-      verifierEntry: verifierEntryPda,
-      verifierProgram: GROTH16_VERIFIER_ID,
-    })
-    .remainingAccounts(remainingAccounts)
-    .preInstructions([
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-    ])
-    .signers([authority])
-    .rpc();
+
+  const buildSettle = (newRootMarker: PublicKey) =>
+    program.methods
+      .settleFromTxdata(uploadId)
+      .accountsPartial({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+        newRootMarker,
+        verifierRouterProgram: VERIFIER_ROUTER_ID,
+        router: routerPda,
+        verifierEntry: verifierEntryPda,
+        verifierProgram: GROTH16_VERIFIER_ID,
+      })
+      .remainingAccounts(remainingAccounts)
+      .preInstructions([
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+      ])
+      .signers([authority]);
+
+  const newRootMarker =
+    options?.newRootMarker ?? (await predictRootMarkerPda(buildSettle, authority.publicKey));
+  return buildSettle(newRootMarker).rpc();
 }
+
+async function paStateExists(): Promise<boolean> {
+  const info = await provider.connection.getAccountInfo(paState);
+  return info !== null;
+}
+
+describe("solana-pa-prototype (AUTH-01: initialization authority)", () => {
+  it("rejects initialization by a non-upgrade-authority signer", async () => {
+    // Must run before PAState is initialized anywhere else in the suite —
+    // otherwise the `init` constraint on `pa_state` would fail with
+    // "already in use" before the AUTH-01 constraint on `program_data` is
+    // ever reached, which would prove nothing about this fix.
+    assert.isFalse(
+      await paStateExists(),
+      "PAState was already initialized before the AUTH-01 rejection test ran; " +
+        "this test must execute first so it observes an uninitialized state"
+    );
+
+    const stranger = Keypair.generate();
+    await airdrop(provider, stranger, 2);
+
+    let caught: any = null;
+    try {
+      await program.methods
+        .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
+        .accountsPartial({
+          paState,
+          payer: stranger.publicKey,
+          systemProgram: SystemProgram.programId,
+          program: program.programId,
+          programData,
+        })
+        .signers([stranger])
+        .rpc();
+    } catch (e: any) {
+      caught = e;
+    }
+    assert.isNotNull(
+      caught,
+      "expected initialization by a non-upgrade-authority signer to fail"
+    );
+
+    // The error must be our Unauthorized code, and it must have been raised by
+    // the `program_data` account's upgrade-authority constraint specifically —
+    // not by account resolution, not by the `program` constraint, and not by
+    // any earlier check. Anchor names the offending account in its log line,
+    // which is what distinguishes "rejected for the right reason" from
+    // "rejected before the constraint was ever evaluated".
+    assertPAError(caught, "Unauthorized");
+    assert.match(
+      errorHaystack(caught),
+      /AnchorError caused by account: program_data/,
+      "Unauthorized must originate from the program_data upgrade-authority " +
+        `constraint. Got:\n${errorHaystack(caught)}`
+    );
+
+    // The rejected transaction must not have left PAState initialized.
+    assert.isFalse(
+      await paStateExists(),
+      "PAState must remain uninitialized after the rejected call"
+    );
+  });
+});
 
 describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   const tx = Buffer.from(fixture.tx_b64, "base64");
@@ -276,7 +441,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     payload: Buffer,
     options?: {
       nullifierAccounts?: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[];
-      newRootMarkerPda?: PublicKey;
+      newRootMarker?: PublicKey;
       additionalHistoricalRootMarkers?: PublicKey[];
     }
   ) {
@@ -289,58 +454,47 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       options
     );
 
-    return program.methods
-      .settleFromTxdata(uploadId)
-      .accounts({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-        verifierRouterProgram: VERIFIER_ROUTER_ID,
-        router: routerPda,
-        verifierEntry: verifierEntryPda,
-        verifierProgram: GROTH16_VERIFIER_ID,
-      })
-      .remainingAccounts(allRemainingAccounts)
-      .preInstructions([
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-      ])
-      .signers([authority])
-      .rpc();
+    const buildSettle = (newRootMarker: PublicKey) =>
+      program.methods
+        .settleFromTxdata(uploadId)
+        .accountsPartial({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          newRootMarker,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: GROTH16_VERIFIER_ID,
+        })
+        .remainingAccounts(allRemainingAccounts)
+        .preInstructions([
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+        ])
+        .signers([authority]);
+
+    const newRootMarker =
+      options?.newRootMarker ?? (await predictRootMarkerPda(buildSettle, authority.publicKey));
+    return buildSettle(newRootMarker).rpc();
   }
 
-  let genesisRootMarkerPda: PublicKey;
-
   before(async () => {
-    genesisRootMarkerPda = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
-
     try {
       await program.account.paStateAccount.fetch(paState);
     } catch {
-      // Initialize with genesis root marker in remaining_accounts
       await program.methods
         .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: provider.wallet.publicKey,
           systemProgram: SystemProgram.programId,
+          program: program.programId,
+          programData,
         })
-        .remainingAccounts([
-          { pubkey: genesisRootMarkerPda, isWritable: true, isSigner: false },
-        ])
         .rpc();
     }
-  });
-
-  it("creates genesis root marker on initialize", async () => {
-    const info = await provider.connection.getAccountInfo(genesisRootMarkerPda);
-    assert.ok(info, "Genesis root marker PDA should exist after initialize");
-    assert.ok(
-      info!.owner.equals(program.programId),
-      "Genesis root marker should be owned by PA program"
-    );
-    assert.equal(info!.data.length, 0, "Root marker should be 0 bytes (existence-only)");
   });
 
   it("initializes with depth 1 (variable-depth tree)", async () => {
@@ -414,7 +568,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     txWitness.writeUInt32LE(0, idx);
 
     try {
-      await settleViaTxData(Keypair.generate(), txWitness);
+      await settleViaTxData(Keypair.generate(), txWitness, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected settle to fail");
     } catch (e: any) {
       // Patching the Delta variant from Proof→Witness corrupts the Borsh layout.
@@ -434,7 +588,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
 
   it("rejects a tampered tx (proof binding)", async () => {
     try {
-      await settleViaTxData(Keypair.generate(), txTampered);
+      await settleViaTxData(Keypair.generate(), txTampered, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected settle to fail");
     } catch (e: any) {
       // The PA calls the verifier router via CPI, which calls the groth16 verifier.
@@ -460,20 +614,15 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       "fixture tx must include block-time-forwarder program id bytes (external_payload injected)"
     );
 
-    // On devnet, nullifiers from a previous run persist. If this fixture was already
-    // settled, verify the existing state instead of re-settling.
+    // Requires a fresh ledger: the assertions below pin an exact state
+    // transition, which a prior settlement would invalidate.
     const firstNullifier = await provider.connection.getAccountInfo(nullifierPdas[0]);
-    if (firstNullifier) {
-      // Already settled — verify markers exist and state is consistent
-      for (const pda of nullifierPdas) {
-        const info = await provider.connection.getAccountInfo(pda);
-        assert.ok(info, "nullifier marker PDA should exist from prior settlement");
-        assert.ok(info!.owner.equals(program.programId), "nullifier marker PDA should be owned by PA program");
-      }
-      const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 1, "nextIndex should reflect prior settlement(s)");
-      return;
-    }
+    assert.isNull(
+      firstNullifier,
+      "batch_groth16.json is already settled on this validator (its first " +
+      "nullifier marker exists). These tests require a fresh ledger. Reset it " +
+      "with './scripts/dev.sh clean' and re-run, or deploy to a fresh devnet."
+    );
 
     // Get the current state before settlement to know the pre-settlement root
     const stateBefore = await program.account.paStateAccount.fetch(paState);
@@ -514,6 +663,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
     try {
       await settleViaTxData(Keypair.generate(), mismatchTx, {
         nullifierAccounts: mismatchNullifierAccounts,
+        newRootMarker: DUMMY_ROOT_MARKER,
       });
       assert.fail("expected settle to fail with ExternalCallOutputMismatch");
     } catch (e: any) {
@@ -522,23 +672,58 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
   });
 });
 
+// ── Historical-root marker with a real Merkle-inclusion proof ───────────────
+// Every fixture above consumes an `is_ephemeral: true` resource: the compliance
+// circuit reports its consumed_commitment_tree_root as an unconstrained
+// `ephemeral_root` (here, always PADDING_LEAF), never a real Merkle path. Since
+// PADDING_LEAF is accepted by `is_root_valid` unconditionally, before the
+// marker lookup ever runs, none of those settlements exercise the
+// historical-root-marker branch.
+//
+// `is_ephemeral` is itself part of the resource's commitment hash, so a
+// resource created as `is_ephemeral: true` (as every one above is) can never
+// later be consumed through a genuine Merkle path -- flipping the flag would
+// change the commitment and no longer match the leaf actually recorded
+// on-chain. Proving the marker mechanism with a real inclusion proof therefore
+// requires a purpose-built "committer" transaction whose created resource is
+// genuinely non-ephemeral.
+//
+// The committer's Merkle path is baked to leaf index 1, so it must settle
+// immediately after batch_groth16.json (leaf 0) and before any other
+// settlement -- hence this block's position. The matching "consumer", which
+// spends that leaf through the real path, runs much later (see STATE-03 part
+// 2), by which point further settlements have advanced the tree and the
+// committer's root is genuinely historical.
+describe("solana-pa-prototype (STATE-03 part 1: commit a non-ephemeral leaf)", () => {
+  it("settles the historical-root committer (its created resource is genuinely non-ephemeral)", async () => {
+    await assertFixtureUnsettled("batch_groth16_historical_root_committer.json");
+
+    const committerFixture = loadFixture("batch_groth16_historical_root_committer.json");
+    const payload = Buffer.from(committerFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(committerFixture.consumed_nullifiers_b64);
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+
+    const nextIndexBefore = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
+    await settleFixtureViaTxData(payload, remainingAccounts);
+    const nextIndexAfter = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
+    assert.equal(nextIndexAfter, nextIndexBefore + 1);
+  });
+});
+
 describe("solana-pa-prototype (Re-initialization guard)", () => {
   it("rejects re-initialization of PAState", async () => {
     // PAState was already initialized in the E2E before() hook.
     // A second initialize call must fail because the account already exists.
-    const genesisRootMarkerPda = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
-
     try {
       await program.methods
         .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: provider.wallet.publicKey,
           systemProgram: SystemProgram.programId,
+          program: program.programId,
+          programData,
         })
-        .remainingAccounts([
-          { pubkey: genesisRootMarkerPda, isWritable: true, isSigner: false },
-        ])
         .rpc();
       assert.fail("expected re-initialization to fail");
     } catch (e: any) {
@@ -561,10 +746,11 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     try {
       await program.methods
         .settle(Buffer.from([0, 1, 2, 3]))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -596,10 +782,11 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     try {
       await program.methods
         .settle(emptyTx)
-        .accounts({
+        .accountsPartial({
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -634,11 +821,12 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -668,10 +856,11 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     try {
       await program.methods
         .settle(Buffer.from([0, 1, 2, 3]))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: fakeRouter,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -705,11 +894,12 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -767,11 +957,12 @@ describe("solana-pa-prototype (Settle error paths)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -812,7 +1003,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .emergencyStop()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: nonAuthority.publicKey,
         })
@@ -839,7 +1030,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .proposeAuthority(newAuthority.publicKey)
-        .accounts({
+        .accountsPartial({
           paState,
           authority: nonAuthority.publicKey,
         })
@@ -866,7 +1057,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Step 1: propose
     await program.methods
       .proposeAuthority(newAuthority.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -882,7 +1073,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Step 2: accept (signed by new authority)
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: newAuthority.publicKey,
       })
@@ -898,7 +1089,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Restore: propose back, accept with provider wallet
     await program.methods
       .proposeAuthority(currentAuthority)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: newAuthority.publicKey,
       })
@@ -907,7 +1098,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: provider.wallet.publicKey,
       })
@@ -930,14 +1121,14 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Two-step transfer
     await program.methods
       .proposeAuthority(newAuthority.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
       .rpc();
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: newAuthority.publicKey,
       })
@@ -947,7 +1138,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .emergencyStop()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -965,7 +1156,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Restore
     await program.methods
       .proposeAuthority(originalAuthority)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: newAuthority.publicKey,
       })
@@ -973,7 +1164,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .rpc();
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: provider.wallet.publicKey,
       })
@@ -984,7 +1175,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Propose transfer to zero address
     await program.methods
       .proposeAuthority(PublicKey.default)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1003,7 +1194,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .proposeAuthority(realCandidate.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1011,7 +1202,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: realCandidate.publicKey,
       })
@@ -1027,7 +1218,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Restore
     await program.methods
       .proposeAuthority(provider.wallet.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: realCandidate.publicKey,
       })
@@ -1035,7 +1226,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .rpc();
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: provider.wallet.publicKey,
       })
@@ -1049,7 +1240,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .acceptAuthority()
-        .accounts({
+        .accountsPartial({
           paState,
           newAuthority: random.publicKey,
         })
@@ -1069,7 +1260,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Propose the intended authority
     await program.methods
       .proposeAuthority(intended.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1079,7 +1270,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .acceptAuthority()
-        .accounts({
+        .accountsPartial({
           paState,
           newAuthority: attacker.publicKey,
         })
@@ -1093,7 +1284,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Cancel the proposal
     await program.methods
       .cancelAuthorityTransfer()
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1109,7 +1300,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Propose first candidate
     await program.methods
       .proposeAuthority(firstCandidate.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1118,7 +1309,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Overwrite with second candidate
     await program.methods
       .proposeAuthority(secondCandidate.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1128,7 +1319,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .acceptAuthority()
-        .accounts({
+        .accountsPartial({
           paState,
           newAuthority: firstCandidate.publicKey,
         })
@@ -1142,7 +1333,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Cancel
     await program.methods
       .cancelAuthorityTransfer()
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1155,7 +1346,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .proposeAuthority(candidate.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1163,7 +1354,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: candidate.publicKey,
       })
@@ -1174,7 +1365,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .acceptAuthority()
-        .accounts({
+        .accountsPartial({
           paState,
           newAuthority: candidate.publicKey,
         })
@@ -1188,7 +1379,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     // Restore authority
     await program.methods
       .proposeAuthority(provider.wallet.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: candidate.publicKey,
       })
@@ -1196,7 +1387,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
       .rpc();
     await program.methods
       .acceptAuthority()
-      .accounts({
+      .accountsPartial({
         paState,
         newAuthority: provider.wallet.publicKey,
       })
@@ -1209,7 +1400,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .proposeAuthority(candidate.publicKey)
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1217,7 +1408,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
 
     await program.methods
       .cancelAuthorityTransfer()
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1227,7 +1418,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .acceptAuthority()
-        .accounts({
+        .accountsPartial({
           paState,
           newAuthority: candidate.publicKey,
         })
@@ -1243,7 +1434,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
     try {
       await program.methods
         .cancelAuthorityTransfer()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -1274,7 +1465,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     try {
       await program.methods
         .txdataInit(uploadId, 100, expiresSlot)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
@@ -1306,7 +1497,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     try {
       await program.methods
         .txdataInit(uploadId, 100, expiresSlot)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
@@ -1349,7 +1540,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
     await program.methods
       .txdataClose(uploadId)
-      .accounts({
+      .accountsPartial({
         txData,
         authority: authority.publicKey,
         refund: authority.publicKey,
@@ -1394,7 +1585,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     try {
       await program.methods
         .txdataClose(uploadId)
-        .accounts({
+        .accountsPartial({
           txData: attackerTxData,
           authority: attacker.publicKey,
           refund: attacker.publicKey,
@@ -1432,7 +1623,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
     try {
       await program.methods
         .txdataClose(uploadId)
-        .accounts({
+        .accountsPartial({
           txData: authorityTxData,  // <-- Attacker passes authority's actual TxData
           authority: attacker.publicKey,
           refund: attacker.publicKey,
@@ -1546,7 +1737,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     try {
       await program.methods
         .txdataWrite(uploadId, 0, Buffer.alloc(200))
-        .accounts({
+        .accountsPartial({
           txData,
           authority: authority.publicKey,
         })
@@ -1573,7 +1764,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     try {
       await program.methods
         .txdataWrite(uploadId, 0, Buffer.alloc(10))
-        .accounts({
+        .accountsPartial({
           txData,
           authority: wrongAuthority.publicKey,
         })
@@ -1602,7 +1793,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
 
     await program.methods
       .txdataWrite(uploadId, 0, Buffer.alloc(50))
-      .accounts({
+      .accountsPartial({
         txData,
         authority: authority.publicKey,
       })
@@ -1612,11 +1803,12 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: wrongAuthority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -1648,7 +1840,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
     try {
       await program.methods
         .txdataClose(uploadId)
-        .accounts({
+        .accountsPartial({
           txData,
           authority: authority.publicKey,
           refund: otherPubkey,
@@ -1706,7 +1898,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
   it("updates expiry config successfully", async () => {
     await program.methods
       .updateExpiryConfig(new anchor.BN(50), new anchor.BN(5000))
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1729,7 +1921,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
     try {
       await program.methods
         .updateExpiryConfig(new anchor.BN(5000), new anchor.BN(100))
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -1744,7 +1936,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
     try {
       await program.methods
         .updateExpiryConfig(new anchor.BN(5), new anchor.BN(1000))
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -1759,7 +1951,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
     try {
       await program.methods
         .updateExpiryConfig(new anchor.BN(50), new anchor.BN(SEVEN_DAYS_SLOTS + 1))
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -1777,7 +1969,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
     try {
       await program.methods
         .updateExpiryConfig(new anchor.BN(50), new anchor.BN(5000))
-        .accounts({
+        .accountsPartial({
           paState,
           authority: nonAuthority.publicKey,
         })
@@ -1797,7 +1989,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
   it("restores default config", async () => {
     await program.methods
       .updateExpiryConfig(new anchor.BN(100), new anchor.BN(216_000))
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1818,7 +2010,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     // Lower min_expiry_slots so we can create short-lived TxData
     await program.methods
       .updateExpiryConfig(new anchor.BN(10), new anchor.BN(216_000))
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1828,7 +2020,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
   after(async () => {
     await program.methods
       .updateExpiryConfig(new anchor.BN(100), new anchor.BN(216_000))
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -1845,7 +2037,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
 
     await program.methods
       .txdataWrite(uploadId, 0, Buffer.alloc(10))
-      .accounts({
+      .accountsPartial({
         txData,
         authority: authority.publicKey,
       })
@@ -1857,7 +2049,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     try {
       await program.methods
         .txdataWrite(uploadId, 10, Buffer.alloc(10))
-        .accounts({
+        .accountsPartial({
           txData,
           authority: authority.publicKey,
         })
@@ -1887,11 +2079,12 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -2018,7 +2211,7 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
+      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail(`expected ${expectedError} error`);
     } catch (e: any) {
       assertPAError(e, expectedError);
@@ -2075,7 +2268,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
     ];
 
     try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
+      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected CPI failure");
     } catch (e: any) {
       // CPI error propagation: Solana records the INNER program's error code,
@@ -2100,11 +2293,11 @@ describe("solana-pa-prototype (External call error paths)", () => {
     ];
 
     try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
+      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected CPI failure from test-forwarder");
     } catch (e: any) {
       // CPI error propagation: test-forwarder's IntentionalFailure (6000)
-      // propagates through instead of PA's ExternalCallCpiFailed (6018).
+      // propagates through instead of PA's ExternalCallCpiFailed (6019).
       const code = extractPAErrorCode(e);
       assert.isNotNull(code, "Expected a program error code in logs");
       assert.equal(code, 6000,
@@ -2123,7 +2316,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
     ];
 
     try {
-      await settleFixtureViaTxData(payload, remainingAccounts);
+      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected ExternalCallOutputMismatch error");
     } catch (e: any) {
       assertPAError(e, "ExternalCallOutputMismatch");
@@ -2134,21 +2327,8 @@ describe("solana-pa-prototype (External call error paths)", () => {
 describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   let v2TxSig: string;
 
-  // On devnet, fixtures may already be settled from a previous run.
-  // Check the first nullifier; if it exists, the fixture was already settled.
-  async function alreadySettled(fixtureName: string): Promise<boolean> {
-    const f = loadFixture(fixtureName);
-    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
-    const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
-    return !!info;
-  }
-
   it("settles v2 fixture (next_index 1→2, depth 1→2)", async () => {
-    if (await alreadySettled("batch_groth16_v2.json")) {
-      const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 2, "nextIndex should reflect prior v2 settlement");
-      return;
-    }
+    await assertFixtureUnsettled("batch_groth16_v2.json");
 
     const accountInfoBefore = await provider.connection.getAccountInfo(paState);
     const sizeBefore = accountInfoBefore!.data.length;
@@ -2166,11 +2346,16 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
   });
 
-  it("verifies events from v2 settlement", async function () {
-    if (!v2TxSig) {
-      this.skip(); // v2 was already settled in a prior run
-      return;
-    }
+  it("verifies events from v2 settlement", async () => {
+    // v2TxSig is set by the preceding test. If it is missing that settlement
+    // failed, which must surface as a failure here rather than a skip: a
+    // skipped test reports as pending, so a regression would cost two tests
+    // and show only one red.
+    assert.ok(
+      v2TxSig,
+      "v2 settlement did not produce a transaction signature — the preceding " +
+      "'settles v2 fixture' test must have failed"
+    );
 
     await provider.connection.confirmTransaction(v2TxSig, "confirmed");
 
@@ -2209,26 +2394,24 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     assert.deepEqual(outputBytes, Buffer.from([0x00]), "output should be RESULT_LT (0x00)");
   });
 
-  it("does not create root marker when PDA not passed", async () => {
-    // Verify the PA's current root does NOT have a root marker — the PA only
-    // creates markers when the correct PDA is provided as the last remaining_account.
+  it("retains a root marker for the v2 settlement's resulting root", async () => {
+    // `newRootMarker` is a required named account, so the v2 settlement above
+    // could not have succeeded without supplying it. This checks that one
+    // instance, for the root the v2 settlement produced.
     const state = await program.account.paStateAccount.fetch(paState);
     const currentRoot = Buffer.from(state.root as number[]);
     const rootMarkerPda = deriveRootPda(currentRoot);
 
     const info = await provider.connection.getAccountInfo(rootMarkerPda);
-    assert.isNull(
-      info,
-      "Root marker should NOT exist when PDA was not passed in remaining_accounts",
+    assert.ok(info, "Root marker should exist for the current root after settlement");
+    assert.ok(
+      info!.owner.equals(program.programId),
+      "Root marker should be owned by the PA program",
     );
   });
 
   it("settles v3 fixture (next_index 2→3, depth stays 2)", async () => {
-    if (await alreadySettled("batch_groth16_v3.json")) {
-      const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 3, "nextIndex should reflect prior v3 settlement");
-      return;
-    }
+    await assertFixtureUnsettled("batch_groth16_v3.json");
 
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
@@ -2245,11 +2428,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   });
 
   it("settles multi-call fixture with two external calls (next_index 3→4)", async () => {
-    if (await alreadySettled("batch_groth16_multi_call.json")) {
-      const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 4, "nextIndex should reflect prior multi-call settlement");
-      return;
-    }
+    await assertFixtureUnsettled("batch_groth16_multi_call.json");
 
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
@@ -2274,6 +2453,103 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   });
 });
 
+// ── STATE-03 part 2: spend the committed leaf via its retained root ────────
+// By now several settlements have advanced the commitment tree well past the
+// root the committer produced, so that root is genuinely historical: it is
+// neither the current root nor PADDING_LEAF. The only branch of
+// `is_root_valid` that can still admit it is the root-marker lookup, which is
+// exactly the branch no maintained test had ever exercised on a validator.
+describe("solana-pa-prototype (STATE-03 part 2: settle against a retained historical root)", () => {
+  // The consumer's root must be genuinely superseded before either of the two
+  // tests below runs, otherwise `is_root_valid` would return true on its
+  // *first* branch (root == current root) and the marker branch would again go
+  // untested. Asserted explicitly rather than assumed from test ordering.
+  function consumerHistoricalRoot(): { rootB64: string; marker: PublicKey } {
+    const consumerFixture = loadFixture("batch_groth16_historical_root.json");
+    const historicalRoots = consumerFixture.historical_roots_b64 ?? [];
+    assert.lengthOf(
+      historicalRoots,
+      1,
+      "consumer fixture must carry exactly one historical (non-current) root",
+    );
+    const rootB64 = historicalRoots[0];
+
+    // The exact trap every other fixture falls into: if the claimed root were
+    // PADDING_LEAF, is_root_valid would accept it unconditionally, before the
+    // marker lookup ever runs, and these tests would prove nothing about root
+    // retention.
+    assert.notEqual(
+      rootB64,
+      EMPTY_TREE_ROOT_INITIAL.toString("base64"),
+      "consumer's historical root must not be PADDING_LEAF -- otherwise is_root_valid " +
+        "admits it unconditionally and this test would not exercise the marker path",
+    );
+
+    return { rootB64, marker: deriveRootPda(Buffer.from(rootB64, "base64")) };
+  }
+
+  async function assertRootIsHistoricalNotCurrent(rootB64: string) {
+    const state = await program.account.paStateAccount.fetch(paState);
+    const currentRootB64 = Buffer.from(state.root as number[]).toString("base64");
+    assert.notEqual(
+      rootB64,
+      currentRootB64,
+      "consumer's root is still the current root -- is_root_valid would accept it on its " +
+        "first branch, so the marker path would remain untested",
+    );
+  }
+
+  // Runs before the success case: at this point the consumer has never
+  // settled, so a rejection here is unambiguous. Its root is neither current
+  // nor PADDING_LEAF, so withholding the marker leaves is_root_valid no branch
+  // that can admit it. This is the half that proves the marker is load-bearing
+  // rather than some other path letting the transaction through.
+  it("rejects the consumer when its historical root marker is withheld (NonExistingRoot)", async () => {
+    const { rootB64 } = consumerHistoricalRoot();
+    await assertRootIsHistoricalNotCurrent(rootB64);
+
+    const consumerFixture = loadFixture("batch_groth16_historical_root.json");
+    const payload = Buffer.from(consumerFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(consumerFixture.consumed_nullifiers_b64);
+    // Deliberately no additionalHistoricalRootMarkers.
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
+
+    try {
+      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
+      assert.fail("expected settle to fail with NonExistingRoot");
+    } catch (e: any) {
+      assertPAError(e, "NonExistingRoot");
+    }
+  });
+
+  it("settles the consumer when its historical root marker is supplied (retention works)", async () => {
+    const { rootB64, marker } = consumerHistoricalRoot();
+    await assertRootIsHistoricalNotCurrent(rootB64);
+
+    const markerInfo = await provider.connection.getAccountInfo(marker);
+    assert.ok(markerInfo, "historical root marker should exist from the committer's settlement");
+    assert.ok(
+      markerInfo!.owner.equals(program.programId),
+      "root marker should be owned by the PA program",
+    );
+
+    await assertFixtureUnsettled("batch_groth16_historical_root.json");
+
+    const consumerFixture = loadFixture("batch_groth16_historical_root.json");
+    const payload = Buffer.from(consumerFixture.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(consumerFixture.consumed_nullifiers_b64);
+    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts, {
+      additionalHistoricalRootMarkers: [marker],
+    });
+
+    const nextIndexBefore = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
+    await settleFixtureViaTxData(payload, remainingAccounts);
+    const nextIndexAfter = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
+    assert.equal(nextIndexAfter, nextIndexBefore + 1, "consumer settlement should append its commitment");
+  });
+});
+
+
 // ── Close-while-running guard ────────────────────────────────────────────
 // Verifies that teardown operations cannot be performed while the PA is
 // running. Must run BEFORE emergency_stop pauses the protocol.
@@ -2283,16 +2559,16 @@ describe("solana-pa-prototype (close_markers_batch requires stopped state)", () 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.deepEqual(state.lifecycle, { running: {} }, "PA should be Running at start of test");
 
-    // Find any existing markers (genesis root marker + settlement markers)
+    // Find any existing markers (settlement root markers from prior settle calls)
     const markers = await provider.connection.getProgramAccounts(program.programId, {
       filters: [{ dataSize: 0 }],
     });
-    assert.ok(markers.length > 0, "Should have markers to close (genesis root marker at minimum)");
+    assert.ok(markers.length > 0, "Should have markers to close");
 
     try {
       await program.methods
         .closeMarkersBatch()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -2316,7 +2592,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
 
     await program.methods
       .emergencyStop()
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -2330,7 +2606,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
     try {
       await program.methods
         .emergencyStop()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
@@ -2350,10 +2626,11 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
     try {
       await program.methods
         .settle(Buffer.from([0, 1, 2, 3]))
-        .accounts({
+        .accountsPartial({
           paState,
           payer: payer.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -2380,11 +2657,12 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
     try {
       await program.methods
         .settleFromTxdata(uploadId)
-        .accounts({
+        .accountsPartial({
           paState,
           txData,
           authority: authority.publicKey,
           systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
@@ -2429,7 +2707,7 @@ describe("solana-pa-prototype (Close instructions)", () => {
 
     await program.methods
       .closeMarkersBatch()
-      .accounts({
+      .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
       })
@@ -2454,7 +2732,7 @@ describe("solana-pa-prototype (Close instructions)", () => {
     try {
       await program.methods
         .closeMarkersBatch()
-        .accounts({
+        .accountsPartial({
           paState,
           authority: fakeAuthority.publicKey,
         })
@@ -2488,7 +2766,7 @@ afterEach(async () => {
       if (!info) continue; // already closed by settle or explicit close
       await program.methods
         .txdataClose(entry.uploadId)
-        .accounts({
+        .accountsPartial({
           txData: entry.txData,
           authority: entry.authority.publicKey,
           refund: entry.authority.publicKey,

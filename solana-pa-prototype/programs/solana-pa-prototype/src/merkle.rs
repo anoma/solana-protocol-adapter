@@ -211,9 +211,19 @@ pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
 ///    store the computed hash as the new frontier entry and hash it
 ///    with `ZEROS[depth]` to produce the root at the new depth.
 ///
-/// This means a tree with exactly 2^d leaves has depth d+1 and its
-/// root includes one level of zero-padding — matching the EVM PA.
+/// Below `MAX_TREE_DEPTH`, this means a tree with exactly 2^d leaves has
+/// depth d+1 and its root includes one level of zero-padding — matching the
+/// EVM PA. At `MAX_TREE_DEPTH` the tree cannot expand further (`can_grow`
+/// gates step 2), so the root stays the plain depth-32 root instead.
 pub fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
+    // The tree is full only at maximum depth with every slot used: below the
+    // maximum, filling a level grows immediately and doubles capacity, so
+    // next_index < capacity always holds afterwards. Reject before any mutation.
+    require!(
+        state.next_index < state.capacity(),
+        PAError::TreeMaxDepthReached
+    );
+
     let depth = state.depth();
     let mut index = state.next_index;
     state.next_index += 1;
@@ -231,9 +241,9 @@ pub fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
         index >>= 1;
     }
 
-    // Expand if the tree is now full (EVM: capacity check after the loop).
-    if state.next_index == state.capacity() {
-        require!(state.can_grow(), PAError::TreeMaxDepthReached);
+    // Expand only when there is a further leaf to place. At maximum depth the
+    // tree stays at depth 32 and its root is the plain depth-32 root.
+    if state.next_index == state.capacity() && state.can_grow() {
         let new_level = state.grow();
         state.set_frontier(new_level, current);
         current = hash_two(&current, &ZEROS[new_level]);

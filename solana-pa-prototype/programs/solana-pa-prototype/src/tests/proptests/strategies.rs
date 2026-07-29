@@ -38,7 +38,7 @@ pub fn arb_solana_external_call(max_data_len: usize) -> impl Strategy<Value = So
     (
         prop::array::uniform32(any::<u8>()),
         arb_byte_vec(max_data_len),
-        arb_byte_vec(max_data_len),
+        prop::collection::vec(any::<u8>(), 1..=max_data_len),
         1..=10u8,
     )
         .prop_map(|(pid, input, output, num_accounts)| SolanaExternalCall {

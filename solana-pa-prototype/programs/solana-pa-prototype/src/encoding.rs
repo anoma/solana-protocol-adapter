@@ -31,6 +31,58 @@ fn compliance_words_from_journal(
     Ok(arm_core::compliance::ComplianceInstanceWords { u32_words })
 }
 
+/// Visit an action's logic inputs in compliance-tag order, validating the
+/// tag-to-input mapping along the way.
+///
+/// This is the single definition of "the order the aggregation proof commits
+/// to". Both the journal digest and the external-call sequence derive from it.
+///
+/// They were once two independent loops. The journal walked tag order while
+/// external calls walked the serialized wire order, so reversing two wire
+/// entries changed what a transaction did while leaving its proof valid — the
+/// adapter executed effects the proof never authorized (audit finding
+/// PRF-03/EXT-03). Making the two loops agree by hand fixed the symptom but left
+/// two copies to keep in sync. One traversal removes the drift.
+///
+/// The visitor receives the index within the action's tag list (even indices are
+/// consumed resources, odd are created), the action tree root, and the matching
+/// logic input.
+pub fn visit_logic_inputs_in_tag_order<F>(
+    action: &arm_core::action::Action,
+    mut visit: F,
+) -> Result<(), PAError>
+where
+    F: FnMut(usize, Digest, &LogicVerifierInputs) -> Result<(), PAError>,
+{
+    let (tags, expected_logic_refs) = extract_tags_and_logic_refs(action)?;
+    if tags.len() != action.logic_verifier_inputs.len() {
+        return Err(PAError::InvalidTransactionData);
+    }
+
+    // The mapping must be unambiguous: a repeated tag would let one input stand
+    // in for another, so the traversal would no longer be a bijection.
+    for (i, lvi) in action.logic_verifier_inputs.iter().enumerate() {
+        if action.logic_verifier_inputs[i + 1..]
+            .iter()
+            .any(|other| other.tag == lvi.tag)
+        {
+            return Err(PAError::InvalidTransactionData);
+        }
+    }
+
+    let action_tree_root = compute_action_tree_root(&tags)?;
+
+    for (idx, (tag, expected_vk)) in tags.iter().zip(&expected_logic_refs).enumerate() {
+        let input = find_logic_input(&action.logic_verifier_inputs, tag)?;
+        if input.verifying_key != *expected_vk {
+            return Err(PAError::InvalidTransactionData);
+        }
+        visit(idx, action_tree_root, input)?;
+    }
+
+    Ok(())
+}
+
 /// Compute the journal digest pinned by the batch aggregation Groth16 proof.
 ///
 /// Per-LVI journal bytes are re-derived from `lvi.app_data` via
@@ -60,26 +112,16 @@ pub fn compute_batch_aggregation_journal_digest(tx: &Transaction) -> Result<Dige
             compliance_instances.push(compliance_words_from_journal(&cu.instance)?);
         }
 
-        let (tags, expected_logic_refs) = extract_tags_and_logic_refs(action)?;
-        if tags.len() != action.logic_verifier_inputs.len() {
-            return Err(PAError::InvalidTransactionData);
-        }
-
-        let action_tree_root = compute_action_tree_root(&tags)?;
-
         // tags is [consumed_nullifier, created_commitment, ...] so even idx is consumed.
-        for (idx, (tag, expected_vk)) in tags.iter().zip(&expected_logic_refs).enumerate() {
-            let input = find_logic_input(&action.logic_verifier_inputs, tag)?;
-            if input.verifying_key != *expected_vk {
-                return Err(PAError::InvalidTransactionData);
-            }
+        visit_logic_inputs_in_tag_order(action, |idx, action_tree_root, input| {
             let journal_bytes = input
                 .to_instance(idx % 2 == 0, action_tree_root)
                 .to_journal()
                 .map_err(|_| PAError::InvalidTransactionData)?;
             logic_instances.push(bytes_to_words(&journal_bytes));
             logic_keys.push(input.verifying_key);
-        }
+            Ok(())
+        })?;
     }
 
     // borsh and risc0_zkvm::serde agree byte-for-byte on this tuple shape:

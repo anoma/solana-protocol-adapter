@@ -18,6 +18,34 @@ declare -A PROGRAMS=(
 # Programs that need post-deploy initialization
 PA_NEEDS_INIT=true
 
+# Package names build_programs() below builds by name. A program added under
+# programs/ that isn't in this list would otherwise silently stop being built
+# on a forward-merge — fail loudly instead. Keep in sync with dev.sh and
+# validator-deploy.sh's equivalent lists.
+EXPECTED_PROGRAMS=(solana-pa-prototype block-time-forwarder test-forwarder)
+
+assert_known_programs() {
+  local dir pkg known ok
+  for dir in "$PROJECT_DIR"/programs/*/; do
+    pkg="$(sed -n 's/^name = "\(.*\)"$/\1/p' "${dir}Cargo.toml" | head -1)"
+    ok=0
+    for known in "${EXPECTED_PROGRAMS[@]}"; do
+      if [[ "$pkg" == "$known" ]]; then
+        ok=1
+        break
+      fi
+    done
+    if [[ $ok -eq 0 ]]; then
+      echo "❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
+      echo "   devnet.sh, dev.sh, and validator-deploy.sh build/deploy programs by" >&2
+      echo "   name. Add '${pkg}' to EXPECTED_PROGRAMS and to the build/deploy" >&2
+      echo "   commands in all three scripts before proceeding — otherwise it" >&2
+      echo "   silently never gets built or deployed." >&2
+      exit 1
+    fi
+  done
+}
+
 # ---------- helpers ----------
 
 require_cmd() {
@@ -122,8 +150,17 @@ close_program() {
 }
 
 build_programs() {
+  assert_known_programs
   echo "Building programs..."
-  anchor build --no-idl
+  # Devnet is a development network, and this script's teardown/close-pdas
+  # commands exist to reset it — so devnet builds carry dev-teardown, which
+  # enables close_markers_batch (marker PDA reclamation). Without it,
+  # cmd_teardown/cmd_close_pdas cannot reclaim marker rent at all.
+  # dev-teardown is a solana-pa-prototype-only Cargo feature, so it must be
+  # scoped with -p rather than passed to the whole-workspace build.
+  anchor build -p solana-pa-prototype --no-idl -- --features dev-teardown
+  anchor build -p block-time-forwarder --no-idl
+  anchor build -p test-forwarder --no-idl
 }
 
 init_pa() {
@@ -465,9 +502,6 @@ case "${1:-}" in
   close-pdas)
     cmd_close_pdas "${2:-}"
     ;;
-  close-pa-state)
-    cmd_close_pdas "--pa-state-only"
-    ;;
   *)
     echo "Usage: devnet.sh <command> [target]"
     echo ""
@@ -476,7 +510,6 @@ case "${1:-}" in
     echo "  upgrade [pa|btf|all]     Rebuild + deploy over existing programs"
     echo "  teardown [pa|btf|all]    PERMANENT: close programs, reclaim rent"
     echo "  close-pdas               Close all PA PDA accounts, reclaim rent"
-    echo "  close-pa-state           Close only PAState (for re-init after upgrade)"
     echo "  test                     Run integration tests against devnet"
     echo "  init                     Initialize PA state (idempotent)"
     echo "  status                   Show deployment status + wallet balance"

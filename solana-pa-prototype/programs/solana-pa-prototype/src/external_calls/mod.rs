@@ -9,6 +9,8 @@ pub use cpi::execute_external_calls;
 
 use crate::error::PAError;
 use crate::types::SolanaExternalCall;
+use anchor_lang::prelude::AccountInfo;
+use anchor_lang::solana_program::instruction::AccountMeta;
 use arm_core::logic_instance::ExpirableBlob;
 use arm_core::transaction::Transaction;
 use arm_core::utils::bytes_to_words;
@@ -29,7 +31,18 @@ pub fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
 /// Decode an external call from its word-array blob.
 pub fn decode_external_call(blob: &ExpirableBlob) -> Result<SolanaExternalCall, PAError> {
     let bytes = words_to_bytes(&blob.blob);
-    bincode::deserialize(bytes).map_err(|_| PAError::InvalidExternalCallBlob)
+    let call: SolanaExternalCall =
+        bincode::deserialize(bytes).map_err(|_| PAError::InvalidExternalCallBlob)?;
+
+    // Solana reports no return-data record for both `set_return_data(&[])` and a
+    // silent return, so an authorized empty output is unrepresentable. Reject it
+    // here rather than failing later as an output mismatch. Absence of return
+    // data must stay an error, never another spelling of empty.
+    if call.expected_output.is_empty() {
+        return Err(PAError::EmptyExpectedOutput);
+    }
+
+    Ok(call)
 }
 
 /// Verify that actual output matches expected output.
@@ -40,13 +53,13 @@ pub fn verify_output(expected: &[u8], actual: &[u8]) -> Result<(), PAError> {
     Ok(())
 }
 
-/// Extract external calls from a transaction.
+/// Extract external calls from a transaction in compliance-tag order.
 ///
-/// Iterates through all actions and their LogicVerifierInputs, decoding each
-/// external_payload blob as a SolanaExternalCall.
-///
-/// Returns a vec of (logic_ref, call) tuples where logic_ref is the verifying_key
-/// from the LogicVerifierInputs containing the call.
+/// The aggregation journal is built by walking each action's compliance units and
+/// looking up the matching logic input by tag (`encoding.rs`). Execution order
+/// must come from that same traversal, otherwise the serialized order of
+/// `logic_verifier_inputs` becomes a second authority over effects that the proof
+/// does not bind.
 pub fn extract_external_calls(
     tx: &Transaction,
 ) -> Result<Vec<(Digest, SolanaExternalCall)>, PAError> {
@@ -57,16 +70,41 @@ pub fn extract_external_calls(
         .map(|lvi| lvi.app_data.external_payload.len())
         .sum();
     let mut calls = Vec::with_capacity(total);
+
     for action in &tx.actions {
-        for lvi in &action.logic_verifier_inputs {
-            let logic_ref = lvi.verifying_key;
-            for blob in &lvi.app_data.external_payload {
-                let call = decode_external_call(blob)?;
-                calls.push((logic_ref, call));
-            }
-        }
+        crate::encoding::visit_logic_inputs_in_tag_order(
+            action,
+            |_idx, _action_tree_root, lvi| {
+                for blob in &lvi.app_data.external_payload {
+                    calls.push((lvi.verifying_key, decode_external_call(blob)?));
+                }
+                Ok(())
+            },
+        )?;
     }
+
     Ok(calls)
+}
+
+/// Build the account metas for a forwarder CPI from its segment.
+///
+/// `segment[0]` is the forwarder program itself; the metas cover the rest.
+///
+/// Signer authority is never propagated. Solana grants an account the highest
+/// privilege it holds anywhere in the message, so an outer signer appearing in a
+/// forwarded position would otherwise reach the forwarder as a signer. Signing a
+/// settlement authorizes submission, not action by whatever program the proof
+/// names. Writability is passed through: forwarders legitimately need writable
+/// accounts, and the proof does not yet bind which (finding EXT-06).
+pub fn build_account_metas(segment: &[AccountInfo<'_>]) -> Vec<AccountMeta> {
+    segment[1..]
+        .iter()
+        .map(|ai| AccountMeta {
+            pubkey: *ai.key,
+            is_signer: false,
+            is_writable: ai.is_writable,
+        })
+        .collect()
 }
 
 /// Anchor discriminator for BlockTimeForwarder::forward_call (sha256("global:forward_call")[..8])

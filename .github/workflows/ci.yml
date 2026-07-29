@@ -12,7 +12,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   RUST_VERSION: "1.93.0"
-  SOLANA_VERSION: "3.0.13"
+  # Must match the Solana pinned by flake.nix (solanaVersion) — the SBF build
+  # runs under platform-tools' own cargo, and an older one cannot parse
+  # edition-2024 manifests in the dependency graph.
+  SOLANA_VERSION: "3.1.14"
   ANCHOR_VERSION: "0.31.1"
 
 jobs:
@@ -59,6 +62,17 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: |
           cargo clippy -p solana-pa-prototype -p block-time-forwarder --all-targets -- \
+            -D warnings \
+            -A unexpected_cfgs \
+            -A deprecated
+
+      # close_markers_batch and its account struct compile only under
+      # dev-teardown, which production builds do not enable. Without this the
+      # gated code is never linted at all.
+      - name: Run clippy (dev-teardown feature)
+        working-directory: ./solana-pa-prototype
+        run: |
+          cargo clippy -p solana-pa-prototype --features dev-teardown --all-targets -- \
             -D warnings \
             -A unexpected_cfgs \
             -A deprecated

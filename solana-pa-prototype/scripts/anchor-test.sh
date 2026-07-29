@@ -32,7 +32,7 @@ deploy_programs
 
 ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
 ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
-  yarn run ts-mocha -p ./tsconfig.json -t 1000000 'tests/**/*.ts'
+  yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 'tests/**/*.ts'
 
 # Anchor's SBF toolchain can leave incompatible host debug artifacts in target/.
 # Clean host packages so subsequent nix cargo commands always rebuild with nix rustc.

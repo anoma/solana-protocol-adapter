@@ -81,6 +81,7 @@ pub mod encoding;
 pub mod error;
 pub mod external_calls;
 pub mod groth16;
+pub mod marker;
 pub mod merkle;
 pub mod nullifier;
 pub mod root;
@@ -106,23 +107,14 @@ pub mod solana_pa_prototype {
 
     /// Initialize a new PAState account.
     ///
-    /// remaining_accounts[0]: genesis root marker PDA (REQUIRED - will be created)
-    ///
-    /// The genesis root marker is required so that transactions built against the
-    /// initial empty tree remain valid after subsequent transactions update the root.
+    /// Takes no remaining accounts. The empty-tree root equals `PADDING_LEAF`,
+    /// which `is_root_valid` accepts unconditionally, so transactions built
+    /// against the initial tree stay valid without a genesis marker.
     pub fn initialize<'info>(
         ctx: Context<'_, '_, '_, 'info, Initialize<'info>>,
         verifier_router: Pubkey,
         proof_selector: [u8; 4],
     ) -> Result<()> {
-        // Genesis root marker is required
-        require!(
-            !ctx.remaining_accounts.is_empty(),
-            PAError::InvalidTransactionData
-        );
-
-        let pa_state_key = ctx.accounts.pa_state.key();
-
         let state = &mut ctx.accounts.pa_state;
         state.bump = ctx.bumps.pa_state;
         state.authority = ctx.accounts.payer.key();
@@ -137,20 +129,6 @@ pub mod solana_pa_prototype {
         state.next_index = 0;
         state.min_expiry_slots = MIN_EXPIRY_SLOTS;
         state.max_expiry_slots = MAX_EXPIRY_SLOTS;
-
-        // Create root marker for genesis root (so historical root check works from start)
-        let genesis_root = state.root;
-        let rent = Rent::get()?;
-        root::create_root_marker(
-            &crate::ID,
-            &pa_state_key,
-            &genesis_root,
-            &ctx.accounts.payer.to_account_info(),
-            &ctx.remaining_accounts[0],
-            &ctx.accounts.system_program.to_account_info(),
-            marker_lamports(&rent),
-        )?;
-        msg!("Created genesis root marker");
 
         msg!("PAState initialized with empty commitment tree");
         Ok(())
@@ -179,6 +157,7 @@ pub mod solana_pa_prototype {
             ctx.remaining_accounts,
             &payer,
             &ctx.accounts.system_program.to_account_info(),
+            &ctx.accounts.new_root_marker.to_account_info(),
             VerifierAccounts {
                 router_program: ctx.accounts.verifier_router_program.to_account_info(),
                 router: ctx.accounts.router.to_account_info(),
@@ -355,6 +334,7 @@ pub mod solana_pa_prototype {
             ctx.remaining_accounts,
             &payer,
             &ctx.accounts.system_program.to_account_info(),
+            &ctx.accounts.new_root_marker.to_account_info(),
             VerifierAccounts {
                 router_program: ctx.accounts.verifier_router_program.to_account_info(),
                 router: ctx.accounts.router.to_account_info(),
@@ -367,7 +347,28 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Emergency stop — permanently pause the protocol (requires upgrade to unpause).
+    /// Emergency stop — terminal. Retires this deployment permanently.
+    ///
+    /// There is no resume instruction: `Running` is set only at initialization
+    /// and this is the only transition out of it. Recovery from a stop is
+    /// migration to a new deployment, matching the EVM adapter, which has no
+    /// unpause and whose contract is not upgradeable.
+    ///
+    /// Solana programs are upgradeable, so the runtime does not enforce
+    /// terminality the way EVM immutability does — that boundary is
+    /// operational, not on-chain. `close_markers_batch` exists only in
+    /// `dev-teardown` builds (never present in production) to reclaim marker
+    /// rent so a *development* deployment can be re-initialized in place; it
+    /// has no production counterpart. Reclaiming marker rent has no
+    /// dependency on the upgrade authority.
+    ///
+    /// A production shutdown of this deployment is a separate, later step:
+    /// setting `program_data.upgrade_authority_address` to `None` makes the
+    /// program immutable. Do that only once the deployment is truly retired,
+    /// because `initialize` requires
+    /// `program_data.upgrade_authority_address == Some(payer.key())` — once
+    /// the authority is `None`, this program ID can never be initialized
+    /// again, even after `close-pa-state`.
     pub fn emergency_stop(ctx: Context<EmergencyStop>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         require!(
@@ -427,8 +428,14 @@ pub mod solana_pa_prototype {
         Ok(())
     }
 
-    /// Close multiple marker PDAs (nullifier or root) in one transaction.
-    /// Markers are passed as remaining_accounts.
+    /// Close marker PDAs and reclaim their rent. Development tooling only.
+    ///
+    /// Deleting nullifier markers destroys replay protection, and re-initializing
+    /// reuses the same `pa_state` address and therefore the same marker
+    /// addresses, so previously spent nullifiers become spendable again. That is
+    /// the point during development and must be impossible in production, so this
+    /// instruction is absent unless `dev-teardown` is enabled.
+    #[cfg(feature = "dev-teardown")]
     pub fn close_markers_batch<'info>(
         ctx: Context<'_, '_, '_, 'info, CloseMarkersBatch<'info>>,
     ) -> Result<()> {
@@ -528,27 +535,19 @@ fn maybe_grow_account<'info>(
     Ok(())
 }
 
-/// Shared settlement logic for both settle and settle_from_txdata.
+/// Require every root consumed by the transaction to be one the adapter accepts.
 ///
-/// `remaining_accounts` layout:
-///   [0..nullifier_count]  — nullifier marker PDAs (created by this function)
-///   [nullifier_count..N]  — external call forwarder segments (program + CPI accounts)
-///   [last]                — (optional) new root marker PDA
-///
-/// Historical root marker PDAs are found by key scan, so they may appear at any index.
-fn execute_settlement<'info>(
-    state: &mut PAStateAccount,
-    pa_state_info: &AccountInfo<'info>,
+/// Takes `state` by shared reference on purpose: validation must not be able to
+/// mutate adapter state. `execute_settlement` holds `&mut PAStateAccount` for its
+/// whole body, so without this narrowing the compiler would permit a mutation here
+/// and the ordering would rest on what happens to be written rather than on what
+/// is allowed.
+fn validate_consumed_roots(
     tx: &Transaction,
-    remaining_accounts: &[AccountInfo<'info>],
-    payer: &AccountInfo<'info>,
-    system_program: &AccountInfo<'info>,
-    verifier: VerifierAccounts<'info>,
+    state: &PAStateAccount,
+    pa_state_key: &Pubkey,
+    remaining_accounts: &[AccountInfo],
 ) -> Result<()> {
-    let pa_state_key = pa_state_info.key;
-
-    require!(!tx.actions.is_empty(), PAError::InvalidTransactionData);
-
     // Deduplicate roots before validation to avoid redundant PDA derivations.
     // Each `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
     // so deduplication saves significant compute when CUs share roots. Pre-sized
@@ -570,6 +569,38 @@ fn execute_settlement<'info>(
             PAError::NonExistingRoot
         );
     }
+    Ok(())
+}
+
+/// Shared settlement logic for both settle and settle_from_txdata.
+///
+/// `remaining_accounts` layout:
+///   [0..nullifier_count]  — nullifier marker PDAs (created by this function)
+///   [nullifier_count..N]  — external call forwarder segments (program + CPI accounts)
+///
+/// Historical root marker PDAs are found by key scan, so they may appear at any index.
+/// The marker for the root this settlement produces is a separate named account
+/// (`new_root_marker`), not part of `remaining_accounts`.
+///
+/// The account parameters are individually threaded (rather than grouped into a
+/// struct) because each is used independently and at a different point in the
+/// function body; grouping would not reduce the real complexity, only relocate it.
+#[allow(clippy::too_many_arguments)]
+fn execute_settlement<'info>(
+    state: &mut PAStateAccount,
+    pa_state_info: &AccountInfo<'info>,
+    tx: &Transaction,
+    remaining_accounts: &[AccountInfo<'info>],
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+    new_root_marker: &AccountInfo<'info>,
+    verifier: VerifierAccounts<'info>,
+) -> Result<()> {
+    let pa_state_key = pa_state_info.key;
+
+    require!(!tx.actions.is_empty(), PAError::InvalidTransactionData);
+
+    validate_consumed_roots(tx, state, pa_state_key, remaining_accounts)?;
 
     let nullifiers = settle::extract_nullifiers(tx)?;
 
@@ -625,7 +656,13 @@ fn execute_settlement<'info>(
         all_logic_refs.extend(logic_refs.iter().map(|d| d.to_bytes()));
     }
 
-    // Runs before nullifier/commitment state changes so failures don't leave partial state.
+    // Runs before nullifier and commitment state changes so that a forwarder
+    // cannot observe them. Solana reverts every account write when the
+    // instruction returns Err, so partial state on failure is impossible
+    // regardless of ordering — that is not what this ordering protects. The
+    // forwarder is chosen by the proof and runs while the transaction is still
+    // in flight, and it can read any account it is handed; running it first
+    // bounds what this settlement has written by the time it executes.
     #[cfg(not(test))]
     external_calls::execute_external_calls(tx, remaining_accounts, nullifiers.len())
         .map_err(anchor_lang::error::Error::from)?;
@@ -676,22 +713,22 @@ fn execute_settlement<'info>(
 
     let new_root = state.root;
 
-    // Root markers enable parallel transaction construction against historical roots.
+    // Every state-changing settlement must retain its resulting root so that
+    // concurrently constructed transactions remain valid after the tree advances.
+    // Solana cannot create an undeclared account, so the marker is required and a
+    // settlement that omits it is rejected.
     let (expected_pda, _) = root::derive_root_pda(&crate::ID, pa_state_key, &new_root);
-    if let Some(last_account) = remaining_accounts.last() {
-        if last_account.key == &expected_pda {
-            root::create_root_marker(
-                &crate::ID,
-                pa_state_key,
-                &new_root,
-                payer,
-                last_account,
-                system_program,
-                ml,
-            )?;
-            msg!("Created root marker for new root");
-        }
-    }
+    require_keys_eq!(expected_pda, *new_root_marker.key, PAError::RootPdaMismatch);
+    root::create_root_marker(
+        &crate::ID,
+        pa_state_key,
+        &new_root,
+        payer,
+        new_root_marker,
+        system_program,
+        ml,
+    )?;
+    msg!("Created root marker for new root");
 
     Ok(())
 }
@@ -711,6 +748,22 @@ pub struct Initialize<'info> {
     pub payer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// The program account is required so `program_data` is proven to be
+    /// *this* program's ProgramData address rather than merely an account
+    /// shaped like one: the constraint reads the programdata address the
+    /// loader recorded inside this very program account and requires it to
+    /// match the supplied `program_data` account.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ PAError::Unauthorized)]
+    pub program: Program<'info, crate::program::SolanaPaPrototype>,
+
+    /// The loader records the upgrade authority here at deploy time, which is the
+    /// only trust anchor available before the adapter has any state of its own.
+    #[account(
+        constraint = program_data.upgrade_authority_address == Some(payer.key())
+            @ PAError::Unauthorized
+    )]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 #[derive(Accounts)]
@@ -777,6 +830,12 @@ pub struct Settle<'info> {
     pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
 
+    /// CHECK: Validated at runtime against the root produced by this settlement.
+    /// Cannot use a seeds constraint: the address depends on the resulting root,
+    /// which is only known after commitments are appended.
+    #[account(mut)]
+    pub new_root_marker: UncheckedAccount<'info>,
+
     /// CHECK: Validated against verifier_router stored in PAStateAccount.
     #[account(constraint = verifier_router_program.key() == pa_state.verifier_router @ PAError::VerifierRouterFailed)]
     pub verifier_router_program: UncheckedAccount<'info>,
@@ -811,6 +870,12 @@ pub struct SettleFromTxData<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Validated at runtime against the root produced by this settlement.
+    /// Cannot use a seeds constraint: the address depends on the resulting root,
+    /// which is only known after commitments are appended.
+    #[account(mut)]
+    pub new_root_marker: UncheckedAccount<'info>,
 
     /// CHECK: Validated against verifier_router stored in PAStateAccount.
     #[account(constraint = verifier_router_program.key() == pa_state.verifier_router @ PAError::VerifierRouterFailed)]
@@ -932,6 +997,7 @@ pub struct UpdateExpiryConfig<'info> {
     pub authority: Signer<'info>,
 }
 
+#[cfg(feature = "dev-teardown")]
 #[derive(Accounts)]
 pub struct CloseMarkersBatch<'info> {
     #[account(

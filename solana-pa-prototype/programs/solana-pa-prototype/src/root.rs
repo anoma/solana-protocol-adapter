@@ -12,9 +12,7 @@ use crate::error::PAError;
 use crate::merkle::PADDING_LEAF;
 use crate::state::PAStateAccount;
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::invoke_signed;
 use arm_core::Digest;
-use solana_system_interface::instruction as system_instruction;
 
 /// Seeds prefix for root marker PDA derivation.
 pub const ROOT_SEED: &[u8] = b"root";
@@ -28,12 +26,16 @@ pub fn derive_root_pda(
     Pubkey::find_program_address(&[ROOT_SEED, pa_state.as_ref(), root_bytes], program_id)
 }
 
-/// Create a root marker PDA if it doesn't already exist.
-///
-/// Returns Ok(()) if marker was created or already exists (idempotent).
+/// Create a root marker PDA for a newly produced root, adopting a
+/// System-owned empty placeholder at that address if one already exists
+/// (see `create_or_adopt_marker`).
 ///
 /// # Errors
 /// * `PAError::RootPdaMismatch` - Provided marker doesn't match expected PDA
+/// * `PAError::RootMarkerAlreadyExists` - Marker already recorded (repeated root)
+/// * `PAError::MarkerUnexpectedOwner` - Placeholder at the PDA is owned by
+///   something other than the system program
+/// * `PAError::MarkerUnexpectedData` - Placeholder at the PDA holds data
 pub fn create_root_marker<'info>(
     program_id: &Pubkey,
     pa_state_key: &Pubkey,
@@ -48,15 +50,13 @@ pub fn create_root_marker<'info>(
     // Verify the provided account matches expected PDA
     require_keys_eq!(expected_key, *marker.key, PAError::RootPdaMismatch);
 
-    // If already owned by this program, marker already exists - success (idempotent)
+    // A repeated produced root is unreachable in normal operation: every
+    // settlement appends at least one commitment and next_index strictly
+    // increases. Reaching this means a hash collision or a tree-accounting bug,
+    // both of which must surface rather than pass quietly.
     if marker.owner == program_id {
-        return Ok(());
+        return err!(PAError::RootMarkerAlreadyExists);
     }
-
-    let ix = system_instruction::create_account(
-        payer.key, marker.key, lamports, 0, // 0 bytes - existence alone indicates valid
-        program_id,
-    );
 
     let signer_seeds: &[&[u8]] = &[
         ROOT_SEED,
@@ -65,13 +65,14 @@ pub fn create_root_marker<'info>(
         &[bump],
     ];
 
-    invoke_signed(
-        &ix,
-        &[payer.clone(), marker.clone(), system_program.clone()],
-        &[signer_seeds],
-    )?;
-
-    Ok(())
+    crate::marker::create_or_adopt_marker(
+        program_id,
+        signer_seeds,
+        payer,
+        marker,
+        system_program,
+        lamports,
+    )
 }
 
 /// Check if a root is valid for transaction construction.

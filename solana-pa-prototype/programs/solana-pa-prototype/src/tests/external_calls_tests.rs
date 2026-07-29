@@ -1,12 +1,14 @@
+use crate::error::PAError;
 use crate::external_calls::{
-    build_forwarder_instruction_data, encode_external_call, extract_external_calls,
-    FORWARD_CALL_DISCRIMINATOR,
+    build_account_metas, build_forwarder_instruction_data, decode_external_call,
+    encode_external_call, extract_external_calls, FORWARD_CALL_DISCRIMINATOR,
 };
 use crate::tests::utils::{
-    create_minimal_transaction, create_transaction_with_external_payload,
-    create_transaction_with_multi_lvi_payloads,
+    create_minimal_transaction, create_tag_consistent_payload_tx,
+    create_transaction_with_external_payload, make_account_info,
 };
 use crate::types::{OutputMode, SolanaExternalCall};
+use anchor_lang::prelude::Pubkey;
 use arm_core::logic_instance::ExpirableBlob;
 use arm_core::Digest;
 
@@ -42,45 +44,72 @@ fn test_extract_external_calls_single() {
     assert_eq!(extracted_call.expected_output, call.expected_output);
 }
 
+/// Execution order must follow the compliance-tag traversal, not the wire order
+/// of logic_verifier_inputs. Reversing the wire entries must not change the
+/// order of extracted calls.
 #[test]
-fn test_extract_external_calls_multiple() {
-    let call1 = SolanaExternalCall {
-        program_id: [0x11; 32],
-        instruction_data: vec![1, 2],
+fn test_extract_external_calls_follows_tag_order_not_wire_order() {
+    let call_a = SolanaExternalCall {
+        program_id: [0xAA; 32],
+        instruction_data: vec![0x01],
         expected_output: vec![0x00],
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
     };
-    let call2 = SolanaExternalCall {
-        program_id: [0x22; 32],
-        instruction_data: vec![3, 4],
-        expected_output: vec![0x01],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    };
-    let call3 = SolanaExternalCall {
-        program_id: [0x33; 32],
-        instruction_data: vec![5, 6, 7, 8],
-        expected_output: vec![0x02],
+    let call_b = SolanaExternalCall {
+        program_id: [0xBB; 32],
+        instruction_data: vec![0x02],
+        expected_output: vec![0x00],
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
     };
 
-    // Two LogicVerifierInputs: first has 2 calls, second has 1 call
-    let tx = create_transaction_with_multi_lvi_payloads(vec![
-        vec![encode_external_call(&call1), encode_external_call(&call2)],
-        vec![encode_external_call(&call3)],
-    ]);
+    let tx = create_tag_consistent_payload_tx(
+        vec![encode_external_call(&call_a)],
+        vec![encode_external_call(&call_b)],
+    );
+    let ordered = extract_external_calls(&tx).expect("canonical tx must extract");
+    assert_eq!(ordered.len(), 2);
+    assert_eq!(ordered[0].1.instruction_data, vec![0x01]);
+    assert_eq!(ordered[1].1.instruction_data, vec![0x02]);
 
-    let extracted = extract_external_calls(&tx).unwrap();
-    assert_eq!(extracted.len(), 3, "Should extract all 3 calls");
+    // Reverse only the wire order. The compliance units are untouched, so the
+    // proof would still verify; extraction order must be unchanged.
+    let mut reversed = tx.clone();
+    reversed.actions[0].logic_verifier_inputs.reverse();
+    let after = extract_external_calls(&reversed).expect("reordered tx must extract");
 
-    let (_, c0) = &extracted[0];
-    let (_, c1) = &extracted[1];
-    let (_, c2) = &extracted[2];
-    assert_eq!(*c0, call1, "call 0 mismatch");
-    assert_eq!(*c1, call2, "call 1 mismatch");
-    assert_eq!(*c2, call3, "call 2 mismatch");
+    assert_eq!(
+        after.len(),
+        2,
+        "reordering wire entries must not drop calls"
+    );
+    assert_eq!(
+        after[0].1.instruction_data,
+        vec![0x01],
+        "first call must still be the consumed-tag call"
+    );
+    assert_eq!(
+        after[1].1.instruction_data,
+        vec![0x02],
+        "second call must still be the created-tag call"
+    );
+}
+
+/// A tag appearing twice makes the mapping ambiguous and must be rejected.
+#[test]
+fn test_extract_external_calls_rejects_duplicate_tags() {
+    let tx_base = create_minimal_transaction();
+    let mut tx = tx_base.clone();
+    tx.actions[0].logic_verifier_inputs[1].tag = tx.actions[0].logic_verifier_inputs[0].tag;
+
+    let result = extract_external_calls(&tx);
+
+    assert!(
+        matches!(result, Err(PAError::InvalidTransactionData)),
+        "duplicate LVI tags must be rejected, got {:?}",
+        result
+    );
 }
 
 #[test]
@@ -141,4 +170,73 @@ fn test_build_forwarder_instruction_data_byte_layout() {
         "input length (Borsh u32 LE)"
     );
     assert_eq!(&data[44..], &input, "input payload");
+}
+
+/// Solana cannot distinguish an explicit empty return from silence, so a call
+/// authorizing an empty output can never settle. Reject it at decode.
+#[test]
+fn test_decode_rejects_empty_expected_output() {
+    let call = SolanaExternalCall {
+        program_id: [7u8; 32],
+        instruction_data: vec![1, 2, 3],
+        expected_output: vec![],
+        output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
+    };
+    let blob = encode_external_call(&call);
+
+    let result = decode_external_call(&blob);
+
+    assert!(
+        matches!(result, Err(PAError::EmptyExpectedOutput)),
+        "expected EmptyExpectedOutput, got {:?}",
+        result
+    );
+}
+
+/// A non-empty expected output remains valid and decodes unchanged.
+#[test]
+fn test_decode_accepts_non_empty_expected_output() {
+    let call = SolanaExternalCall {
+        program_id: [7u8; 32],
+        instruction_data: vec![1, 2, 3],
+        expected_output: vec![0x2a],
+        output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
+    };
+    let blob = encode_external_call(&call);
+
+    let decoded = decode_external_call(&blob).expect("non-empty output must decode");
+
+    assert_eq!(decoded, call);
+}
+
+/// Signer authority must never reach a forwarder. Solana unions privileges
+/// across the message, so an outer signer can appear in a forwarded position
+/// without that position requesting it.
+#[test]
+fn test_build_account_metas_never_propagates_signer() {
+    let program_id = Pubkey::new_unique();
+    let forwarder_key = Pubkey::new_unique();
+    let payer_key = Pubkey::new_unique();
+
+    make_account_info!(forwarder, &forwarder_key, owner: &program_id,
+        lamports: 0, signer: false, writable: false, executable: true);
+    // The outer payer: signer and writable by virtue of the outer message.
+    make_account_info!(payer, &payer_key, owner: &program_id,
+        lamports: 1_000_000, signer: true, writable: true, executable: false);
+
+    let segment = [forwarder.clone(), payer.clone()];
+    let metas = build_account_metas(&segment);
+
+    assert_eq!(metas.len(), 1, "metas cover segment[1..], not the program");
+    assert_eq!(metas[0].pubkey, payer_key);
+    assert!(
+        !metas[0].is_signer,
+        "signer authority must never be forwarded to proof-selected code"
+    );
+    assert!(
+        metas[0].is_writable,
+        "writability is preserved; only signer authority is withheld"
+    );
 }

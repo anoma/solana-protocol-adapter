@@ -7,8 +7,6 @@
 
 use crate::error::PAError;
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::invoke_signed;
-use solana_system_interface::instruction as system_instruction;
 
 /// Seeds prefix for nullifier PDA derivation.
 pub const NULLIFIER_SEED: &[u8] = b"nullifier";
@@ -25,16 +23,22 @@ pub fn derive_nullifier_pda(
     )
 }
 
-/// Check that a nullifier has not been spent, then create its marker PDA.
+/// Check that a nullifier has not been spent, then create its marker PDA,
+/// adopting a System-owned empty placeholder at that address if one already
+/// exists (see `create_or_adopt_marker`).
 ///
-/// This function performs an atomic check-and-create operation:
+/// This function performs an atomic check-and-create-or-adopt operation:
 /// 1. Verify the provided marker account matches the expected PDA
 /// 2. Check the marker isn't already owned by the program (would mean duplicate)
-/// 3. Create the marker PDA via CPI to system program
+/// 3. Create the marker PDA via CPI to system program, or adopt a placeholder
+///    already funded there
 ///
 /// # Errors
 /// * `PAError::NullifierPdaMismatch` - Provided marker doesn't match expected PDA
 /// * `PAError::DuplicateNullifier` - Marker already exists (nullifier spent)
+/// * `PAError::MarkerUnexpectedOwner` - Placeholder at the PDA is owned by
+///   something other than the system program
+/// * `PAError::MarkerUnexpectedData` - Placeholder at the PDA holds data
 pub fn check_and_create_nullifier_marker<'info>(
     program_id: &Pubkey,
     pa_state_key: &Pubkey,
@@ -49,15 +53,10 @@ pub fn check_and_create_nullifier_marker<'info>(
     // Verify the provided account matches expected PDA
     require_keys_eq!(expected_key, *marker.key, PAError::NullifierPdaMismatch);
 
-    // If already owned by this program, nullifier was previously spent
+    // Already ours: this nullifier was consumed by an earlier settlement.
     if marker.owner == program_id {
         return err!(PAError::DuplicateNullifier);
     }
-
-    let ix = system_instruction::create_account(
-        payer.key, marker.key, lamports, 0, // 0 bytes - existence alone indicates spent
-        program_id,
-    );
 
     let signer_seeds: &[&[u8]] = &[
         NULLIFIER_SEED,
@@ -66,11 +65,12 @@ pub fn check_and_create_nullifier_marker<'info>(
         &[bump],
     ];
 
-    invoke_signed(
-        &ix,
-        &[payer.clone(), marker.clone(), system_program.clone()],
-        &[signer_seeds],
-    )?;
-
-    Ok(())
+    crate::marker::create_or_adopt_marker(
+        program_id,
+        signer_seeds,
+        payer,
+        marker,
+        system_program,
+        lamports,
+    )
 }

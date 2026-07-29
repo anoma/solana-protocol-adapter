@@ -24,6 +24,28 @@ macro_rules! make_account_info {
 }
 pub(crate) use make_account_info;
 
+/// Like `make_account_info!` but with caller-supplied account data, for testing
+/// the reject-on-data branch of marker creation.
+macro_rules! make_account_info_with_data {
+    ($name:ident, $key:expr, owner: $owner:expr, lamports: $lamports:expr,
+     data: $data:expr, signer: $signer:expr, writable: $writable:expr,
+     executable: $executable:expr) => {
+        #[allow(unused_mut)]
+        let mut $name = ($lamports as u64, $data);
+        let $name = ::anchor_lang::prelude::AccountInfo::new(
+            $key,
+            $signer,
+            $writable,
+            &mut $name.0,
+            &mut $name.1,
+            $owner,
+            $executable,
+            0,
+        );
+    };
+}
+pub(crate) use make_account_info_with_data;
+
 /// Assert that a Result is an AnchorError whose `error_name` matches the given PAError variant.
 ///
 /// Anchor wraps `#[error_code]` variants into `AnchorError { error_name, error_code_number, .. }`.
@@ -160,8 +182,8 @@ pub fn create_minimal_transaction() -> Transaction {
 }
 
 /// Attaches payloads to the first LVI (index 0) of a minimal transaction.
-/// Preserves CU-consistent LVI tags. For tests needing multiple LVIs or that
-/// don't care about tag consistency, see `create_transaction_with_multi_lvi_payloads`.
+/// Preserves CU-consistent LVI tags. For tests needing multiple LVIs, see
+/// `create_tag_consistent_payload_tx`.
 pub fn create_transaction_with_external_payload(payloads: Vec<ExpirableBlob>) -> Transaction {
     let mut tx = create_minimal_transaction();
     tx.actions[0].logic_verifier_inputs[0]
@@ -170,28 +192,22 @@ pub fn create_transaction_with_external_payload(payloads: Vec<ExpirableBlob>) ->
     tx
 }
 
-/// One action, one CU, multiple LVIs with per-LVI external payloads.
+/// One action, one CU, two LVIs whose tags match the CU's nullifier and
+/// commitment, each carrying its own external payloads.
 ///
-/// The LVI list replaces the two LVIs from `create_minimal_transaction`, so LVI tags
-/// do NOT correspond to the CU's nullifier/commitment. Only valid for external call
-/// extraction tests — not for encoding/journal tests that require CU↔LVI consistency.
-pub fn create_transaction_with_multi_lvi_payloads(
-    payloads_per_lvi: Vec<Vec<ExpirableBlob>>,
+/// The tags are CU-consistent, so this is valid for tests that traverse in
+/// compliance-tag order.
+pub fn create_tag_consistent_payload_tx(
+    consumed_payloads: Vec<ExpirableBlob>,
+    created_payloads: Vec<ExpirableBlob>,
 ) -> Transaction {
     let mut tx = create_minimal_transaction();
-    tx.actions[0].logic_verifier_inputs = payloads_per_lvi
-        .into_iter()
-        .enumerate()
-        .map(|(i, payloads)| LogicVerifierInputs {
-            tag: Digest::default(),
-            verifying_key: Digest::from_bytes([i as u8; 32]),
-            app_data: AppData {
-                external_payload: payloads,
-                ..AppData::default()
-            },
-            proof: None,
-        })
-        .collect();
+    tx.actions[0].logic_verifier_inputs[0]
+        .app_data
+        .external_payload = consumed_payloads;
+    tx.actions[0].logic_verifier_inputs[1]
+        .app_data
+        .external_payload = created_payloads;
     tx
 }
 
@@ -228,7 +244,7 @@ pub fn make_external_call(
     crate::types::SolanaExternalCall {
         program_id,
         instruction_data,
-        expected_output: vec![],
+        expected_output: vec![0x00],
         output_mode: crate::types::OutputMode::ReturnData,
         num_accounts: 1,
     }

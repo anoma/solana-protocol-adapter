@@ -1,5 +1,5 @@
 use crate::merkle::{append_to_tree, hash_two, EMPTY_TREE_ROOT_INITIAL, PADDING_LEAF, ZEROS};
-use crate::tests::utils::create_test_pa_state;
+use crate::tests::utils::{assert_anchor_err, create_test_pa_state};
 use anchor_lang::solana_program::hash::hashv;
 use arm_core::Digest;
 use sha2::{Digest as Sha2Digest, Sha256};
@@ -211,4 +211,67 @@ fn test_expand_after_fill_at_depth_2() {
     let root = state.root_digest();
     let expected = evm_compute_root(&leaves, 3);
     assert_eq!(root, expected, "4-leaf root must match EVM at depth 3");
+}
+
+/// A depth-32 tree declares capacity 2^32 and must accept index 2^32 - 1.
+#[test]
+fn test_append_accepts_final_declared_leaf_at_max_depth() {
+    let mut state = create_test_pa_state();
+    state.current_depth = 32;
+    state.frontier = vec![[0u8; 32]; 32];
+    state.next_index = (1u64 << 32) - 1;
+
+    let leaf = Digest::from_bytes([0x77; 32]);
+    let result = append_to_tree(&mut state, leaf);
+
+    assert!(
+        result.is_ok(),
+        "index 2^32-1 is within declared capacity and must be accepted, got {:?}",
+        result
+    );
+    assert_eq!(state.next_index, 1u64 << 32, "final leaf must be committed");
+    assert_eq!(
+        state.current_depth, 32,
+        "tree must not expand past max depth"
+    );
+
+    // index = 2^32 - 1 is all-ones in binary, so every one of the 32 levels
+    // takes the "right child" branch, hashing the (test) all-zero frontier
+    // against the running value, and MAX_TREE_DEPTH blocks the post-loop
+    // expansion — the plain depth-32 root, with no extra zero-padding level.
+    // Recompute it independently of append_to_tree to pin the exact value:
+    // the spec requires off-chain implementations to agree on this root.
+    let zero_frontier = Digest::from_bytes([0u8; 32]);
+    let mut expected = leaf;
+    for _ in 0..32 {
+        expected = hash_two(&zero_frontier, &expected);
+    }
+    assert_eq!(
+        state.root_digest(),
+        expected,
+        "max-depth root must equal the plain depth-32 hash chain over the frontier"
+    );
+}
+
+/// Once full at max depth, the next append is rejected before any mutation.
+#[test]
+fn test_append_rejects_when_full_without_mutating() {
+    let mut state = create_test_pa_state();
+    state.current_depth = 32;
+    state.frontier = vec![[0u8; 32]; 32];
+    state.next_index = 1u64 << 32;
+    state.root = [0xAB; 32];
+
+    let before_index = state.next_index;
+    let before_depth = state.current_depth;
+    let before_root = state.root;
+    let before_frontier = state.frontier.clone();
+
+    let result = append_to_tree(&mut state, Digest::from_bytes([0x88; 32]));
+
+    assert_anchor_err!(result, TreeMaxDepthReached);
+    assert_eq!(state.next_index, before_index, "next_index must not change");
+    assert_eq!(state.current_depth, before_depth, "depth must not change");
+    assert_eq!(state.root, before_root, "root must not change");
+    assert_eq!(state.frontier, before_frontier, "frontier must not change");
 }
