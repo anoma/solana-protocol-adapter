@@ -63,6 +63,17 @@ jobs:
             -A unexpected_cfgs \
             -A deprecated
 
+      # close_markers_batch and its account struct compile only under
+      # dev-teardown, which production builds do not enable. Without this the
+      # gated code is never linted at all.
+      - name: Run clippy (dev-teardown feature)
+        working-directory: ./solana-pa-prototype
+        run: |
+          cargo clippy -p solana-pa-prototype --features dev-teardown --all-targets -- \
+            -D warnings \
+            -A unexpected_cfgs \
+            -A deprecated
+
   # Rust unit tests
   test:
     name: Test
