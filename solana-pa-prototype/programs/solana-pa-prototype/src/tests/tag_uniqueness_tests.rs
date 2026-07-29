@@ -56,10 +56,13 @@ fn duplicate_tag_rejected_by_extraction_and_journal_digest() {
         extraction_result
     );
 
-    // Journal digest computation independently rejects it too.
+    // Journal digest computation rejects it too, via the same traversal. Both
+    // paths now fail with InvalidTransactionData from the explicit ambiguity
+    // check rather than TagNotFound, which was the downstream symptom of a
+    // required tag going unmatched.
     let result = compute_batch_aggregation_journal_digest(&tx);
     assert!(
-        matches!(result, Err(PAError::TagNotFound)),
+        matches!(result, Err(PAError::InvalidTransactionData)),
         "Journal digest computation must also block on the duplicate tag: {:?}",
         result
     );

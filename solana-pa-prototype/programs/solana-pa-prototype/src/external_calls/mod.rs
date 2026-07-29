@@ -72,28 +72,15 @@ pub fn extract_external_calls(
     let mut calls = Vec::with_capacity(total);
 
     for action in &tx.actions {
-        let (tags, _logic_refs) = crate::encoding::extract_tags_and_logic_refs(action)?;
-        if tags.len() != action.logic_verifier_inputs.len() {
-            return Err(PAError::InvalidTransactionData);
-        }
-
-        // The tag lookup must be unambiguous: a repeated tag would let one input
-        // stand in for another and make the traversal non-bijective.
-        for (i, lvi) in action.logic_verifier_inputs.iter().enumerate() {
-            if action.logic_verifier_inputs[i + 1..]
-                .iter()
-                .any(|other| other.tag == lvi.tag)
-            {
-                return Err(PAError::InvalidTransactionData);
-            }
-        }
-
-        for tag in &tags {
-            let lvi = crate::encoding::find_logic_input(&action.logic_verifier_inputs, tag)?;
-            for blob in &lvi.app_data.external_payload {
-                calls.push((lvi.verifying_key, decode_external_call(blob)?));
-            }
-        }
+        crate::encoding::visit_logic_inputs_in_tag_order(
+            action,
+            |_idx, _action_tree_root, lvi| {
+                for blob in &lvi.app_data.external_payload {
+                    calls.push((lvi.verifying_key, decode_external_call(blob)?));
+                }
+                Ok(())
+            },
+        )?;
     }
 
     Ok(calls)
