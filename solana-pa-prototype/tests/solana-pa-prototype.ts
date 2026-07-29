@@ -159,6 +159,31 @@ function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; 
   return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
 }
 
+/**
+ * Assert that `fixtureName` has not already been settled on this validator.
+ *
+ * Every test that settles a fixture asserts an exact state transition
+ * (next_index before -> after, a specific resulting root, specific markers).
+ * Those assertions are only meaningful on a fresh ledger. If a fixture's
+ * nullifiers already exist, the ledger is not fresh and the rest of the test is
+ * measuring something else.
+ *
+ * This fails loudly rather than skipping or degrading to a weaker check: a
+ * silently retired test reports as pending, which reads as green, and a
+ * weakened one reports as passing while verifying materially less.
+ */
+async function assertFixtureUnsettled(fixtureName: string): Promise<void> {
+  const f = loadFixture(fixtureName);
+  const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
+  const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
+  assert.isNull(
+    info,
+    `${fixtureName} is already settled on this validator (its first nullifier ` +
+    `marker exists). These tests require a fresh ledger. Reset it with ` +
+    `'./scripts/dev.sh clean' and re-run, or deploy to a fresh devnet.`
+  );
+}
+
 function buildSettleRemainingAccounts(
   nullifierAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
   options?: {
@@ -588,20 +613,15 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
       "fixture tx must include block-time-forwarder program id bytes (external_payload injected)"
     );
 
-    // On devnet, nullifiers from a previous run persist. If this fixture was already
-    // settled, verify the existing state instead of re-settling.
+    // Requires a fresh ledger: the assertions below pin an exact state
+    // transition, which a prior settlement would invalidate.
     const firstNullifier = await provider.connection.getAccountInfo(nullifierPdas[0]);
-    if (firstNullifier) {
-      // Already settled — verify markers exist and state is consistent
-      for (const pda of nullifierPdas) {
-        const info = await provider.connection.getAccountInfo(pda);
-        assert.ok(info, "nullifier marker PDA should exist from prior settlement");
-        assert.ok(info!.owner.equals(program.programId), "nullifier marker PDA should be owned by PA program");
-      }
-      const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 1, "nextIndex should reflect prior settlement(s)");
-      return;
-    }
+    assert.isNull(
+      firstNullifier,
+      "batch_groth16.json is already settled on this validator (its first " +
+      "nullifier marker exists). These tests require a fresh ledger. Reset it " +
+      "with './scripts/dev.sh clean' and re-run, or deploy to a fresh devnet."
+    );
 
     // Get the current state before settlement to know the pre-settlement root
     const stateBefore = await program.account.paStateAccount.fetch(paState);
@@ -674,17 +694,8 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
 // 2), by which point further settlements have advanced the tree and the
 // committer's root is genuinely historical.
 describe("solana-pa-prototype (STATE-03 part 1: commit a non-ephemeral leaf)", () => {
-  async function alreadySettledLocal(fixtureName: string): Promise<boolean> {
-    const f = loadFixture(fixtureName);
-    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
-    const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
-    return !!info;
-  }
-
   it("settles the historical-root committer (its created resource is genuinely non-ephemeral)", async () => {
-    if (await alreadySettledLocal("batch_groth16_historical_root_committer.json")) {
-      return;
-    }
+    await assertFixtureUnsettled("batch_groth16_historical_root_committer.json");
 
     const committerFixture = loadFixture("batch_groth16_historical_root_committer.json");
     const payload = Buffer.from(committerFixture.tx_b64, "base64");
@@ -2315,21 +2326,8 @@ describe("solana-pa-prototype (External call error paths)", () => {
 describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   let v2TxSig: string;
 
-  // On devnet, fixtures may already be settled from a previous run.
-  // Check the first nullifier; if it exists, the fixture was already settled.
-  async function alreadySettled(fixtureName: string): Promise<boolean> {
-    const f = loadFixture(fixtureName);
-    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
-    const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
-    return !!info;
-  }
-
   it("settles v2 fixture (next_index 1→2, depth 1→2)", async () => {
-    if (await alreadySettled("batch_groth16_v2.json")) {
-      const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 2, "nextIndex should reflect prior v2 settlement");
-      return;
-    }
+    await assertFixtureUnsettled("batch_groth16_v2.json");
 
     const accountInfoBefore = await provider.connection.getAccountInfo(paState);
     const sizeBefore = accountInfoBefore!.data.length;
@@ -2347,11 +2345,16 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
   });
 
-  it("verifies events from v2 settlement", async function () {
-    if (!v2TxSig) {
-      this.skip(); // v2 was already settled in a prior run
-      return;
-    }
+  it("verifies events from v2 settlement", async () => {
+    // v2TxSig is set by the preceding test. If it is missing that settlement
+    // failed, which must surface as a failure here rather than a skip: a
+    // skipped test reports as pending, so a regression would cost two tests
+    // and show only one red.
+    assert.ok(
+      v2TxSig,
+      "v2 settlement did not produce a transaction signature — the preceding " +
+      "'settles v2 fixture' test must have failed"
+    );
 
     await provider.connection.confirmTransaction(v2TxSig, "confirmed");
 
@@ -2407,11 +2410,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   });
 
   it("settles v3 fixture (next_index 2→3, depth stays 2)", async () => {
-    if (await alreadySettled("batch_groth16_v3.json")) {
-      const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 3, "nextIndex should reflect prior v3 settlement");
-      return;
-    }
+    await assertFixtureUnsettled("batch_groth16_v3.json");
 
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
@@ -2428,11 +2427,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
   });
 
   it("settles multi-call fixture with two external calls (next_index 3→4)", async () => {
-    if (await alreadySettled("batch_groth16_multi_call.json")) {
-      const state = await program.account.paStateAccount.fetch(paState);
-      assert.isAtLeast(state.nextIndex.toNumber(), 4, "nextIndex should reflect prior multi-call settlement");
-      return;
-    }
+    await assertFixtureUnsettled("batch_groth16_multi_call.json");
 
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
@@ -2464,12 +2459,6 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 // `is_root_valid` that can still admit it is the root-marker lookup, which is
 // exactly the branch no maintained test had ever exercised on a validator.
 describe("solana-pa-prototype (STATE-03 part 2: settle against a retained historical root)", () => {
-  async function alreadySettledLocal(fixtureName: string): Promise<boolean> {
-    const f = loadFixture(fixtureName);
-    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
-    const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
-    return !!info;
-  }
   // The consumer's root must be genuinely superseded before either of the two
   // tests below runs, otherwise `is_root_valid` would return true on its
   // *first* branch (root == current root) and the marker branch would again go
@@ -2543,9 +2532,7 @@ describe("solana-pa-prototype (STATE-03 part 2: settle against a retained histor
       "root marker should be owned by the PA program",
     );
 
-    if (await alreadySettledLocal("batch_groth16_historical_root.json")) {
-      return;
-    }
+    await assertFixtureUnsettled("batch_groth16_historical_root.json");
 
     const consumerFixture = loadFixture("batch_groth16_historical_root.json");
     const payload = Buffer.from(consumerFixture.tx_b64, "base64");
