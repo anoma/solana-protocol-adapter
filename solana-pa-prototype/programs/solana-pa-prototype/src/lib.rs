@@ -535,6 +535,43 @@ fn maybe_grow_account<'info>(
     Ok(())
 }
 
+/// Require every root consumed by the transaction to be one the adapter accepts.
+///
+/// Takes `state` by shared reference on purpose: validation must not be able to
+/// mutate adapter state. `execute_settlement` holds `&mut PAStateAccount` for its
+/// whole body, so without this narrowing the compiler would permit a mutation here
+/// and the ordering would rest on what happens to be written rather than on what
+/// is allowed.
+fn validate_consumed_roots(
+    tx: &Transaction,
+    state: &PAStateAccount,
+    pa_state_key: &Pubkey,
+    remaining_accounts: &[AccountInfo],
+) -> Result<()> {
+    // Deduplicate roots before validation to avoid redundant PDA derivations.
+    // Each `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
+    // so deduplication saves significant compute when CUs share roots. Pre-sized
+    // to the worst case (one root per CU) so the BPF bump allocator doesn't
+    // accumulate capacity-doubled buffers.
+    let total_cu_count: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
+    let mut unique_roots: Vec<arm_core::Digest> = Vec::with_capacity(total_cu_count);
+    for action in &tx.actions {
+        for cu in &action.compliance_units {
+            let root = settle::read_consumed_root(cu)?;
+            if !unique_roots.contains(&root) {
+                unique_roots.push(root);
+            }
+        }
+    }
+    for root in &unique_roots {
+        require!(
+            root::is_root_valid(state, &crate::ID, pa_state_key, root, remaining_accounts),
+            PAError::NonExistingRoot
+        );
+    }
+    Ok(())
+}
+
 /// Shared settlement logic for both settle and settle_from_txdata.
 ///
 /// `remaining_accounts` layout:
@@ -563,27 +600,7 @@ fn execute_settlement<'info>(
 
     require!(!tx.actions.is_empty(), PAError::InvalidTransactionData);
 
-    // Deduplicate roots before validation to avoid redundant PDA derivations.
-    // Each `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
-    // so deduplication saves significant compute when CUs share roots. Pre-sized
-    // to the worst case (one root per CU) so the BPF bump allocator doesn't
-    // accumulate capacity-doubled buffers.
-    let total_cu_count: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
-    let mut unique_roots: Vec<arm_core::Digest> = Vec::with_capacity(total_cu_count);
-    for action in &tx.actions {
-        for cu in &action.compliance_units {
-            let root = settle::read_consumed_root(cu)?;
-            if !unique_roots.contains(&root) {
-                unique_roots.push(root);
-            }
-        }
-    }
-    for root in &unique_roots {
-        require!(
-            root::is_root_valid(state, &crate::ID, pa_state_key, root, remaining_accounts),
-            PAError::NonExistingRoot
-        );
-    }
+    validate_consumed_roots(tx, state, pa_state_key, remaining_accounts)?;
 
     let nullifiers = settle::extract_nullifiers(tx)?;
 
