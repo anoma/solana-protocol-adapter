@@ -32,6 +32,34 @@ VERIFIER_ENTRY_PDA="4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
 
 VALIDATOR_PID=""
 
+# Package names build_or_restore/build_programs below build by name. A
+# program added under programs/ that isn't in this list would otherwise
+# silently stop being built on a forward-merge — fail loudly instead. Keep in
+# sync with dev.sh and devnet.sh's equivalent lists.
+EXPECTED_PROGRAMS=(solana-pa-prototype block-time-forwarder test-forwarder)
+
+assert_known_programs() {
+  local dir pkg known ok
+  for dir in "$PROJECT_DIR"/programs/*/; do
+    pkg="$(sed -n 's/^name = "\(.*\)"$/\1/p' "${dir}Cargo.toml" | head -1)"
+    ok=0
+    for known in "${EXPECTED_PROGRAMS[@]}"; do
+      if [[ "$pkg" == "$known" ]]; then
+        ok=1
+        break
+      fi
+    done
+    if [[ $ok -eq 0 ]]; then
+      echo "    ❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
+      echo "       validator-deploy.sh, dev.sh, and devnet.sh build/deploy programs by" >&2
+      echo "       name. Add '${pkg}' to EXPECTED_PROGRAMS and to the build/deploy" >&2
+      echo "       commands in all three scripts before proceeding — otherwise it" >&2
+      echo "       silently never gets built or deployed." >&2
+      exit 1
+    fi
+  done
+}
+
 # ── Helpers ────────────────────────────────────────────────────────────
 
 require_cmd() {
@@ -173,6 +201,7 @@ sync_program_ids() {
       git checkout HEAD -- target/deploy/ 2>/dev/null || true
     else
       echo "    Generating program keypairs (first build)..."
+      assert_known_programs
       # dev-teardown is a solana-pa-prototype-only Cargo feature; scope it
       # with -p so the other programs' builds don't get an unknown-feature
       # error (they don't define dev-teardown).
@@ -214,6 +243,8 @@ sync_program_ids() {
 }
 
 build_programs() {
+  assert_known_programs
+
   # anchor build uses cargo +nightly for IDL generation, which is incompatible
   # with debug artifacts compiled by the stable toolchain (e.g. from cargo test).
   # Remove incremental build state and proc-macro artifacts to avoid ABI mismatch.
@@ -223,7 +254,8 @@ build_programs() {
   # dev-teardown enables close_markers_batch (development-only marker PDA
   # reclamation). This script only runs the local integration test suite, so
   # the dev build is always what's under test — production builds run plain
-  # `anchor build` without this flag (see dev.sh's anchor-build command).
+  # `anchor build` without this flag (see dev.sh's release-build command,
+  # which also verifies close_markers_batch is absent from the built IDL).
   # It's a solana-pa-prototype-only Cargo feature, so it must be scoped with
   # -p rather than passed to the whole-workspace build.
   build_with_filtered_output anchor build -p solana-pa-prototype -- --features dev-teardown

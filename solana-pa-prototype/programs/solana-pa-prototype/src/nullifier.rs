@@ -23,16 +23,22 @@ pub fn derive_nullifier_pda(
     )
 }
 
-/// Check that a nullifier has not been spent, then create its marker PDA.
+/// Check that a nullifier has not been spent, then create its marker PDA,
+/// adopting a System-owned empty placeholder at that address if one already
+/// exists (see `create_or_adopt_marker`).
 ///
-/// This function performs an atomic check-and-create operation:
+/// This function performs an atomic check-and-create-or-adopt operation:
 /// 1. Verify the provided marker account matches the expected PDA
 /// 2. Check the marker isn't already owned by the program (would mean duplicate)
-/// 3. Create the marker PDA via CPI to system program
+/// 3. Create the marker PDA via CPI to system program, or adopt a placeholder
+///    already funded there
 ///
 /// # Errors
 /// * `PAError::NullifierPdaMismatch` - Provided marker doesn't match expected PDA
 /// * `PAError::DuplicateNullifier` - Marker already exists (nullifier spent)
+/// * `PAError::MarkerUnexpectedOwner` - Placeholder at the PDA is owned by
+///   something other than the system program
+/// * `PAError::MarkerUnexpectedData` - Placeholder at the PDA holds data
 pub fn check_and_create_nullifier_marker<'info>(
     program_id: &Pubkey,
     pa_state_key: &Pubkey,

@@ -234,6 +234,23 @@ fn test_append_accepts_final_declared_leaf_at_max_depth() {
         state.current_depth, 32,
         "tree must not expand past max depth"
     );
+
+    // index = 2^32 - 1 is all-ones in binary, so every one of the 32 levels
+    // takes the "right child" branch, hashing the (test) all-zero frontier
+    // against the running value, and MAX_TREE_DEPTH blocks the post-loop
+    // expansion — the plain depth-32 root, with no extra zero-padding level.
+    // Recompute it independently of append_to_tree to pin the exact value:
+    // the spec requires off-chain implementations to agree on this root.
+    let zero_frontier = Digest::from_bytes([0u8; 32]);
+    let mut expected = leaf;
+    for _ in 0..32 {
+        expected = hash_two(&zero_frontier, &expected);
+    }
+    assert_eq!(
+        state.root_digest(),
+        expected,
+        "max-depth root must equal the plain depth-32 hash chain over the frontier"
+    );
 }
 
 /// Once full at max depth, the next append is rejected before any mutation.

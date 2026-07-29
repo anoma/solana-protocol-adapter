@@ -92,9 +92,11 @@ function deriveRootPda(root: Buffer): PublicKey {
 
 // `newRootMarker` is a required named account, so every settle/settleFromTxdata
 // call needs a value even when the test expects settlement to fail before the
-// account is ever read. This reuses the well-known genesis marker PDA purely
-// as a syntactically valid placeholder — its address is irrelevant for those
-// tests since the instruction fails earlier.
+// account is ever read. `initialize` never creates a root marker for the
+// empty-tree root — `is_root_valid` accepts it directly, without a marker —
+// so this PDA never exists on-chain. It's used purely as a syntactically
+// valid placeholder address; its value is irrelevant for those tests since
+// the instruction fails earlier.
 const DUMMY_ROOT_MARKER = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
 
 // Predict the produced-root marker PDA for a settlement whose resulting root is
@@ -2283,7 +2285,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
       assert.fail("expected CPI failure from test-forwarder");
     } catch (e: any) {
       // CPI error propagation: test-forwarder's IntentionalFailure (6000)
-      // propagates through instead of PA's ExternalCallCpiFailed (6018).
+      // propagates through instead of PA's ExternalCallCpiFailed (6019).
       const code = extractPAErrorCode(e);
       assert.isNotNull(code, "Expected a program error code in logs");
       assert.equal(code, 6000,
@@ -2388,10 +2390,10 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
     assert.deepEqual(outputBytes, Buffer.from([0x00]), "output should be RESULT_LT (0x00)");
   });
 
-  it("creates a root marker for every settlement (mandatory retention)", async () => {
-    // The marker is now a required named account, so there is no longer an
-    // "omitted marker" case: the v2 settlement above could not have succeeded
-    // without retaining its resulting root.
+  it("retains a root marker for the v2 settlement's resulting root", async () => {
+    // `newRootMarker` is a required named account, so the v2 settlement above
+    // could not have succeeded without supplying it. This checks that one
+    // instance, for the root the v2 settlement produced.
     const state = await program.account.paStateAccount.fetch(paState);
     const currentRoot = Buffer.from(state.root as number[]);
     const rootMarkerPda = deriveRootPda(currentRoot);

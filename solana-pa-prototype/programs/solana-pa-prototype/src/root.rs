@@ -26,11 +26,16 @@ pub fn derive_root_pda(
     Pubkey::find_program_address(&[ROOT_SEED, pa_state.as_ref(), root_bytes], program_id)
 }
 
-/// Create a root marker PDA for a newly produced root.
+/// Create a root marker PDA for a newly produced root, adopting a
+/// System-owned empty placeholder at that address if one already exists
+/// (see `create_or_adopt_marker`).
 ///
 /// # Errors
 /// * `PAError::RootPdaMismatch` - Provided marker doesn't match expected PDA
 /// * `PAError::RootMarkerAlreadyExists` - Marker already recorded (repeated root)
+/// * `PAError::MarkerUnexpectedOwner` - Placeholder at the PDA is owned by
+///   something other than the system program
+/// * `PAError::MarkerUnexpectedData` - Placeholder at the PDA holds data
 pub fn create_root_marker<'info>(
     program_id: &Pubkey,
     pa_state_key: &Pubkey,

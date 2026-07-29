@@ -30,6 +30,36 @@ run_in_project() {
   fi
 }
 
+# Program crates that the build/deploy commands below (in this file, and in
+# devnet.sh and validator-deploy.sh) know how to build by name. A program
+# added under programs/ that isn't in this list would otherwise silently stop
+# being built and deployed on a forward-merge — fail loudly instead.
+EXPECTED_PROGRAMS=(solana-pa-prototype block-time-forwarder test-forwarder)
+
+# Verify every crate under programs/ is one this script's build commands
+# already account for. Exits non-zero (naming the unrecognized crate) if not.
+assert_known_programs() {
+  local dir pkg known ok
+  for dir in "$PROJECT_DIR"/programs/*/; do
+    pkg="$(sed -n 's/^name = "\(.*\)"$/\1/p' "${dir}Cargo.toml" | head -1)"
+    ok=0
+    for known in "${EXPECTED_PROGRAMS[@]}"; do
+      if [[ "$pkg" == "$known" ]]; then
+        ok=1
+        break
+      fi
+    done
+    if [[ $ok -eq 0 ]]; then
+      echo "❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
+      echo "   dev.sh, devnet.sh, and validator-deploy.sh build/deploy programs by" >&2
+      echo "   name. Add '${pkg}' to EXPECTED_PROGRAMS and to the build/deploy" >&2
+      echo "   commands in all three scripts before proceeding — otherwise it" >&2
+      echo "   silently never gets built or deployed." >&2
+      exit 1
+    fi
+  done
+}
+
 # Packages whose commit hash must match across every Cargo.lock in the project.
 # Each entry is a workspace dep that appears in all three lockfiles (workspace,
 # fixture-gen, guest). Skew silently produces proofs that don't verify on chain
@@ -138,9 +168,33 @@ case "${1:-}" in
     # it must be scoped to that program (`-p`) rather than passed to the
     # whole-workspace build — the other programs don't define this feature
     # and `anchor build -- --features dev-teardown` would fail on them.
-    # A production build runs plain `anchor build` without this flag so the
-    # instruction is absent from the deployed binary.
+    # This is the development build. The production build is `release-build`
+    # below, which omits this flag and verifies the instruction is absent.
+    assert_known_programs
     run_in_project "anchor build -p solana-pa-prototype --no-idl -- --features dev-teardown && anchor build -p block-time-forwarder --no-idl && anchor build -p test-forwarder --no-idl"
+    ;;
+
+  release-build)
+    # The production build: plain `anchor build`, no dev-teardown feature, so
+    # close_markers_batch (development-only marker PDA reclamation) must be
+    # absent from the deployed binary. Generate the IDL for solana-pa-prototype
+    # (skip it for the others — they don't gate anything on it) and verify
+    # close_markers_batch isn't in it, so this stays a self-checking command
+    # rather than a convention nothing enforces.
+    assert_known_programs
+    IDL_PATH="$PROJECT_DIR/target/idl/solana_pa_prototype.json"
+    rm -f "$IDL_PATH"
+    run_in_project "anchor build -p solana-pa-prototype && anchor build -p block-time-forwarder --no-idl && anchor build -p test-forwarder --no-idl"
+    if [[ ! -f "$IDL_PATH" ]]; then
+      echo "❌ release-build: anchor build did not produce an IDL at ${IDL_PATH}" >&2
+      exit 1
+    fi
+    if grep -q '"close_markers_batch"' "$IDL_PATH"; then
+      echo "❌ release-build: close_markers_batch is present in the production IDL (${IDL_PATH})." >&2
+      echo "   dev-teardown must not be enabled for a production build." >&2
+      exit 1
+    fi
+    echo "✅ release-build: production build succeeded; close_markers_batch is absent from the IDL."
     ;;
 
   anchor-test)
@@ -284,7 +338,9 @@ PYEOF
     echo "  test         Run Rust tests"
     echo "  fmt          Check Rust formatting"
     echo "  clippy       Run clippy lints"
-    echo "  anchor-build Build Anchor programs"
+    echo "  anchor-build Build Anchor programs (development build, dev-teardown enabled)"
+    echo "  release-build Build the production binaries (no dev-teardown; verifies"
+    echo "               close_markers_batch is absent from the IDL)"
     echo "  anchor-test    Run deterministic Anchor integration tests"
     echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
     echo "  fixture-test Run fixture-gen tests"

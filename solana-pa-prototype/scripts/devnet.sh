@@ -18,6 +18,34 @@ declare -A PROGRAMS=(
 # Programs that need post-deploy initialization
 PA_NEEDS_INIT=true
 
+# Package names build_programs() below builds by name. A program added under
+# programs/ that isn't in this list would otherwise silently stop being built
+# on a forward-merge — fail loudly instead. Keep in sync with dev.sh and
+# validator-deploy.sh's equivalent lists.
+EXPECTED_PROGRAMS=(solana-pa-prototype block-time-forwarder test-forwarder)
+
+assert_known_programs() {
+  local dir pkg known ok
+  for dir in "$PROJECT_DIR"/programs/*/; do
+    pkg="$(sed -n 's/^name = "\(.*\)"$/\1/p' "${dir}Cargo.toml" | head -1)"
+    ok=0
+    for known in "${EXPECTED_PROGRAMS[@]}"; do
+      if [[ "$pkg" == "$known" ]]; then
+        ok=1
+        break
+      fi
+    done
+    if [[ $ok -eq 0 ]]; then
+      echo "❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
+      echo "   devnet.sh, dev.sh, and validator-deploy.sh build/deploy programs by" >&2
+      echo "   name. Add '${pkg}' to EXPECTED_PROGRAMS and to the build/deploy" >&2
+      echo "   commands in all three scripts before proceeding — otherwise it" >&2
+      echo "   silently never gets built or deployed." >&2
+      exit 1
+    fi
+  done
+}
+
 # ---------- helpers ----------
 
 require_cmd() {
@@ -122,6 +150,7 @@ close_program() {
 }
 
 build_programs() {
+  assert_known_programs
   echo "Building programs..."
   # Devnet is a development network, and this script's teardown/close-pdas
   # commands exist to reset it — so devnet builds carry dev-teardown, which

@@ -354,10 +354,21 @@ pub mod solana_pa_prototype {
     /// migration to a new deployment, matching the EVM adapter, which has no
     /// unpause and whose contract is not upgradeable.
     ///
-    /// Solana programs are upgradeable, so the runtime does not enforce this the
-    /// way EVM immutability does. Teardown must set the program's upgrade
-    /// authority to `None` before `close_markers_batch` reclaims marker rent,
-    /// because closing markers destroys replay protection and root history.
+    /// Solana programs are upgradeable, so the runtime does not enforce
+    /// terminality the way EVM immutability does — that boundary is
+    /// operational, not on-chain. `close_markers_batch` exists only in
+    /// `dev-teardown` builds (never present in production) to reclaim marker
+    /// rent so a *development* deployment can be re-initialized in place; it
+    /// has no production counterpart. Reclaiming marker rent has no
+    /// dependency on the upgrade authority.
+    ///
+    /// A production shutdown of this deployment is a separate, later step:
+    /// setting `program_data.upgrade_authority_address` to `None` makes the
+    /// program immutable. Do that only once the deployment is truly retired,
+    /// because `initialize` requires
+    /// `program_data.upgrade_authority_address == Some(payer.key())` — once
+    /// the authority is `None`, this program ID can never be initialized
+    /// again, even after `close-pa-state`.
     pub fn emergency_stop(ctx: Context<EmergencyStop>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         require!(

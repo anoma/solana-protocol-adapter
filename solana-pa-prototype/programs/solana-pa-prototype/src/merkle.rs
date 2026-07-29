@@ -211,8 +211,10 @@ pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
 ///    store the computed hash as the new frontier entry and hash it
 ///    with `ZEROS[depth]` to produce the root at the new depth.
 ///
-/// This means a tree with exactly 2^d leaves has depth d+1 and its
-/// root includes one level of zero-padding — matching the EVM PA.
+/// Below `MAX_TREE_DEPTH`, this means a tree with exactly 2^d leaves has
+/// depth d+1 and its root includes one level of zero-padding — matching the
+/// EVM PA. At `MAX_TREE_DEPTH` the tree cannot expand further (`can_grow`
+/// gates step 2), so the root stays the plain depth-32 root instead.
 pub fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
     // The tree is full only at maximum depth with every slot used: below the
     // maximum, filling a level grows immediately and doubles capacity, so
