@@ -1,0 +1,640 @@
+#!/usr/bin/env bash
+# Cluster operations for the PA programs: build, deploy, initialize, status,
+# emergency stop, teardown. One code path for every cluster — the target
+# cluster is a flag, never baked into a script. All per-cluster differences
+# (RPC URL, explorer links, wallet default, dev-teardown policy) are data set
+# in resolve_cluster.
+#
+# Run through ./scripts/dev.sh, which enters the Nix shell:
+#   ./scripts/dev.sh deploy pa --cluster devnet
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+# shellcheck source=validator-deploy.sh
+source "${SCRIPT_DIR}/validator-deploy.sh"
+
+# Deployable program targets: shorthand → binary name under target/deploy/.
+# test-forwarder is deliberately absent: it exists only for the local
+# integration suite and is never deployed to a real cluster.
+declare -A PROGRAMS=(
+  [pa]="solana_pa_prototype"
+  [btf]="block_time_forwarder"
+)
+
+usage() {
+  cat <<USAGE
+Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]
+
+Commands:
+  deploy [pa|btf|all]    First-time deploy (default target: all). Deploys the
+                         production build; initializes the PA if deployed.
+  upgrade [pa|btf|all]   Rebuild + deploy over existing programs
+  teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent. Closed
+                         program IDs are burned forever.
+  close-pdas             Close all PA marker PDAs, reclaim rent. Requires the
+                         deployed PA to be a --dev-teardown build (the
+                         instruction is absent from production builds).
+  init                   Initialize PA state (idempotent)
+  estop                  EMERGENCY STOP the PA — terminal, no resume.
+                         Requires --yes.
+  status                 Show deployment status + wallet balance
+  balance                Show wallet address and balance
+  test [--cluster <c>]   No cluster (or localnet): full deterministic local
+                         integration flow. devnet/mainnet: cluster-safe test
+                         subset against the programs deployed there.
+  build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
+  build-release          Build the production binaries, no deploy (verifies
+                         close_markers_batch is absent from the IDL)
+
+Flags:
+  --cluster <c>    Target cluster (required except test/build-dev/build-release)
+  --wallet <path>  Wallet keypair. Defaults: devnet → scripts/devnet-wallet.json,
+                   localnet → ~/.config/solana/id.json, mainnet → none (required).
+                   The wallet must exist; nothing is auto-generated.
+  --url <rpc>      Override the cluster's default RPC URL
+  --no-idl         build-dev: skip IDL generation (faster compile check)
+  --dev-teardown   deploy/upgrade: build with the dev-teardown feature
+                   (close_markers_batch enabled). Refused on mainnet.
+  --yes            Confirm irreversible actions (estop)
+
+Initialization parameters (required by deploy/init when the PA is a target):
+  PA_VERIFIER_ROUTER   RISC0 verifier router program ID (base58).
+                       Devnet: ${VERIFIER_ROUTER}
+  PA_PROOF_SELECTOR    4-byte Groth16 verifier selector (hex).
+                       Devnet: ${GROTH16_SELECTOR}
+USAGE
+  exit 1
+}
+
+# ---------- argument parsing ----------
+
+COMMAND=""
+TARGET=""
+CLUSTER=""
+WALLET_OVERRIDE=""
+RPC_OVERRIDE=""
+NO_IDL=false
+DEV_TEARDOWN=false
+ASSUME_YES=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --cluster)
+      [[ $# -ge 2 ]] || { echo "❌ --cluster requires a value" >&2; exit 1; }
+      CLUSTER="$2"
+      shift 2
+      ;;
+    --wallet)
+      [[ $# -ge 2 ]] || { echo "❌ --wallet requires a value" >&2; exit 1; }
+      WALLET_OVERRIDE="$2"
+      shift 2
+      ;;
+    --url)
+      [[ $# -ge 2 ]] || { echo "❌ --url requires a value" >&2; exit 1; }
+      RPC_OVERRIDE="$2"
+      shift 2
+      ;;
+    --no-idl)
+      NO_IDL=true
+      shift
+      ;;
+    --dev-teardown)
+      DEV_TEARDOWN=true
+      shift
+      ;;
+    --yes)
+      ASSUME_YES=true
+      shift
+      ;;
+    --*)
+      echo "❌ Unknown flag: $1" >&2
+      usage
+      ;;
+    *)
+      if [[ -z "$COMMAND" ]]; then
+        COMMAND="$1"
+      elif [[ -z "$TARGET" ]]; then
+        TARGET="$1"
+      else
+        echo "❌ Unexpected argument: $1" >&2
+        usage
+      fi
+      shift
+      ;;
+  esac
+done
+
+[[ -n "$COMMAND" ]] || usage
+
+# ---------- cluster resolution ----------
+
+RPC_URL=""
+EXPLORER_QS=""
+PRINT_EXPLORER=false
+ALLOW_DEV_TEARDOWN=false
+WALLET=""
+
+resolve_cluster() {
+  local default_wallet=""
+  case "$CLUSTER" in
+    localnet)
+      # validator-deploy.sh's defaults for the local test validator
+      RPC_URL="$CLUSTER_URL"
+      default_wallet="$ANCHOR_WALLET_PATH"
+      ALLOW_DEV_TEARDOWN=true
+      ;;
+    devnet)
+      RPC_URL="https://api.devnet.solana.com"
+      EXPLORER_QS="?cluster=devnet"
+      PRINT_EXPLORER=true
+      ALLOW_DEV_TEARDOWN=true
+      default_wallet="${PROJECT_DIR}/scripts/devnet-wallet.json"
+      ;;
+    mainnet)
+      RPC_URL="https://api.mainnet-beta.solana.com"
+      PRINT_EXPLORER=true
+      ;;
+    "")
+      echo "❌ Missing --cluster <localnet|devnet|mainnet>" >&2
+      exit 1
+      ;;
+    *)
+      echo "❌ Unknown cluster: ${CLUSTER} (expected localnet, devnet, or mainnet)" >&2
+      exit 1
+      ;;
+  esac
+
+  if [[ -n "$RPC_OVERRIDE" ]]; then
+    RPC_URL="$RPC_OVERRIDE"
+  fi
+
+  WALLET="${WALLET_OVERRIDE:-$default_wallet}"
+  if [[ -z "$WALLET" ]]; then
+    echo "❌ No default wallet for cluster '${CLUSTER}' — pass --wallet <path>" >&2
+    exit 1
+  fi
+  if [[ ! -f "$WALLET" ]]; then
+    echo "❌ Wallet not found: ${WALLET}" >&2
+    echo "   Nothing is auto-generated. Provide an existing, funded keypair" >&2
+    echo "   (or pass a different one with --wallet)." >&2
+    exit 1
+  fi
+}
+
+# ---------- helpers ----------
+
+get_wallet_pubkey() {
+  solana-keygen pubkey "$WALLET"
+}
+
+get_balance() {
+  # Returns numeric SOL balance (e.g. "3.5")
+  solana balance --keypair "$WALLET" --url "$RPC_URL" | awk '{print $1}'
+}
+
+ensure_balance() {
+  local min_sol="$1"
+  local balance
+  balance="$(get_balance)"
+
+  if awk "BEGIN{exit ($balance >= $min_sol) ? 0 : 1}"; then
+    echo "Balance: ${balance} SOL (need ${min_sol})"
+    return 0
+  fi
+
+  echo "❌ Insufficient balance: ${balance} SOL (need ${min_sol})"
+  echo "Wallet: $(get_wallet_pubkey)"
+  echo "Transfer SOL to this wallet before proceeding."
+  exit 1
+}
+
+get_program_id() {
+  local name="$1"
+  solana-keygen pubkey "target/deploy/${name}-keypair.json"
+}
+
+is_deployed() {
+  local program_id="$1"
+  solana program show "$program_id" --url "$RPC_URL" >/dev/null 2>&1
+}
+
+print_explorer_link() {
+  local address="$1"
+  if [[ "$PRINT_EXPLORER" == "true" ]]; then
+    echo "  https://explorer.solana.com/address/${address}${EXPLORER_QS}"
+  fi
+}
+
+deploy_one() {
+  local name="$1"
+  local program_id
+  program_id="$(get_program_id "$name")"
+
+  echo "Deploying ${name} (${program_id})..."
+  if ! solana program deploy \
+    "target/deploy/${name}.so" \
+    --keypair "$WALLET" \
+    --program-id "target/deploy/${name}-keypair.json" \
+    --url "$RPC_URL" 2>&1; then
+    echo ""
+    echo "❌ Deploy failed for ${name}."
+    echo "If the program was previously closed (teardown), the ID is permanently burned."
+    echo "To recover: delete target/deploy/${name}-keypair.json, run 'anchor build --no-idl'"
+    echo "to generate a new keypair, then deploy again."
+    exit 1
+  fi
+  echo "  ✅ ${name} deployed: ${program_id}"
+  print_explorer_link "$program_id"
+}
+
+close_one() {
+  local name="$1"
+  local program_id
+  program_id="$(get_program_id "$name")"
+
+  if ! is_deployed "$program_id"; then
+    echo "  ${name} (${program_id}): not deployed, skipping"
+    return 0
+  fi
+
+  echo "Closing ${name} (${program_id})..."
+  solana program close "$program_id" \
+    --keypair "$WALLET" \
+    --url "$RPC_URL" \
+    --bypass-warning
+  echo "  ✅ ${name} closed, rent reclaimed"
+}
+
+build_for_deploy() {
+  if [[ "$DEV_TEARDOWN" == "true" ]]; then
+    if [[ "$ALLOW_DEV_TEARDOWN" != "true" ]]; then
+      echo "❌ --dev-teardown is refused on ${CLUSTER}: close_markers_batch deletes" >&2
+      echo "   nullifier markers (replay protection) and must never exist in a" >&2
+      echo "   production deployment." >&2
+      exit 1
+    fi
+    build_programs_dev
+  else
+    build_programs_release
+  fi
+}
+
+# Cluster deploys never generate fresh program IDs implicitly: an ID that
+# isn't committed (or already present locally) would deploy to an address
+# nothing else knows about.
+require_deploy_keypairs() {
+  if ! restore_program_keypairs; then
+    echo "❌ Program keypairs are missing from target/deploy/ and not in git." >&2
+    echo "   Generate them with './scripts/dev.sh anchor-build', commit the ones" >&2
+    echo "   you intend to deploy, then re-run." >&2
+    exit 1
+  fi
+}
+
+# The deployed binary bakes in declare_id!, and every PDA derivation depends
+# on it. If declare_id! and the deploy keypair disagree, the deployment is
+# broken in ways that only surface at settlement time — catch it here.
+assert_declare_id_synced() {
+  local targets="$1"
+  local t name lib_rs declared actual
+  for t in $targets; do
+    name="${PROGRAMS[$t]}"
+    lib_rs="programs/${name//_/-}/src/lib.rs"
+    declared="$(read_declare_id "$lib_rs")"
+    actual="$(get_program_id "$name")"
+    if [[ "$declared" != "$actual" ]]; then
+      echo "❌ ${name}: declare_id! (${declared}) does not match the deploy keypair (${actual})." >&2
+      echo "   Sync them before deploying (anchor-test runs sync_program_ids, or fix ${lib_rs})." >&2
+      exit 1
+    fi
+  done
+}
+
+require_init_params() {
+  if [[ -z "${PA_VERIFIER_ROUTER:-}" || -z "${PA_PROOF_SELECTOR:-}" ]]; then
+    echo "❌ Missing PA_VERIFIER_ROUTER and/or PA_PROOF_SELECTOR." >&2
+    echo "   initialize pins the verifier router and proof selector for the" >&2
+    echo "   lifetime of the deployment; there is no safe default." >&2
+    echo "   Devnet values:" >&2
+    echo "     PA_VERIFIER_ROUTER=${VERIFIER_ROUTER}" >&2
+    echo "     PA_PROOF_SELECTOR=${GROTH16_SELECTOR}" >&2
+    exit 1
+  fi
+}
+
+# Resolve target list from user argument to space-separated shorthand names.
+resolve_targets() {
+  local target="${1:-all}"
+  case "$target" in
+    all)
+      echo "${!PROGRAMS[*]}"
+      ;;
+    pa|btf)
+      echo "$target"
+      ;;
+    *)
+      echo "❌ Unknown target: ${target}" >&2
+      echo "Valid targets: pa, btf, all" >&2
+      exit 1
+      ;;
+  esac
+}
+
+# Estimate minimum SOL needed for deployment.
+# PA ~4.7 SOL (659K binary), BTF ~1.3 SOL (177K binary).
+# Estimates include headroom for transaction fees.
+estimate_balance_needed() {
+  local targets="$1"
+  local total=0
+  for t in $targets; do
+    case "$t" in
+      pa)  total=$(awk "BEGIN{print $total + 5}") ;;
+      btf) total=$(awk "BEGIN{print $total + 2}") ;;
+    esac
+  done
+  echo "$total"
+}
+
+run_ts() {
+  local script="$1"
+  shift
+  ANCHOR_PROVIDER_URL="$RPC_URL" \
+  ANCHOR_WALLET="$WALLET" \
+    npx ts-node -P tsconfig.json "$script" "$@"
+}
+
+init_pa() {
+  echo "Initializing PA (idempotent)..."
+  run_ts scripts/init-pa.ts
+}
+
+# ---------- commands ----------
+
+cmd_deploy() {
+  local targets
+  targets="$(resolve_targets "$TARGET")"
+
+  require_cmd anchor
+  require_cmd npx
+
+  if [[ " $targets " == *" pa "* ]]; then
+    require_init_params
+  fi
+
+  require_deploy_keypairs
+  assert_declare_id_synced "$targets"
+  ensure_balance "$(estimate_balance_needed "$targets")"
+  build_for_deploy
+
+  for t in $targets; do
+    deploy_one "${PROGRAMS[$t]}"
+  done
+
+  if [[ " $targets " == *" pa "* ]]; then
+    init_pa
+  fi
+
+  echo ""
+  echo "✅ Deploy complete (${CLUSTER})"
+  for t in $targets; do
+    echo "  ${t}: $(get_program_id "${PROGRAMS[$t]}")"
+  done
+}
+
+cmd_upgrade() {
+  local targets
+  targets="$(resolve_targets "$TARGET")"
+
+  require_cmd anchor
+
+  require_deploy_keypairs
+  assert_declare_id_synced "$targets"
+
+  # Verify target programs are already deployed
+  for t in $targets; do
+    local pid
+    pid="$(get_program_id "${PROGRAMS[$t]}")"
+    if ! is_deployed "$pid"; then
+      echo "❌ ${t} (${pid}) is not deployed — use 'deploy' for first-time deployment"
+      exit 1
+    fi
+  done
+
+  build_for_deploy
+
+  # Deploy overwrites the existing program binary in-place (no close needed)
+  for t in $targets; do
+    deploy_one "${PROGRAMS[$t]}"
+  done
+
+  echo ""
+  echo "✅ Upgrade complete (${CLUSTER})"
+  for t in $targets; do
+    echo "  ${t}: $(get_program_id "${PROGRAMS[$t]}")"
+  done
+}
+
+cmd_teardown() {
+  local targets
+  targets="$(resolve_targets "$TARGET")"
+
+  require_cmd npx
+
+  echo "⚠️  WARNING: solana program close is PERMANENT."
+  echo "Closed program IDs cannot be reused. You will need new keypairs to deploy again."
+  echo ""
+
+  # Close PDA accounts first (programs must still be deployed for close instructions to work)
+  echo "==> Closing PDA accounts before closing programs..."
+  cmd_close_pdas || echo "⚠ PDA close failed or partially completed — continuing with program close"
+  echo ""
+
+  for t in $targets; do
+    close_one "${PROGRAMS[$t]}"
+  done
+
+  echo ""
+  echo "✅ Teardown complete (${CLUSTER})"
+}
+
+cmd_close_pdas() {
+  require_cmd npx
+
+  echo "Closing PA marker PDA accounts..."
+  # close-pdas.ts requires the deployed PA to expose close_markers_batch
+  # (a dev-teardown build) and errors with instructions if it doesn't.
+  run_ts scripts/close-pdas.ts
+}
+
+cmd_init() {
+  require_cmd npx
+
+  require_init_params
+
+  local pid
+  pid="$(get_program_id "solana_pa_prototype")"
+  if ! is_deployed "$pid"; then
+    echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
+    echo "Run: ./scripts/dev.sh deploy pa --cluster ${CLUSTER}"
+    exit 1
+  fi
+
+  init_pa
+}
+
+cmd_estop() {
+  require_cmd npx
+
+  local pid
+  pid="$(get_program_id "solana_pa_prototype")"
+  if ! is_deployed "$pid"; then
+    echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
+    exit 1
+  fi
+
+  if [[ "$ASSUME_YES" != "true" ]]; then
+    echo "Emergency stop is TERMINAL: there is no resume instruction, and the"
+    echo "PAState account for this program ID can never be re-initialized."
+    echo "Recovery is migration to a new deployment."
+    echo ""
+    echo "  Cluster: ${CLUSTER}"
+    echo "  PA program: ${pid}"
+    echo "  Authority wallet: $(get_wallet_pubkey)"
+    echo ""
+    echo "Re-run with --yes to execute."
+    exit 1
+  fi
+
+  run_ts scripts/estop-pa.ts
+}
+
+cmd_status() {
+  echo "=== Status (${CLUSTER}) ==="
+  echo ""
+
+  local pubkey balance
+  pubkey="$(get_wallet_pubkey)"
+  balance="$(get_balance)"
+  echo "Wallet: ${pubkey}"
+  echo "Balance: ${balance} SOL"
+  print_explorer_link "$pubkey"
+  echo ""
+
+  for t in "${!PROGRAMS[@]}"; do
+    local name="${PROGRAMS[$t]}"
+    local keypair="target/deploy/${name}-keypair.json"
+    if [[ -f "$keypair" ]]; then
+      local pid
+      pid="$(solana-keygen pubkey "$keypair")"
+      if is_deployed "$pid"; then
+        echo "${t} (${name}): ✅ deployed — ${pid}"
+      else
+        echo "${t} (${name}): not deployed — ${pid}"
+      fi
+      print_explorer_link "$pid"
+    else
+      echo "${t} (${name}): no keypair (run anchor build first)"
+    fi
+  done
+  echo ""
+
+  # PAState PDA
+  if [[ -f "target/deploy/solana_pa_prototype-keypair.json" ]]; then
+    local pa_pid pa_state pa_state_addr
+    pa_pid="$(get_program_id "solana_pa_prototype")"
+    pa_state="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" 2>/dev/null | head -1 || true)"
+    if [[ -n "$pa_state" ]]; then
+      pa_state_addr="$(echo "$pa_state" | awk '{print $1}')"
+      if solana account "$pa_state_addr" --url "$RPC_URL" >/dev/null 2>&1; then
+        echo "PAState PDA: ✅ initialized — ${pa_state_addr}"
+      else
+        echo "PAState PDA: not initialized — ${pa_state_addr}"
+      fi
+    fi
+  fi
+}
+
+cmd_balance() {
+  echo "$(get_wallet_pubkey)  $(get_balance) SOL"
+}
+
+cmd_test() {
+  require_cmd yarn
+  require_cmd node
+
+  ensure_balance 2
+
+  # Verify both programs are deployed
+  for t in "${!PROGRAMS[@]}"; do
+    local pid
+    pid="$(get_program_id "${PROGRAMS[$t]}")"
+    if ! is_deployed "$pid"; then
+      echo "❌ ${t} (${pid}) is not deployed on ${CLUSTER}"
+      echo "Run: ./scripts/dev.sh deploy --cluster ${CLUSTER}"
+      exit 1
+    fi
+  done
+
+  ensure_node_modules
+
+  # Cluster-safe test describe blocks (explicit allowlist).
+  # Tests that require test-forwarder or permanently mutate state are excluded.
+  local grep_pattern
+  grep_pattern=$(cat <<'GREP'
+Groth16 batch aggregation E2E|Re-initialization guard|Direct settle & duplicate nullifier|Settle error paths|Issue #6: Emergency Stop|TxData Expiration|TxData authority and bounds checks|update_expiry_config|TxData expiration enforcement|Settlement error paths — fixture variants|Tree growth and multi-settlement
+GREP
+  )
+
+  echo "Running cluster-safe integration tests (${CLUSTER})..."
+  ANCHOR_PROVIDER_URL="$RPC_URL" \
+  ANCHOR_WALLET="$WALLET" \
+    yarn run ts-mocha -p ./tsconfig.json -t 1000000 \
+      --grep "$grep_pattern" \
+      'tests/**/*.ts'
+
+  echo ""
+  echo "✅ Cluster tests passed (${CLUSTER})"
+}
+
+# ---------- dispatch ----------
+
+cd "$PROJECT_DIR"
+
+case "$COMMAND" in
+  build-dev)
+    require_cmd anchor
+    if [[ "$NO_IDL" == "true" ]]; then
+      build_programs_dev noidl
+    else
+      build_programs_dev
+    fi
+    ;;
+  build-release)
+    require_cmd anchor
+    build_programs_release
+    ;;
+  test)
+    if [[ -z "$CLUSTER" || "$CLUSTER" == "localnet" ]]; then
+      # Full deterministic local flow: sync IDs, build, start a validator,
+      # deploy, run the whole suite. Guard against Cargo.lock skew first.
+      ensure_lockfile_sync
+      exec "${SCRIPT_DIR}/anchor-test.sh"
+    fi
+    require_cmd solana
+    require_cmd solana-keygen
+    resolve_cluster
+    cmd_test
+    ;;
+  deploy|upgrade|teardown|close-pdas|init|estop|status|balance)
+    require_cmd solana
+    require_cmd solana-keygen
+    resolve_cluster
+    "cmd_${COMMAND//-/_}"
+    ;;
+  *)
+    echo "❌ Unknown command: ${COMMAND}" >&2
+    usage
+    ;;
+esac

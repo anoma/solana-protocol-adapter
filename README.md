@@ -49,6 +49,8 @@ That's it! The script will:
 | `./scripts/dev.sh test` | Run Rust unit tests |
 | `./scripts/dev.sh validator` | Start the local validator |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
+| `./scripts/dev.sh release-build` | Build the production binaries (verifies dev-only instructions are absent) |
+| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `estop`, `status`, `balance`, `close-pdas`, `teardown`) against `localnet`/`devnet`/`mainnet` — see `scripts/ops.sh` for flags |
 
 ### Rebuilding From Scratch
 
@@ -356,6 +358,7 @@ Clients submit RM transactions to the PA for settlement.
        txData,
        authority,
        systemProgram,
+       newRootMarker,       // required: marker PDA of the post-settlement root
        verifierRouterProgram,
        router: routerPda,
        verifierEntry: verifierEntryPda,
@@ -368,8 +371,6 @@ Clients submit RM transactions to the PA for settlement.
        { pubkey: forwarderProgramId, isWritable: false, isSigner: false },
        { pubkey: forwarderAccount1, isWritable: false, isSigner: false },
        // ... more forwarder accounts
-       // New root marker PDA (last position, optional)
-       { pubkey: newRootMarkerPda, isWritable: true, isSigner: false },
      ])
      .preInstructions([
        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -417,45 +418,20 @@ The PA expects `remaining_accounts` in this order:
 2. **External call segments** - For each external call:
    - Forwarder program account (executable)
    - Accounts required by that forwarder
-3. **Historical root markers** (optional, read-only) - For transactions anchored to historical roots
-4. **New root marker PDA** (optional, last position, writable) - Created after settlement
+3. **Historical root markers** (optional, read-only) - For transactions anchored to historical roots. Position-independent: validity is checked by scanning the whole list.
+
+The **new root marker PDA** is NOT part of `remaining_accounts`: it is the
+named `new_root_marker` account of `settle`/`settle_from_txdata` (required,
+writable). Settlement rejects with `RootPdaMismatch` unless its address is
+the marker PDA of the post-settlement root.
 
 ---
 
 ## External Call Encoding
 
-External calls are encoded in the RM transaction's `LogicVerifierInputs.app_data.external_payload`.
-
-### SolanaExternalCall Structure
-
-```rust
-#[derive(Serialize, Deserialize)]
-pub struct SolanaExternalCall {
-    pub program_id: [u8; 32],       // Forwarder program ID
-    pub instruction_data: Vec<u8>,  // Passed to forwarder's forward_call
-    pub expected_output: Vec<u8>,   // Must match forwarder's return data
-    pub output_mode: OutputMode,
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum OutputMode {
-    ReturnData,  // Read via get_return_data() (≤1024 bytes)
-}
-```
-
-### Encoding
-
-External calls are serialized with bincode, then converted to a word array:
-
-```rust
-let bytes = bincode::serialize(&call)?;
-let words = bytes_to_words(&bytes);  // Pads to 4-byte boundary, little-endian
-
-ExpirableBlob {
-    blob: words,
-    deletion_criterion: 0,
-}
-```
+External calls are part of the transaction wire format — see
+[`solana-pa-prototype/docs/INTEGRATION.md`](solana-pa-prototype/docs/INTEGRATION.md),
+"External call encoding".
 
 ---
 
@@ -533,13 +509,19 @@ cd solana-pa-prototype
 
 The validator is configured to clone the RISC0 verifier programs from devnet on startup.
 
-### Deploy PA Programs
+### Deploy PA Programs to the Local Validator
 
 ```bash
 cd solana-pa-prototype
 solana config set --url http://127.0.0.1:8899
 anchor deploy --provider.cluster http://127.0.0.1:8899
 ```
+
+### Deploy to a Real Cluster
+
+Deployment, initialization, emergency stop, and retirement procedures for
+devnet/mainnet live in
+[`solana-pa-prototype/docs/OPERATIONS.md`](solana-pa-prototype/docs/OPERATIONS.md).
 
 ---
 

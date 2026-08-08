@@ -1,0 +1,208 @@
+# Protocol Adapter Integration Contract
+
+This document is the contract for software that talks to the Protocol
+Adapter (PA) on chain: services that build and submit transactions, indexers
+that reconstruct state from its events, explorers, and client bindings. It
+covers the four things the README's client walkthrough does not: the exact
+wire format of a transaction, the transaction-data upload account's
+semantics, the full event set with emission rules, and the root-marker model.
+
+Call-level mechanics — instruction call sequences, account lists, PDA
+derivations, the `remaining_accounts` layout, and external-call encoding —
+are in the repo README under "Building a Client" and are not repeated here.
+Canonical TypeScript derivations live in `tests/utils/constants.ts` and
+`tests/utils/pda.ts`. Where this document names source files, they are under
+`programs/solana-pa-prototype/src/`.
+
+## Two submission paths
+
+- **`settle(transaction_data: Vec<u8>)`** — one instruction carrying the
+  whole serialized transaction. Only usable when the transaction fits in a
+  single Solana transaction.
+- **`txdata_init` → `txdata_write` (repeated) → `settle_from_txdata`** —
+  upload the serialized transaction in chunks to a buffer account, then
+  settle from it. This is the normal path; real transactions with proofs do
+  not fit in one Solana transaction.
+
+Both paths verify the same things and emit the same events. Settlement is
+rejected while the deployment is emergency-stopped.
+
+## The transaction wire format
+
+There are two serialization layers; do not confuse them:
+
+1. **The instruction layer is Anchor's:** an 8-byte instruction
+   discriminator followed by Borsh-serialized arguments. Any Anchor client
+   handles this automatically.
+2. **The `transaction_data` bytes inside that argument are bincode, not
+   Borsh.** The PA deserializes them with `bincode::deserialize` into the
+   `Transaction` type from the `anoma-rm-core` crate
+   (`github.com/anoma/arm-risc0`, at the branch and commit pinned in this
+   repo's `Cargo.toml` and `Cargo.lock`). Producers must serialize with
+   bincode from that same crate version; the encoding must match
+   byte-for-byte.
+
+Borsh appears elsewhere in the PA (account state, event bodies, instruction
+arguments) but never for the transaction payload itself.
+
+Working examples: the `tests/fixtures/batch_groth16*.json` fixtures carry
+complete settlement-ready transactions as base64 in their `tx_b64` field.
+The other fixtures are deliberately failing variants (missing aggregation
+proof, garbage proof, wrong root, forwarder failures) — useful as negative
+examples, not as templates.
+
+A transaction must carry an aggregation proof (`aggregation_proof` set), and
+the 4-byte selector in that proof's seal must equal the `proof_selector`
+this deployment pinned at initialization — see "Deployment parameters"
+below.
+
+### External call encoding
+
+External calls ride inside the transaction itself, in
+`LogicVerifierInputs.app_data.external_payload`. Each call is a
+`SolanaExternalCall` (defined in `types.rs`):
+
+```rust
+pub struct SolanaExternalCall {
+    pub program_id: [u8; 32],       // Forwarder program ID
+    pub instruction_data: Vec<u8>,  // Passed to the forwarder's forward_call
+    pub expected_output: Vec<u8>,   // Must match the forwarder's return data; must be
+                                    // non-empty (EmptyExpectedOutput otherwise — Solana
+                                    // cannot represent an explicit empty return)
+    pub output_mode: OutputMode,    // ReturnData: read via get_return_data() (≤1024 bytes)
+    pub num_accounts: u8,           // Accounts in this call's remaining_accounts segment,
+                                    // including the forwarder program account
+}
+```
+
+The call is bincode-serialized, packed into a word array with
+`bytes_to_words` (zero-pads to a 4-byte boundary), and stored as an
+`ExpirableBlob` in the external payload. **Every** `external_payload` entry
+is decoded and executed as a call — the decoder does not filter, so nothing
+else may be stored there. The canonical encoder
+(`external_calls::encode_external_call`) sets `deletion_criterion` to `0`
+(ephemeral), which also keeps calls from being re-emitted as payload events
+(see Events).
+
+## Transaction-data upload accounts (TxData)
+
+The chunked path's buffer account, created per upload. Facts an integrator
+must know (source: the `txdata_*` handlers in `lib.rs` and the account
+constraints below them):
+
+- **Identity:** PDA of `["tx_data", authority, upload_id as u64 LE]`. The
+  `upload_id` is chosen by the uploader; one authority can run parallel
+  uploads under distinct IDs.
+- **Roles:** the account records an `authority` and a `refund` address, both
+  set to the creating signer. Only the authority can write chunks, extend
+  the deadline, settle from the account, or close it early. Rent always
+  returns to `refund`.
+- **Expiry:** `txdata_init` takes an `expires_slot`, which must land between
+  `min_expiry_slots` and `max_expiry_slots` from the current slot. These
+  bounds live on the PA state account and are operator-tunable within the
+  program's hard envelope (`MIN_ALLOWED_EXPIRY` to `SEVEN_DAYS_SLOTS`,
+  `state.rs`); read them from chain rather than assuming the defaults. Writes and settlement are rejected after expiry.
+  `txdata_extend` can push the deadline out (strictly increasing, same
+  bounds).
+- **Garbage collection is permissionless:** after expiry, anyone may call
+  `txdata_close_expired`; the rent still goes to the stored `refund`
+  address. Uploads that are abandoned do not leak rent forever.
+- **Capacity is fixed at init.** The account is allocated at that size up
+  front. Settlement deserializes only the bytes actually written
+  (`payload[..written_len]`), so capacity must be at least the serialized
+  transaction length; the tests size it exactly.
+
+## Events
+
+All events are Anchor events: base64 payloads in the program log, prefixed
+with an 8-byte discriminator derived from the event's name, body
+Borsh-encoded. A settlement emits, in this order:
+
+1. Per action, in action order: first that action's **payload events**
+   (one per emitted payload entry of each of its resources — see the
+   filtering rule below), then that action's `ActionExecutedEvent
+   { action_tree_root: [u8;32], action_tag_count: u32 }`. Payload events of
+   action N+1 therefore come after action N's `ActionExecutedEvent`.
+2. Per external call, in call order: `ForwarderCallExecutedEvent
+   { forwarder: Pubkey, input: Vec<u8>, output: Vec<u8> }`.
+3. Once: `TransactionExecutedEvent { tags: Vec<[u8;32]>,
+   logic_refs: Vec<[u8;32]> }`.
+
+**Tag semantics** (`extract_tags_and_logic_refs` in `encoding.rs`): for each
+compliance unit (one consumed/created resource pair) of each action, two
+tags are appended in order — the consumed resource's nullifier, then the
+created resource's commitment.
+`logic_refs` is index-parallel to `tags`. `TransactionExecutedEvent`
+therefore lists every state change of the settlement: even-indexed entries
+are nullifiers, odd-indexed entries are commitments, and the commitments
+appear in exactly the order they were appended to the commitment tree.
+
+**Payload events** carry application data blobs. There are four structs with
+identical bodies `{ tag: [u8;32], index: u32, blob: Vec<u8> }` —
+`ResourcePayloadEvent`, `DiscoveryPayloadEvent`, `ExternalPayloadEvent`,
+`ApplicationPayloadEvent` — one per payload category. Four distinct structs
+exist so each category gets its own Anchor discriminator and indexers can
+filter at the log-parsing level without decoding bodies. Rules
+(`emit_app_data_events` in `lib.rs`):
+
+- A payload entry is emitted **only if its deletion criterion says "store
+  forever"** (`deletion_criterion == DELETION_CRITERION_NEVER`, defined in
+  `state.rs`). Entries with any other criterion never appear in events; an
+  indexer cannot reconstruct them and must not expect to.
+- `tag` is the resource tag the payload belongs to; `index` is the entry's
+  position within its own category's payload list for that resource (not a
+  global index).
+- `blob` is the payload's `u32` word array reinterpreted as bytes in memory
+  order (`words_to_bytes`, a plain cast — little-endian on Solana), the
+  inverse of the zero-padded `bytes_to_words` packing.
+
+## Roots and markers
+
+A root is valid for settlement exactly when a marker account exists: a PDA
+of `["root", pa_state, root_bytes]` owned by the PA (`root.rs`). The PA
+stores no list of historical roots in its state account. Two roots are
+valid without any marker: the current tree root, and the empty-tree root
+(the tree pads unfilled positions with a fixed leaf value — `PADDING_LEAF`
+in `merkle.rs` — and an empty tree's root is built entirely from it, which
+lets transactions built against a freshly initialized PA settle without a
+genesis marker).
+
+For transaction builders:
+
+- A transaction consuming resources proven against an older root must
+  include that root's marker account (read-only) in the settlement's
+  `remaining_accounts`, after the nullifier-marker slots and forwarder
+  segments — those leading positions are consumed positionally (see the
+  README's layout), while the validity check itself scans the whole list.
+  Omitting the marker fails the settlement with `NonExistingRoot`.
+- Every settlement must pass the **new** root's marker address as the named
+  `new_root_marker` account (writable) of `settle` / `settle_from_txdata`;
+  it is not part of `remaining_accounts`. Compute the new root by applying
+  the transaction's commitments to the current tree. If the address does
+  not match the post-settlement root, settlement rejects with
+  `RootPdaMismatch`. The PA creates the marker at that address,
+  permanently: every past root stays valid, so a builder can target a root
+  while other settlements advance the tree.
+
+Production binaries contain no instruction that deletes markers.
+(Development builds carry a teardown instruction, compiled out of
+production builds — a build-discipline boundary, not a chain guarantee;
+`dev.sh release-build` verifies its absence.)
+
+## Deployment parameters
+
+`initialize` pins two values for the deployment's lifetime, readable from
+the PA state account:
+
+- `verifier_router: Pubkey` — the RISC0 verifier router the PA will call for
+  proof verification. Settlement requires passing this exact program (plus
+  its router PDA, verifier entry, and verifier program) in the settle
+  accounts.
+- `proof_selector: [u8;4]` — the 4-byte selector every transaction's
+  aggregation proof must carry.
+
+Program IDs, the router addresses for the current devnet deployment, and
+key custody are in `docs/DEVNET_DEPLOYMENT.md`. Operator procedures
+(deploy, emergency stop, retirement) are in `docs/OPERATIONS.md`; the fact
+integrators care about: a stopped deployment rejects settlement and has no
+resume instruction — recovery is a new deployment with a fresh, empty tree.

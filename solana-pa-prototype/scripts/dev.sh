@@ -30,103 +30,11 @@ run_in_project() {
   fi
 }
 
-# Program crates that the build/deploy commands below (in this file, and in
-# devnet.sh and validator-deploy.sh) know how to build by name. A program
-# added under programs/ that isn't in this list would otherwise silently stop
-# being built and deployed on a forward-merge — fail loudly instead.
-EXPECTED_PROGRAMS=(solana-pa-prototype block-time-forwarder test-forwarder)
-
-# Verify every crate under programs/ is one this script's build commands
-# already account for. Exits non-zero (naming the unrecognized crate) if not.
-assert_known_programs() {
-  local dir pkg known ok
-  for dir in "$PROJECT_DIR"/programs/*/; do
-    pkg="$(sed -n 's/^name = "\(.*\)"$/\1/p' "${dir}Cargo.toml" | head -1)"
-    ok=0
-    for known in "${EXPECTED_PROGRAMS[@]}"; do
-      if [[ "$pkg" == "$known" ]]; then
-        ok=1
-        break
-      fi
-    done
-    if [[ $ok -eq 0 ]]; then
-      echo "❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
-      echo "   dev.sh, devnet.sh, and validator-deploy.sh build/deploy programs by" >&2
-      echo "   name. Add '${pkg}' to EXPECTED_PROGRAMS and to the build/deploy" >&2
-      echo "   commands in all three scripts before proceeding — otherwise it" >&2
-      echo "   silently never gets built or deployed." >&2
-      exit 1
-    fi
-  done
-}
-
-# Packages whose commit hash must match across every Cargo.lock in the project.
-# Each entry is a workspace dep that appears in all three lockfiles (workspace,
-# fixture-gen, guest). Skew silently produces proofs that don't verify on chain
-# (arm-risc0) or compile errors that look like unrelated bugs (anoma-pa-solana-client).
-LOCK_SYNC_PACKAGES=(anoma-rm-core anoma-pa-solana-client)
-
-# Every Cargo.lock that participates in the build. New independent workspaces
-# (a fresh tools/* crate, a separate guest, etc.) must be added here AND the
-# script must keep working when one of these lockfiles is absent on a branch.
-LOCK_FILES=(
-  Cargo.lock
-  tools/fixture-gen/Cargo.lock
-  tools/fixture-gen/passthrough-logic/methods/guest/Cargo.lock
-)
-
-# Print the locked commit of <pkg> in <lockfile>, or empty string if absent.
-lock_commit_for() {
-  local lockfile="$1"
-  local pkg="$2"
-  if [[ ! -f "$lockfile" ]]; then
-    return 0
-  fi
-  # `grep` returns 1 when this lockfile doesn't include $pkg — a legitimate
-  # case (different lockfiles have different dep sets, e.g. the guest lockfile
-  # doesn't include workspace-only deps like anoma-pa-solana-client). Suppress
-  # so callers under `set -e` see the empty string instead of an early exit.
-  grep -A2 "^name = \"${pkg}\"$" "$lockfile" \
-    | grep "^source" \
-    | grep -oP '#\K[a-f0-9]+' \
-    | head -1 \
-    || true
-}
-
-# Verify every package in LOCK_SYNC_PACKAGES resolves to the same commit
-# across every present lockfile. Exits non-zero if any skew is detected.
-ensure_lockfile_sync() {
-  local pkg lockfile commit ref_commit ref_file mismatch=0
-  for pkg in "${LOCK_SYNC_PACKAGES[@]}"; do
-    ref_commit=''
-    ref_file=''
-    for lockfile in "${LOCK_FILES[@]}"; do
-      local full="$PROJECT_DIR/$lockfile"
-      [[ -f "$full" ]] || continue
-      commit="$(lock_commit_for "$full" "$pkg")"
-      [[ -n "$commit" ]] || continue
-      if [[ -z "$ref_commit" ]]; then
-        ref_commit="$commit"
-        ref_file="$lockfile"
-      elif [[ "$commit" != "$ref_commit" ]]; then
-        if [[ $mismatch -eq 0 ]]; then
-          echo "❌ Cargo.lock skew detected:" >&2
-        fi
-        echo "  ${pkg}:" >&2
-        echo "    ${ref_file}: ${ref_commit:0:12}" >&2
-        echo "    ${lockfile}: ${commit:0:12}" >&2
-        mismatch=1
-        ref_commit="$commit"
-        ref_file="$lockfile"
-      fi
-    done
-  done
-  if [[ $mismatch -ne 0 ]]; then
-    echo "" >&2
-    echo "Fix: ./scripts/dev.sh lock-sync <package>" >&2
-    return 1
-  fi
-}
+# Shared library: lockfile-sync checks (LOCK_FILES, ensure_lockfile_sync)
+# and program build/registry functions. Sourcing has no side effects beyond
+# variable defaults, so it is safe outside the Nix shell.
+# shellcheck source=validator-deploy.sh
+source "${SCRIPT_DIR}/validator-deploy.sh"
 
 # Run `cargo update -p <pkg>` against every present lockfile so all three stay
 # pinned to the same commit. Use after bumping a git-dep branch HEAD.
@@ -163,43 +71,28 @@ case "${1:-}" in
     ;;
 
   anchor-build)
-    # dev-teardown enables close_markers_batch, development-only marker
-    # reclamation tooling. It's a solana-pa-prototype-only Cargo feature, so
-    # it must be scoped to that program (`-p`) rather than passed to the
-    # whole-workspace build — the other programs don't define this feature
-    # and `anchor build -- --features dev-teardown` would fail on them.
-    # This is the development build. The production build is `release-build`
-    # below, which omits this flag and verifies the instruction is absent.
-    assert_known_programs
-    run_in_project "anchor build -p solana-pa-prototype --no-idl -- --features dev-teardown && anchor build -p block-time-forwarder --no-idl && anchor build -p test-forwarder --no-idl"
+    # Development compile check: dev-teardown enabled, no IDL generation.
+    # The production build is `release-build` below.
+    run_in_project "./scripts/ops.sh build-dev --no-idl"
     ;;
 
   release-build)
-    # The production build: plain `anchor build`, no dev-teardown feature, so
-    # close_markers_batch (development-only marker PDA reclamation) must be
-    # absent from the deployed binary. Generate the IDL for solana-pa-prototype
-    # (skip it for the others — they don't gate anything on it) and verify
-    # close_markers_batch isn't in it, so this stays a self-checking command
-    # rather than a convention nothing enforces.
-    assert_known_programs
-    IDL_PATH="$PROJECT_DIR/target/idl/solana_pa_prototype.json"
-    rm -f "$IDL_PATH"
-    run_in_project "anchor build -p solana-pa-prototype && anchor build -p block-time-forwarder --no-idl && anchor build -p test-forwarder --no-idl"
-    if [[ ! -f "$IDL_PATH" ]]; then
-      echo "❌ release-build: anchor build did not produce an IDL at ${IDL_PATH}" >&2
-      exit 1
-    fi
-    if grep -q '"close_markers_batch"' "$IDL_PATH"; then
-      echo "❌ release-build: close_markers_batch is present in the production IDL (${IDL_PATH})." >&2
-      echo "   dev-teardown must not be enabled for a production build." >&2
-      exit 1
-    fi
-    echo "✅ release-build: production build succeeded; close_markers_batch is absent from the IDL."
+    # Production build: no dev-teardown; verifies close_markers_batch is
+    # absent from the generated IDL.
+    run_in_project "./scripts/ops.sh build-release"
     ;;
 
   anchor-test)
-    ensure_lockfile_sync
-    run_in_project "./scripts/anchor-test.sh"
+    # ops.sh owns the dispatch: no --cluster (or --cluster localnet) runs the
+    # full deterministic local flow; devnet/mainnet runs the cluster-safe
+    # subset against the programs already deployed there.
+    shift
+    run_in_project "./scripts/ops.sh test $*"
+    ;;
+
+  deploy|upgrade|teardown|close-pdas|init|estop|status|balance)
+    # Cluster operations — see ./scripts/ops.sh for flags and semantics.
+    run_in_project "./scripts/ops.sh $*"
     ;;
 
   validator)
@@ -239,11 +132,6 @@ case "${1:-}" in
 
   clippy)
     run_in_project "cargo clippy -p solana-pa-prototype -p block-time-forwarder --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
-    ;;
-
-  devnet)
-    shift
-    run_in_project "./scripts/devnet.sh $*"
     ;;
 
   coverage)
@@ -341,7 +229,9 @@ PYEOF
     echo "  anchor-build Build Anchor programs (development build, dev-teardown enabled)"
     echo "  release-build Build the production binaries (no dev-teardown; verifies"
     echo "               close_markers_batch is absent from the IDL)"
-    echo "  anchor-test    Run deterministic Anchor integration tests"
+    echo "  anchor-test [--cluster <c>]"
+    echo "               Local: full deterministic integration flow (default)."
+    echo "               devnet/mainnet: cluster-safe subset against deployed programs"
     echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
     echo "  fixture-test Run fixture-gen tests"
     echo "  validator    Start a local Solana validator"
@@ -352,15 +242,17 @@ PYEOF
     echo "  lock-sync <pkg>  Update <pkg> in every Cargo.lock so they re-align"
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
     echo ""
-    echo "Devnet commands:"
-    echo "  devnet deploy [pa|btf|all]    First-time deploy to devnet"
-    echo "  devnet upgrade [pa|btf|all]   Rebuild + deploy over existing programs"
-    echo "  devnet teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent"
-    echo "  devnet close-pdas            Close all PA PDA accounts, reclaim rent"
-    echo "  devnet test                   Run integration tests against devnet"
-    echo "  devnet init                   Initialize PA state (idempotent)"
-    echo "  devnet status                 Show deployment status + wallet balance"
-    echo "  devnet balance                Show wallet address and balance"
+    echo "Cluster operations (all take --cluster <localnet|devnet|mainnet>;"
+    echo "see ./scripts/ops.sh for all flags, wallet defaults, and required env):"
+    echo "  deploy [pa|btf|all]    First-time deploy (production build; --dev-teardown opts in)"
+    echo "  upgrade [pa|btf|all]   Rebuild + deploy over existing programs"
+    echo "  teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent"
+    echo "  close-pdas             Close all PA marker PDAs (needs a dev-teardown build)"
+    echo "  init                   Initialize PA state (idempotent; needs PA_VERIFIER_ROUTER"
+    echo "                         and PA_PROOF_SELECTOR)"
+    echo "  estop                  EMERGENCY STOP the PA (terminal; requires --yes)"
+    echo "  status                 Show deployment status + wallet balance"
+    echo "  balance                Show wallet address and balance"
     exit 1
     ;;
 

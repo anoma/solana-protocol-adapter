@@ -1,78 +1,42 @@
 # Devnet Deployment Record
 
-**Deployed:** 2026-01-26
-**Network:** Solana Devnet
+Live state is always what `./scripts/dev.sh status --cluster devnet` reports;
+this file records what was deployed, by whom, and when. Update it after every
+deploy, upgrade, estop, or teardown.
 
-## Deployed Programs
+**Record last verified:** 2026-08-08
 
-### Protocol Adapter (PA)
-- **Program ID:** `AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt`
-- **Authority:** `FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh`
+## Current deployment
 
-### Verifier Router (RISC0 v3.0.0)
-- **Program ID:** `BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg`
-- **Router PDA:** `9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S`
-- **Authority:** `FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh`
+| Program | ID | State |
+|---|---|---|
+| Protocol Adapter | `De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ` | deployed, PAState initialized |
+| Block Time Forwarder | `3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf` | deployed (stateless) |
 
-### Groth16 Verifier (RISC0 v3.0.0)
-- **Program ID:** `2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD`
-- **Verifier Entry PDA:** `4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey`
-- **Selector:** `0x73c457ba` (matches fixture verifier_parameters)
-- **Authority:** `9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S` (Router PDA)
+- **Operator wallet** (PA authority and upgrade authority for both programs):
+  `5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9`
+  (`scripts/devnet-wallet.json`)
 
-### Block Time Forwarder
-- **Program ID:** `FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq`
-- **Purpose:** External call forwarder for time comparisons (required by fixture)
+## Verifier infrastructure (pinned at initialize)
 
-## Architecture
+| Component | Address |
+|---|---|
+| RISC0 Verifier Router | `BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg` |
+| Groth16 Verifier | `2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD` |
+| Router PDA | `9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S` |
+| Verifier Entry PDA (selector `0x73c457ba`) | `4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey` |
 
-```
-                    ┌─────────────────────┐
-                    │  Protocol Adapter   │
-                    │  (PA Program)       │
-                    │  AV1dFJCfq...       │
-                    └─────────┬───────────┘
-                              │
-          ┌───────────────────┼───────────────────┐
-          │ CPI (verify)      │                   │ CPI (external calls)
-          ▼                   │                   ▼
-┌─────────────────────┐       │       ┌─────────────────────┐
-│  Verifier Router    │       │       │  Block Time         │
-│  BetEAE4n...        │       │       │  Forwarder          │
-│  ┌───────────────┐  │       │       │  FLh2rbn...         │
-│  │  Router PDA   │  │       │       └─────────────────────┘
-│  │  9ZJmYSY...   │  │       │
-│  │  - owner      │  │       │
-│  │  - verifiers  │  │       │
-│  └───────────────┘  │       │
-└─────────┬───────────┘       │
-          │ Routes by selector│
-          ▼                   │
-┌─────────────────────┐       │
-│  Groth16 Verifier   │       │
-│  2Yfa83L...         │       │
-│  selector: 0x73c4.. │       │
-└─────────────────────┘       │
-```
+The local test validator clones the devnet verifier stack — see
+`scripts/validator-deploy.sh` and `Anchor.toml` for the clone lists. The
+router's on-chain owner is
+`FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh` (this project's January
+deployment wallet).
 
-## Deployment Wallet
+## Superseded deployments
 
-- **Address:** `FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh`
-- **Keypair:** `solana-pa-prototype/scripts/devnet-wallet.json`
+| Program | ID | Owner wallet | Status |
+|---|---|---|---|
+| Protocol Adapter (2026-01-26) | `AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt` | `FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh` | live, initialized, superseded — to be retired |
+| Block Time Forwarder (2026-01-26) | `FLh2rbnAbtFZkLMMX36Fh4rV9wJWUFrLw5gDmoLzPEgq` | `FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh` | live, superseded — to be retired |
 
-## Usage Notes
-
-1. The PA is configured to verify proofs via the Verifier Router
-2. The Router looks up verifiers by their 4-byte selector
-3. For Groth16 proofs, use selector `0x73c457ba`
-4. The Router PDA owns the Groth16 Verifier (can close/estop it)
-5. These programs are cloned to localnet for testing via Anchor.toml
-
-## Verifying Deployment
-
-```bash
-# Check programs exist
-solana program show --url devnet AV1dFJCfq6CmJ523ft8YwNsQVYEoDxzNfEhEFJzoUkjt
-solana program show --url devnet BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg
-solana program show --url devnet 2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD
-```
+Retirement procedure: `docs/OPERATIONS.md`, Sunsetting.
