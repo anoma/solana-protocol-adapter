@@ -90,7 +90,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh test $*"
     ;;
 
-  deploy|upgrade|teardown|close-pdas|init|estop|status|balance)
+  deploy|upgrade|teardown|close-pdas|init|estop|status|balance|sync-ids)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $*"
     ;;
