@@ -47,6 +47,8 @@ Commands:
   build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
   build-release          Build the production binaries, no deploy (verifies
                          close_markers_batch is absent from the IDL)
+  sync-ids               Sync declare_id!/Anchor.toml/test refs to the
+                         committed program keypairs (use after rotating IDs)
 
 Flags:
   --cluster <c>    Target cluster (required except test/build-dev/build-release)
@@ -610,6 +612,16 @@ case "$COMMAND" in
     else
       build_programs_dev
     fi
+    ;;
+  sync-ids)
+    # Adopt the program IDs in target/deploy/ (restored from git, or freshly
+    # committed when rotating to new IDs): sync declare_id!, Anchor.toml,
+    # and the fixture/test references.
+    require_cmd anchor
+    require_cmd solana-keygen
+    require_cmd yarn
+    require_cmd node
+    sync_program_ids
     ;;
   build-release)
     require_cmd anchor

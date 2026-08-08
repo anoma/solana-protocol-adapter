@@ -40,9 +40,11 @@ function requireInstruction(
   program: Program<SolanaPaPrototype>,
   instructionName: string
 ): void {
-  const present = program.idl.instructions.some(
-    (ix) => ix.name === instructionName
-  );
+  // Check program.methods (the camelCased surface the script actually
+  // calls), not the raw IDL: the Anchor TS client camelCases instruction
+  // names, so a snake_case comparison against program.idl never matches.
+  const camel = instructionName.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
+  const present = typeof (program.methods as Record<string, unknown>)[camel] === "function";
   if (!present) {
     console.error(
       `❌ Instruction '${instructionName}' is not present in the deployed ` +

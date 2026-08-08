@@ -167,7 +167,10 @@ step.
    markers via `close_markers_batch`, which requires the Stopped state and
    exists only in `--dev-teardown` builds. Production builds abandon marker
    rent by design; there is deliberately no production path that deletes
-   replay-protection markers.
+   replay-protection markers. The command validates the instruction against
+   the locally built IDL, so run a development build first
+   (`./scripts/dev.sh run "./scripts/ops.sh build-dev"`) if the last build
+   was a production one — observed during the first devnet retirement.
 3. **End the program.** Two mutually exclusive options:
    - `solana program close <PROGRAM_ID> --bypass-warning` — reclaims the
      program account's rent and burns the program ID permanently
