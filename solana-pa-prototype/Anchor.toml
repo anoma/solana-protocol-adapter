@@ -4,12 +4,12 @@ skip-lint = false
 
 [programs.devnet]
 block_time_forwarder = "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
-solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
+solana_pa_prototype = "9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF"
 test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
 
 [programs.localnet]
 block_time_forwarder = "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
-solana_pa_prototype = "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ"
+solana_pa_prototype = "9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF"
 test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
 
 [provider]
