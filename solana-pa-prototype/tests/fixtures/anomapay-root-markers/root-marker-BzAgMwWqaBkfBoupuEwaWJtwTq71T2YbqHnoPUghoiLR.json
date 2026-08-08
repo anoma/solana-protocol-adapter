@@ -1,12 +1,12 @@
 {
-  "pubkey": "GqCHSDUyz5orJEHDGxKhVvHP9WTt5QUgveLDf2NjJUps",
+  "pubkey": "BzAgMwWqaBkfBoupuEwaWJtwTq71T2YbqHnoPUghoiLR",
   "account": {
     "lamports": 1000000,
     "data": [
       "",
       "base64"
     ],
-    "owner": "De5uxTic9Ed8dRW8TFDKDk6wWtCZa5BDCnLiVhLEoFyJ",
+    "owner": "9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF",
     "executable": false,
     "rentEpoch": 18446744073709551615,
     "space": 0
