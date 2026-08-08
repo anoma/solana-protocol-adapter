@@ -36,16 +36,24 @@ import { PA_STATE_SEED } from "../tests/utils/constants";
  * that defines it — `close_markers_batch` requires `dev-teardown`, which
  * production builds do not enable.
  */
+// The method builder for a feature-gated instruction: a zero-argument
+// entry of program.methods. Typed loosely on purpose — naming the method in
+// a type annotation would make this file fail to COMPILE against production
+// types (which lack it), preempting the actionable runtime message below.
+type MethodBuilder = () => ReturnType<
+  Program<SolanaPaPrototype>["methods"][keyof Program<SolanaPaPrototype>["methods"]]
+>;
+
 function requireInstruction(
   program: Program<SolanaPaPrototype>,
   instructionName: string
-): void {
+): MethodBuilder {
   // Check program.methods (the camelCased surface the script actually
   // calls), not the raw IDL: the Anchor TS client camelCases instruction
   // names, so a snake_case comparison against program.idl never matches.
   const camel = instructionName.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-  const present = typeof (program.methods as Record<string, unknown>)[camel] === "function";
-  if (!present) {
+  const method = (program.methods as Record<string, unknown>)[camel];
+  if (typeof method !== "function") {
     console.error(
       `❌ Instruction '${instructionName}' is not present in the deployed ` +
       `program's IDL (target/idl/solana_pa_prototype.json).\n` +
@@ -55,6 +63,7 @@ function requireInstruction(
     );
     process.exit(1);
   }
+  return method as MethodBuilder;
 }
 
 async function main() {
@@ -91,7 +100,7 @@ async function main() {
   let totalRecovered = 0;
 
   {
-    requireInstruction(program, "close_markers_batch");
+    const closeMarkersBatch = requireInstruction(program, "close_markers_batch");
 
     // Find all 0-byte marker accounts (nullifier + root markers)
     const markers = await connection.getProgramAccounts(program.programId, {
@@ -114,8 +123,7 @@ async function main() {
         }));
 
         try {
-          await program.methods
-            .closeMarkersBatch()
+          await closeMarkersBatch()
             .accounts({
               paState: paStatePda,
               authority: wallet.publicKey,
