@@ -30,36 +30,6 @@ run_in_project() {
   fi
 }
 
-# Program crates that the build/deploy commands below (in this file, and in
-# devnet.sh and validator-deploy.sh) know how to build by name. A program
-# added under programs/ that isn't in this list would otherwise silently stop
-# being built and deployed on a forward-merge — fail loudly instead.
-EXPECTED_PROGRAMS=(solana-pa-prototype block-time-forwarder test-forwarder)
-
-# Verify every crate under programs/ is one this script's build commands
-# already account for. Exits non-zero (naming the unrecognized crate) if not.
-assert_known_programs() {
-  local dir pkg known ok
-  for dir in "$PROJECT_DIR"/programs/*/; do
-    pkg="$(sed -n 's/^name = "\(.*\)"$/\1/p' "${dir}Cargo.toml" | head -1)"
-    ok=0
-    for known in "${EXPECTED_PROGRAMS[@]}"; do
-      if [[ "$pkg" == "$known" ]]; then
-        ok=1
-        break
-      fi
-    done
-    if [[ $ok -eq 0 ]]; then
-      echo "❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
-      echo "   dev.sh, devnet.sh, and validator-deploy.sh build/deploy programs by" >&2
-      echo "   name. Add '${pkg}' to EXPECTED_PROGRAMS and to the build/deploy" >&2
-      echo "   commands in all three scripts before proceeding — otherwise it" >&2
-      echo "   silently never gets built or deployed." >&2
-      exit 1
-    fi
-  done
-}
-
 # Packages whose commit hash must match across every Cargo.lock in the project.
 # Each entry is a workspace dep that appears in all three lockfiles (workspace,
 # fixture-gen, guest). Skew silently produces proofs that don't verify on chain
@@ -163,43 +133,49 @@ case "${1:-}" in
     ;;
 
   anchor-build)
-    # dev-teardown enables close_markers_batch, development-only marker
-    # reclamation tooling. It's a solana-pa-prototype-only Cargo feature, so
-    # it must be scoped to that program (`-p`) rather than passed to the
-    # whole-workspace build — the other programs don't define this feature
-    # and `anchor build -- --features dev-teardown` would fail on them.
-    # This is the development build. The production build is `release-build`
-    # below, which omits this flag and verifies the instruction is absent.
-    assert_known_programs
-    run_in_project "anchor build -p solana-pa-prototype --no-idl -- --features dev-teardown && anchor build -p block-time-forwarder --no-idl && anchor build -p test-forwarder --no-idl"
+    # Development build: dev-teardown enabled (close_markers_batch present).
+    # The production build is `release-build` below.
+    run_in_project "./scripts/ops.sh build-dev"
     ;;
 
   release-build)
-    # The production build: plain `anchor build`, no dev-teardown feature, so
-    # close_markers_batch (development-only marker PDA reclamation) must be
-    # absent from the deployed binary. Generate the IDL for solana-pa-prototype
-    # (skip it for the others — they don't gate anything on it) and verify
-    # close_markers_batch isn't in it, so this stays a self-checking command
-    # rather than a convention nothing enforces.
-    assert_known_programs
-    IDL_PATH="$PROJECT_DIR/target/idl/solana_pa_prototype.json"
-    rm -f "$IDL_PATH"
-    run_in_project "anchor build -p solana-pa-prototype && anchor build -p block-time-forwarder --no-idl && anchor build -p test-forwarder --no-idl"
-    if [[ ! -f "$IDL_PATH" ]]; then
-      echo "❌ release-build: anchor build did not produce an IDL at ${IDL_PATH}" >&2
-      exit 1
-    fi
-    if grep -q '"close_markers_batch"' "$IDL_PATH"; then
-      echo "❌ release-build: close_markers_batch is present in the production IDL (${IDL_PATH})." >&2
-      echo "   dev-teardown must not be enabled for a production build." >&2
-      exit 1
-    fi
-    echo "✅ release-build: production build succeeded; close_markers_batch is absent from the IDL."
+    # Production build: no dev-teardown; verifies close_markers_batch is
+    # absent from the generated IDL.
+    run_in_project "./scripts/ops.sh build-release"
     ;;
 
   anchor-test)
-    ensure_lockfile_sync
-    run_in_project "./scripts/anchor-test.sh"
+    # No --cluster (or --cluster localnet): full deterministic local flow —
+    # sync IDs, build, start a validator, deploy, run the whole suite.
+    # --cluster devnet|mainnet: run the cluster-safe test subset against the
+    # programs already deployed on that cluster.
+    shift
+    CLUSTER_ARG=""
+    if [[ "${1:-}" == "--cluster" ]]; then
+      CLUSTER_ARG="${2:-}"
+      if [[ -z "$CLUSTER_ARG" ]]; then
+        echo "❌ --cluster requires a value" >&2
+        exit 1
+      fi
+      shift 2
+    fi
+    if [[ $# -gt 0 ]]; then
+      echo "❌ Unexpected arguments: $*" >&2
+      exit 1
+    fi
+    if [[ -z "$CLUSTER_ARG" || "$CLUSTER_ARG" == "localnet" ]]; then
+      ensure_lockfile_sync
+      run_in_project "./scripts/anchor-test.sh"
+    else
+      run_in_project "./scripts/ops.sh test --cluster $CLUSTER_ARG"
+    fi
+    ;;
+
+  deploy|upgrade|teardown|close-pdas|init|estop|status|balance)
+    # Cluster operations — see ./scripts/ops.sh for flags and semantics.
+    CMD="$1"
+    shift
+    run_in_project "./scripts/ops.sh $CMD $*"
     ;;
 
   validator)
@@ -239,11 +215,6 @@ case "${1:-}" in
 
   clippy)
     run_in_project "cargo clippy -p solana-pa-prototype -p block-time-forwarder --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
-    ;;
-
-  devnet)
-    shift
-    run_in_project "./scripts/devnet.sh $*"
     ;;
 
   coverage)
@@ -341,7 +312,9 @@ PYEOF
     echo "  anchor-build Build Anchor programs (development build, dev-teardown enabled)"
     echo "  release-build Build the production binaries (no dev-teardown; verifies"
     echo "               close_markers_batch is absent from the IDL)"
-    echo "  anchor-test    Run deterministic Anchor integration tests"
+    echo "  anchor-test [--cluster <c>]"
+    echo "               Local: full deterministic integration flow (default)."
+    echo "               devnet/mainnet: cluster-safe subset against deployed programs"
     echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
     echo "  fixture-test Run fixture-gen tests"
     echo "  validator    Start a local Solana validator"
@@ -352,15 +325,17 @@ PYEOF
     echo "  lock-sync <pkg>  Update <pkg> in every Cargo.lock so they re-align"
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
     echo ""
-    echo "Devnet commands:"
-    echo "  devnet deploy [pa|btf|all]    First-time deploy to devnet"
-    echo "  devnet upgrade [pa|btf|all]   Rebuild + deploy over existing programs"
-    echo "  devnet teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent"
-    echo "  devnet close-pdas            Close all PA PDA accounts, reclaim rent"
-    echo "  devnet test                   Run integration tests against devnet"
-    echo "  devnet init                   Initialize PA state (idempotent)"
-    echo "  devnet status                 Show deployment status + wallet balance"
-    echo "  devnet balance                Show wallet address and balance"
+    echo "Cluster operations (all take --cluster <localnet|devnet|mainnet>;"
+    echo "see ./scripts/ops.sh for all flags, wallet defaults, and required env):"
+    echo "  deploy [pa|btf|all]    First-time deploy (production build; --dev-teardown opts in)"
+    echo "  upgrade [pa|btf|all]   Rebuild + deploy over existing programs"
+    echo "  teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent"
+    echo "  close-pdas             Close all PA marker PDAs (needs a dev-teardown build)"
+    echo "  init                   Initialize PA state (idempotent; needs PA_VERIFIER_ROUTER"
+    echo "                         and PA_PROOF_SELECTOR)"
+    echo "  estop                  EMERGENCY STOP the PA (terminal; requires --yes)"
+    echo "  status                 Show deployment status + wallet balance"
+    echo "  balance                Show wallet address and balance"
     exit 1
     ;;
 

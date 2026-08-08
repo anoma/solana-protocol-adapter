@@ -49,6 +49,8 @@ That's it! The script will:
 | `./scripts/dev.sh test` | Run Rust unit tests |
 | `./scripts/dev.sh validator` | Start the local validator |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
+| `./scripts/dev.sh release-build` | Build the production binaries (verifies dev-only instructions are absent) |
+| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `estop`, `status`, `balance`, `close-pdas`, `teardown`) against `localnet`/`devnet`/`mainnet` — see `scripts/ops.sh` for flags |
 
 ### Rebuilding From Scratch
 

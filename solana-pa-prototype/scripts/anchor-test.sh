@@ -16,7 +16,8 @@ ensure_wallet
 
 echo "==> (1/3) Syncing program IDs and building"
 sync_program_ids
-build_programs
+build_programs_dev
+check_required_fixture
 
 echo "==> (2/3) Starting validator"
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Shared validator deployment functions.
+# Shared build, program-ID-sync, and validator lifecycle functions.
 # Source this file from other scripts; do not execute directly.
+# Consumers: anchor-test.sh (local integration flow) and ops.sh (cluster ops).
 #
 # Required variables (set by caller before sourcing):
 #   PROJECT_DIR     - path to solana-pa-prototype
@@ -32,10 +33,10 @@ VERIFIER_ENTRY_PDA="4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
 
 VALIDATOR_PID=""
 
-# Package names build_or_restore/build_programs below build by name. A
-# program added under programs/ that isn't in this list would otherwise
-# silently stop being built on a forward-merge — fail loudly instead. Keep in
-# sync with dev.sh and devnet.sh's equivalent lists.
+# Package names the build functions below build by name. A program added
+# under programs/ that isn't in this list would otherwise silently stop being
+# built on a forward-merge — fail loudly instead. This is the single copy:
+# dev.sh and ops.sh both route builds through the functions in this file.
 EXPECTED_PROGRAMS=(solana-pa-prototype block-time-forwarder test-forwarder)
 
 assert_known_programs() {
@@ -51,10 +52,10 @@ assert_known_programs() {
     done
     if [[ $ok -eq 0 ]]; then
       echo "    ❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
-      echo "       validator-deploy.sh, dev.sh, and devnet.sh build/deploy programs by" >&2
-      echo "       name. Add '${pkg}' to EXPECTED_PROGRAMS and to the build/deploy" >&2
-      echo "       commands in all three scripts before proceeding — otherwise it" >&2
-      echo "       silently never gets built or deployed." >&2
+      echo "       Builds and deploys go by name. Add '${pkg}' to EXPECTED_PROGRAMS" >&2
+      echo "       and the build functions in validator-deploy.sh — and to the" >&2
+      echo "       PROGRAMS registry in ops.sh if it deploys to real clusters —" >&2
+      echo "       otherwise it silently never gets built or deployed." >&2
       exit 1
     fi
   done
@@ -174,15 +175,9 @@ require_commands() {
   require_cmd curl
 }
 
-sync_program_ids() {
-  if ! yarn install --frozen-lockfile; then
-    echo "    Lockfile out of sync, regenerating..."
-    rm -f yarn.lock package-lock.json
-    yarn install
-  fi
-
-  # Keypairs are committed to the repo. If missing locally, restore from git.
-  # If not in git (fresh repo / CI), generate them via anchor build.
+# Keypairs are committed to the repo. If missing locally, restore from git.
+# If not in git (fresh repo / CI), generate them via anchor build.
+ensure_program_keypairs() {
   local missing_keypairs=false
   for kp in target/deploy/solana_pa_prototype-keypair.json \
             target/deploy/block_time_forwarder-keypair.json \
@@ -210,6 +205,16 @@ sync_program_ids() {
       build_with_filtered_output anchor build -p test-forwarder --no-idl
     fi
   fi
+}
+
+sync_program_ids() {
+  if ! yarn install --frozen-lockfile; then
+    echo "    Lockfile out of sync, regenerating..."
+    rm -f yarn.lock package-lock.json
+    yarn install
+  fi
+
+  ensure_program_keypairs
 
   PA_ID="$(sync_program_id "PA" \
     "target/deploy/solana_pa_prototype-keypair.json" \
@@ -242,34 +247,63 @@ sync_program_ids() {
 
 }
 
-build_programs() {
-  assert_known_programs
-
-  # anchor build uses cargo +nightly for IDL generation, which is incompatible
-  # with debug artifacts compiled by the stable toolchain (e.g. from cargo test).
-  # Remove incremental build state and proc-macro artifacts to avoid ABI mismatch.
+# anchor build uses cargo +nightly for IDL generation, which is incompatible
+# with debug artifacts compiled by the stable toolchain (e.g. from cargo test).
+# Remove incremental build state and proc-macro artifacts to avoid ABI mismatch.
+clean_incremental_artifacts() {
   rm -rf target/debug/incremental target/debug/build
+}
 
-  echo "    Building programs..."
+build_programs_dev() {
+  assert_known_programs
+  clean_incremental_artifacts
+
+  echo "    Building programs (development build, dev-teardown enabled)..."
   # dev-teardown enables close_markers_batch (development-only marker PDA
-  # reclamation). This script only runs the local integration test suite, so
-  # the dev build is always what's under test — production builds run plain
-  # `anchor build` without this flag (see dev.sh's release-build command,
-  # which also verifies close_markers_batch is absent from the built IDL).
-  # It's a solana-pa-prototype-only Cargo feature, so it must be scoped with
-  # -p rather than passed to the whole-workspace build.
+  # reclamation). It's a solana-pa-prototype-only Cargo feature, so it must
+  # be scoped with -p rather than passed to the whole-workspace build.
   build_with_filtered_output anchor build -p solana-pa-prototype -- --features dev-teardown
   build_with_filtered_output anchor build -p block-time-forwarder
   build_with_filtered_output anchor build -p test-forwarder
+}
 
-  # Validate required fixture contains the correct program ID.
-  local REQUIRED_FIXTURE="tests/fixtures/batch_groth16.json"
-  if [[ ! -f "$REQUIRED_FIXTURE" ]] || ! fixture_matches_program_id "$REQUIRED_FIXTURE" "$BTF_ID"; then
-    echo "Required fixture is missing or stale: ${REQUIRED_FIXTURE}"
+# The production build: plain `anchor build`, no dev-teardown feature, so
+# close_markers_batch must be absent from the deployed binary. The IDL is
+# generated for solana-pa-prototype and checked, so this stays a
+# self-checking command rather than a convention nothing enforces.
+build_programs_release() {
+  assert_known_programs
+  clean_incremental_artifacts
+
+  local idl_path="target/idl/solana_pa_prototype.json"
+  rm -f "$idl_path"
+
+  echo "    Building programs (production build)..."
+  build_with_filtered_output anchor build -p solana-pa-prototype
+  build_with_filtered_output anchor build -p block-time-forwarder --no-idl
+  build_with_filtered_output anchor build -p test-forwarder --no-idl
+
+  if [[ ! -f "$idl_path" ]]; then
+    echo "❌ release build: anchor build did not produce an IDL at ${idl_path}" >&2
+    exit 1
+  fi
+  if grep -q '"close_markers_batch"' "$idl_path"; then
+    echo "❌ release build: close_markers_batch is present in the production IDL (${idl_path})." >&2
+    echo "   dev-teardown must not be enabled for a production build." >&2
+    exit 1
+  fi
+  echo "    ✅ Production build: close_markers_batch is absent from the IDL."
+}
+
+# Validate the required fixture contains the current BTF program ID.
+# Requires BTF_ID (exported by sync_program_ids).
+check_required_fixture() {
+  local required_fixture="tests/fixtures/batch_groth16.json"
+  if [[ ! -f "$required_fixture" ]] || ! fixture_matches_program_id "$required_fixture" "$BTF_ID"; then
+    echo "Required fixture is missing or stale: ${required_fixture}"
     echo "Regenerate with: ./scripts/dev.sh gen-fixtures tests/fixtures/batch_groth16.json"
     exit 1
   fi
-
 }
 
 start_validator() {
