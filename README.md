@@ -420,7 +420,11 @@ The PA expects `remaining_accounts` in this order:
    - Forwarder program account (executable)
    - Accounts required by that forwarder
 3. **Historical root markers** (optional, read-only) - For transactions anchored to historical roots
-4. **New root marker PDA** (optional, last position, writable) - Created after settlement
+
+The **new root marker PDA** is NOT part of `remaining_accounts`: it is the
+named `new_root_marker` account of `settle`/`settle_from_txdata` (required,
+writable). Settlement rejects with `RootPdaMismatch` unless its address is
+the marker PDA of the post-settlement root.
 
 ---
 
