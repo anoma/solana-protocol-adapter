@@ -1,8 +1,6 @@
 # Devnet Deployment Record
 
-Live state is always what `./scripts/dev.sh status --cluster devnet` reports;
-this file records what was deployed, by whom, and when. Update it after every
-deploy, upgrade, estop, or teardown.
+Live state is always what `./scripts/dev.sh status --cluster devnet` reports; this file records what was deployed, by whom, and when. Update it after every deploy, upgrade, estop, or teardown.
 
 **Record last verified:** 2026-08-08
 
@@ -14,9 +12,7 @@ deploy, upgrade, estop, or teardown.
 | Block Time Forwarder | `3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf` | deployed (stateless), shared across PA deployments |
 
 - **PAState PDA:** `FrpGojQ5LKxY5afjRgBEL1fENy5GrjbzdwHLFWkf97ui`
-- **Operator wallet** (PA authority and upgrade authority for both programs):
-  `5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9`
-  (`scripts/devnet-wallet.json`)
+- **Operator wallet** (PA authority and upgrade authority for both programs): `5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9` (`scripts/devnet-wallet.json`)
 
 ## Verifier infrastructure (pinned at initialize)
 
@@ -27,17 +23,11 @@ deploy, upgrade, estop, or teardown.
 | Router PDA | `9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S` |
 | Verifier Entry PDA (selector `0x73c457ba`) | `4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey` |
 
-The local test validator clones the devnet verifier stack — see
-`scripts/validator-deploy.sh` and `Anchor.toml` for the clone lists. The
-router's on-chain owner is
-`FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh` (this project's January
-deployment wallet).
+The local test validator clones the devnet verifier stack — see `scripts/validator-deploy.sh` and `Anchor.toml` for the clone lists. The router's on-chain owner is `FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh` (this project's January deployment wallet).
 
 ## Retired deployments
 
-All retired 2026-08-08 per the sunsetting procedure in `docs/OPERATIONS.md`.
-A retired PA's PAState account survives its program by design and can never
-be re-initialized.
+All retired 2026-08-08 per the sunsetting procedure in `docs/OPERATIONS.md`. A retired PA's PAState account survives its program by design and can never be re-initialized.
 
 | Program | ID | Outcome |
 |---|---|---|
