@@ -2,8 +2,8 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
+import { PA_STATE_SEED } from "../tests/utils/constants";
 
-const PA_STATE_SEED = Buffer.from("pa_state");
 const BPF_LOADER_UPGRADEABLE = new PublicKey(
   "BPFLoaderUpgradeab1e11111111111111111111111"
 );

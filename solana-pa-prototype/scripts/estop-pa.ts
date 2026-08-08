@@ -2,8 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
-
-const PA_STATE_SEED = Buffer.from("pa_state");
+import { PA_STATE_SEED } from "../tests/utils/constants";
 
 function isStopped(lifecycle: object): boolean {
   return "stopped" in lifecycle;

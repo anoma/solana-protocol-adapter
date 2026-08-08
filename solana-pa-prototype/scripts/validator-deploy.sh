@@ -30,6 +30,8 @@ VERIFIER_ROUTER="BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"
 GROTH16_VERIFIER="2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"
 ROUTER_PDA="9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"
 VERIFIER_ENTRY_PDA="4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
+# Selector registered for the groth16 verifier entry above
+GROTH16_SELECTOR="0x73c457ba"
 
 VALIDATOR_PID=""
 
@@ -175,45 +177,124 @@ require_commands() {
   require_cmd curl
 }
 
-# Keypairs are committed to the repo. If missing locally, restore from git.
-# If not in git (fresh repo / CI), generate them via anchor build.
-ensure_program_keypairs() {
-  local missing_keypairs=false
-  for kp in target/deploy/solana_pa_prototype-keypair.json \
-            target/deploy/block_time_forwarder-keypair.json \
-            target/deploy/test_forwarder-keypair.json; do
+PROGRAM_KEYPAIRS=(
+  target/deploy/solana_pa_prototype-keypair.json
+  target/deploy/block_time_forwarder-keypair.json
+  target/deploy/test_forwarder-keypair.json
+)
+
+# Restore committed program keypairs from git if missing locally.
+# Returns nonzero if any keypair is still missing afterward (not in git).
+restore_program_keypairs() {
+  local kp missing=false
+  for kp in "${PROGRAM_KEYPAIRS[@]}"; do
     if [[ ! -f "$kp" ]]; then
-      missing_keypairs=true
+      missing=true
       break
     fi
   done
-  if [[ "$missing_keypairs" == "true" ]]; then
+  if [[ "$missing" == "true" ]]; then
     # git show/checkout use paths relative to repo root, not working dir
     local git_root
     git_root="$(git rev-parse --show-prefix 2>/dev/null)"
     if git show "HEAD:${git_root}target/deploy/solana_pa_prototype-keypair.json" >/dev/null 2>&1; then
       echo "    Restoring program keypairs from git..."
-      git checkout HEAD -- target/deploy/ 2>/dev/null || true
-    else
-      echo "    Generating program keypairs (first build)..."
-      assert_known_programs
-      # dev-teardown is a solana-pa-prototype-only Cargo feature; scope it
-      # with -p so the other programs' builds don't get an unknown-feature
-      # error (they don't define dev-teardown).
-      build_with_filtered_output anchor build -p solana-pa-prototype --no-idl -- --features dev-teardown
-      build_with_filtered_output anchor build -p block-time-forwarder --no-idl
-      build_with_filtered_output anchor build -p test-forwarder --no-idl
+      git checkout HEAD -- target/deploy/
     fi
+  fi
+  for kp in "${PROGRAM_KEYPAIRS[@]}"; do
+    [[ -f "$kp" ]] || return 1
+  done
+}
+
+# Keypairs are committed to the repo. If missing locally, restore from git.
+# If not in git (fresh repo / CI), generate them via anchor build.
+ensure_program_keypairs() {
+  if ! restore_program_keypairs; then
+    echo "    Generating program keypairs (first build)..."
+    build_programs_dev noidl
   fi
 }
 
-sync_program_ids() {
+# yarn install, regenerating the lockfile if it is out of sync.
+ensure_node_modules() {
   if ! yarn install --frozen-lockfile; then
     echo "    Lockfile out of sync, regenerating..."
     rm -f yarn.lock package-lock.json
     yarn install
   fi
+}
 
+# Packages whose commit hash must match across every Cargo.lock in the project.
+# Each entry is a workspace dep that appears in all three lockfiles (workspace,
+# fixture-gen, guest). Skew silently produces proofs that don't verify on chain
+# (arm-risc0) or compile errors that look like unrelated bugs (anoma-pa-solana-client).
+LOCK_SYNC_PACKAGES=(anoma-rm-core anoma-pa-solana-client)
+
+# Every Cargo.lock that participates in the build. New independent workspaces
+# (a fresh tools/* crate, a separate guest, etc.) must be added here AND the
+# consumers must keep working when one of these lockfiles is absent on a branch.
+LOCK_FILES=(
+  Cargo.lock
+  tools/fixture-gen/Cargo.lock
+  tools/fixture-gen/passthrough-logic/methods/guest/Cargo.lock
+)
+
+# Print the locked commit of <pkg> in <lockfile>, or empty string if absent.
+lock_commit_for() {
+  local lockfile="$1"
+  local pkg="$2"
+  if [[ ! -f "$lockfile" ]]; then
+    return 0
+  fi
+  # `grep` returns 1 when this lockfile doesn't include $pkg — a legitimate
+  # case (different lockfiles have different dep sets, e.g. the guest lockfile
+  # doesn't include workspace-only deps like anoma-pa-solana-client). Suppress
+  # so callers under `set -e` see the empty string instead of an early exit.
+  grep -A2 "^name = \"${pkg}\"$" "$lockfile" \
+    | grep "^source" \
+    | grep -oP '#\K[a-f0-9]+' \
+    | head -1 \
+    || true
+}
+
+# Verify every package in LOCK_SYNC_PACKAGES resolves to the same commit
+# across every present lockfile. Exits non-zero if any skew is detected.
+ensure_lockfile_sync() {
+  local pkg lockfile commit ref_commit ref_file mismatch=0
+  for pkg in "${LOCK_SYNC_PACKAGES[@]}"; do
+    ref_commit=''
+    ref_file=''
+    for lockfile in "${LOCK_FILES[@]}"; do
+      local full="$PROJECT_DIR/$lockfile"
+      [[ -f "$full" ]] || continue
+      commit="$(lock_commit_for "$full" "$pkg")"
+      [[ -n "$commit" ]] || continue
+      if [[ -z "$ref_commit" ]]; then
+        ref_commit="$commit"
+        ref_file="$lockfile"
+      elif [[ "$commit" != "$ref_commit" ]]; then
+        if [[ $mismatch -eq 0 ]]; then
+          echo "❌ Cargo.lock skew detected:" >&2
+        fi
+        echo "  ${pkg}:" >&2
+        echo "    ${ref_file}: ${ref_commit:0:12}" >&2
+        echo "    ${lockfile}: ${commit:0:12}" >&2
+        mismatch=1
+        ref_commit="$commit"
+        ref_file="$lockfile"
+      fi
+    done
+  done
+  if [[ $mismatch -ne 0 ]]; then
+    echo "" >&2
+    echo "Fix: ./scripts/dev.sh lock-sync <package>" >&2
+    return 1
+  fi
+}
+
+sync_program_ids() {
+  ensure_node_modules
   ensure_program_keypairs
 
   PA_ID="$(sync_program_id "PA" \
@@ -255,6 +336,14 @@ clean_incremental_artifacts() {
 }
 
 build_programs_dev() {
+  # $1 = "noidl" skips IDL generation — a separate cargo +nightly compile
+  # pass per program that pure compile checks don't need. Anything that runs
+  # the TS operator scripts or tests needs the IDL (and target/types).
+  local idl_flag=""
+  if [[ "${1:-}" == "noidl" ]]; then
+    idl_flag="--no-idl"
+  fi
+
   assert_known_programs
   clean_incremental_artifacts
 
@@ -262,9 +351,9 @@ build_programs_dev() {
   # dev-teardown enables close_markers_batch (development-only marker PDA
   # reclamation). It's a solana-pa-prototype-only Cargo feature, so it must
   # be scoped with -p rather than passed to the whole-workspace build.
-  build_with_filtered_output anchor build -p solana-pa-prototype -- --features dev-teardown
-  build_with_filtered_output anchor build -p block-time-forwarder
-  build_with_filtered_output anchor build -p test-forwarder
+  build_with_filtered_output anchor build -p solana-pa-prototype ${idl_flag} -- --features dev-teardown
+  build_with_filtered_output anchor build -p block-time-forwarder ${idl_flag}
+  build_with_filtered_output anchor build -p test-forwarder ${idl_flag}
 }
 
 # The production build: plain `anchor build`, no dev-teardown feature, so

@@ -30,73 +30,11 @@ run_in_project() {
   fi
 }
 
-# Packages whose commit hash must match across every Cargo.lock in the project.
-# Each entry is a workspace dep that appears in all three lockfiles (workspace,
-# fixture-gen, guest). Skew silently produces proofs that don't verify on chain
-# (arm-risc0) or compile errors that look like unrelated bugs (anoma-pa-solana-client).
-LOCK_SYNC_PACKAGES=(anoma-rm-core anoma-pa-solana-client)
-
-# Every Cargo.lock that participates in the build. New independent workspaces
-# (a fresh tools/* crate, a separate guest, etc.) must be added here AND the
-# script must keep working when one of these lockfiles is absent on a branch.
-LOCK_FILES=(
-  Cargo.lock
-  tools/fixture-gen/Cargo.lock
-  tools/fixture-gen/passthrough-logic/methods/guest/Cargo.lock
-)
-
-# Print the locked commit of <pkg> in <lockfile>, or empty string if absent.
-lock_commit_for() {
-  local lockfile="$1"
-  local pkg="$2"
-  if [[ ! -f "$lockfile" ]]; then
-    return 0
-  fi
-  # `grep` returns 1 when this lockfile doesn't include $pkg — a legitimate
-  # case (different lockfiles have different dep sets, e.g. the guest lockfile
-  # doesn't include workspace-only deps like anoma-pa-solana-client). Suppress
-  # so callers under `set -e` see the empty string instead of an early exit.
-  grep -A2 "^name = \"${pkg}\"$" "$lockfile" \
-    | grep "^source" \
-    | grep -oP '#\K[a-f0-9]+' \
-    | head -1 \
-    || true
-}
-
-# Verify every package in LOCK_SYNC_PACKAGES resolves to the same commit
-# across every present lockfile. Exits non-zero if any skew is detected.
-ensure_lockfile_sync() {
-  local pkg lockfile commit ref_commit ref_file mismatch=0
-  for pkg in "${LOCK_SYNC_PACKAGES[@]}"; do
-    ref_commit=''
-    ref_file=''
-    for lockfile in "${LOCK_FILES[@]}"; do
-      local full="$PROJECT_DIR/$lockfile"
-      [[ -f "$full" ]] || continue
-      commit="$(lock_commit_for "$full" "$pkg")"
-      [[ -n "$commit" ]] || continue
-      if [[ -z "$ref_commit" ]]; then
-        ref_commit="$commit"
-        ref_file="$lockfile"
-      elif [[ "$commit" != "$ref_commit" ]]; then
-        if [[ $mismatch -eq 0 ]]; then
-          echo "❌ Cargo.lock skew detected:" >&2
-        fi
-        echo "  ${pkg}:" >&2
-        echo "    ${ref_file}: ${ref_commit:0:12}" >&2
-        echo "    ${lockfile}: ${commit:0:12}" >&2
-        mismatch=1
-        ref_commit="$commit"
-        ref_file="$lockfile"
-      fi
-    done
-  done
-  if [[ $mismatch -ne 0 ]]; then
-    echo "" >&2
-    echo "Fix: ./scripts/dev.sh lock-sync <package>" >&2
-    return 1
-  fi
-}
+# Shared library: lockfile-sync checks (LOCK_FILES, ensure_lockfile_sync)
+# and program build/registry functions. Sourcing has no side effects beyond
+# variable defaults, so it is safe outside the Nix shell.
+# shellcheck source=validator-deploy.sh
+source "${SCRIPT_DIR}/validator-deploy.sh"
 
 # Run `cargo update -p <pkg>` against every present lockfile so all three stay
 # pinned to the same commit. Use after bumping a git-dep branch HEAD.
@@ -133,9 +71,9 @@ case "${1:-}" in
     ;;
 
   anchor-build)
-    # Development build: dev-teardown enabled (close_markers_batch present).
+    # Development compile check: dev-teardown enabled, no IDL generation.
     # The production build is `release-build` below.
-    run_in_project "./scripts/ops.sh build-dev"
+    run_in_project "./scripts/ops.sh build-dev --no-idl"
     ;;
 
   release-build)
@@ -145,37 +83,16 @@ case "${1:-}" in
     ;;
 
   anchor-test)
-    # No --cluster (or --cluster localnet): full deterministic local flow —
-    # sync IDs, build, start a validator, deploy, run the whole suite.
-    # --cluster devnet|mainnet: run the cluster-safe test subset against the
-    # programs already deployed on that cluster.
+    # ops.sh owns the dispatch: no --cluster (or --cluster localnet) runs the
+    # full deterministic local flow; devnet/mainnet runs the cluster-safe
+    # subset against the programs already deployed there.
     shift
-    CLUSTER_ARG=""
-    if [[ "${1:-}" == "--cluster" ]]; then
-      CLUSTER_ARG="${2:-}"
-      if [[ -z "$CLUSTER_ARG" ]]; then
-        echo "❌ --cluster requires a value" >&2
-        exit 1
-      fi
-      shift 2
-    fi
-    if [[ $# -gt 0 ]]; then
-      echo "❌ Unexpected arguments: $*" >&2
-      exit 1
-    fi
-    if [[ -z "$CLUSTER_ARG" || "$CLUSTER_ARG" == "localnet" ]]; then
-      ensure_lockfile_sync
-      run_in_project "./scripts/anchor-test.sh"
-    else
-      run_in_project "./scripts/ops.sh test --cluster $CLUSTER_ARG"
-    fi
+    run_in_project "./scripts/ops.sh test $*"
     ;;
 
   deploy|upgrade|teardown|close-pdas|init|estop|status|balance)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
-    CMD="$1"
-    shift
-    run_in_project "./scripts/ops.sh $CMD $*"
+    run_in_project "./scripts/ops.sh $*"
     ;;
 
   validator)

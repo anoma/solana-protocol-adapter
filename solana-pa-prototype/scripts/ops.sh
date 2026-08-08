@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Cluster operations for the PA programs: build, deploy, initialize, status,
 # emergency stop, teardown. One code path for every cluster — the target
-# cluster is a flag, never baked into a script.
+# cluster is a flag, never baked into a script. All per-cluster differences
+# (RPC URL, explorer links, wallet default, dev-teardown policy) are data set
+# in resolve_cluster.
 #
 # Run through ./scripts/dev.sh, which enters the Nix shell:
 #   ./scripts/dev.sh deploy pa --cluster devnet
@@ -22,7 +24,7 @@ declare -A PROGRAMS=(
 )
 
 usage() {
-  cat <<'USAGE'
+  cat <<USAGE
 Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]
 
 Commands:
@@ -31,7 +33,7 @@ Commands:
   upgrade [pa|btf|all]   Rebuild + deploy over existing programs
   teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent. Closed
                          program IDs are burned forever.
-  close-pdas [flag]      Close all PA marker PDAs, reclaim rent. Requires the
+  close-pdas             Close all PA marker PDAs, reclaim rent. Requires the
                          deployed PA to be a --dev-teardown build (the
                          instruction is absent from production builds).
   init                   Initialize PA state (idempotent)
@@ -39,27 +41,29 @@ Commands:
                          Requires --yes.
   status                 Show deployment status + wallet balance
   balance                Show wallet address and balance
-  test                   Run the cluster-safe integration test subset against
-                         deployed programs
-  build-dev              Build all programs (dev-teardown enabled), no deploy
+  test [--cluster <c>]   No cluster (or localnet): full deterministic local
+                         integration flow. devnet/mainnet: cluster-safe test
+                         subset against the programs deployed there.
+  build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
   build-release          Build the production binaries, no deploy (verifies
                          close_markers_batch is absent from the IDL)
 
 Flags:
-  --cluster <c>    Target cluster (required except build-dev/build-release)
+  --cluster <c>    Target cluster (required except test/build-dev/build-release)
   --wallet <path>  Wallet keypair. Defaults: devnet → scripts/devnet-wallet.json,
                    localnet → ~/.config/solana/id.json, mainnet → none (required).
                    The wallet must exist; nothing is auto-generated.
   --url <rpc>      Override the cluster's default RPC URL
+  --no-idl         build-dev: skip IDL generation (faster compile check)
   --dev-teardown   deploy/upgrade: build with the dev-teardown feature
                    (close_markers_batch enabled). Refused on mainnet.
   --yes            Confirm irreversible actions (estop)
 
 Initialization parameters (required by deploy/init when the PA is a target):
   PA_VERIFIER_ROUTER   RISC0 verifier router program ID (base58).
-                       Devnet: BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg
+                       Devnet: ${VERIFIER_ROUTER}
   PA_PROOF_SELECTOR    4-byte Groth16 verifier selector (hex).
-                       Devnet: 0x73c457ba
+                       Devnet: ${GROTH16_SELECTOR}
 USAGE
   exit 1
 }
@@ -71,9 +75,9 @@ TARGET=""
 CLUSTER=""
 WALLET_OVERRIDE=""
 RPC_OVERRIDE=""
+NO_IDL=false
 DEV_TEARDOWN=false
 ASSUME_YES=false
-EXTRA_FLAG=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -91,6 +95,10 @@ while [[ $# -gt 0 ]]; do
       [[ $# -ge 2 ]] || { echo "❌ --url requires a value" >&2; exit 1; }
       RPC_OVERRIDE="$2"
       shift 2
+      ;;
+    --no-idl)
+      NO_IDL=true
+      shift
       ;;
     --dev-teardown)
       DEV_TEARDOWN=true
@@ -120,35 +128,32 @@ done
 
 [[ -n "$COMMAND" ]] || usage
 
-# close-pdas historically forwards one positional flag to close-pdas.ts
-if [[ "$COMMAND" == "close-pdas" ]]; then
-  EXTRA_FLAG="$TARGET"
-  TARGET=""
-fi
-
 # ---------- cluster resolution ----------
 
 RPC_URL=""
 EXPLORER_QS=""
 PRINT_EXPLORER=false
+ALLOW_DEV_TEARDOWN=false
 WALLET=""
 
 resolve_cluster() {
   local default_wallet=""
   case "$CLUSTER" in
     localnet)
-      RPC_URL="http://127.0.0.1:8899"
-      default_wallet="$HOME/.config/solana/id.json"
+      # validator-deploy.sh's defaults for the local test validator
+      RPC_URL="$CLUSTER_URL"
+      default_wallet="$ANCHOR_WALLET_PATH"
+      ALLOW_DEV_TEARDOWN=true
       ;;
     devnet)
       RPC_URL="https://api.devnet.solana.com"
       EXPLORER_QS="?cluster=devnet"
       PRINT_EXPLORER=true
+      ALLOW_DEV_TEARDOWN=true
       default_wallet="${PROJECT_DIR}/scripts/devnet-wallet.json"
       ;;
     mainnet)
       RPC_URL="https://api.mainnet-beta.solana.com"
-      EXPLORER_QS=""
       PRINT_EXPLORER=true
       ;;
     "")
@@ -264,8 +269,8 @@ close_one() {
 
 build_for_deploy() {
   if [[ "$DEV_TEARDOWN" == "true" ]]; then
-    if [[ "$CLUSTER" == "mainnet" ]]; then
-      echo "❌ --dev-teardown is refused on mainnet: close_markers_batch deletes" >&2
+    if [[ "$ALLOW_DEV_TEARDOWN" != "true" ]]; then
+      echo "❌ --dev-teardown is refused on ${CLUSTER}: close_markers_batch deletes" >&2
       echo "   nullifier markers (replay protection) and must never exist in a" >&2
       echo "   production deployment." >&2
       exit 1
@@ -273,6 +278,18 @@ build_for_deploy() {
     build_programs_dev
   else
     build_programs_release
+  fi
+}
+
+# Cluster deploys never generate fresh program IDs implicitly: an ID that
+# isn't committed (or already present locally) would deploy to an address
+# nothing else knows about.
+require_deploy_keypairs() {
+  if ! restore_program_keypairs; then
+    echo "❌ Program keypairs are missing from target/deploy/ and not in git." >&2
+    echo "   Generate them with './scripts/dev.sh anchor-build', commit the ones" >&2
+    echo "   you intend to deploy, then re-run." >&2
+    exit 1
   fi
 }
 
@@ -301,8 +318,8 @@ require_init_params() {
     echo "   initialize pins the verifier router and proof selector for the" >&2
     echo "   lifetime of the deployment; there is no safe default." >&2
     echo "   Devnet values:" >&2
-    echo "     PA_VERIFIER_ROUTER=BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg" >&2
-    echo "     PA_PROOF_SELECTOR=0x73c457ba" >&2
+    echo "     PA_VERIFIER_ROUTER=${VERIFIER_ROUTER}" >&2
+    echo "     PA_PROOF_SELECTOR=${GROTH16_SELECTOR}" >&2
     exit 1
   fi
 }
@@ -358,22 +375,18 @@ init_pa() {
 cmd_deploy() {
   local targets
   targets="$(resolve_targets "$TARGET")"
-  local min_sol
-  min_sol="$(estimate_balance_needed "$targets")"
 
   require_cmd anchor
-  require_cmd solana
-  require_cmd solana-keygen
   require_cmd npx
 
   if [[ " $targets " == *" pa "* ]]; then
     require_init_params
   fi
 
-  ensure_program_keypairs
-  build_for_deploy
+  require_deploy_keypairs
   assert_declare_id_synced "$targets"
-  ensure_balance "$min_sol"
+  ensure_balance "$(estimate_balance_needed "$targets")"
+  build_for_deploy
 
   for t in $targets; do
     deploy_one "${PROGRAMS[$t]}"
@@ -395,10 +408,9 @@ cmd_upgrade() {
   targets="$(resolve_targets "$TARGET")"
 
   require_cmd anchor
-  require_cmd solana
-  require_cmd solana-keygen
 
-  ensure_program_keypairs
+  require_deploy_keypairs
+  assert_declare_id_synced "$targets"
 
   # Verify target programs are already deployed
   for t in $targets; do
@@ -411,7 +423,6 @@ cmd_upgrade() {
   done
 
   build_for_deploy
-  assert_declare_id_synced "$targets"
 
   # Deploy overwrites the existing program binary in-place (no close needed)
   for t in $targets; do
@@ -429,8 +440,6 @@ cmd_teardown() {
   local targets
   targets="$(resolve_targets "$TARGET")"
 
-  require_cmd solana
-  require_cmd solana-keygen
   require_cmd npx
 
   echo "⚠️  WARNING: solana program close is PERMANENT."
@@ -456,12 +465,10 @@ cmd_close_pdas() {
   echo "Closing PA marker PDA accounts..."
   # close-pdas.ts requires the deployed PA to expose close_markers_batch
   # (a dev-teardown build) and errors with instructions if it doesn't.
-  run_ts scripts/close-pdas.ts ${EXTRA_FLAG:+"$EXTRA_FLAG"}
+  run_ts scripts/close-pdas.ts
 }
 
 cmd_init() {
-  require_cmd solana
-  require_cmd solana-keygen
   require_cmd npx
 
   require_init_params
@@ -478,8 +485,6 @@ cmd_init() {
 }
 
 cmd_estop() {
-  require_cmd solana
-  require_cmd solana-keygen
   require_cmd npx
 
   local pid
@@ -506,9 +511,6 @@ cmd_estop() {
 }
 
 cmd_status() {
-  require_cmd solana
-  require_cmd solana-keygen
-
   echo "=== Status (${CLUSTER}) ==="
   echo ""
 
@@ -555,15 +557,10 @@ cmd_status() {
 }
 
 cmd_balance() {
-  require_cmd solana
-  require_cmd solana-keygen
-
   echo "$(get_wallet_pubkey)  $(get_balance) SOL"
 }
 
 cmd_test() {
-  require_cmd solana
-  require_cmd solana-keygen
   require_cmd yarn
   require_cmd node
 
@@ -580,12 +577,7 @@ cmd_test() {
     fi
   done
 
-  # Ensure node_modules are present
-  if ! yarn install --frozen-lockfile 2>/dev/null; then
-    echo "Lockfile out of sync, regenerating..."
-    rm -f yarn.lock package-lock.json
-    yarn install
-  fi
+  ensure_node_modules
 
   # Cluster-safe test describe blocks (explicit allowlist).
   # Tests that require test-forwarder or permanently mutate state are excluded.
@@ -613,47 +605,33 @@ cd "$PROJECT_DIR"
 case "$COMMAND" in
   build-dev)
     require_cmd anchor
-    build_programs_dev
+    if [[ "$NO_IDL" == "true" ]]; then
+      build_programs_dev noidl
+    else
+      build_programs_dev
+    fi
     ;;
   build-release)
     require_cmd anchor
     build_programs_release
     ;;
-  deploy)
-    resolve_cluster
-    cmd_deploy
-    ;;
-  upgrade)
-    resolve_cluster
-    cmd_upgrade
-    ;;
-  teardown)
-    resolve_cluster
-    cmd_teardown
-    ;;
-  close-pdas)
-    resolve_cluster
-    cmd_close_pdas
-    ;;
-  init)
-    resolve_cluster
-    cmd_init
-    ;;
-  estop)
-    resolve_cluster
-    cmd_estop
-    ;;
-  status)
-    resolve_cluster
-    cmd_status
-    ;;
-  balance)
-    resolve_cluster
-    cmd_balance
-    ;;
   test)
+    if [[ -z "$CLUSTER" || "$CLUSTER" == "localnet" ]]; then
+      # Full deterministic local flow: sync IDs, build, start a validator,
+      # deploy, run the whole suite. Guard against Cargo.lock skew first.
+      ensure_lockfile_sync
+      exec "${SCRIPT_DIR}/anchor-test.sh"
+    fi
+    require_cmd solana
+    require_cmd solana-keygen
     resolve_cluster
     cmd_test
+    ;;
+  deploy|upgrade|teardown|close-pdas|init|estop|status|balance)
+    require_cmd solana
+    require_cmd solana-keygen
+    resolve_cluster
+    "cmd_${COMMAND//-/_}"
     ;;
   *)
     echo "❌ Unknown command: ${COMMAND}" >&2
