@@ -297,10 +297,19 @@ sync_program_ids() {
   ensure_node_modules
   ensure_program_keypairs
 
+  PA_OLD="$(read_declare_id "programs/solana-pa-prototype/src/lib.rs")"
   PA_ID="$(sync_program_id "PA" \
     "target/deploy/solana_pa_prototype-keypair.json" \
     "programs/solana-pa-prototype/src/lib.rs" \
     "solana_pa_prototype")"
+
+  # The preloaded root-marker account fixtures derive their addresses and
+  # owner from the PA program ID — regenerate them on rotation, or the
+  # imported-transfer test fails NonExistingRoot against stale addresses.
+  if [[ "$PA_OLD" != "$PA_ID" ]]; then
+    echo "    PA ID changed — regenerating root-marker account fixtures" >&2
+    npx ts-node -P tsconfig.json scripts/regen-root-markers.ts >&2
+  fi
 
   BTF_OLD="$(read_declare_id "programs/block-time-forwarder/src/lib.rs")"
   BTF_ID="$(sync_program_id "BTF" \

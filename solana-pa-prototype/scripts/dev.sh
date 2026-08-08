@@ -251,6 +251,7 @@ PYEOF
     echo "  init                   Initialize PA state (idempotent; needs PA_VERIFIER_ROUTER"
     echo "                         and PA_PROOF_SELECTOR)"
     echo "  estop                  EMERGENCY STOP the PA (terminal; requires --yes)"
+    echo "  sync-ids               Sync declare_id!/Anchor.toml/test refs to the committed keypairs"
     echo "  status                 Show deployment status + wallet balance"
     echo "  balance                Show wallet address and balance"
     exit 1
