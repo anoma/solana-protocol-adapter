@@ -29,8 +29,7 @@ rejected while the deployment is emergency-stopped.
 
 ## The transaction wire format
 
-There are two serialization layers, and confusing them is the most common
-integration mistake:
+There are two serialization layers; do not confuse them:
 
 1. **The instruction layer is Anchor's:** an 8-byte instruction
    discriminator followed by Borsh-serialized arguments. Any Anchor client
@@ -38,20 +37,52 @@ integration mistake:
 2. **The `transaction_data` bytes inside that argument are bincode, not
    Borsh.** The PA deserializes them with `bincode::deserialize` into the
    `Transaction` type from the `anoma-rm-core` crate
-   (`github.com/anoma/arm-risc0`, branch `solana` — the exact commit is
-   pinned in this repo's `Cargo.lock`). Producers must serialize with
+   (`github.com/anoma/arm-risc0`, at the branch and commit pinned in this
+   repo's `Cargo.toml` and `Cargo.lock`). Producers must serialize with
    bincode from that same crate version; the encoding must match
    byte-for-byte.
 
 Borsh appears elsewhere in the PA (account state, event bodies, instruction
 arguments) but never for the transaction payload itself.
 
-Working examples: every fixture in `tests/fixtures/*.json` carries a
-complete valid transaction as base64 in its `tx_b64` field.
+Working examples: the `tests/fixtures/batch_groth16*.json` fixtures carry
+complete settlement-ready transactions as base64 in their `tx_b64` field.
+The other fixtures are deliberately failing variants (missing aggregation
+proof, garbage proof, wrong root, forwarder failures) — useful as negative
+examples, not as templates.
 
 A transaction must carry an aggregation proof (`aggregation_proof` set), and
-its seal's 4-byte selector must equal the one this deployment pinned at
-initialization — see "Deployment parameters" below.
+the 4-byte selector in that proof's seal must equal the `proof_selector`
+this deployment pinned at initialization — see "Deployment parameters"
+below.
+
+### External call encoding
+
+External calls ride inside the transaction itself, in
+`LogicVerifierInputs.app_data.external_payload`. Each call is a
+`SolanaExternalCall` (defined in `types.rs`):
+
+```rust
+pub struct SolanaExternalCall {
+    pub program_id: [u8; 32],       // Forwarder program ID
+    pub instruction_data: Vec<u8>,  // Passed to the forwarder's forward_call
+    pub expected_output: Vec<u8>,   // Must match the forwarder's return data; must be
+                                    // non-empty (EmptyExpectedOutput otherwise — Solana
+                                    // cannot represent an explicit empty return)
+    pub output_mode: OutputMode,    // ReturnData: read via get_return_data() (≤1024 bytes)
+    pub num_accounts: u8,           // Accounts in this call's remaining_accounts segment,
+                                    // including the forwarder program account
+}
+```
+
+The call is bincode-serialized, packed into a word array with
+`bytes_to_words` (zero-pads to a 4-byte boundary), and stored as an
+`ExpirableBlob` in the external payload. **Every** `external_payload` entry
+is decoded and executed as a call — the decoder does not filter, so nothing
+else may be stored there. The canonical encoder
+(`external_calls::encode_external_call`) sets `deletion_criterion` to `0`
+(ephemeral), which also keeps calls from being re-emitted as payload events
+(see Events).
 
 ## Transaction-data upload accounts (TxData)
 
@@ -68,9 +99,9 @@ constraints below them):
   returns to `refund`.
 - **Expiry:** `txdata_init` takes an `expires_slot`, which must land between
   `min_expiry_slots` and `max_expiry_slots` from the current slot. These
-  bounds live on the PA state account and are operator-tunable within
-  [10 slots, 7 days]; read them from chain rather than assuming the
-  defaults. Writes and settlement are rejected after expiry.
+  bounds live on the PA state account and are operator-tunable within the
+  program's hard envelope (`MIN_ALLOWED_EXPIRY` to `SEVEN_DAYS_SLOTS`,
+  `state.rs`); read them from chain rather than assuming the defaults. Writes and settlement are rejected after expiry.
   `txdata_extend` can push the deadline out (strictly increasing, same
   bounds).
 - **Garbage collection is permissionless:** after expiry, anyone may call
@@ -87,18 +118,20 @@ All events are Anchor events: base64 payloads in the program log, prefixed
 with an 8-byte discriminator derived from the event's name, body
 Borsh-encoded. A settlement emits, in this order:
 
-1. Per action, per resource, per payload entry: one **payload event**
-   (see filtering rule below).
-2. Per action: `ActionExecutedEvent { action_tree_root: [u8;32],
-   action_tag_count: u32 }`.
-3. Per external call, in call order: `ForwarderCallExecutedEvent
+1. Per action, in action order: first that action's **payload events**
+   (one per emitted payload entry of each of its resources — see the
+   filtering rule below), then that action's `ActionExecutedEvent
+   { action_tree_root: [u8;32], action_tag_count: u32 }`. Payload events of
+   action N+1 therefore come after action N's `ActionExecutedEvent`.
+2. Per external call, in call order: `ForwarderCallExecutedEvent
    { forwarder: Pubkey, input: Vec<u8>, output: Vec<u8> }`.
-4. Once: `TransactionExecutedEvent { tags: Vec<[u8;32]>,
+3. Once: `TransactionExecutedEvent { tags: Vec<[u8;32]>,
    logic_refs: Vec<[u8;32]> }`.
 
 **Tag semantics** (`extract_tags_and_logic_refs` in `encoding.rs`): for each
-compliance unit of each action, two tags are appended in order — the
-consumed resource's nullifier, then the created resource's commitment.
+compliance unit (one consumed/created resource pair) of each action, two
+tags are appended in order — the consumed resource's nullifier, then the
+created resource's commitment.
 `logic_refs` is index-parallel to `tags`. `TransactionExecutedEvent`
 therefore lists every state change of the settlement: even-indexed entries
 are nullifiers, odd-indexed entries are commitments, and the commitments
@@ -113,9 +146,9 @@ filter at the log-parsing level without decoding bodies. Rules
 (`emit_app_data_events` in `lib.rs`):
 
 - A payload entry is emitted **only if its deletion criterion says "store
-  forever"** (`deletion_criterion == 1`). Entries with any other criterion
-  never appear in events; an indexer cannot reconstruct them and must not
-  expect to.
+  forever"** (`deletion_criterion == DELETION_CRITERION_NEVER`, defined in
+  `state.rs`). Entries with any other criterion never appear in events; an
+  indexer cannot reconstruct them and must not expect to.
 - `tag` is the resource tag the payload belongs to; `index` is the entry's
   position within its own category's payload list for that resource (not a
   global index).
@@ -125,33 +158,36 @@ filter at the log-parsing level without decoding bodies. Rules
 
 ## Roots and markers
 
-The PA does not store a list of historical roots in its state account.
-Validity is existence of a marker account: a root is acceptable for
-settlement if a PDA of `["root", pa_state, root_bytes]` owned by the PA
-exists (`root.rs`). Two roots are valid without any marker: the current tree
-root, and the empty-tree root (which equals the tree's padding leaf — this
+A root is valid for settlement exactly when a marker account exists: a PDA
+of `["root", pa_state, root_bytes]` owned by the PA (`root.rs`). The PA
+stores no list of historical roots in its state account. Two roots are
+valid without any marker: the current tree root, and the empty-tree root
+(the tree pads unfilled positions with a fixed leaf value — `PADDING_LEAF`
+in `merkle.rs` — and an empty tree's root is built entirely from it, which
 lets transactions built against a freshly initialized PA settle without a
 genesis marker).
 
 For transaction builders:
 
 - A transaction consuming resources proven against an older root must
-  include that root's marker account (read-only) among the settlement's
-  `remaining_accounts`; position does not matter. Omitting it fails the
-  settlement with `NonExistingRoot`.
-- Every settlement must supply the **new** root's marker address as the
-  named `new_root_marker` account (writable) of `settle` /
-  `settle_from_txdata` — it is not part of `remaining_accounts`, and it is
-  required, not optional: the PA rejects with `RootPdaMismatch` unless the
-  address matches the post-settlement root, which the builder computes by
-  applying the transaction's commitments to the current tree. The PA
-  creates the marker there, permanently: every settlement's resulting root
-  stays valid, which is what allows building transactions against a root
+  include that root's marker account (read-only) in the settlement's
+  `remaining_accounts`, after the nullifier-marker slots and forwarder
+  segments — those leading positions are consumed positionally (see the
+  README's layout), while the validity check itself scans the whole list.
+  Omitting the marker fails the settlement with `NonExistingRoot`.
+- Every settlement must pass the **new** root's marker address as the named
+  `new_root_marker` account (writable) of `settle` / `settle_from_txdata`;
+  it is not part of `remaining_accounts`. Compute the new root by applying
+  the transaction's commitments to the current tree. If the address does
+  not match the post-settlement root, settlement rejects with
+  `RootPdaMismatch`. The PA creates the marker at that address,
+  permanently: every past root stays valid, so a builder can target a root
   while other settlements advance the tree.
 
-Markers are never deleted in production deployments. (Development builds
-carry an extra teardown instruction; it cannot exist in a production binary
-and integrators should ignore it.)
+Production binaries contain no instruction that deletes markers.
+(Development builds carry a teardown instruction, compiled out of
+production builds — a build-discipline boundary, not a chain guarantee;
+`dev.sh release-build` verifies its absence.)
 
 ## Deployment parameters
 
@@ -162,11 +198,11 @@ the PA state account:
   proof verification. Settlement requires passing this exact program (plus
   its router PDA, verifier entry, and verifier program) in the settle
   accounts.
-- `proof_selector: [u8;4]` — the verifier selector every transaction's
-  aggregation seal must carry.
+- `proof_selector: [u8;4]` — the 4-byte selector every transaction's
+  aggregation proof must carry.
 
 Program IDs, the router addresses for the current devnet deployment, and
 key custody are in `docs/DEVNET_DEPLOYMENT.md`. Operator procedures
 (deploy, emergency stop, retirement) are in `docs/OPERATIONS.md`; the fact
-integrators care about: a stopped deployment rejects all settlement forever,
-and recovery is a new deployment with a fresh, empty tree.
+integrators care about: a stopped deployment rejects settlement and has no
+resume instruction — recovery is a new deployment with a fresh, empty tree.

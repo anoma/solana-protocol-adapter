@@ -358,6 +358,7 @@ Clients submit RM transactions to the PA for settlement.
        txData,
        authority,
        systemProgram,
+       newRootMarker,       // required: marker PDA of the post-settlement root
        verifierRouterProgram,
        router: routerPda,
        verifierEntry: verifierEntryPda,
@@ -370,8 +371,6 @@ Clients submit RM transactions to the PA for settlement.
        { pubkey: forwarderProgramId, isWritable: false, isSigner: false },
        { pubkey: forwarderAccount1, isWritable: false, isSigner: false },
        // ... more forwarder accounts
-       // New root marker PDA (last position, optional)
-       { pubkey: newRootMarkerPda, isWritable: true, isSigner: false },
      ])
      .preInstructions([
        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -419,7 +418,7 @@ The PA expects `remaining_accounts` in this order:
 2. **External call segments** - For each external call:
    - Forwarder program account (executable)
    - Accounts required by that forwarder
-3. **Historical root markers** (optional, read-only) - For transactions anchored to historical roots
+3. **Historical root markers** (optional, read-only) - For transactions anchored to historical roots. Position-independent: validity is checked by scanning the whole list.
 
 The **new root marker PDA** is NOT part of `remaining_accounts`: it is the
 named `new_root_marker` account of `settle`/`settle_from_txdata` (required,
@@ -430,38 +429,9 @@ the marker PDA of the post-settlement root.
 
 ## External Call Encoding
 
-External calls are encoded in the RM transaction's `LogicVerifierInputs.app_data.external_payload`.
-
-### SolanaExternalCall Structure
-
-```rust
-#[derive(Serialize, Deserialize)]
-pub struct SolanaExternalCall {
-    pub program_id: [u8; 32],       // Forwarder program ID
-    pub instruction_data: Vec<u8>,  // Passed to forwarder's forward_call
-    pub expected_output: Vec<u8>,   // Must match forwarder's return data
-    pub output_mode: OutputMode,
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum OutputMode {
-    ReturnData,  // Read via get_return_data() (≤1024 bytes)
-}
-```
-
-### Encoding
-
-External calls are serialized with bincode, then converted to a word array:
-
-```rust
-let bytes = bincode::serialize(&call)?;
-let words = bytes_to_words(&bytes);  // Pads to 4-byte boundary, little-endian
-
-ExpirableBlob {
-    blob: words,
-    deletion_criterion: 0,
-}
-```
+External calls are part of the transaction wire format — see
+[`solana-pa-prototype/docs/INTEGRATION.md`](solana-pa-prototype/docs/INTEGRATION.md),
+"External call encoding".
 
 ---
 
