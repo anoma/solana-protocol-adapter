@@ -5,9 +5,12 @@ deployment: how to deploy and initialize it, run it, stop it in an emergency,
 and retire it permanently. The one fact that shapes everything here: **Solana
 programs are upgradeable, so "stopped forever" is not enforced by the chain —
 it is enforced by how you handle two keys.** The EVM Protocol Adapter gets
-finality for free because its contract is immutable; on Solana, the
-equivalent finality is an operator action (burning the upgrade authority),
-and it must come last.
+finality for free because its contract is immutable — its `emergencyStop()`
+has no unpause, no key can resurrect a stopped instance, and its only
+operational document is a deploy/release checklist. On Solana the equivalent
+finality is an operator action (burning the upgrade authority), it must come
+last, and the stop/retire half of the lifecycle below is the part EVM
+immutability does automatically.
 
 All commands run through `./scripts/dev.sh` from `solana-pa-prototype/`,
 which enters the Nix shell automatically. Every command takes
@@ -15,8 +18,7 @@ which enters the Nix shell automatically. Every command takes
 
 ## The two keys
 
-A deployment has two independent authorities, and they answer different
-questions:
+A deployment has two independent authorities:
 
 | Authority | Lives in | Controls | Moved by |
 |---|---|---|---|
@@ -37,31 +39,32 @@ Two consequences to keep in mind:
   upgrade the program.
 - Whoever holds the upgrade authority can replace the program binary — which
   means they could deploy code that undoes a stop. A stop is only as
-  permanent as upgrade-authority custody. Permanent retirement therefore
-  ends with burning that authority (see Sunsetting).
+  permanent as upgrade-authority custody.
 
-Current devnet posture: both authorities are held by
-`scripts/devnet-wallet.json`
-(`5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9`).
+Current key custody per cluster lives in the deployment record
+(`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every
+operation.
 
 ## Deploy and initialize
 
 Prerequisites:
 
-1. A funded wallet for the target cluster. Defaults: devnet uses
-   `scripts/devnet-wallet.json`; mainnet has no default and requires
-   `--wallet`. Nothing is ever auto-generated. Budget roughly 5 SOL for the
-   PA program and 2 SOL for the block-time forwarder (rent for the program
-   accounts, plus fees).
+1. A funded wallet for the target cluster (per-cluster defaults and the
+   `--wallet` flag: `scripts/ops.sh` usage). `deploy` checks the balance
+   against its own size-based estimate before building and refuses with the
+   amount needed.
 2. The two initialization parameters, exported as environment variables.
    `initialize` pins them for the lifetime of the deployment — there is no
    safe default and no way to change them later:
 
    ```sh
-   export PA_VERIFIER_ROUTER=BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg  # devnet RISC0 router
-   export PA_PROOF_SELECTOR=0x73c457ba                                     # devnet groth16 selector
+   export PA_VERIFIER_ROUTER=<verifier router program ID>
+   export PA_PROOF_SELECTOR=<4-byte hex selector>
    ```
 
+   Running `deploy pa` without them set prints the current devnet values,
+   which are defined once in `scripts/validator-deploy.sh` and recorded in
+   the cluster's deployment record.
 3. Program keypairs present under `target/deploy/` (they are committed to
    git and restored automatically). Cluster deploys refuse to invent fresh
    program IDs; if you intend a new ID, generate keypairs with
@@ -77,8 +80,8 @@ Procedure:
 `deploy` builds the production binary by default and verifies that
 `close_markers_batch` — a development-only instruction that deletes
 nullifier markers, i.e. replay protection — is absent from it. Passing
-`--dev-teardown` opts into the development build (refused on mainnet), which
-is the only build whose markers can later be reclaimed by `close-pdas`.
+`--dev-teardown` opts into the development build, which is the only build
+whose markers can later be reclaimed by `close-pdas`.
 
 After a first deployment, update `docs/DEVNET_DEPLOYMENT.md` (or the
 equivalent record for the cluster) with the program IDs, wallet, router,
@@ -127,8 +130,9 @@ RISC0 verifier's pause is set.
 
 Diagnosis is by transaction logs: a router-side stop shows the router
 program's own `SelectorDeactivated` error in the failed transaction's logs,
-clearly distinct from a proof failure. On devnet the router deployment's
-authority is held by this project, so it cannot be stopped by a third party.
+clearly distinct from a proof failure. Whether anyone outside this project
+can trip that switch depends on who owns the router deployment — the
+current owner is in the cluster's deployment record.
 
 ## Recovery
 
@@ -148,8 +152,7 @@ decide).
 The PAState account of a stopped deployment can never be re-initialized.
 This is deliberate: the account address derives from a fixed seed, so
 re-initializing would resurrect old nullifier-marker addresses and let
-previously spent notes spend again. The instruction that once allowed it
-(`close_pa_state`) was removed for exactly this reason.
+previously spent notes spend again.
 
 ## Sunsetting
 
@@ -180,13 +183,3 @@ the normal end. Immutability-by-burned-authority is the shape a mainnet
 retirement would take when the historical state should stay served at its
 known addresses.
 
-## Relationship to the EVM Protocol Adapter
-
-The EVM PA's operational document is its release checklist: deploy,
-verify on Etherscan/sourcify, version, publish. It needs nothing for the
-back half of the lifecycle because the chain enforces it — the contract is
-not upgradeable, its `emergencyStop()` has no unpause, and no key can
-resurrect a stopped instance. This document exists because Solana gives none
-of that for free: the deploy half is the same kind of checklist, and the
-stop/retire half is the operator performing, by hand and in the right order,
-what EVM immutability does automatically.

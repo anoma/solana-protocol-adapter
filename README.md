@@ -535,13 +535,19 @@ cd solana-pa-prototype
 
 The validator is configured to clone the RISC0 verifier programs from devnet on startup.
 
-### Deploy PA Programs
+### Deploy PA Programs to the Local Validator
 
 ```bash
 cd solana-pa-prototype
 solana config set --url http://127.0.0.1:8899
 anchor deploy --provider.cluster http://127.0.0.1:8899
 ```
+
+### Deploy to a Real Cluster
+
+Deployment, initialization, emergency stop, and retirement procedures for
+devnet/mainnet live in
+[`solana-pa-prototype/docs/OPERATIONS.md`](solana-pa-prototype/docs/OPERATIONS.md).
 
 ---
 

@@ -26,10 +26,11 @@ deploy, upgrade, estop, or teardown.
 | Router PDA | `9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S` |
 | Verifier Entry PDA (selector `0x73c457ba`) | `4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey` |
 
-These are the same addresses `Anchor.toml` clones into the local test
-validator. The router's on-chain owner is
+The local test validator clones the devnet verifier stack — see
+`scripts/validator-deploy.sh` and `Anchor.toml` for the clone lists. The
+router's on-chain owner is
 `FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh` (this project's January
-deployment wallet), so no third party can emergency-stop the verifier entry.
+deployment wallet).
 
 ## Superseded deployments
 
