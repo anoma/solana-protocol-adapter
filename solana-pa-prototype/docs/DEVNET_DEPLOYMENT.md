@@ -2,13 +2,13 @@
 
 Live state is always what `./scripts/dev.sh status --cluster devnet` reports; this file records what was deployed, by whom, and when. Update it after every deploy, upgrade, estop, or teardown.
 
-**Record last verified:** 2026-08-08
+**Record last verified:** 2026-08-10
 
 ## Current deployment (beta)
 
 | Program | ID | State |
 |---|---|---|
-| Protocol Adapter | `9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF` | deployed 2026-08-08 (production build), PAState initialized, empty tree |
+| Protocol Adapter | `9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF` | deployed 2026-08-08 (production build), PAState initialized; exercised in place 2026-08-10: full cluster suite (59 passing) settled the committed Groth16 fixtures against it (8 marker accounts on chain, authority verified back with the operator wallet) |
 | Block Time Forwarder | `3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf` | deployed (stateless), shared across PA deployments |
 
 - **PAState PDA:** `FrpGojQ5LKxY5afjRgBEL1fENy5GrjbzdwHLFWkf97ui`
