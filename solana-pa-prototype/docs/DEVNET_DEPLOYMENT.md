@@ -8,7 +8,7 @@ Live state is always what `./scripts/dev.sh status --cluster devnet` reports; th
 
 | Program | ID | State |
 |---|---|---|
-| Protocol Adapter | `9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF` | deployed 2026-08-08 (production build), PAState initialized; production IDL published on chain 2026-08-11 (IDL account `AoEQQEXZQURXh8jpwKZLaQ7woStZaEZuMPthZxqjwJYv`); exercised in place 2026-08-10: full cluster suite (59 passing) settled the committed Groth16 fixtures against it (8 marker accounts on chain, authority verified back with the operator wallet) |
+| Protocol Adapter | `9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF` | deployed 2026-08-08 (production build), PAState initialized; production IDL published on chain 2026-08-11 as `protocol_adapter` — explorers display "Protocol Adapter" (IDL account `AoEQQEXZQURXh8jpwKZLaQ7woStZaEZuMPthZxqjwJYv`); exercised in place 2026-08-10: full cluster suite (59 passing) settled the committed Groth16 fixtures against it (8 marker accounts on chain, authority verified back with the operator wallet) |
 | Block Time Forwarder | `3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf` | deployed (stateless), shared across PA deployments |
 
 - **PAState PDA:** `FrpGojQ5LKxY5afjRgBEL1fENy5GrjbzdwHLFWkf97ui`
