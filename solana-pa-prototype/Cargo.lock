@@ -1627,6 +1627,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "protocol-adapter"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anoma-rm-core",
+ "anoma-rm-solana",
+ "bincode",
+ "block-time-forwarder",
+ "borsh 1.6.0",
+ "groth_16_verifier",
+ "hex-literal",
+ "proptest",
+ "serde",
+ "sha2 0.10.9",
+ "solana-system-interface",
+ "verifier_router",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2544,25 +2563,6 @@ checksum = "1b03f149b0d2eba4514f4444b7300ea65ee23f509b10417e13799517c28c2ebc"
 dependencies = [
  "k256",
  "solana-program-error 3.0.1",
-]
-
-[[package]]
-name = "solana-pa-prototype"
-version = "0.1.0"
-dependencies = [
- "anchor-lang",
- "anoma-rm-core",
- "anoma-rm-solana",
- "bincode",
- "block-time-forwarder",
- "borsh 1.6.0",
- "groth_16_verifier",
- "hex-literal",
- "proptest",
- "serde",
- "sha2 0.10.9",
- "solana-system-interface",
- "verifier_router",
 ]
 
 [[package]]

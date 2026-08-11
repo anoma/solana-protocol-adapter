@@ -30,9 +30,9 @@ function currentPaProgramId(): PublicKey {
   // Anchor.toml is the synced source get_program_id also agrees with;
   // reading it avoids requiring a built keypair or IDL.
   const toml = fs.readFileSync(ANCHOR_TOML, "utf-8");
-  const m = toml.match(/^solana_pa_prototype = "([1-9A-HJ-NP-Za-km-z]+)"$/m);
+  const m = toml.match(/^protocol_adapter = "([1-9A-HJ-NP-Za-km-z]+)"$/m);
   if (!m) {
-    console.error(`❌ Could not read solana_pa_prototype ID from ${ANCHOR_TOML}`);
+    console.error(`❌ Could not read protocol_adapter ID from ${ANCHOR_TOML}`);
     process.exit(1);
   }
   return new PublicKey(m[1]);

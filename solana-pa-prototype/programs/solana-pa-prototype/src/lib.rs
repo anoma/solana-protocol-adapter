@@ -102,7 +102,7 @@ use merkle::{
 use state::*;
 
 #[program]
-pub mod solana_pa_prototype {
+pub mod protocol_adapter {
     use super::*;
 
     /// Initialize a new PAState account.
@@ -755,7 +755,7 @@ pub struct Initialize<'info> {
     /// loader recorded inside this very program account and requires it to
     /// match the supplied `program_data` account.
     #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ PAError::Unauthorized)]
-    pub program: Program<'info, crate::program::SolanaPaPrototype>,
+    pub program: Program<'info, crate::program::ProtocolAdapter>,
 
     /// The loader records the upgrade authority here at deploy time, which is the
     /// only trust anchor available before the adapter has any state of its own.

@@ -11,7 +11,7 @@ import {
 } from "@solana/web3.js";
 import { assert } from "chai";
 import path from "path";
-import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
+import { ProtocolAdapter } from "../target/types/protocol_adapter";
 
 import {
   getRouterPda,
@@ -54,12 +54,12 @@ async function airdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: number
   fundedKeypairs.push(kp);
 }
 
-const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
+const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "protocol_adapter.json");
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
 
-const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 
 const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
@@ -371,7 +371,7 @@ async function paStateExists(): Promise<boolean> {
   return info !== null;
 }
 
-describe("solana-pa-prototype (AUTH-01: initialization authority)", () => {
+describe("protocol-adapter (AUTH-01: initialization authority)", () => {
   it("rejects initialization by a non-upgrade-authority signer", async () => {
     // Must run before PAState is initialized anywhere else in the suite —
     // otherwise the `init` constraint on `pa_state` would fail with
@@ -429,7 +429,7 @@ describe("solana-pa-prototype (AUTH-01: initialization authority)", () => {
   });
 });
 
-describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
+describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
   const tx = Buffer.from(fixture.tx_b64, "base64");
   const txTampered = Buffer.from(fixture.tx_tampered_b64, "base64");
 
@@ -694,7 +694,7 @@ describe("solana-pa-prototype (Groth16 batch aggregation E2E)", () => {
 // spends that leaf through the real path, runs much later (see STATE-03 part
 // 2), by which point further settlements have advanced the tree and the
 // committer's root is genuinely historical.
-describe("solana-pa-prototype (STATE-03 part 1: commit a non-ephemeral leaf)", () => {
+describe("protocol-adapter (STATE-03 part 1: commit a non-ephemeral leaf)", () => {
   it("settles the historical-root committer (its created resource is genuinely non-ephemeral)", async () => {
     await assertFixtureUnsettled("batch_groth16_historical_root_committer.json");
 
@@ -710,7 +710,7 @@ describe("solana-pa-prototype (STATE-03 part 1: commit a non-ephemeral leaf)", (
   });
 });
 
-describe("solana-pa-prototype (Re-initialization guard)", () => {
+describe("protocol-adapter (Re-initialization guard)", () => {
   it("rejects re-initialization of PAState", async () => {
     // PAState was already initialized in the E2E before() hook.
     // A second initialize call must fail because the account already exists.
@@ -738,7 +738,7 @@ describe("solana-pa-prototype (Re-initialization guard)", () => {
   });
 });
 
-describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
+describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
   it("rejects garbage transaction_data via settle", async () => {
     const payer = Keypair.generate();
     await airdrop(provider, payer, 2);
@@ -846,7 +846,7 @@ describe("solana-pa-prototype (Direct settle & duplicate nullifier)", () => {
   });
 });
 
-describe("solana-pa-prototype (Settle error paths)", () => {
+describe("protocol-adapter (Settle error paths)", () => {
   it("rejects wrong verifier_router_program address", async () => {
     const payer = Keypair.generate();
     await airdrop(provider, payer, 2);
@@ -982,7 +982,7 @@ describe("solana-pa-prototype (Settle error paths)", () => {
   });
 });
 
-describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
+describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   it("stores authority on PAStateAccount after initialize", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.ok(state.authority, "State should have authority field");
@@ -1446,7 +1446,7 @@ describe("solana-pa-prototype (Issue #6: Emergency Stop)", () => {
   });
 });
 
-describe("solana-pa-prototype (TxData Expiration)", () => {
+describe("protocol-adapter (TxData Expiration)", () => {
   it("rejects txdata_init with expires_slot too soon", async () => {
     const authority = Keypair.generate();
     await airdrop(provider, authority, 1);
@@ -1726,7 +1726,7 @@ describe("solana-pa-prototype (TxData Expiration)", () => {
 
 });
 
-describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
+describe("protocol-adapter (TxData authority and bounds checks)", () => {
 
   it("rejects txdata_write that exceeds payload capacity", async () => {
     const authority = Keypair.generate();
@@ -1894,7 +1894,7 @@ describe("solana-pa-prototype (TxData authority and bounds checks)", () => {
   });
 });
 
-describe("solana-pa-prototype (update_expiry_config)", () => {
+describe("protocol-adapter (update_expiry_config)", () => {
   it("updates expiry config successfully", async () => {
     await program.methods
       .updateExpiryConfig(new anchor.BN(50), new anchor.BN(5000))
@@ -2001,7 +2001,7 @@ describe("solana-pa-prototype (update_expiry_config)", () => {
   });
 });
 
-describe("solana-pa-prototype (TxData expiration enforcement)", () => {
+describe("protocol-adapter (TxData expiration enforcement)", () => {
   // On devnet, slots advance at ~2.5/s and tx confirmation takes seconds.
   // 30 slots gives enough room to init+write before expiration.
   const EXPIRY_OFFSET = 30;
@@ -2203,7 +2203,7 @@ describe("solana-pa-prototype (TxData expiration enforcement)", () => {
   });
 });
 
-describe("solana-pa-prototype (Settlement error paths — fixture variants)", () => {
+describe("protocol-adapter (Settlement error paths — fixture variants)", () => {
   async function expectSettleError(fixtureName: string, expectedError: string) {
     const fx = loadFixture(fixtureName);
     const payload = Buffer.from(fx.tx_b64, "base64");
@@ -2231,7 +2231,7 @@ describe("solana-pa-prototype (Settlement error paths — fixture variants)", ()
   });
 });
 
-describe("solana-pa-prototype (AnomaPay imported transfer regression)", () => {
+describe("protocol-adapter (AnomaPay imported transfer regression)", () => {
   it("settles imported backend transfer TxData payload", async () => {
     const fx = loadFixture<Fixture>("anomapay_transfer_0e345103.json");
     const payload = Buffer.from(fx.tx_b64, "base64");
@@ -2252,7 +2252,7 @@ describe("solana-pa-prototype (AnomaPay imported transfer regression)", () => {
   });
 });
 
-describe("solana-pa-prototype (External call error paths)", () => {
+describe("protocol-adapter (External call error paths)", () => {
   it("rejects settlement when forwarder CPI accounts are wrong", async () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
     // Replace SYSVAR_CLOCK_PUBKEY with a random pubkey so the CPI to btf fails.
@@ -2324,7 +2324,7 @@ describe("solana-pa-prototype (External call error paths)", () => {
   });
 });
 
-describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
+describe("protocol-adapter (Tree growth and multi-settlement)", () => {
   let v2TxSig: string;
 
   it("settles v2 fixture (next_index 1→2, depth 1→2)", async () => {
@@ -2459,7 +2459,7 @@ describe("solana-pa-prototype (Tree growth and multi-settlement)", () => {
 // neither the current root nor PADDING_LEAF. The only branch of
 // `is_root_valid` that can still admit it is the root-marker lookup, which is
 // exactly the branch no maintained test had ever exercised on a validator.
-describe("solana-pa-prototype (STATE-03 part 2: settle against a retained historical root)", () => {
+describe("protocol-adapter (STATE-03 part 2: settle against a retained historical root)", () => {
   // The consumer's root must be genuinely superseded before either of the two
   // tests below runs, otherwise `is_root_valid` would return true on its
   // *first* branch (root == current root) and the marker branch would again go
@@ -2554,7 +2554,7 @@ describe("solana-pa-prototype (STATE-03 part 2: settle against a retained histor
 // Verifies that teardown operations cannot be performed while the PA is
 // running. Must run BEFORE emergency_stop pauses the protocol.
 
-describe("solana-pa-prototype (close_markers_batch requires stopped state)", () => {
+describe("protocol-adapter (close_markers_batch requires stopped state)", () => {
   it("close_markers_batch fails when PA is not stopped", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.deepEqual(state.lifecycle, { running: {} }, "PA should be Running at start of test");
@@ -2585,7 +2585,7 @@ describe("solana-pa-prototype (close_markers_batch requires stopped state)", () 
 
 // MUST BE LAST: emergency_stop permanently pauses PAState. No further
 // settle operations can succeed after this block runs.
-describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
+describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
   it("emergency_stop pauses protocol", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     assert.equal(JSON.stringify(stateBefore.lifecycle), JSON.stringify({ running: {} }), "Should be Running before emergency_stop");
@@ -2683,7 +2683,7 @@ describe("solana-pa-prototype (Emergency Stop E2E — LAST)", () => {
 
 // ── Close instruction tests ──────────────────────────────────────────────
 
-describe("solana-pa-prototype (Close instructions)", () => {
+describe("protocol-adapter (Close instructions)", () => {
   it("close_markers_batch closes marker PDAs and refunds rent", async () => {
     // Find all 0-byte marker accounts owned by the PA program
     const allAccounts = await provider.connection.getProgramAccounts(program.programId, {

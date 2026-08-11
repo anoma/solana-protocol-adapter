@@ -1,7 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
-import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
+import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { PA_STATE_SEED } from "../tests/utils/constants";
 
 const BPF_LOADER_UPGRADEABLE = new PublicKey(
@@ -56,7 +56,7 @@ async function main() {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+  const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 
   const verifierRouter = requireVerifierRouter();
   const proofSelector = requireProofSelector();

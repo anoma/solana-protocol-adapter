@@ -36,7 +36,7 @@ jobs:
 
       - name: Check formatting
         working-directory: ./solana-pa-prototype
-        run: cargo fmt -p solana-pa-prototype -p block-time-forwarder --check
+        run: cargo fmt -p protocol-adapter -p block-time-forwarder --check
 
   # Clippy linting
   clippy:
@@ -61,7 +61,7 @@ jobs:
       - name: Run clippy
         working-directory: ./solana-pa-prototype
         run: |
-          cargo clippy -p solana-pa-prototype -p block-time-forwarder --all-targets -- \
+          cargo clippy -p protocol-adapter -p block-time-forwarder --all-targets -- \
             -D warnings \
             -A unexpected_cfgs \
             -A deprecated
@@ -72,7 +72,7 @@ jobs:
       - name: Run clippy (dev-teardown feature)
         working-directory: ./solana-pa-prototype
         run: |
-          cargo clippy -p solana-pa-prototype --features dev-teardown --all-targets -- \
+          cargo clippy -p protocol-adapter --features dev-teardown --all-targets -- \
             -D warnings \
             -A unexpected_cfgs \
             -A deprecated
@@ -98,7 +98,7 @@ jobs:
 
       - name: Run tests
         working-directory: ./solana-pa-prototype
-        run: cargo test -p solana-pa-prototype -p block-time-forwarder
+        run: cargo test -p protocol-adapter -p block-time-forwarder
 
   # Anchor integration tests
   anchor-test:

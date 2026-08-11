@@ -19,7 +19,7 @@ source "${SCRIPT_DIR}/validator-deploy.sh"
 # test-forwarder is deliberately absent: it exists only for the local
 # integration suite and is never deployed to a real cluster.
 declare -A PROGRAMS=(
-  [pa]="solana_pa_prototype"
+  [pa]="protocol_adapter"
   [btf]="block_time_forwarder"
 )
 
@@ -479,7 +479,7 @@ cmd_init() {
   require_init_params
 
   local pid
-  pid="$(get_program_id "solana_pa_prototype")"
+  pid="$(get_program_id "protocol_adapter")"
   if ! is_deployed "$pid"; then
     echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
     echo "Run: ./scripts/dev.sh deploy pa --cluster ${CLUSTER}"
@@ -493,7 +493,7 @@ cmd_estop() {
   require_cmd npx
 
   local pid
-  pid="$(get_program_id "solana_pa_prototype")"
+  pid="$(get_program_id "protocol_adapter")"
   if ! is_deployed "$pid"; then
     echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
     exit 1
@@ -546,9 +546,9 @@ cmd_status() {
   echo ""
 
   # PAState PDA
-  if [[ -f "target/deploy/solana_pa_prototype-keypair.json" ]]; then
+  if [[ -f "target/deploy/protocol_adapter-keypair.json" ]]; then
     local pa_pid pa_state pa_state_addr
-    pa_pid="$(get_program_id "solana_pa_prototype")"
+    pa_pid="$(get_program_id "protocol_adapter")"
     pa_state="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" 2>/dev/null | head -1 || true)"
     if [[ -n "$pa_state" ]]; then
       pa_state_addr="$(echo "$pa_state" | awk '{print $1}')"
@@ -574,8 +574,8 @@ cmd_balance() {
 cmd_idl_publish() {
   require_cmd anchor
 
-  local pid idl_path="target/idl/solana_pa_prototype.json"
-  pid="$(get_program_id "solana_pa_prototype")"
+  local pid idl_path="target/idl/protocol_adapter.json"
+  pid="$(get_program_id "protocol_adapter")"
   if ! is_deployed "$pid"; then
     echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
     exit 1

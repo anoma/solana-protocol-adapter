@@ -20,7 +20,7 @@ import {
 } from "@solana/web3.js";
 import { assert } from "chai";
 import path from "path";
-import { SolanaPaPrototype } from "../../target/types/solana_pa_prototype";
+import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 
 import {
   getRouterPda,
@@ -38,12 +38,12 @@ import {
   deriveNullifierAccounts,
 } from "../utils";
 
-const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "solana_pa_prototype.json");
+const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "protocol_adapter.json");
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
 
-const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
 const fixture = loadFixture("batch_groth16.json");
