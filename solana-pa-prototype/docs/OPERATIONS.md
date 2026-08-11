@@ -56,7 +56,7 @@ npx @solana-program/program-metadata@latest write security <PROGRAM_ID> \
   docs/program-metadata.json --rpc <rpc-url> --keypair scripts/devnet-wallet.json
 ```
 
-Signer must be the program's upgrade authority. Republish after changing the JSON; the logo URL points at `docs/assets/anoma-logo.jpeg` on main, so the asset travels with the repo.
+Signer must be the program's upgrade authority. Republish after changing the JSON. The logo URL is the public Anoma GitHub org avatar: this repository is private, so assets in it (`docs/assets/anoma-logo.jpeg`) are not fetchable by explorers — a publicly served URL is required.
 
 After a first deployment, update `docs/DEVNET_DEPLOYMENT.md` (or the equivalent record for the cluster) with the program IDs, wallet, router, selector, and date.
 
@@ -64,7 +64,7 @@ To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster 
 
 ### Verified (reproducible) builds
 
-The deployed PA should be the deterministic `solana-verify` Docker build, so anyone can check that the on-chain bytes come from this repo:
+The deployed PA should be the deterministic `solana-verify` Docker build, so the on-chain bytes are checkable against this repo:
 
 ```sh
 ./scripts/dev.sh verify-build --cluster devnet      # build + compare against deployed
@@ -73,7 +73,7 @@ The deployed PA should be the deterministic `solana-verify` Docker build, so any
 
 `verify-build` builds with the pinned image (`[workspace.metadata.cli]` in `Cargo.toml` selects it — keep it in lockstep with `flake.nix`) and fails loudly if the deployed program doesn't match. **A normal build overwrites the artifact with non-matching bytes** — after any `anchor-test` or `build-*`, rerun `verify-build` before an upgrade you intend to keep verified. Validate the artifact behaviorally before shipping: `dev.sh validator` (backgrounded), `dev.sh deploy --cluster localnet --prebuilt`, `dev.sh anchor-test --cluster localnet --prebuilt`.
 
-Anyone can then reproduce and check the deployment with:
+The deployment is then reproduced and checked with:
 
 ```sh
 solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
@@ -81,7 +81,7 @@ solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
   --library-name protocol_adapter
 ```
 
-The explorer "Verified" badge additionally requires the OtterSec remote API, which serves mainnet only — on devnet, the command above is the whole verification story.
+**Reach depends on repo visibility.** This repository is private, so today only people with read access (their git credentials satisfy the clone) can run the check; the on-chain verification PDA points at a repo outsiders cannot fetch. The explorer "Verified" badge requires more on both axes: the OtterSec remote API serves mainnet only, and its worker must be able to clone the repo — i.e. the source (at least at the recorded commit) must be public. A mainnet deployment that should carry the badge therefore requires opening the source; that is a product decision, not an operational step.
 
 ## Emergency stop
 

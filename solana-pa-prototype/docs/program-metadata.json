@@ -1,8 +1,10 @@
 {
   "name": "Protocol Adapter",
-  "logo": "https://raw.githubusercontent.com/anoma/solana-protocol-adapter/main/solana-pa-prototype/docs/assets/anoma-logo.jpeg",
+  "logo": "https://avatars.githubusercontent.com/u/87261362",
   "description": "Anoma Resource Machine protocol adapter: verifies RISC0 Groth16 proofs and settles ARM transactions on Solana.",
   "project_url": "https://anoma.net",
   "source_code": "https://github.com/anoma/solana-protocol-adapter",
-  "contacts": ["email:security@anoma.foundation"]
+  "contacts": [
+    "email:security@anoma.foundation"
+  ]
 }
