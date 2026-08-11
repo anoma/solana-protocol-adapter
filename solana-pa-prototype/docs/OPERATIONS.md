@@ -53,6 +53,27 @@ After a first deployment, update `docs/DEVNET_DEPLOYMENT.md` (or the equivalent 
 
 To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster <c>`. Upgrading replaces the binary in place; it does not touch PAState, markers, or the initialization parameters.
 
+### Verified (reproducible) builds
+
+The deployed PA should be the deterministic `solana-verify` Docker build, so anyone can check that the on-chain bytes come from this repo:
+
+```sh
+./scripts/dev.sh verify-build --cluster devnet      # build + compare against deployed
+./scripts/dev.sh upgrade pa --cluster devnet --prebuilt   # ship that exact artifact
+```
+
+`verify-build` builds with the pinned image (`[workspace.metadata.cli]` in `Cargo.toml` selects it — keep it in lockstep with `flake.nix`) and fails loudly if the deployed program doesn't match. **A normal build overwrites the artifact with non-matching bytes** — after any `anchor-test` or `build-*`, rerun `verify-build` before an upgrade you intend to keep verified. Validate the artifact behaviorally before shipping: `dev.sh validator` (backgrounded), `dev.sh deploy --cluster localnet --prebuilt`, `dev.sh anchor-test --cluster localnet --prebuilt`.
+
+Anyone can then reproduce and check the deployment with:
+
+```sh
+solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
+  https://github.com/anoma/solana-protocol-adapter --mount-path solana-pa-prototype \
+  --library-name protocol_adapter
+```
+
+The explorer "Verified" badge additionally requires the OtterSec remote API, which serves mainnet only — on devnet, the command above is the whole verification story.
+
 ## Emergency stop
 
 The stop exists for one scenario: the deployment can no longer be trusted — typically a suspected vulnerability — and settlement must halt now.

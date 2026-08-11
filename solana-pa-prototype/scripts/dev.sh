@@ -90,13 +90,16 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh test $*"
     ;;
 
-  deploy|upgrade|teardown|close-pdas|init|estop|status|balance|sync-ids|idl-publish)
+  deploy|upgrade|teardown|close-pdas|init|estop|status|balance|sync-ids|idl-publish|verify-build)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $*"
     ;;
 
   validator)
-    run_in_project "solana-test-validator --reset --url devnet --rpc-port 8899 --faucet-port 9900 --bind-address 127.0.0.1 --log"
+    # ops.sh validator uses start_validator (validator-deploy.sh), which
+    # clones the RISC0 verifier stack from devnet and preloads the marker
+    # fixtures — a bare validator cannot settle anything.
+    run_in_project "./scripts/ops.sh validator"
     ;;
 
   gen-fixtures)

@@ -23,6 +23,14 @@ declare -A PROGRAMS=(
   [btf]="block_time_forwarder"
 )
 
+# Source file per target. Directory names are historical and deliberately do
+# not track the crate/binary name (the PA crate is protocol-adapter, its
+# directory solana-pa-prototype), so this cannot be derived by munging.
+declare -A PROGRAM_LIBRS=(
+  [pa]="programs/solana-pa-prototype/src/lib.rs"
+  [btf]="programs/block-time-forwarder/src/lib.rs"
+)
+
 usage() {
   cat <<USAGE
 Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]
@@ -52,6 +60,11 @@ Commands:
                          close_markers_batch is absent from the IDL)
   sync-ids               Sync declare_id!/Anchor.toml/test refs to the
                          committed program keypairs (use after rotating IDs)
+  verify-build [--cluster <c>]
+                         Deterministic solana-verify Docker build of the PA;
+                         with a cluster, compares against the deployed hash
+  validator              Start the local test validator (RISC0 verifier stack
+                         cloned from devnet, marker fixtures preloaded)
 
 Flags:
   --cluster <c>    Target cluster (required except test/build-dev/build-release)
@@ -62,6 +75,8 @@ Flags:
   --no-idl         build-dev: skip IDL generation (faster compile check)
   --dev-teardown   deploy/upgrade: build with the dev-teardown feature
                    (close_markers_batch enabled). Refused on mainnet.
+  --prebuilt       deploy/upgrade: ship the existing target/deploy artifacts
+                   without rebuilding (for verify-build output)
   --yes            Confirm irreversible actions (estop)
 
 Initialization parameters (required by deploy/init when the PA is a target):
@@ -82,6 +97,7 @@ WALLET_OVERRIDE=""
 RPC_OVERRIDE=""
 NO_IDL=false
 DEV_TEARDOWN=false
+PREBUILT=false
 ASSUME_YES=false
 
 while [[ $# -gt 0 ]]; do
@@ -107,6 +123,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --dev-teardown)
       DEV_TEARDOWN=true
+      shift
+      ;;
+    --prebuilt)
+      PREBUILT=true
       shift
       ;;
     --yes)
@@ -273,6 +293,27 @@ close_one() {
 }
 
 build_for_deploy() {
+  if [[ "$PREBUILT" == "true" ]]; then
+    if [[ "$DEV_TEARDOWN" == "true" ]]; then
+      echo "❌ --prebuilt and --dev-teardown are contradictory: --prebuilt deploys" >&2
+      echo "   existing artifacts without building anything." >&2
+      exit 1
+    fi
+    # Deploy the artifacts already in target/deploy/ — the path for shipping
+    # a solana-verify deterministic build, which a rebuild here would clobber.
+    local t so
+    for t in $(resolve_targets "$TARGET"); do
+      so="target/deploy/${PROGRAMS[$t]}.so"
+      if [[ ! -f "$so" ]]; then
+        echo "❌ --prebuilt: ${so} does not exist. Build it first (e.g. verify-build" >&2
+        echo "   for the PA's deterministic artifact, build-release for the rest)." >&2
+        exit 1
+      fi
+    done
+    echo "    Deploying prebuilt artifacts from target/deploy/ (no build)."
+    return 0
+  fi
+
   if [[ "$DEV_TEARDOWN" == "true" ]]; then
     if [[ "$ALLOW_DEV_TEARDOWN" != "true" ]]; then
       echo "❌ --dev-teardown is refused on ${CLUSTER}: close_markers_batch deletes" >&2
@@ -306,7 +347,7 @@ assert_declare_id_synced() {
   local t name lib_rs declared actual
   for t in $targets; do
     name="${PROGRAMS[$t]}"
-    lib_rs="programs/${name//_/-}/src/lib.rs"
+    lib_rs="${PROGRAM_LIBRS[$t]}"
     declared="$(read_declare_id "$lib_rs")"
     actual="$(get_program_id "$name")"
     if [[ "$declared" != "$actual" ]]; then
@@ -565,6 +606,39 @@ cmd_balance() {
   echo "$(get_wallet_pubkey)  $(get_balance) SOL"
 }
 
+# Deterministic (verifiable) build of the PA via solana-verify's pinned
+# Docker image; with a cluster, also compares against the deployed program's
+# hash. The resulting target/deploy/protocol_adapter.so is the artifact that
+# must be shipped (deploy/upgrade --prebuilt) for verification to succeed —
+# any local rebuild produces different bytes.
+cmd_verify_build() {
+  if ! command -v solana-verify >/dev/null 2>&1; then
+    echo "❌ solana-verify is not installed. Install with:" >&2
+    echo "   cargo install solana-verify --locked" >&2
+    exit 1
+  fi
+
+  solana-verify build --library-name protocol_adapter
+
+  local built
+  built="$(solana-verify get-executable-hash target/deploy/protocol_adapter.so)"
+  echo "Built executable hash: ${built}"
+
+  if [[ -n "$CLUSTER" ]]; then
+    local pid deployed
+    pid="$(get_program_id "protocol_adapter")"
+    deployed="$(solana-verify get-program-hash -u "$RPC_URL" "$pid")"
+    echo "Deployed program hash: ${deployed} (${pid}, ${CLUSTER})"
+    if [[ "$built" == "$deployed" ]]; then
+      echo "✅ Deployed program matches the deterministic build."
+    else
+      echo "❌ Deployed program does NOT match the deterministic build."
+      echo "   Ship the artifact with: ./scripts/dev.sh upgrade pa --cluster ${CLUSTER} --prebuilt"
+      exit 1
+    fi
+  fi
+}
+
 # Publish the PA's production IDL on chain (Anchor's IDL account, derived
 # from the program ID), so explorers and generic Anchor clients decode the
 # program's instructions, accounts, and events straight from the cluster.
@@ -686,8 +760,30 @@ case "$COMMAND" in
     require_cmd anchor
     build_programs_release
     ;;
+  verify-build)
+    if [[ -n "$CLUSTER" ]]; then
+      require_cmd solana
+      require_cmd solana-keygen
+      resolve_cluster
+    fi
+    cmd_verify_build
+    ;;
+  validator)
+    require_cmd solana-test-validator
+    # start_validator (validator-deploy.sh) clones the RISC0 verifier stack
+    # from devnet and preloads the root-marker account fixtures — a bare
+    # validator cannot settle anything.
+    start_validator
+    trap 'stop_validator' EXIT INT TERM
+    echo "Validator running (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
+    tail -f "$VALIDATOR_LOG"
+    ;;
   test)
-    if [[ -z "$CLUSTER" || "$CLUSTER" == "localnet" ]]; then
+    # --prebuilt: run the cluster-safe subset against already-deployed
+    # programs on the given cluster (including a validator already running
+    # on localnet) — the validation path for verify-build artifacts, which
+    # the full flow would rebuild and clobber.
+    if [[ "$PREBUILT" != "true" && ( -z "$CLUSTER" || "$CLUSTER" == "localnet" ) ]]; then
       # Full deterministic local flow: sync IDs, build, start a validator,
       # deploy, run the whole suite. Guard against Cargo.lock skew first.
       ensure_lockfile_sync
