@@ -40,11 +40,14 @@ Prerequisites:
 Procedure:
 
 ```sh
-./scripts/dev.sh deploy pa --cluster devnet   # or: deploy all
-./scripts/dev.sh status --cluster devnet      # verify: deployed + PAState initialized
+./scripts/dev.sh deploy pa --cluster devnet        # or: deploy all
+./scripts/dev.sh status --cluster devnet           # verify: deployed + PAState initialized
+./scripts/dev.sh idl-publish --cluster devnet      # put the production IDL on chain
 ```
 
 `deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which is the only build whose markers can later be reclaimed by `close-pdas`.
+
+`idl-publish` stores the production IDL in the program's Anchor IDL account on chain, so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), then verifies the cluster serves exactly the published file. Rerun it after every `upgrade` that changes the interface.
 
 After a first deployment, update `docs/DEVNET_DEPLOYMENT.md` (or the equivalent record for the cluster) with the program IDs, wallet, router, selector, and date.
 
