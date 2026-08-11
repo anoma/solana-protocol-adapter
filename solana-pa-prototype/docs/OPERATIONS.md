@@ -49,6 +49,15 @@ Procedure:
 
 `idl-publish` stores the production IDL in the program's Anchor IDL account on chain, so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), then verifies the cluster serves exactly the published file. Rerun it after every `upgrade` that changes the interface.
 
+The program's display metadata — name, icon, description, project links, and the security contact (`security@anoma.foundation`, same as the EVM PA's `@custom:security-contact`) — lives in `docs/program-metadata.json` and is published to the program-metadata PDA that Solana Explorer reads:
+
+```sh
+npx @solana-program/program-metadata@latest write security <PROGRAM_ID> \
+  docs/program-metadata.json --rpc <rpc-url> --keypair scripts/devnet-wallet.json
+```
+
+Signer must be the program's upgrade authority. Republish after changing the JSON; the logo URL points at `docs/assets/anoma-logo.jpeg` on main, so the asset travels with the repo.
+
 After a first deployment, update `docs/DEVNET_DEPLOYMENT.md` (or the equivalent record for the cluster) with the program IDs, wallet, router, selector, and date.
 
 To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster <c>`. Upgrading replaces the binary in place; it does not touch PAState, markers, or the initialization parameters.
