@@ -24,7 +24,7 @@ import {
   PublicKey,
   LAMPORTS_PER_SOL,
 } from "@solana/web3.js";
-import { SolanaPaPrototype } from "../target/types/solana_pa_prototype";
+import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { PA_STATE_SEED } from "../tests/utils/constants";
 
 /**
@@ -41,11 +41,11 @@ import { PA_STATE_SEED } from "../tests/utils/constants";
 // a type annotation would make this file fail to COMPILE against production
 // types (which lack it), preempting the actionable runtime message below.
 type MethodBuilder = () => ReturnType<
-  Program<SolanaPaPrototype>["methods"][keyof Program<SolanaPaPrototype>["methods"]]
+  Program<ProtocolAdapter>["methods"][keyof Program<ProtocolAdapter>["methods"]]
 >;
 
 function requireInstruction(
-  program: Program<SolanaPaPrototype>,
+  program: Program<ProtocolAdapter>,
   instructionName: string
 ): MethodBuilder {
   // Check program.methods (the camelCased surface the script actually
@@ -56,7 +56,7 @@ function requireInstruction(
   if (typeof method !== "function") {
     console.error(
       `❌ Instruction '${instructionName}' is not present in the deployed ` +
-      `program's IDL (target/idl/solana_pa_prototype.json).\n` +
+      `program's IDL (target/idl/protocol_adapter.json).\n` +
       `   Either the program was built without the Cargo feature that ` +
       `defines it (e.g. 'dev-teardown' for close_markers_batch), or the ` +
       `instruction does not exist on this branch. This script cannot proceed.`
@@ -70,7 +70,7 @@ async function main() {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
 
-  const program = anchor.workspace.SolanaPaPrototype as Program<SolanaPaPrototype>;
+  const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
   const connection = provider.connection;
   const wallet = provider.wallet as anchor.Wallet;
 

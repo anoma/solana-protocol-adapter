@@ -39,7 +39,7 @@ ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
 # Clean host packages so subsequent nix cargo commands always rebuild with nix rustc.
 cargo clean \
   --package block-time-forwarder \
-  --package solana-pa-prototype \
+  --package protocol-adapter \
   >/dev/null 2>&1 || true
 
 echo "==> All tests passed"

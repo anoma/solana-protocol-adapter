@@ -127,16 +127,16 @@ case "${1:-}" in
     ;;
 
   fmt)
-    run_in_project "cargo fmt -p solana-pa-prototype -p block-time-forwarder -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
+    run_in_project "cargo fmt -p protocol-adapter -p block-time-forwarder -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
     ;;
 
   clippy)
-    run_in_project "cargo clippy -p solana-pa-prototype -p block-time-forwarder --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
+    run_in_project "cargo clippy -p protocol-adapter -p block-time-forwarder --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
     ;;
 
   coverage)
     echo "Building test binaries..."
-    BUILD_JSON=$(run_in_project "cargo test -p solana-pa-prototype -p block-time-forwarder --no-run --message-format=json 2>/dev/null")
+    BUILD_JSON=$(run_in_project "cargo test -p protocol-adapter -p block-time-forwarder --no-run --message-format=json 2>/dev/null")
     BINS=$(echo "$BUILD_JSON" | jq -r 'select(.executable != null and .profile.test == true) | .executable')
 
     if [[ -z "$BINS" ]]; then

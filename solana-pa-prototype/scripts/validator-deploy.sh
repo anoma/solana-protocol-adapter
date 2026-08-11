@@ -39,7 +39,7 @@ VALIDATOR_PID=""
 # under programs/ that isn't in this list would otherwise silently stop being
 # built on a forward-merge — fail loudly instead. This is the single copy:
 # dev.sh and ops.sh both route builds through the functions in this file.
-EXPECTED_PROGRAMS=(solana-pa-prototype block-time-forwarder test-forwarder)
+EXPECTED_PROGRAMS=(protocol-adapter block-time-forwarder test-forwarder)
 
 assert_known_programs() {
   local dir pkg known ok
@@ -178,7 +178,7 @@ require_commands() {
 }
 
 PROGRAM_KEYPAIRS=(
-  target/deploy/solana_pa_prototype-keypair.json
+  target/deploy/protocol_adapter-keypair.json
   target/deploy/block_time_forwarder-keypair.json
   target/deploy/test_forwarder-keypair.json
 )
@@ -197,7 +197,7 @@ restore_program_keypairs() {
     # git show/checkout use paths relative to repo root, not working dir
     local git_root
     git_root="$(git rev-parse --show-prefix 2>/dev/null)"
-    if git show "HEAD:${git_root}target/deploy/solana_pa_prototype-keypair.json" >/dev/null 2>&1; then
+    if git show "HEAD:${git_root}target/deploy/protocol_adapter-keypair.json" >/dev/null 2>&1; then
       echo "    Restoring program keypairs from git..."
       git checkout HEAD -- target/deploy/
     fi
@@ -299,9 +299,9 @@ sync_program_ids() {
 
   PA_OLD="$(read_declare_id "programs/solana-pa-prototype/src/lib.rs")"
   PA_ID="$(sync_program_id "PA" \
-    "target/deploy/solana_pa_prototype-keypair.json" \
+    "target/deploy/protocol_adapter-keypair.json" \
     "programs/solana-pa-prototype/src/lib.rs" \
-    "solana_pa_prototype")"
+    "protocol_adapter")"
 
   # The preloaded root-marker account fixtures derive their addresses and
   # owner from the PA program ID — regenerate them on rotation, or the
@@ -358,26 +358,26 @@ build_programs_dev() {
 
   echo "    Building programs (development build, dev-teardown enabled)..."
   # dev-teardown enables close_markers_batch (development-only marker PDA
-  # reclamation). It's a solana-pa-prototype-only Cargo feature, so it must
+  # reclamation). It's a protocol-adapter-only Cargo feature, so it must
   # be scoped with -p rather than passed to the whole-workspace build.
-  build_with_filtered_output anchor build -p solana-pa-prototype ${idl_flag} -- --features dev-teardown
+  build_with_filtered_output anchor build -p protocol-adapter ${idl_flag} -- --features dev-teardown
   build_with_filtered_output anchor build -p block-time-forwarder ${idl_flag}
   build_with_filtered_output anchor build -p test-forwarder ${idl_flag}
 }
 
 # The production build: plain `anchor build`, no dev-teardown feature, so
 # close_markers_batch must be absent from the deployed binary. The IDL is
-# generated for solana-pa-prototype and checked, so this stays a
+# generated for protocol-adapter and checked, so this stays a
 # self-checking command rather than a convention nothing enforces.
 build_programs_release() {
   assert_known_programs
   clean_incremental_artifacts
 
-  local idl_path="target/idl/solana_pa_prototype.json"
+  local idl_path="target/idl/protocol_adapter.json"
   rm -f "$idl_path"
 
   echo "    Building programs (production build)..."
-  build_with_filtered_output anchor build -p solana-pa-prototype
+  build_with_filtered_output anchor build -p protocol-adapter
   build_with_filtered_output anchor build -p block-time-forwarder --no-idl
   build_with_filtered_output anchor build -p test-forwarder --no-idl
 
@@ -451,7 +451,7 @@ start_validator() {
 }
 
 deploy_programs() {
-  anchor deploy --provider.cluster "$CLUSTER_URL" --program-name solana_pa_prototype
+  anchor deploy --provider.cluster "$CLUSTER_URL" --program-name protocol_adapter
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name block_time_forwarder
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name test_forwarder
 }
