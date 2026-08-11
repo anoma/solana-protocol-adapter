@@ -41,6 +41,9 @@ Commands:
                          Requires --yes.
   status                 Show deployment status + wallet balance
   balance                Show wallet address and balance
+  idl-publish            Publish the PA's production IDL on chain (init or
+                         upgrade the Anchor IDL account; signer must be the
+                         upgrade authority)
   test [--cluster <c>]   No cluster (or localnet): full deterministic local
                          integration flow. devnet/mainnet: cluster-safe test
                          subset against the programs deployed there.
@@ -562,6 +565,62 @@ cmd_balance() {
   echo "$(get_wallet_pubkey)  $(get_balance) SOL"
 }
 
+# Publish the PA's production IDL on chain (Anchor's IDL account, derived
+# from the program ID), so explorers and generic Anchor clients decode the
+# program's instructions, accounts, and events straight from the cluster.
+# Builds the production IDL first — the build self-checks that the dev-only
+# close_markers_batch instruction is absent, so a dev IDL cannot be
+# published by accident. Signer must be the program's upgrade authority.
+cmd_idl_publish() {
+  require_cmd anchor
+
+  local pid idl_path="target/idl/solana_pa_prototype.json"
+  pid="$(get_program_id "solana_pa_prototype")"
+  if ! is_deployed "$pid"; then
+    echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
+    exit 1
+  fi
+
+  build_programs_release
+
+  if anchor idl fetch "$pid" --provider.cluster "$RPC_URL" >/dev/null 2>&1; then
+    echo "IDL account exists — upgrading..."
+    anchor idl upgrade "$pid" \
+      --filepath "$idl_path" \
+      --provider.cluster "$RPC_URL" \
+      --provider.wallet "$WALLET"
+  else
+    echo "No IDL account — initializing..."
+    anchor idl init "$pid" \
+      --filepath "$idl_path" \
+      --provider.cluster "$RPC_URL" \
+      --provider.wallet "$WALLET"
+  fi
+
+  # Read back what the cluster now serves rather than assuming the write
+  # landed; a mismatch here must fail loudly. `anchor idl fetch`
+  # re-serializes with sorted keys, so compare canonicalized JSON, not text.
+  local fetched
+  fetched="$(mktemp)"
+  anchor idl fetch "$pid" --provider.cluster "$RPC_URL" > "$fetched"
+  if ! node -e '
+    const fs = require("fs");
+    const canon = (v) =>
+      Array.isArray(v) ? v.map(canon)
+      : v && typeof v === "object"
+        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])]))
+        : v;
+    const read = (p) => JSON.stringify(canon(JSON.parse(fs.readFileSync(p, "utf-8"))));
+    process.exit(read(process.argv[1]) === read(process.argv[2]) ? 0 : 1);
+  ' "$fetched" "$idl_path"; then
+    echo "❌ Fetched on-chain IDL does not match ${idl_path}" >&2
+    rm -f "$fetched"
+    exit 1
+  fi
+  rm -f "$fetched"
+  echo "✅ On-chain IDL for ${pid} matches ${idl_path} (${CLUSTER})"
+}
+
 cmd_test() {
   require_cmd yarn
   require_cmd node
@@ -639,7 +698,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|teardown|close-pdas|init|estop|status|balance)
+  deploy|upgrade|teardown|close-pdas|init|estop|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster
