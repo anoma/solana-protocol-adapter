@@ -65,6 +65,8 @@ Commands:
                          with a cluster, compares against the deployed hash
   validator              Start the local test validator (RISC0 verifier stack
                          cloned from devnet, marker fixtures preloaded)
+  validator-deploy       Sync IDs, build, start the validator, deploy all
+                         programs, and keep the validator running
 
 Flags:
   --cluster <c>    Target cluster (required except test/build-dev/build-release)
@@ -776,6 +778,21 @@ case "$COMMAND" in
     start_validator
     trap 'stop_validator' EXIT INT TERM
     echo "Validator running (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
+    tail -f "$VALIDATOR_LOG"
+    ;;
+  validator-deploy)
+    # Full local stack, kept running: sync IDs, build, start the validator,
+    # deploy all programs, then hold the validator up for external clients
+    # (harnesses, manual testing). Ctrl-C tears the validator down.
+    require_commands
+    ensure_wallet
+    ensure_lockfile_sync
+    sync_program_ids
+    build_programs_dev
+    start_validator
+    trap 'stop_validator' EXIT INT TERM
+    deploy_programs
+    echo "Validator running with programs deployed (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
     tail -f "$VALIDATOR_LOG"
     ;;
   test)

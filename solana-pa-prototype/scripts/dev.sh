@@ -102,6 +102,12 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh validator"
     ;;
 
+  validator-deploy)
+    # Like validator, but also builds and deploys all programs first and
+    # keeps the validator running for external clients (test harnesses).
+    run_in_project "./scripts/ops.sh validator-deploy"
+    ;;
+
   gen-fixtures)
     shift
     ensure_lockfile_sync
