@@ -6,6 +6,10 @@ import { PublicKey } from "@solana/web3.js";
 export const VERIFIER_ROUTER_ID = new PublicKey("BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg");
 export const GROTH16_VERIFIER_ID = new PublicKey("2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD");
 
+// Localnet-only mock verifier (programs/mock-verifier). ID synced by
+// sync_program_ids in validator-deploy.sh from the committed keypair.
+export const MOCK_VERIFIER_ID = new PublicKey("H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKvgDhrvVVHvHf");
+
 export function getRouterPda(routerProgramId: PublicKey = VERIFIER_ROUTER_ID): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("router")],

@@ -16,8 +16,8 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 source "${SCRIPT_DIR}/validator-deploy.sh"
 
 # Deployable program targets: shorthand → binary name under target/deploy/.
-# test-forwarder is deliberately absent: it exists only for the local
-# integration suite and is never deployed to a real cluster.
+# test-forwarder and mock-verifier are deliberately absent: they exist only
+# for the local integration suite and are never deployed to a real cluster.
 declare -A PROGRAMS=(
   [pa]="protocol_adapter"
   [btf]="block_time_forwarder"

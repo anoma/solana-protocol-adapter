@@ -39,7 +39,7 @@ VALIDATOR_PID=""
 # under programs/ that isn't in this list would otherwise silently stop being
 # built on a forward-merge — fail loudly instead. This is the single copy:
 # dev.sh and ops.sh both route builds through the functions in this file.
-EXPECTED_PROGRAMS=(protocol-adapter block-time-forwarder test-forwarder)
+EXPECTED_PROGRAMS=(protocol-adapter block-time-forwarder test-forwarder mock-verifier)
 
 assert_known_programs() {
   local dir pkg known ok
@@ -181,6 +181,7 @@ PROGRAM_KEYPAIRS=(
   target/deploy/protocol_adapter-keypair.json
   target/deploy/block_time_forwarder-keypair.json
   target/deploy/test_forwarder-keypair.json
+  target/deploy/mock_verifier-keypair.json
 )
 
 # Restore committed program keypairs from git if missing locally.
@@ -335,6 +336,17 @@ sync_program_ids() {
     sed -i -E "s/testForwarderId = new PublicKey\(\"[^\"]+\"\)/testForwarderId = new PublicKey(\"${TF_ID}\")/" tests/solana-pa-prototype.ts
   fi
 
+  MV_OLD="$(read_declare_id "programs/mock-verifier/src/lib.rs")"
+  MV_ID="$(sync_program_id "MV" \
+    "target/deploy/mock_verifier-keypair.json" \
+    "programs/mock-verifier/src/lib.rs" \
+    "mock_verifier")"
+
+  # MV ID also appears in the TS verifier utils
+  if [[ "$MV_OLD" != "$MV_ID" ]]; then
+    sed -i -E "s/MOCK_VERIFIER_ID = new PublicKey\(\"[^\"]+\"\)/MOCK_VERIFIER_ID = new PublicKey(\"${MV_ID}\")/" scripts/verifier-utils/index.ts
+  fi
+
 }
 
 # anchor build uses cargo +nightly for IDL generation, which is incompatible
@@ -363,6 +375,7 @@ build_programs_dev() {
   build_with_filtered_output anchor build -p protocol-adapter ${idl_flag} -- --features dev-teardown
   build_with_filtered_output anchor build -p block-time-forwarder ${idl_flag}
   build_with_filtered_output anchor build -p test-forwarder ${idl_flag}
+  build_with_filtered_output anchor build -p mock-verifier ${idl_flag}
 }
 
 # The production build: plain `anchor build`, no dev-teardown feature, so
@@ -380,6 +393,7 @@ build_programs_release() {
   build_with_filtered_output anchor build -p protocol-adapter
   build_with_filtered_output anchor build -p block-time-forwarder --no-idl
   build_with_filtered_output anchor build -p test-forwarder --no-idl
+  build_with_filtered_output anchor build -p mock-verifier --no-idl
 
   if [[ ! -f "$idl_path" ]]; then
     echo "❌ release build: anchor build did not produce an IDL at ${idl_path}" >&2
@@ -454,6 +468,7 @@ deploy_programs() {
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name protocol_adapter
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name block_time_forwarder
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name test_forwarder
+  anchor deploy --provider.cluster "$CLUSTER_URL" --program-name mock_verifier
 }
 
 stop_validator() {

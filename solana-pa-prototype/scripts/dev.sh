@@ -136,11 +136,11 @@ case "${1:-}" in
     ;;
 
   fmt)
-    run_in_project "cargo fmt -p protocol-adapter -p block-time-forwarder -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
+    run_in_project "cargo fmt -p protocol-adapter -p block-time-forwarder -p test-forwarder -p mock-verifier -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
     ;;
 
   clippy)
-    run_in_project "cargo clippy -p protocol-adapter -p block-time-forwarder --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
+    run_in_project "cargo clippy -p protocol-adapter -p block-time-forwarder -p test-forwarder -p mock-verifier --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
     ;;
 
   coverage)
