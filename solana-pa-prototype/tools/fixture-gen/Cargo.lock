@@ -1707,11 +1707,11 @@ dependencies = [
  "hex",
  "k256",
  "passthrough-logic-methods",
+ "protocol-adapter",
  "risc0-zkvm",
  "serde",
  "serde_json",
  "sha2 0.10.9",
- "solana-pa-prototype",
  "test-forwarder",
  "tokio",
  "verifier_router",
@@ -3371,6 +3371,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "protocol-adapter"
+version = "0.1.0"
+dependencies = [
+ "anchor-lang",
+ "anoma-rm-core",
+ "anoma-rm-solana",
+ "bincode",
+ "borsh 1.5.7",
+ "groth_16_verifier",
+ "hex-literal",
+ "serde",
+ "solana-system-interface",
+ "verifier_router",
+]
+
+[[package]]
 name = "puffin"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4929,22 +4945,6 @@ checksum = "1b03f149b0d2eba4514f4444b7300ea65ee23f509b10417e13799517c28c2ebc"
 dependencies = [
  "k256",
  "solana-program-error 3.0.1",
-]
-
-[[package]]
-name = "solana-pa-prototype"
-version = "0.1.0"
-dependencies = [
- "anchor-lang",
- "anoma-rm-core",
- "anoma-rm-solana",
- "bincode",
- "borsh 1.5.7",
- "groth_16_verifier",
- "hex-literal",
- "serde",
- "solana-system-interface",
- "verifier_router",
 ]
 
 [[package]]
