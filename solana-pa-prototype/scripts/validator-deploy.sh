@@ -13,7 +13,7 @@
 #   ANCHOR_WALLET_PATH   - wallet path (default: ~/.config/solana/id.json)
 #
 # Exported after sync_program_ids:
-#   PA_ID, BTF_ID, TF_ID
+#   PA_ID, BTF_ID, TF_ID, MV_ID
 #
 # Exported after start_validator:
 #   VALIDATOR_PID
@@ -54,9 +54,11 @@ assert_known_programs() {
     done
     if [[ $ok -eq 0 ]]; then
       echo "    ❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
-      echo "       Builds and deploys go by name. Add '${pkg}' to EXPECTED_PROGRAMS" >&2
-      echo "       and the build functions in validator-deploy.sh — and to the" >&2
-      echo "       PROGRAMS registry in ops.sh if it deploys to real clusters —" >&2
+      echo "       Builds and deploys go by name. Register '${pkg}' in ALL of:" >&2
+      echo "       EXPECTED_PROGRAMS, PROGRAM_KEYPAIRS, sync_program_ids," >&2
+      echo "       build_programs_dev, build_programs_release, and" >&2
+      echo "       deploy_programs (this file), plus the PROGRAMS/PROGRAM_LIBRS" >&2
+      echo "       registries in ops.sh if it deploys to real clusters —" >&2
       echo "       otherwise it silently never gets built or deployed." >&2
       exit 1
     fi
@@ -342,11 +344,13 @@ sync_program_ids() {
     "programs/mock-verifier/src/lib.rs" \
     "mock_verifier")"
 
-  # MV ID also appears in the TS verifier utils
+  # MV ID also appears in the TS verifier utils, and the preloaded mock
+  # VerifierEntry account fixture embeds it — regenerate on rotation.
   if [[ "$MV_OLD" != "$MV_ID" ]]; then
     sed -i -E "s/MOCK_VERIFIER_ID = new PublicKey\(\"[^\"]+\"\)/MOCK_VERIFIER_ID = new PublicKey(\"${MV_ID}\")/" scripts/verifier-utils/index.ts
+    echo "    MV ID changed — regenerating mock verifier-entry account fixture" >&2
+    npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts >&2
   fi
-
 }
 
 # anchor build uses cargo +nightly for IDL generation, which is incompatible
@@ -374,8 +378,10 @@ build_programs_dev() {
   # be scoped with -p rather than passed to the whole-workspace build.
   build_with_filtered_output anchor build -p protocol-adapter ${idl_flag} -- --features dev-teardown
   build_with_filtered_output anchor build -p block-time-forwarder ${idl_flag}
-  build_with_filtered_output anchor build -p test-forwarder ${idl_flag}
-  build_with_filtered_output anchor build -p mock-verifier ${idl_flag}
+  # Nothing consumes the test-only programs' IDLs — skip that extra
+  # cargo +nightly pass unconditionally.
+  build_with_filtered_output anchor build -p test-forwarder --no-idl
+  build_with_filtered_output anchor build -p mock-verifier --no-idl
 }
 
 # The production build: plain `anchor build`, no dev-teardown feature, so
@@ -439,6 +445,19 @@ start_validator() {
     marker_addr="${marker_base#root-marker-}"
     marker_addr="${marker_addr%.json}"
     account_args+=(--account "$marker_addr" "$marker_file")
+  done
+
+  # Synthetic VerifierEntry registering the mock verifier under selector
+  # 0xffffffff. Loaded in both modes: a PA instance only accepts seals with
+  # the selector it was initialized with, so real-mode runs are unaffected.
+  local entry_glob="tests/fixtures/mock/verifier-entry-"*.json
+  for entry_file in $entry_glob; do
+    [[ -e "$entry_file" ]] || continue
+    local entry_base entry_addr
+    entry_base="$(basename "$entry_file")"
+    entry_addr="${entry_base#verifier-entry-}"
+    entry_addr="${entry_addr%.json}"
+    account_args+=(--account "$entry_addr" "$entry_file")
   done
 
   solana-test-validator \
