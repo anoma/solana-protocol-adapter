@@ -36,7 +36,7 @@ jobs:
 
       - name: Check formatting
         working-directory: ./solana-pa-prototype
-        run: cargo fmt -p protocol-adapter -p block-time-forwarder -p test-forwarder -p mock-verifier --check
+        run: cargo fmt --all --check
 
   # Clippy linting
   clippy:
@@ -61,7 +61,7 @@ jobs:
       - name: Run clippy
         working-directory: ./solana-pa-prototype
         run: |
-          cargo clippy -p protocol-adapter -p block-time-forwarder -p test-forwarder -p mock-verifier --all-targets -- \
+          cargo clippy --workspace --all-targets -- \
             -D warnings \
             -A unexpected_cfgs \
             -A deprecated

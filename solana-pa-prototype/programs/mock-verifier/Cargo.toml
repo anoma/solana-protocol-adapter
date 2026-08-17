@@ -20,4 +20,4 @@ idl-build = ["anchor-lang/idl-build"]
 anchor-lang = { workspace = true }
 # hash_claim and the Proof type — reusing the real verifier's claim-digest
 # computation guarantees the mock can never drift from it.
-groth_16_verifier = { git = "https://github.com/risc0/risc0-solana.git", tag = "v3.0.0", features = ["cpi"] }
+groth_16_verifier = { git = "https://github.com/risc0/risc0-solana.git", tag = "v3.0.0", features = ["no-entrypoint"] }

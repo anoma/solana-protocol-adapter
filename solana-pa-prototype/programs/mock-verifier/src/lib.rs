@@ -13,6 +13,7 @@
 //! selector; instances pinned to the Groth16 selector are unaffected.
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::log::sol_log_data;
 use anchor_lang::system_program;
 use groth_16_verifier::{hash_claim, Proof};
 
@@ -42,21 +43,14 @@ pub mod mock_verifier {
         journal_digest: [u8; 32],
     ) -> Result<()> {
         let claim = hash_claim(&image_id, &journal_digest);
-        msg!("mock-verifier expected claim digest: {}", hex(&claim));
-        msg!(
-            "mock-verifier seal pi_c[..32]:       {}",
-            hex(&proof.pi_c[..32])
-        );
-        require!(
-            proof.pi_c[..32] == claim,
-            MockVerifierError::ClaimDigestMismatch
-        );
+        if proof.pi_c[..32] != claim {
+            // Base64 payloads in the tx log: expected claim digest, then
+            // the seal's pi_c[..32].
+            sol_log_data(&[&claim, &proof.pi_c[..32]]);
+            return err!(MockVerifierError::ClaimDigestMismatch);
+        }
         Ok(())
     }
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // Offset keeps these codes disjoint from groth_16_verifier's (6000): the
