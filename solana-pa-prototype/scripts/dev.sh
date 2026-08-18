@@ -124,7 +124,10 @@ case "${1:-}" in
     ;;
 
   fixture-test)
-    run_in_project "RISC0_SKIP_BUILD=1 cargo test --manifest-path tools/fixture-gen/Cargo.toml"
+    # The fixture-gen test module documents requiring RISC0_DEV_MODE=1: its
+    # transaction-building tests execute guests without proving. Without it
+    # they run real succinct proving in parallel and OOM the machine.
+    run_in_project "RISC0_DEV_MODE=1 RISC0_SKIP_BUILD=1 cargo test --manifest-path tools/fixture-gen/Cargo.toml"
     ;;
 
   update-deps)
