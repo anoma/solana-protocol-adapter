@@ -26,7 +26,7 @@ import {
   getRouterPda,
   getVerifierEntryPda,
   VERIFIER_ROUTER_ID,
-  GROTH16_VERIFIER_ID,
+  verifierProgramForSelector,
 } from "../../scripts/verifier-utils";
 
 import {
@@ -47,9 +47,10 @@ const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
 const fixture = loadFixture("batch_groth16.json");
-const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
+const PROOF_SELECTOR = parseSelectorFromFixture(fixture.selector);
+const VERIFIER_PROGRAM_ID = verifierProgramForSelector(PROOF_SELECTOR);
 const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
-const [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, VERIFIER_ROUTER_ID);
+const [verifierEntryPda] = getVerifierEntryPda(PROOF_SELECTOR, VERIFIER_ROUTER_ID);
 
 const fundedKeypairs: Keypair[] = [];
 
@@ -111,7 +112,7 @@ async function settleRaw(
       verifierRouterProgram: VERIFIER_ROUTER_ID,
       router: routerPda,
       verifierEntry: verifierEntryPda,
-      verifierProgram: GROTH16_VERIFIER_ID,
+      verifierProgram: VERIFIER_PROGRAM_ID,
     })
     .remainingAccounts(remainingAccounts)
     .preInstructions([
@@ -201,7 +202,11 @@ describe("Security: mutation-based settle tests", () => {
   // --- Proof mutations ---
 
   it("rejects transaction with corrupted proof bytes", async () => {
-    const corrupted = flipByte(validTx, validTx.length - 10);
+    // The tx ends with the 260-byte seal; len-40 lands inside pi_c[..32],
+    // which both the real Groth16 check and the mock verifier's claim-digest
+    // check bind. (len-10 would be pi_c's unused tail, which a mock seal
+    // does not bind.)
+    const corrupted = flipByte(validTx, validTx.length - 40);
     await assertRejects(
       () => settleRaw(corrupted, nullifierAccounts),
       "corrupted proof",

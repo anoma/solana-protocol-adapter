@@ -413,13 +413,29 @@ build_programs_release() {
   echo "    ✅ Production build: close_markers_batch is absent from the IDL."
 }
 
-# Validate the required fixture contains the current BTF program ID.
+# Validate the required fixture for the given test mode ($1, real|mock):
+# it must exist, contain the current BTF program ID, and carry the selector
+# its mode demands — a mock fixture in the real dir (or vice versa) would
+# silently run the suite against the wrong verifier.
 # Requires BTF_ID (exported by sync_program_ids).
 check_required_fixture() {
+  local mode="${1:-real}"
   local required_fixture="tests/fixtures/batch_groth16.json"
+  local regen_hint="./scripts/dev.sh gen-fixtures tests/fixtures/batch_groth16.json"
+  local expected_selector="$GROTH16_SELECTOR"
+  if [[ "$mode" == "mock" ]]; then
+    required_fixture="tests/fixtures/mock/batch_groth16.json"
+    regen_hint="./scripts/dev.sh gen-fixtures --mock tests/fixtures/mock/batch_groth16.json"
+    expected_selector="0xffffffff"
+  fi
   if [[ ! -f "$required_fixture" ]] || ! fixture_matches_program_id "$required_fixture" "$BTF_ID"; then
     echo "Required fixture is missing or stale: ${required_fixture}"
-    echo "Regenerate with: ./scripts/dev.sh gen-fixtures tests/fixtures/batch_groth16.json"
+    echo "Regenerate with: ${regen_hint}"
+    exit 1
+  fi
+  if ! grep -q "\"selector\": \"${expected_selector}\"" "$required_fixture"; then
+    echo "Required fixture ${required_fixture} does not carry the ${mode}-mode selector ${expected_selector}"
+    echo "Regenerate with: ${regen_hint}"
     exit 1
   fi
 }

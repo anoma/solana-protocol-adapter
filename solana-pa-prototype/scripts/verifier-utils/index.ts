@@ -14,6 +14,13 @@ export const MOCK_VERIFIER_ID = new PublicKey("H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKv
 // (risc0 fake-receipt convention; the real Groth16 selector is 0x73c457ba).
 export const MOCK_SELECTOR = Buffer.from([0xff, 0xff, 0xff, 0xff]);
 
+// The verifier program the router dispatches a seal with this selector to.
+// Fixtures carry their selector, so tests derive the right verifier program
+// from the fixture instead of hardcoding one.
+export function verifierProgramForSelector(selector: Buffer | Uint8Array): PublicKey {
+  return MOCK_SELECTOR.equals(Buffer.from(selector)) ? MOCK_VERIFIER_ID : GROTH16_VERIFIER_ID;
+}
+
 export function getRouterPda(routerProgramId: PublicKey = VERIFIER_ROUTER_ID): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("router")],

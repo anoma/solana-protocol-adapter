@@ -100,11 +100,17 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: cargo test -p protocol-adapter -p block-time-forwarder
 
-  # Anchor integration tests
+  # Anchor integration tests, once per proof mode: real Groth16 fixtures
+  # against the devnet-cloned verifier, and mock fixtures against the
+  # localnet mock verifier.
   anchor-test:
-    name: Anchor Test
+    name: Anchor Test (${{ matrix.mode }})
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [real, mock]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -151,4 +157,4 @@ jobs:
 
       - name: Build and test
         working-directory: ./solana-pa-prototype
-        run: ./scripts/anchor-test.sh
+        run: PA_TEST_MODE=${{ matrix.mode }} ./scripts/anchor-test.sh

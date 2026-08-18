@@ -17,7 +17,7 @@ import {
   getRouterPda,
   getVerifierEntryPda,
   VERIFIER_ROUTER_ID,
-  GROTH16_VERIFIER_ID,
+  verifierProgramForSelector,
 } from "../scripts/verifier-utils";
 
 import {
@@ -33,6 +33,7 @@ import {
   ADDRESS_MISMATCH_PATTERN,
   readJson,
   loadFixture,
+  TEST_MODE,
   type Fixture,
   parseSelectorFromFixture,
   fundKeypair,
@@ -73,10 +74,11 @@ const [programData] = PublicKey.findProgramAddressSync(
 
 const fixture = loadFixture("batch_groth16.json");
 
-const GROTH16_SELECTOR = parseSelectorFromFixture(fixture.selector);
+const PROOF_SELECTOR = parseSelectorFromFixture(fixture.selector);
+const VERIFIER_PROGRAM_ID = verifierProgramForSelector(PROOF_SELECTOR);
 
 const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
-const [verifierEntryPda] = getVerifierEntryPda(GROTH16_SELECTOR, VERIFIER_ROUTER_ID);
+const [verifierEntryPda] = getVerifierEntryPda(PROOF_SELECTOR, VERIFIER_ROUTER_ID);
 
 // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
 const blockTimeForwarderId = new PublicKey("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf");
@@ -352,7 +354,7 @@ async function settleFixtureViaTxData(
         verifierRouterProgram: VERIFIER_ROUTER_ID,
         router: routerPda,
         verifierEntry: verifierEntryPda,
-        verifierProgram: GROTH16_VERIFIER_ID,
+        verifierProgram: VERIFIER_PROGRAM_ID,
       })
       .remainingAccounts(remainingAccounts)
       .preInstructions([
@@ -389,7 +391,7 @@ describe("protocol-adapter (AUTH-01: initialization authority)", () => {
     let caught: any = null;
     try {
       await program.methods
-        .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
+        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR))
         .accountsPartial({
           paState,
           payer: stranger.publicKey,
@@ -466,7 +468,7 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
@@ -485,7 +487,7 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
       await program.account.paStateAccount.fetch(paState);
     } catch {
       await program.methods
-        .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
+        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR))
         .accountsPartial({
           paState,
           payer: provider.wallet.publicKey,
@@ -591,17 +593,20 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
       await settleViaTxData(Keypair.generate(), txTampered, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected settle to fail");
     } catch (e: any) {
-      // The PA calls the verifier router via CPI, which calls the groth16 verifier.
-      // The groth16 verifier rejects the tampered proof with VerificationError (6000).
-      // Solana's CPI error propagation records the INNER program's error code in the
-      // PA's failure line — so we see 0x1770 (6000) instead of the PA's VerifierRouterFailed (6013).
+      // The PA calls the verifier router via CPI, which calls the verifier the
+      // fixture's selector routes to. Solana's CPI error propagation records
+      // the INNER program's error code in the PA's failure line — so we see
+      // the verifier's code instead of the PA's VerifierRouterFailed (6013).
+      // Real mode: groth16 verifier VerificationError (6000). Mock mode:
+      // mock verifier ClaimDigestMismatch (6600, offset chosen to stay
+      // disjoint from the groth16 verifier's codes).
+      const expectedCode = TEST_MODE === "mock" ? 6600 : 6000;
       const code = extractPAErrorCode(e);
       assert.isNotNull(code, "Expected a program error code in logs");
-      // The inner verifier's error code 6000 propagates through CPI
       assert.equal(
         code,
-        6000,
-        "groth16 verifier's VerificationError (6000) should propagate through CPI",
+        expectedCode,
+        `the ${TEST_MODE} verifier's rejection code (${expectedCode}) should propagate through CPI`,
       );
     }
   });
@@ -716,7 +721,7 @@ describe("protocol-adapter (Re-initialization guard)", () => {
     // A second initialize call must fail because the account already exists.
     try {
       await program.methods
-        .initialize(VERIFIER_ROUTER_ID, Array.from(GROTH16_SELECTOR))
+        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR))
         .accountsPartial({
           paState,
           payer: provider.wallet.publicKey,
@@ -754,7 +759,7 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -790,7 +795,7 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -830,7 +835,7 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
@@ -864,7 +869,7 @@ describe("protocol-adapter (Settle error paths)", () => {
           verifierRouterProgram: fakeRouter,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -903,7 +908,7 @@ describe("protocol-adapter (Settle error paths)", () => {
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
@@ -966,7 +971,7 @@ describe("protocol-adapter (Settle error paths)", () => {
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .remainingAccounts(remainingAccounts)
         .preInstructions([
@@ -1812,7 +1817,7 @@ describe("protocol-adapter (TxData authority and bounds checks)", () => {
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -2088,7 +2093,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
@@ -2634,7 +2639,7 @@ describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -2666,7 +2671,7 @@ describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
           verifierRouterProgram: VERIFIER_ROUTER_ID,
           router: routerPda,
           verifierEntry: verifierEntryPda,
-          verifierProgram: GROTH16_VERIFIER_ID,
+          verifierProgram: VERIFIER_PROGRAM_ID,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
