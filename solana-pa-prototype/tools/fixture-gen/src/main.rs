@@ -1021,12 +1021,17 @@ fn build_historical_root_consumer_witness(
     };
     created_resource.set_nonce(consumed_nf);
 
-    let compliance_witness = ComplianceWitness::from_resources_with_path(
-        committed_resource,
-        committer_nf_key,
-        merkle_path,
+    // Built literally (like the committer's witness) rather than via arm's
+    // from_resources_with_path, which draws a random rcv and would make
+    // fixture generation nondeterministic.
+    let compliance_witness = ComplianceWitness {
+        consumed_resource: committed_resource,
         created_resource,
-    );
+        merkle_path,
+        rcv: Scalar::ONE.to_bytes().to_vec(),
+        nf_key: committer_nf_key,
+        ephemeral_root: initial_root(),
+    };
 
     Ok((compliance_witness, created_resource))
 }
