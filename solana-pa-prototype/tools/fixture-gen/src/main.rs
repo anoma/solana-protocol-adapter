@@ -772,6 +772,42 @@ fn write_root_marker_accounts(
     Ok(())
 }
 
+/// Fields every fixture derives from a seal-encoded transaction: the
+/// serialized transaction and a serialized tampered clone (base64), its
+/// consumed nullifiers and historical roots (base64), and the seal's
+/// selector. Shared by the generate, import, and mockify paths so every
+/// fixture follows the same on-disk convention.
+struct DerivedFixtureFields {
+    tx_b64: String,
+    tx_tampered_b64: String,
+    consumed_nullifiers_b64: Vec<String>,
+    historical_roots_b64: Vec<String>,
+    selector: String,
+}
+
+fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
+    let tx_bytes = bincode::serialize(tx).context("serialize tx")?;
+    eprintln!("  {} bytes", tx_bytes.len());
+
+    let mut tx_tampered = tx.clone();
+    mutate_created_commitment_keep_structure(&mut tx_tampered)?;
+    let tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
+
+    let selector = extract_selector(tx).context("extract selector from proof")?;
+    eprintln!("  selector: {selector}");
+
+    Ok(DerivedFixtureFields {
+        tx_b64: BASE64.encode(tx_bytes),
+        tx_tampered_b64: BASE64.encode(tampered_bytes),
+        consumed_nullifiers_b64: consumed_nullifiers_b64(tx)?,
+        historical_roots_b64: historical_roots(tx)?
+            .iter()
+            .map(|root| BASE64.encode(root))
+            .collect(),
+        selector,
+    })
+}
+
 fn import_backend_result_fixture(
     input: &Path,
     output: &Path,
@@ -786,9 +822,6 @@ fn import_backend_result_fixture(
         .context("verify imported backend aggregation proof")?;
 
     let roots = historical_roots(&tx).context("extract imported historical roots")?;
-    let historical_roots_b64 = roots.iter().map(|root| BASE64.encode(root)).collect();
-    let consumed_nullifiers_b64 =
-        consumed_nullifiers_b64(&tx).context("extract imported nullifiers")?;
 
     let agg_proof_bytes = tx
         .aggregation_proof
@@ -796,25 +829,17 @@ fn import_backend_result_fixture(
         .ok_or_else(|| anyhow!("imported transaction is missing aggregation_proof"))?;
     tx.aggregation_proof = Some(encode_seal(agg_proof_bytes).context("encode imported seal")?);
 
-    let selector = extract_selector(&tx).context("extract imported selector")?;
-    let tx_bytes = bincode::serialize(&tx).context("serialize imported transaction")?;
-
-    let mut tx_tampered = tx.clone();
-    mutate_created_commitment_keep_structure(&mut tx_tampered)
-        .context("tamper imported transaction")?;
-    let tx_tampered_bytes =
-        bincode::serialize(&tx_tampered).context("serialize tampered imported transaction")?;
-
+    let fields = derive_fixture_fields(&tx).context("derive imported fixture fields")?;
     let fixture = Fixture {
         format: FIXTURE_FORMAT,
         aggregation_strategy: "batch",
         aggregation_proof_type: "groth16",
-        selector,
+        selector: fields.selector,
         forwarder_type: Some("anomapay_transfer"),
-        tx_b64: BASE64.encode(tx_bytes),
-        tx_tampered_b64: BASE64.encode(tx_tampered_bytes),
-        consumed_nullifiers_b64,
-        historical_roots_b64,
+        tx_b64: fields.tx_b64,
+        tx_tampered_b64: fields.tx_tampered_b64,
+        consumed_nullifiers_b64: fields.consumed_nullifiers_b64,
+        historical_roots_b64: fields.historical_roots_b64,
     };
 
     if let Some(parent) = output.parent() {
@@ -858,43 +883,17 @@ fn finalize_and_write_fixture(
         })
     })?;
 
-    let tx_bytes = timed_phase("serialize_tx", || {
-        let bytes = bincode::serialize(&*tx).context("serialize tx")?;
-        eprintln!("  {} bytes", bytes.len());
-        Ok(bytes)
-    })?;
-
-    let consumed_nullifiers_b64 =
-        timed_phase("extract_nullifiers", || consumed_nullifiers_b64(tx))?;
-
-    let historical_roots_b64 = timed_phase("extract_historical_roots", || {
-        Ok(historical_roots(tx)?
-            .iter()
-            .map(|root| BASE64.encode(root))
-            .collect::<Vec<_>>())
-    })?;
-
-    let (tx_tampered_bytes, selector) = timed_phase("tamper_and_extract_selector", || {
-        let mut tx_tampered = tx.clone();
-        mutate_created_commitment_keep_structure(&mut tx_tampered)?;
-        let tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
-        eprintln!("  tampered: {} bytes", tampered_bytes.len());
-
-        let sel = extract_selector(tx).context("extract selector from proof")?;
-        eprintln!("  selector: {sel}");
-        Ok((tampered_bytes, sel))
-    })?;
-
+    let fields = timed_phase("derive_fixture_fields", || derive_fixture_fields(tx))?;
     let fixture = Fixture {
         format: FIXTURE_FORMAT,
         aggregation_strategy: "batch",
         aggregation_proof_type: proof_type,
-        selector,
+        selector: fields.selector,
         forwarder_type,
-        tx_b64: BASE64.encode(tx_bytes),
-        tx_tampered_b64: BASE64.encode(tx_tampered_bytes),
-        consumed_nullifiers_b64,
-        historical_roots_b64,
+        tx_b64: fields.tx_b64,
+        tx_tampered_b64: fields.tx_tampered_b64,
+        consumed_nullifiers_b64: fields.consumed_nullifiers_b64,
+        historical_roots_b64: fields.historical_roots_b64,
     };
 
     timed_phase("write_fixture", || {
@@ -1369,41 +1368,29 @@ fn mockify_fixture(input: &Path, output: &Path) -> Result<()> {
     }
     tx.aggregation_proof = Some(mock_seal_bytes(mock_claim_digest(&tx)?)?);
 
-    // The mock twin must change nothing but the seal: recompute the derived
-    // fields and require them to match the input fixture exactly.
-    let nullifiers = consumed_nullifiers_b64(&tx)?;
+    let fields = derive_fixture_fields(&tx)?;
+
+    // The mock twin must change nothing but the seal: the recomputed
+    // derived fields must match the input fixture exactly.
     let existing_nullifiers: Vec<String> =
         serde_json::from_value(fixture["consumed_nullifiers_b64"].clone())
             .context("parsing consumed_nullifiers_b64")?;
-    if nullifiers != existing_nullifiers {
+    if fields.consumed_nullifiers_b64 != existing_nullifiers {
         bail!("recomputed nullifiers differ from the input fixture's — refusing to write");
     }
-    let roots: Vec<String> = historical_roots(&tx)?
-        .iter()
-        .map(|root| BASE64.encode(root))
-        .collect();
     let existing_roots: Vec<String> = fixture
         .get("historical_roots_b64")
         .map(|value| serde_json::from_value(value.clone()))
         .transpose()
         .context("parsing historical_roots_b64")?
         .unwrap_or_default();
-    if roots != existing_roots {
+    if fields.historical_roots_b64 != existing_roots {
         bail!("recomputed historical roots differ from the input fixture's — refusing to write");
     }
 
-    let mut tx_tampered = tx.clone();
-    mutate_created_commitment_keep_structure(&mut tx_tampered)?;
-
-    fixture.insert(
-        "tx_b64".into(),
-        BASE64.encode(bincode::serialize(&tx)?).into(),
-    );
-    fixture.insert(
-        "tx_tampered_b64".into(),
-        BASE64.encode(bincode::serialize(&tx_tampered)?).into(),
-    );
-    fixture.insert("selector".into(), extract_selector(&tx)?.into());
+    fixture.insert("tx_b64".into(), fields.tx_b64.into());
+    fixture.insert("tx_tampered_b64".into(), fields.tx_tampered_b64.into());
+    fixture.insert("selector".into(), fields.selector.into());
     fixture.insert("aggregation_proof_type".into(), "mock".into());
 
     fs::write(output, serde_json::to_string_pretty(&fixture)?)
