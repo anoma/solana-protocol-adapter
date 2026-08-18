@@ -139,10 +139,7 @@ while [[ $# -gt 0 ]]; do
     --mode)
       [[ $# -ge 2 ]] || { echo "❌ --mode requires a value" >&2; exit 1; }
       TEST_MODE="$2"
-      if [[ "$TEST_MODE" != "real" && "$TEST_MODE" != "mock" ]]; then
-        echo "❌ --mode must be 'real' or 'mock', got '${TEST_MODE}'" >&2
-        exit 1
-      fi
+      validate_test_mode "$TEST_MODE"
       shift 2
       ;;
     --yes)
@@ -810,14 +807,6 @@ case "$COMMAND" in
     tail -f "$VALIDATOR_LOG"
     ;;
   test)
-    # The mock verifier is never deployed to a real cluster, so mock mode
-    # only makes sense on the full local flow.
-    if [[ "$TEST_MODE" == "mock" ]]; then
-      if [[ "$PREBUILT" == "true" || ( -n "$CLUSTER" && "$CLUSTER" != "localnet" ) ]]; then
-        echo "❌ --mode mock is localnet-only (the mock verifier never deploys to a real cluster)" >&2
-        exit 1
-      fi
-    fi
     # --prebuilt: run the cluster-safe subset against already-deployed
     # programs on the given cluster (including a validator already running
     # on localnet) — the validation path for verify-build artifacts, which
@@ -827,6 +816,12 @@ case "$COMMAND" in
       # deploy, run the whole suite. Guard against Cargo.lock skew first.
       ensure_lockfile_sync
       PA_TEST_MODE="$TEST_MODE" exec "${SCRIPT_DIR}/anchor-test.sh"
+    fi
+    # Everything below is the cluster-subset path, where the mock verifier
+    # is never deployed.
+    if [[ "$TEST_MODE" == "mock" ]]; then
+      echo "❌ --mode mock is localnet-only (the mock verifier never deploys to a real cluster)" >&2
+      exit 1
     fi
     require_cmd solana
     require_cmd solana-keygen

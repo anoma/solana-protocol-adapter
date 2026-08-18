@@ -26,7 +26,7 @@ import {
   getRouterPda,
   getVerifierEntryPda,
   VERIFIER_ROUTER_ID,
-  verifierProgramForSelector,
+  verifierForSelector,
 } from "../../scripts/verifier-utils";
 
 import {
@@ -48,7 +48,7 @@ const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.prog
 
 const fixture = loadFixture("batch_groth16.json");
 const PROOF_SELECTOR = parseSelectorFromFixture(fixture.selector);
-const VERIFIER_PROGRAM_ID = verifierProgramForSelector(PROOF_SELECTOR);
+const VERIFIER_PROGRAM_ID = verifierForSelector(PROOF_SELECTOR).program;
 const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
 const [verifierEntryPda] = getVerifierEntryPda(PROOF_SELECTOR, VERIFIER_ROUTER_ID);
 

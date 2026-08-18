@@ -14,11 +14,24 @@ export const MOCK_VERIFIER_ID = new PublicKey("H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKv
 // (risc0 fake-receipt convention; the real Groth16 selector is 0x73c457ba).
 export const MOCK_SELECTOR = Buffer.from([0xff, 0xff, 0xff, 0xff]);
 
-// The verifier program the router dispatches a seal with this selector to.
-// Fixtures carry their selector, so tests derive the right verifier program
-// from the fixture instead of hardcoding one.
-export function verifierProgramForSelector(selector: Buffer | Uint8Array): PublicKey {
-  return MOCK_SELECTOR.equals(Buffer.from(selector)) ? MOCK_VERIFIER_ID : GROTH16_VERIFIER_ID;
+// Verifiers by router selector. Fixtures carry their selector, so tests
+// derive the verifier program (and the error code it rejects bad seals
+// with) from the fixture instead of hardcoding one. Unknown selectors fail
+// loudly rather than silently defaulting to some verifier.
+const VERIFIERS_BY_SELECTOR: Record<string, { program: PublicKey; rejectionCode: number }> = {
+  // groth_16_verifier: VerificationError
+  "73c457ba": { program: GROTH16_VERIFIER_ID, rejectionCode: 6000 },
+  // mock-verifier: ClaimDigestMismatch (offset 6600 keeps it disjoint)
+  ffffffff: { program: MOCK_VERIFIER_ID, rejectionCode: 6600 },
+};
+
+export function verifierForSelector(selector: Buffer): { program: PublicKey; rejectionCode: number } {
+  const hex = selector.toString("hex");
+  const verifier = VERIFIERS_BY_SELECTOR[hex];
+  if (!verifier) {
+    throw new Error(`no verifier registered for selector 0x${hex}`);
+  }
+  return verifier;
 }
 
 export function getRouterPda(routerProgramId: PublicKey = VERIFIER_ROUTER_ID): [PublicKey, number] {

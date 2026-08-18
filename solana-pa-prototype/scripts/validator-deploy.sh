@@ -32,6 +32,9 @@ ROUTER_PDA="9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"
 VERIFIER_ENTRY_PDA="4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
 # Selector registered for the groth16 verifier entry above
 GROTH16_SELECTOR="0x73c457ba"
+# Selector the synthetic genesis VerifierEntry registers the localnet
+# mock verifier under (risc0 fake-receipt convention)
+MOCK_SELECTOR="0xffffffff"
 
 VALIDATOR_PID=""
 
@@ -94,6 +97,7 @@ build_with_filtered_output() {
 fixture_matches_program_id() {
   local fixture_path="$1"
   local program_id="$2"
+  local expected_selector="${3:-}"
 
   node -e '
     const fs = require("fs");
@@ -101,16 +105,28 @@ fixture_matches_program_id() {
 
     const fixturePath = process.argv[1];
     const programId = process.argv[2];
+    const expectedSelector = process.argv[3];
 
     const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf-8"));
     if (!fixture.selector || !fixture.tx_b64) {
+      process.exit(1);
+    }
+    if (expectedSelector && fixture.selector !== expectedSelector) {
       process.exit(1);
     }
 
     const txBytes = Buffer.from(fixture.tx_b64, "base64");
     const programIdBytes = Buffer.from(bs58.decode(programId));
     process.exit(txBytes.includes(programIdBytes) ? 0 : 1);
-  ' "$fixture_path" "$program_id"
+  ' "$fixture_path" "$program_id" "$expected_selector"
+}
+
+# The two suite proof modes; each entry point validates its own input.
+validate_test_mode() {
+  if [[ "$1" != "real" && "$1" != "mock" ]]; then
+    echo "❌ test mode must be 'real' or 'mock', got '$1'" >&2
+    exit 1
+  fi
 }
 
 wait_for_validator() {
@@ -419,23 +435,19 @@ build_programs_release() {
 # silently run the suite against the wrong verifier.
 # Requires BTF_ID (exported by sync_program_ids).
 check_required_fixture() {
-  local mode="${1:-real}"
-  local required_fixture="tests/fixtures/batch_groth16.json"
-  local regen_hint="./scripts/dev.sh gen-fixtures tests/fixtures/batch_groth16.json"
-  local expected_selector="$GROTH16_SELECTOR"
+  local mode="$1"
+  local subdir="" mock_flag="" expected_selector="$GROTH16_SELECTOR"
   if [[ "$mode" == "mock" ]]; then
-    required_fixture="tests/fixtures/mock/batch_groth16.json"
-    regen_hint="./scripts/dev.sh gen-fixtures --mock tests/fixtures/mock/batch_groth16.json"
-    expected_selector="0xffffffff"
+    subdir="mock/"
+    mock_flag="--mock "
+    expected_selector="$MOCK_SELECTOR"
   fi
-  if [[ ! -f "$required_fixture" ]] || ! fixture_matches_program_id "$required_fixture" "$BTF_ID"; then
-    echo "Required fixture is missing or stale: ${required_fixture}"
-    echo "Regenerate with: ${regen_hint}"
-    exit 1
-  fi
-  if ! grep -q "\"selector\": \"${expected_selector}\"" "$required_fixture"; then
-    echo "Required fixture ${required_fixture} does not carry the ${mode}-mode selector ${expected_selector}"
-    echo "Regenerate with: ${regen_hint}"
+  local required_fixture="tests/fixtures/${subdir}batch_groth16.json"
+  if [[ ! -f "$required_fixture" ]] ||
+    ! fixture_matches_program_id "$required_fixture" "$BTF_ID" "$expected_selector"; then
+    echo "Required fixture is missing, stale, or carries the wrong selector"
+    echo "for ${mode} mode (expected ${expected_selector}): ${required_fixture}"
+    echo "Regenerate with: ./scripts/dev.sh gen-fixtures ${mock_flag}${required_fixture}"
     exit 1
   fi
 }
@@ -452,29 +464,24 @@ start_validator() {
 
   mkdir -p "$VALIDATOR_LEDGER"
 
+  # Genesis account fixtures named <prefix><address>.json, preloaded via
+  # --account: AnomaPay root markers, and the synthetic VerifierEntry that
+  # registers the mock verifier under selector 0xffffffff (loaded in both
+  # modes — a PA instance only accepts seals with the selector it was
+  # initialized with, so real-mode runs are unaffected).
   local account_args=()
-  local marker_glob="tests/fixtures/anomapay-root-markers/root-marker-"*.json
-  for marker_file in $marker_glob; do
-    [[ -e "$marker_file" ]] || continue
-    local marker_base marker_addr
-    marker_base="$(basename "$marker_file")"
-    marker_addr="${marker_base#root-marker-}"
-    marker_addr="${marker_addr%.json}"
-    account_args+=(--account "$marker_addr" "$marker_file")
-  done
-
-  # Synthetic VerifierEntry registering the mock verifier under selector
-  # 0xffffffff. Loaded in both modes: a PA instance only accepts seals with
-  # the selector it was initialized with, so real-mode runs are unaffected.
-  local entry_glob="tests/fixtures/mock/verifier-entry-"*.json
-  for entry_file in $entry_glob; do
-    [[ -e "$entry_file" ]] || continue
-    local entry_base entry_addr
-    entry_base="$(basename "$entry_file")"
-    entry_addr="${entry_base#verifier-entry-}"
-    entry_addr="${entry_addr%.json}"
-    account_args+=(--account "$entry_addr" "$entry_file")
-  done
+  add_genesis_accounts() {
+    local dir="$1" prefix="$2" file base addr
+    for file in "$dir/$prefix"*.json; do
+      [[ -e "$file" ]] || continue
+      base="$(basename "$file")"
+      addr="${base#"$prefix"}"
+      addr="${addr%.json}"
+      account_args+=(--account "$addr" "$file")
+    done
+  }
+  add_genesis_accounts tests/fixtures/anomapay-root-markers root-marker-
+  add_genesis_accounts tests/fixtures/verifier-entries verifier-entry-
 
   solana-test-validator \
     --reset \

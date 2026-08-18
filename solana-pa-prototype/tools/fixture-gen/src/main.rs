@@ -360,22 +360,16 @@ fn mock_seal_bytes(claim: risc0_zkvm::sha::Digest) -> Result<Vec<u8>> {
             pi_c,
         },
     };
-    let bytes = seal.try_to_vec().context("serialize mock Seal")?;
-    if bytes.len() != 260 {
-        bail!("mock seal must be exactly 260 bytes, got {}", bytes.len());
-    }
-    Ok(bytes)
+    seal.try_to_vec().context("serialize mock Seal")
 }
 
 /// Encode a dev-mode (Fake) aggregation receipt as a mock router seal,
 /// cross-checking the receipt's claim digest against the one derived from
 /// the transaction alone so any journal-derivation drift fails loudly.
-fn encode_mock_seal(agg_proof_bytes: &[u8], tx: &Transaction) -> Result<Vec<u8>> {
-    let inner: InnerReceipt =
-        bincode::deserialize(agg_proof_bytes).context("decode aggregation receipt")?;
-    let InnerReceipt::Fake(fake) = inner else {
-        bail!("expected a dev-mode (Fake) aggregation receipt");
-    };
+fn encode_mock_seal(
+    fake: &risc0_zkvm::FakeReceipt<ReceiptClaim>,
+    tx: &Transaction,
+) -> Result<Vec<u8>> {
     let receipt_claim = fake.claim.digest();
     let derived_claim = mock_claim_digest(tx)?;
     if receipt_claim != derived_claim {
@@ -851,12 +845,12 @@ fn finalize_and_write_fixture(
     // receipts go through arm's canonical seal encoding. The fixture is
     // labeled accordingly (aggregation_proof_type, selector).
     let proof_type = timed_phase("encode_seal", || {
-        let agg_proof_bytes = tx.aggregation_proof.clone().unwrap();
+        let agg_proof_bytes = tx.aggregation_proof.take().unwrap();
         let inner: InnerReceipt =
             bincode::deserialize(&agg_proof_bytes).context("decode aggregation receipt")?;
-        Ok(if matches!(inner, InnerReceipt::Fake(_)) {
+        Ok(if let InnerReceipt::Fake(fake) = inner {
             eprintln!("  dev-mode receipt -> mock seal (selector 0xffffffff)");
-            tx.aggregation_proof = Some(encode_mock_seal(&agg_proof_bytes, tx)?);
+            tx.aggregation_proof = Some(encode_mock_seal(&fake, tx)?);
             "mock"
         } else {
             tx.aggregation_proof = Some(encode_seal(&agg_proof_bytes).context("encode seal")?);
@@ -929,14 +923,7 @@ const HISTORICAL_ROOT_NONCE_BYTE: u8 = 8;
 /// reconstruct, off-chain, the exact tree state the historical-root
 /// committer transaction lands in as leaf index 1.
 fn read_sole_created_commitment(path: &Path) -> Result<Digest> {
-    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let value: serde_json::Value = serde_json::from_str(&raw).context("parsing fixture JSON")?;
-    let tx_b64 = value["tx_b64"]
-        .as_str()
-        .ok_or_else(|| anyhow!("missing tx_b64 field in {}", path.display()))?;
-    let tx_bytes = BASE64.decode(tx_b64).context("decoding tx_b64")?;
-    let tx: Transaction =
-        bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
+    let (_, tx) = load_fixture_tx(path)?;
 
     if tx.actions.len() != 1 || tx.actions[0].compliance_units.len() != 1 {
         bail!(
@@ -1320,22 +1307,26 @@ where
     Ok(result)
 }
 
-fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
-    let fixture_str =
-        fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
-
-    #[derive(serde::Deserialize, Serialize)]
-    struct RawFixture {
-        tx_b64: String,
-        #[serde(flatten)]
-        rest: serde_json::Map<String, serde_json::Value>,
-    }
-
-    let mut fixture: RawFixture =
-        serde_json::from_str(&fixture_str).context("parsing fixture JSON")?;
-    let tx_bytes = BASE64.decode(&fixture.tx_b64).context("decoding tx_b64")?;
-    let mut tx: Transaction =
+/// Read a fixture JSON and bincode-decode its transaction. Returns the raw
+/// JSON map alongside so callers can rewrite fields in place.
+fn load_fixture_tx(
+    path: &Path,
+) -> Result<(serde_json::Map<String, serde_json::Value>, Transaction)> {
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let map: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&raw).context("parsing fixture JSON")?;
+    let tx_b64 = map
+        .get("tx_b64")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("missing tx_b64 field in {}", path.display()))?;
+    let tx_bytes = BASE64.decode(tx_b64).context("decoding tx_b64")?;
+    let tx: Transaction =
         bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
+    Ok((map, tx))
+}
+
+fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
+    let (mut fixture, mut tx) = load_fixture_tx(input)?;
 
     let mut stripped = 0usize;
     for action in &mut tx.actions {
@@ -1355,8 +1346,8 @@ fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
     eprintln!("Stripped {} external call(s) total", stripped);
 
     let modified_bytes = bincode::serialize(&tx).context("re-serializing Transaction")?;
-    fixture.tx_b64 = BASE64.encode(&modified_bytes);
-    fixture.rest.remove("forwarder_type");
+    fixture.insert("tx_b64".into(), BASE64.encode(&modified_bytes).into());
+    fixture.remove("forwarder_type");
 
     let output_str = serde_json::to_string_pretty(&fixture).context("serializing fixture")?;
     fs::write(output, output_str).with_context(|| format!("writing {}", output.display()))?;
@@ -1371,17 +1362,7 @@ fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
 /// Exists for imported fixtures whose proving inputs are not in this repo
 /// (the dev-mode pipeline cannot regenerate them).
 fn mockify_fixture(input: &Path, output: &Path) -> Result<()> {
-    let fixture_str =
-        fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
-    let mut fixture: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&fixture_str).context("parsing fixture JSON")?;
-
-    let tx_b64 = fixture["tx_b64"]
-        .as_str()
-        .ok_or_else(|| anyhow!("missing tx_b64 field"))?;
-    let tx_bytes = BASE64.decode(tx_b64).context("decoding tx_b64")?;
-    let mut tx: Transaction =
-        bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
+    let (mut fixture, mut tx) = load_fixture_tx(input)?;
 
     if tx.aggregation_proof.is_none() {
         bail!("fixture transaction has no aggregation_proof to replace");
@@ -1401,12 +1382,12 @@ fn mockify_fixture(input: &Path, output: &Path) -> Result<()> {
         .iter()
         .map(|root| BASE64.encode(root))
         .collect();
-    let existing_roots: Vec<String> = match fixture.get("historical_roots_b64") {
-        Some(value) => {
-            serde_json::from_value(value.clone()).context("parsing historical_roots_b64")?
-        }
-        None => Vec::new(),
-    };
+    let existing_roots: Vec<String> = fixture
+        .get("historical_roots_b64")
+        .map(|value| serde_json::from_value(value.clone()))
+        .transpose()
+        .context("parsing historical_roots_b64")?
+        .unwrap_or_default();
     if roots != existing_roots {
         bail!("recomputed historical roots differ from the input fixture's — refusing to write");
     }
@@ -1432,16 +1413,7 @@ fn mockify_fixture(input: &Path, output: &Path) -> Result<()> {
 }
 
 fn dump_fixture(input: &Path) -> Result<()> {
-    let fixture_str =
-        fs::read_to_string(input).with_context(|| format!("reading {}", input.display()))?;
-    let raw: serde_json::Value =
-        serde_json::from_str(&fixture_str).context("parsing fixture JSON")?;
-    let tx_b64 = raw["tx_b64"]
-        .as_str()
-        .ok_or_else(|| anyhow!("missing tx_b64 field"))?;
-    let tx_bytes = BASE64.decode(tx_b64).context("decoding tx_b64")?;
-    let tx: Transaction =
-        bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
+    let (_, tx) = load_fixture_tx(input)?;
 
     eprintln!("Transaction:");
     eprintln!("  actions: {}", tx.actions.len());
@@ -1760,12 +1732,19 @@ fn parse_args() -> Result<Command> {
     }))
 }
 
-/// Enter mock mode: proofs run through the local dev-mode executor (guests
-/// execute, nothing is proven), and `finalize_and_write_fixture` turns the
-/// resulting Fake aggregation receipt into a mock seal. RISC0_DEV_MODE is a
-/// runtime env var read by risc0 at proving time; setting it here keeps the
-/// flag self-contained instead of depending on ambient environment state.
-fn apply_mock_mode(prover_choice: Option<ProverChoice>) -> Result<Option<ProverChoice>> {
+/// Enter mock mode (no-op unless `mock`): proofs run through the local
+/// dev-mode executor (guests execute, nothing is proven), and
+/// `finalize_and_write_fixture` turns the resulting Fake aggregation receipt
+/// into a mock seal. RISC0_DEV_MODE is a runtime env var read by risc0 at
+/// proving time; setting it here keeps the flag self-contained instead of
+/// depending on ambient environment state.
+fn apply_mock_mode(
+    mock: bool,
+    prover_choice: Option<ProverChoice>,
+) -> Result<Option<ProverChoice>> {
+    if !mock {
+        return Ok(prover_choice);
+    }
     if matches!(prover_choice, Some(ProverChoice::Queue)) {
         bail!("--mock generates dev-mode receipts with the local executor; --prover queue is incompatible");
     }
@@ -1826,11 +1805,7 @@ async fn main() -> Result<()> {
             prover_choice,
             mock,
         } => {
-            let prover_choice = if mock {
-                apply_mock_mode(prover_choice)?
-            } else {
-                prover_choice
-            };
+            let prover_choice = apply_mock_mode(mock, prover_choice)?;
             return generate_historical_root_fixtures(
                 &batch_groth16_path,
                 &committer_out,
@@ -1847,11 +1822,7 @@ async fn main() -> Result<()> {
 
     let total_start = Instant::now();
 
-    let prover_choice = if mock {
-        apply_mock_mode(prover_choice)?
-    } else {
-        prover_choice
-    };
+    let prover_choice = apply_mock_mode(mock, prover_choice)?;
     let prover = resolve_prover(prover_choice)?;
     match &prover {
         Prover::Local => eprintln!("prover: local (CPU risc0 prover)"),

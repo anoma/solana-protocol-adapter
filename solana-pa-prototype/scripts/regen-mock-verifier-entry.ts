@@ -17,16 +17,13 @@
  * npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts
  */
 import * as crypto from "crypto";
-import * as fs from "fs";
-import * as path from "path";
+import { writeGenesisAccountFixtures } from "./genesis-account";
 import {
   VERIFIER_ROUTER_ID,
   MOCK_VERIFIER_ID,
   MOCK_SELECTOR,
   getVerifierEntryPda,
 } from "./verifier-utils";
-
-const OUT_DIR = "tests/fixtures/mock";
 
 // Anchor account layout: discriminator ‖ selector: [u8;4] ‖ verifier: Pubkey
 // ‖ estopped: bool (risc0-solana verifier_router::state::VerifierEntry).
@@ -44,38 +41,12 @@ function verifierEntryData(): Buffer {
   ]);
 }
 
-function main() {
-  const [entryPda] = getVerifierEntryPda(MOCK_SELECTOR);
-  const data = verifierEntryData();
-
-  // Stale entries (old mock-verifier ID) must go, not accumulate.
-  for (const f of fs.readdirSync(OUT_DIR)) {
-    if (f.startsWith("verifier-entry-") && f.endsWith(".json")) {
-      fs.unlinkSync(path.join(OUT_DIR, f));
-    }
-  }
-
-  const account = {
-    pubkey: entryPda.toBase58(),
-    account: {
-      // 45-byte accounts need >= 1_204_080 lamports to be rent-exempt.
-      lamports: 2_000_000,
-      data: [data.toString("base64"), "base64"],
-      owner: VERIFIER_ROUTER_ID.toBase58(),
-      executable: false,
-      // u64::MAX exceeds JS safe integers — placeholder swapped below so
-      // the file carries the exact literal the validator expects.
-      rentEpoch: "__RENT_EPOCH__",
-      space: data.length,
-    },
-  };
-  const outPath = path.join(OUT_DIR, `verifier-entry-${entryPda.toBase58()}.json`);
-  const body = JSON.stringify(account, null, 2).replace(
-    '"__RENT_EPOCH__"',
-    "18446744073709551615"
-  );
-  fs.writeFileSync(outPath, body);
-  console.log(`  wrote ${outPath} (verifier ${MOCK_VERIFIER_ID.toBase58()})`);
-}
-
-main();
+const [entryPda] = getVerifierEntryPda(MOCK_SELECTOR);
+writeGenesisAccountFixtures({
+  outDir: "tests/fixtures/verifier-entries",
+  prefix: "verifier-entry-",
+  owner: VERIFIER_ROUTER_ID,
+  // 45-byte accounts need >= 1_204_080 lamports to be rent-exempt.
+  lamports: 2_000_000,
+  accounts: [{ pubkey: entryPda, data: verifierEntryData() }],
+});

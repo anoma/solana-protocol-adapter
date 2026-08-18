@@ -17,7 +17,7 @@ import {
   getRouterPda,
   getVerifierEntryPda,
   VERIFIER_ROUTER_ID,
-  verifierProgramForSelector,
+  verifierForSelector,
 } from "../scripts/verifier-utils";
 
 import {
@@ -33,7 +33,6 @@ import {
   ADDRESS_MISMATCH_PATTERN,
   readJson,
   loadFixture,
-  TEST_MODE,
   type Fixture,
   parseSelectorFromFixture,
   fundKeypair,
@@ -75,7 +74,8 @@ const [programData] = PublicKey.findProgramAddressSync(
 const fixture = loadFixture("batch_groth16.json");
 
 const PROOF_SELECTOR = parseSelectorFromFixture(fixture.selector);
-const VERIFIER_PROGRAM_ID = verifierProgramForSelector(PROOF_SELECTOR);
+const VERIFIER = verifierForSelector(PROOF_SELECTOR);
+const VERIFIER_PROGRAM_ID = VERIFIER.program;
 
 const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
 const [verifierEntryPda] = getVerifierEntryPda(PROOF_SELECTOR, VERIFIER_ROUTER_ID);
@@ -597,16 +597,12 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
       // fixture's selector routes to. Solana's CPI error propagation records
       // the INNER program's error code in the PA's failure line — so we see
       // the verifier's code instead of the PA's VerifierRouterFailed (6013).
-      // Real mode: groth16 verifier VerificationError (6000). Mock mode:
-      // mock verifier ClaimDigestMismatch (6600, offset chosen to stay
-      // disjoint from the groth16 verifier's codes).
-      const expectedCode = TEST_MODE === "mock" ? 6600 : 6000;
       const code = extractPAErrorCode(e);
       assert.isNotNull(code, "Expected a program error code in logs");
       assert.equal(
         code,
-        expectedCode,
-        `the ${TEST_MODE} verifier's rejection code (${expectedCode}) should propagate through CPI`,
+        VERIFIER.rejectionCode,
+        `the fixture selector's verifier rejection code (${VERIFIER.rejectionCode}) should propagate through CPI`,
       );
     }
   });

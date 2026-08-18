@@ -13,11 +13,9 @@ cd "$PROJECT_DIR"
 
 # real: fixtures with Groth16 proofs, verified by the devnet-cloned verifier.
 # mock: fixtures with mock seals, verified by the localnet mock verifier.
-PA_TEST_MODE="${PA_TEST_MODE:-real}"
-if [[ "$PA_TEST_MODE" != "real" && "$PA_TEST_MODE" != "mock" ]]; then
-  echo "❌ PA_TEST_MODE must be 'real' or 'mock', got '${PA_TEST_MODE}'" >&2
-  exit 1
-fi
+# Exported so the ts-mocha suite (tests/utils/fixtures.ts) sees it.
+export PA_TEST_MODE="${PA_TEST_MODE:-real}"
+validate_test_mode "$PA_TEST_MODE"
 echo "==> Test mode: ${PA_TEST_MODE}"
 
 require_commands
@@ -42,7 +40,6 @@ deploy_programs
 
 ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
 ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
-PA_TEST_MODE="$PA_TEST_MODE" \
   yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 'tests/**/*.ts'
 
 # Anchor's SBF toolchain can leave incompatible host debug artifacts in target/.
