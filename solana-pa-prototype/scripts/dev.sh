@@ -102,6 +102,12 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh validator"
     ;;
 
+  validator-deploy)
+    # Like validator, but also builds and deploys all programs first and
+    # keeps the validator running for external clients (test harnesses).
+    run_in_project "./scripts/ops.sh validator-deploy"
+    ;;
+
   gen-fixtures)
     shift
     ensure_lockfile_sync
@@ -118,7 +124,10 @@ case "${1:-}" in
     ;;
 
   fixture-test)
-    run_in_project "RISC0_SKIP_BUILD=1 cargo test --manifest-path tools/fixture-gen/Cargo.toml"
+    # The fixture-gen test module documents requiring RISC0_DEV_MODE=1: its
+    # transaction-building tests execute guests without proving. Without it
+    # they run real succinct proving in parallel and OOM the machine.
+    run_in_project "RISC0_DEV_MODE=1 RISC0_SKIP_BUILD=1 cargo test --manifest-path tools/fixture-gen/Cargo.toml"
     ;;
 
   update-deps)
@@ -130,11 +139,11 @@ case "${1:-}" in
     ;;
 
   fmt)
-    run_in_project "cargo fmt -p protocol-adapter -p block-time-forwarder -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
+    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
     ;;
 
   clippy)
-    run_in_project "cargo clippy -p protocol-adapter -p block-time-forwarder --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
+    run_in_project "cargo clippy --workspace --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
     ;;
 
   coverage)

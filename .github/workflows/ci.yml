@@ -36,7 +36,7 @@ jobs:
 
       - name: Check formatting
         working-directory: ./solana-pa-prototype
-        run: cargo fmt -p protocol-adapter -p block-time-forwarder --check
+        run: cargo fmt --all --check
 
   # Clippy linting
   clippy:
@@ -61,7 +61,7 @@ jobs:
       - name: Run clippy
         working-directory: ./solana-pa-prototype
         run: |
-          cargo clippy -p protocol-adapter -p block-time-forwarder --all-targets -- \
+          cargo clippy --workspace --all-targets -- \
             -D warnings \
             -A unexpected_cfgs \
             -A deprecated
@@ -100,9 +100,10 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: cargo test -p protocol-adapter -p block-time-forwarder
 
-  # Anchor integration tests
-  anchor-test:
-    name: Anchor Test
+  # Build the programs once; the per-mode test jobs below reuse the
+  # artifacts instead of repeating the SBF build.
+  anchor-build:
+    name: Anchor Build
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -149,6 +150,70 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: yarn install --frozen-lockfile || yarn install
 
-      - name: Build and test
+      - name: Build programs
         working-directory: ./solana-pa-prototype
-        run: ./scripts/anchor-test.sh
+        run: ./scripts/anchor-test.sh build
+
+      - name: Upload program artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: anchor-programs
+          if-no-files-found: error
+          path: |
+            solana-pa-prototype/target/deploy
+            solana-pa-prototype/target/idl
+            solana-pa-prototype/target/types
+
+  # Anchor integration tests, once per proof mode: real Groth16 fixtures
+  # against the devnet-cloned verifier, and mock fixtures against the
+  # localnet mock verifier. No Rust toolchain needed — the programs come
+  # from the anchor-build job.
+  anchor-test:
+    name: Anchor Test (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    needs: anchor-build
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [real, mock]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Yarn
+        run: npm install -g yarn
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Create Solana keypair
+        run: solana-keygen new --no-bip39-passphrase
+
+      - name: Install Anchor CLI
+        run: |
+          curl -fsSL -o anchor "https://github.com/coral-xyz/anchor/releases/download/v${{ env.ANCHOR_VERSION }}/anchor-${{ env.ANCHOR_VERSION }}-x86_64-unknown-linux-gnu"
+          chmod +x anchor
+          sudo mv anchor /usr/local/bin/
+
+      - name: Install node dependencies
+        working-directory: ./solana-pa-prototype
+        run: yarn install --frozen-lockfile || yarn install
+
+      - name: Download program artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: anchor-programs
+          path: solana-pa-prototype/target
+
+      - name: Run tests
+        working-directory: ./solana-pa-prototype
+        run: PA_TEST_MODE=${{ matrix.mode }} ./scripts/anchor-test.sh test

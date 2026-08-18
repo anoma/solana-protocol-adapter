@@ -17,10 +17,10 @@
  * ID changes. Standalone: npx ts-node -P tsconfig.json scripts/regen-root-markers.ts
  */
 import * as fs from "fs";
-import * as path from "path";
 import { PublicKey } from "@solana/web3.js";
 import { PA_STATE_SEED } from "../tests/utils/constants";
 import { deriveRootMarkerPda } from "../tests/utils/pda";
+import { writeGenesisAccountFixtures } from "./genesis-account";
 
 const FIXTURE = "tests/fixtures/anomapay_transfer_0e345103.json";
 const OUT_DIR = "tests/fixtures/anomapay-root-markers";
@@ -49,37 +49,16 @@ function main() {
     process.exit(1);
   }
 
-  // Stale markers (old program ID) must go, not accumulate.
-  for (const f of fs.readdirSync(OUT_DIR)) {
-    if (f.startsWith("root-marker-") && f.endsWith(".json")) {
-      fs.unlinkSync(path.join(OUT_DIR, f));
-    }
-  }
-
-  for (const rootB64 of roots) {
-    const root = Buffer.from(rootB64, "base64");
-    const marker = deriveRootMarkerPda(paState, root, programId);
-    const account = {
-      pubkey: marker.toBase58(),
-      account: {
-        lamports: 1_000_000,
-        data: ["", "base64"],
-        owner: programId.toBase58(),
-        executable: false,
-        // u64::MAX exceeds JS safe integers — placeholder swapped below so
-        // the file carries the exact literal the validator expects.
-        rentEpoch: "__RENT_EPOCH__",
-        space: 0,
-      },
-    };
-    const outPath = path.join(OUT_DIR, `root-marker-${marker.toBase58()}.json`);
-    const body = JSON.stringify(account, null, 2).replace(
-      '"__RENT_EPOCH__"',
-      "18446744073709551615"
-    );
-    fs.writeFileSync(outPath, body);
-    console.log(`  wrote ${outPath} (owner ${programId.toBase58()})`);
-  }
+  writeGenesisAccountFixtures({
+    outDir: OUT_DIR,
+    prefix: "root-marker-",
+    owner: programId,
+    lamports: 1_000_000,
+    accounts: roots.map((rootB64) => ({
+      pubkey: deriveRootMarkerPda(paState, Buffer.from(rootB64, "base64"), programId),
+      data: Buffer.alloc(0),
+    })),
+  });
 }
 
 main();

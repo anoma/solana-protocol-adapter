@@ -13,7 +13,7 @@
 #   ANCHOR_WALLET_PATH   - wallet path (default: ~/.config/solana/id.json)
 #
 # Exported after sync_program_ids:
-#   PA_ID, BTF_ID, TF_ID
+#   PA_ID, BTF_ID, TF_ID, MV_ID
 #
 # Exported after start_validator:
 #   VALIDATOR_PID
@@ -32,6 +32,9 @@ ROUTER_PDA="9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"
 VERIFIER_ENTRY_PDA="4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
 # Selector registered for the groth16 verifier entry above
 GROTH16_SELECTOR="0x73c457ba"
+# Selector the synthetic genesis VerifierEntry registers the localnet
+# mock verifier under (risc0 fake-receipt convention)
+MOCK_SELECTOR="0xffffffff"
 
 VALIDATOR_PID=""
 
@@ -39,7 +42,7 @@ VALIDATOR_PID=""
 # under programs/ that isn't in this list would otherwise silently stop being
 # built on a forward-merge — fail loudly instead. This is the single copy:
 # dev.sh and ops.sh both route builds through the functions in this file.
-EXPECTED_PROGRAMS=(protocol-adapter block-time-forwarder test-forwarder)
+EXPECTED_PROGRAMS=(protocol-adapter block-time-forwarder test-forwarder mock-verifier)
 
 assert_known_programs() {
   local dir pkg known ok
@@ -54,9 +57,11 @@ assert_known_programs() {
     done
     if [[ $ok -eq 0 ]]; then
       echo "    ❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
-      echo "       Builds and deploys go by name. Add '${pkg}' to EXPECTED_PROGRAMS" >&2
-      echo "       and the build functions in validator-deploy.sh — and to the" >&2
-      echo "       PROGRAMS registry in ops.sh if it deploys to real clusters —" >&2
+      echo "       Builds and deploys go by name. Register '${pkg}' in ALL of:" >&2
+      echo "       EXPECTED_PROGRAMS, PROGRAM_KEYPAIRS, sync_program_ids," >&2
+      echo "       build_programs_dev, build_programs_release, and" >&2
+      echo "       deploy_programs (this file), plus the PROGRAMS/PROGRAM_LIBRS" >&2
+      echo "       registries in ops.sh if it deploys to real clusters —" >&2
       echo "       otherwise it silently never gets built or deployed." >&2
       exit 1
     fi
@@ -92,6 +97,7 @@ build_with_filtered_output() {
 fixture_matches_program_id() {
   local fixture_path="$1"
   local program_id="$2"
+  local expected_selector="${3:-}"
 
   node -e '
     const fs = require("fs");
@@ -99,16 +105,28 @@ fixture_matches_program_id() {
 
     const fixturePath = process.argv[1];
     const programId = process.argv[2];
+    const expectedSelector = process.argv[3];
 
     const fixture = JSON.parse(fs.readFileSync(fixturePath, "utf-8"));
     if (!fixture.selector || !fixture.tx_b64) {
+      process.exit(1);
+    }
+    if (expectedSelector && fixture.selector !== expectedSelector) {
       process.exit(1);
     }
 
     const txBytes = Buffer.from(fixture.tx_b64, "base64");
     const programIdBytes = Buffer.from(bs58.decode(programId));
     process.exit(txBytes.includes(programIdBytes) ? 0 : 1);
-  ' "$fixture_path" "$program_id"
+  ' "$fixture_path" "$program_id" "$expected_selector"
+}
+
+# The two suite proof modes; each entry point validates its own input.
+validate_test_mode() {
+  if [[ "$1" != "real" && "$1" != "mock" ]]; then
+    echo "❌ test mode must be 'real' or 'mock', got '$1'" >&2
+    exit 1
+  fi
 }
 
 wait_for_validator() {
@@ -181,6 +199,7 @@ PROGRAM_KEYPAIRS=(
   target/deploy/protocol_adapter-keypair.json
   target/deploy/block_time_forwarder-keypair.json
   target/deploy/test_forwarder-keypair.json
+  target/deploy/mock_verifier-keypair.json
 )
 
 # Restore committed program keypairs from git if missing locally.
@@ -335,6 +354,19 @@ sync_program_ids() {
     sed -i -E "s/testForwarderId = new PublicKey\(\"[^\"]+\"\)/testForwarderId = new PublicKey(\"${TF_ID}\")/" tests/solana-pa-prototype.ts
   fi
 
+  MV_OLD="$(read_declare_id "programs/mock-verifier/src/lib.rs")"
+  MV_ID="$(sync_program_id "MV" \
+    "target/deploy/mock_verifier-keypair.json" \
+    "programs/mock-verifier/src/lib.rs" \
+    "mock_verifier")"
+
+  # MV ID also appears in the TS verifier utils, and the preloaded mock
+  # VerifierEntry account fixture embeds it — regenerate on rotation.
+  if [[ "$MV_OLD" != "$MV_ID" ]]; then
+    sed -i -E "s/MOCK_VERIFIER_ID = new PublicKey\(\"[^\"]+\"\)/MOCK_VERIFIER_ID = new PublicKey(\"${MV_ID}\")/" scripts/verifier-utils/index.ts
+    echo "    MV ID changed — regenerating mock verifier-entry account fixture" >&2
+    npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts >&2
+  fi
 }
 
 # anchor build uses cargo +nightly for IDL generation, which is incompatible
@@ -362,7 +394,10 @@ build_programs_dev() {
   # be scoped with -p rather than passed to the whole-workspace build.
   build_with_filtered_output anchor build -p protocol-adapter ${idl_flag} -- --features dev-teardown
   build_with_filtered_output anchor build -p block-time-forwarder ${idl_flag}
-  build_with_filtered_output anchor build -p test-forwarder ${idl_flag}
+  # Nothing consumes the test-only programs' IDLs — skip that extra
+  # cargo +nightly pass unconditionally.
+  build_with_filtered_output anchor build -p test-forwarder --no-idl
+  build_with_filtered_output anchor build -p mock-verifier --no-idl
 }
 
 # The production build: plain `anchor build`, no dev-teardown feature, so
@@ -380,6 +415,7 @@ build_programs_release() {
   build_with_filtered_output anchor build -p protocol-adapter
   build_with_filtered_output anchor build -p block-time-forwarder --no-idl
   build_with_filtered_output anchor build -p test-forwarder --no-idl
+  build_with_filtered_output anchor build -p mock-verifier --no-idl
 
   if [[ ! -f "$idl_path" ]]; then
     echo "❌ release build: anchor build did not produce an IDL at ${idl_path}" >&2
@@ -393,13 +429,25 @@ build_programs_release() {
   echo "    ✅ Production build: close_markers_batch is absent from the IDL."
 }
 
-# Validate the required fixture contains the current BTF program ID.
+# Validate the required fixture for the given test mode ($1, real|mock):
+# it must exist, contain the current BTF program ID, and carry the selector
+# its mode demands — a mock fixture in the real dir (or vice versa) would
+# silently run the suite against the wrong verifier.
 # Requires BTF_ID (exported by sync_program_ids).
 check_required_fixture() {
-  local required_fixture="tests/fixtures/batch_groth16.json"
-  if [[ ! -f "$required_fixture" ]] || ! fixture_matches_program_id "$required_fixture" "$BTF_ID"; then
-    echo "Required fixture is missing or stale: ${required_fixture}"
-    echo "Regenerate with: ./scripts/dev.sh gen-fixtures tests/fixtures/batch_groth16.json"
+  local mode="$1"
+  local subdir="" mock_flag="" expected_selector="$GROTH16_SELECTOR"
+  if [[ "$mode" == "mock" ]]; then
+    subdir="mock/"
+    mock_flag="--mock "
+    expected_selector="$MOCK_SELECTOR"
+  fi
+  local required_fixture="tests/fixtures/${subdir}batch_groth16.json"
+  if [[ ! -f "$required_fixture" ]] ||
+    ! fixture_matches_program_id "$required_fixture" "$BTF_ID" "$expected_selector"; then
+    echo "Required fixture is missing, stale, or carries the wrong selector"
+    echo "for ${mode} mode (expected ${expected_selector}): ${required_fixture}"
+    echo "Regenerate with: ./scripts/dev.sh gen-fixtures ${mock_flag}${required_fixture}"
     exit 1
   fi
 }
@@ -416,16 +464,24 @@ start_validator() {
 
   mkdir -p "$VALIDATOR_LEDGER"
 
+  # Genesis account fixtures named <prefix><address>.json, preloaded via
+  # --account: AnomaPay root markers, and the synthetic VerifierEntry that
+  # registers the mock verifier under selector 0xffffffff (loaded in both
+  # modes — a PA instance only accepts seals with the selector it was
+  # initialized with, so real-mode runs are unaffected).
   local account_args=()
-  local marker_glob="tests/fixtures/anomapay-root-markers/root-marker-"*.json
-  for marker_file in $marker_glob; do
-    [[ -e "$marker_file" ]] || continue
-    local marker_base marker_addr
-    marker_base="$(basename "$marker_file")"
-    marker_addr="${marker_base#root-marker-}"
-    marker_addr="${marker_addr%.json}"
-    account_args+=(--account "$marker_addr" "$marker_file")
-  done
+  add_genesis_accounts() {
+    local dir="$1" prefix="$2" file base addr
+    for file in "$dir/$prefix"*.json; do
+      [[ -e "$file" ]] || continue
+      base="$(basename "$file")"
+      addr="${base#"$prefix"}"
+      addr="${addr%.json}"
+      account_args+=(--account "$addr" "$file")
+    done
+  }
+  add_genesis_accounts tests/fixtures/anomapay-root-markers root-marker-
+  add_genesis_accounts tests/fixtures/verifier-entries verifier-entry-
 
   solana-test-validator \
     --reset \
@@ -454,6 +510,7 @@ deploy_programs() {
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name protocol_adapter
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name block_time_forwarder
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name test_forwarder
+  anchor deploy --provider.cluster "$CLUSTER_URL" --program-name mock_verifier
 }
 
 stop_validator() {

@@ -6,6 +6,34 @@ import { PublicKey } from "@solana/web3.js";
 export const VERIFIER_ROUTER_ID = new PublicKey("BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg");
 export const GROTH16_VERIFIER_ID = new PublicKey("2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD");
 
+// Localnet-only mock verifier (programs/mock-verifier). ID synced by
+// sync_program_ids in validator-deploy.sh from the committed keypair.
+export const MOCK_VERIFIER_ID = new PublicKey("H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKvgDhrvVVHvHf");
+
+// Selector the synthetic VerifierEntry registers the mock verifier under
+// (risc0 fake-receipt convention; the real Groth16 selector is 0x73c457ba).
+export const MOCK_SELECTOR = Buffer.from([0xff, 0xff, 0xff, 0xff]);
+
+// Verifiers by router selector. Fixtures carry their selector, so tests
+// derive the verifier program (and the error code it rejects bad seals
+// with) from the fixture instead of hardcoding one. Unknown selectors fail
+// loudly rather than silently defaulting to some verifier.
+const VERIFIERS_BY_SELECTOR: Record<string, { program: PublicKey; rejectionCode: number }> = {
+  // groth_16_verifier: VerificationError
+  "73c457ba": { program: GROTH16_VERIFIER_ID, rejectionCode: 6000 },
+  // mock-verifier: ClaimDigestMismatch (offset 6600 keeps it disjoint)
+  ffffffff: { program: MOCK_VERIFIER_ID, rejectionCode: 6600 },
+};
+
+export function verifierForSelector(selector: Buffer): { program: PublicKey; rejectionCode: number } {
+  const hex = selector.toString("hex");
+  const verifier = VERIFIERS_BY_SELECTOR[hex];
+  if (!verifier) {
+    throw new Error(`no verifier registered for selector 0x${hex}`);
+  }
+  return verifier;
+}
+
 export function getRouterPda(routerProgramId: PublicKey = VERIFIER_ROUTER_ID): [PublicKey, number] {
   return PublicKey.findProgramAddressSync(
     [Buffer.from("router")],
