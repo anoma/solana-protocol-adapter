@@ -1,84 +1,76 @@
-//! Settlement extraction helpers for processing RM transactions.
+//! Settlement extraction helpers over the aggregation instance.
 //!
-//! ComplianceUnit::instance is journal bytes on the wire (224 bytes per CU,
-//! laid out as 7 contiguous 32-byte fields). The on-chain BPF heap is small
-//! and easily exhausted by allocating a structured `ComplianceInstance` per
-//! CU, so the readers below pull individual fields straight out of the byte
-//! slice without intermediate allocation.
+//! The aggregation instance is the only proof-backed source of settlement
+//! data: every field below is committed by the batch aggregation Groth16
+//! proof via the journal digest, so reading from it (never from the
+//! transaction's unproven parts) is what makes the extracted values
+//! trustworthy.
 
-use crate::error::PAError;
-use arm_core::compliance_unit::ComplianceUnit;
-use arm_core::transaction::Transaction;
+use arm_core::aggregation_instance::AggregationInstance;
 use arm_core::Digest;
 
-/// Byte offsets of each `ComplianceInstance` field within its journal bytes,
-/// matching the `arm_core::compliance::ComplianceInstance` Borsh layout
-/// (u32-word array, contiguous):
-///   words 0..8   — consumed_nullifier
-///   words 8..16  — consumed_logic_ref
-///   words 16..24 — consumed_commitment_tree_root
-///   words 24..32 — created_commitment
-///   words 32..40 — created_logic_ref
-///   words 40..48 — delta_x
-///   words 48..56 — delta_y
-const CONSUMED_NULLIFIER_OFFSET: usize = 0;
-const CONSUMED_LOGIC_REF_OFFSET: usize = 32;
-const CONSUMED_ROOT_OFFSET: usize = 64;
-const CREATED_COMMITMENT_OFFSET: usize = 96;
-const CREATED_LOGIC_REF_OFFSET: usize = 128;
-pub(crate) const COMPLIANCE_INSTANCE_BYTES: usize = 224;
-
-fn read_field(instance: &[u8], offset: usize) -> Result<Digest, PAError> {
-    let chunk: [u8; 32] = instance
-        .get(offset..offset + 32)
-        .ok_or(PAError::ComplianceInstanceParseFailed)?
-        .try_into()
-        .map_err(|_| PAError::ComplianceInstanceParseFailed)?;
-    Ok(Digest::from_bytes(chunk))
+/// Total number of resources (consumed + created) across the instance.
+pub fn total_resource_count(instance: &AggregationInstance) -> usize {
+    instance
+        .actions
+        .iter()
+        .map(|a| a.consumed_publics.len() + a.created_publics.len())
+        .sum()
 }
 
-pub fn read_consumed_nullifier(cu: &ComplianceUnit) -> Result<Digest, PAError> {
-    read_field(&cu.instance, CONSUMED_NULLIFIER_OFFSET)
-}
-
-pub fn read_consumed_logic_ref(cu: &ComplianceUnit) -> Result<Digest, PAError> {
-    read_field(&cu.instance, CONSUMED_LOGIC_REF_OFFSET)
-}
-
-pub fn read_consumed_root(cu: &ComplianceUnit) -> Result<Digest, PAError> {
-    read_field(&cu.instance, CONSUMED_ROOT_OFFSET)
-}
-
-pub fn read_created_commitment(cu: &ComplianceUnit) -> Result<Digest, PAError> {
-    read_field(&cu.instance, CREATED_COMMITMENT_OFFSET)
-}
-
-pub fn read_created_logic_ref(cu: &ComplianceUnit) -> Result<Digest, PAError> {
-    read_field(&cu.instance, CREATED_LOGIC_REF_OFFSET)
-}
-
-fn extract_field(
-    tx: &Transaction,
-    reader: fn(&ComplianceUnit) -> Result<Digest, PAError>,
-) -> Result<Vec<Digest>, PAError> {
-    let total: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
+/// Nullifiers of all consumed resources, in instance order.
+/// Pre-sized so the BPF bump allocator (no free) doesn't retain
+/// capacity-doubled buffers.
+pub fn extract_nullifiers(instance: &AggregationInstance) -> Vec<Digest> {
+    let total: usize = instance
+        .actions
+        .iter()
+        .map(|a| a.consumed_publics.len())
+        .sum();
     let mut out = Vec::with_capacity(total);
-    for action in &tx.actions {
-        for cu in &action.compliance_units {
-            out.push(reader(cu)?);
+    for action in &instance.actions {
+        for consumed in &action.consumed_publics {
+            out.push(consumed.resource_nullifier);
         }
     }
-    Ok(out)
+    out
 }
 
-/// Extract nullifiers across all actions, reading directly from journal bytes.
-/// Pre-sized to the exact number of CUs so the BPF bump allocator doesn't
-/// retain capacity-doubled buffers from `.collect()`'s growth.
-pub fn extract_nullifiers(tx: &Transaction) -> Result<Vec<Digest>, PAError> {
-    extract_field(tx, read_consumed_nullifier)
+/// Commitments of all created resources, in instance order.
+pub fn extract_commitments(instance: &AggregationInstance) -> Vec<Digest> {
+    let total: usize = instance
+        .actions
+        .iter()
+        .map(|a| a.created_publics.len())
+        .sum();
+    let mut out = Vec::with_capacity(total);
+    for action in &instance.actions {
+        for created in &action.created_publics {
+            out.push(created.resource_commitment);
+        }
+    }
+    out
 }
 
-/// Extract commitments across all actions, reading directly from journal bytes.
-pub fn extract_commitments(tx: &Transaction) -> Result<Vec<Digest>, PAError> {
-    extract_field(tx, read_created_commitment)
+/// Deduplicated commitment-tree roots consumed by the instance.
+///
+/// Each root is validated against the adapter's historical root set, and each
+/// `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
+/// so deduplication saves significant compute when resources share roots.
+/// Pre-sized to the worst case (one root per consumed resource).
+pub fn unique_consumed_roots(instance: &AggregationInstance) -> Vec<Digest> {
+    let total: usize = instance
+        .actions
+        .iter()
+        .map(|a| a.consumed_publics.len())
+        .sum();
+    let mut unique_roots: Vec<Digest> = Vec::with_capacity(total);
+    for action in &instance.actions {
+        for consumed in &action.consumed_publics {
+            if !unique_roots.contains(&consumed.commitment_tree_root) {
+                unique_roots.push(consumed.commitment_tree_root);
+            }
+        }
+    }
+    unique_roots
 }

@@ -1,40 +1,31 @@
 use crate::groth16::{prepare_proof_for_verification, BATCH_AGGREGATION_IMAGE_ID};
-use crate::tests::utils::{
-    create_minimal_transaction, fake_aggregation_proof_bytes, FAKE_SELECTOR,
-};
-use arm_core::transaction::Transaction;
+use crate::tests::utils::{minimal_instance, FAKE_SELECTOR};
+use arm_core::transaction::Aggregation;
 
-fn tx_with_fake_aggregation_proof() -> Transaction {
-    let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = Some(fake_aggregation_proof_bytes());
-    tx
+fn fake_aggregation() -> Aggregation {
+    Aggregation {
+        proof: crate::tests::utils::fake_aggregation_proof_bytes(),
+        instance: minimal_instance(),
+    }
 }
 
 #[test]
 fn test_prepare_proof_accepts_batch_discriminant() {
-    let tx = tx_with_fake_aggregation_proof();
-    let prepared = prepare_proof_for_verification(&tx, FAKE_SELECTOR).unwrap();
-    assert_eq!(prepared.image_id, BATCH_AGGREGATION_IMAGE_ID);
-}
-
-#[test]
-fn test_prepare_proof_no_proof() {
-    let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = None;
-    assert!(prepare_proof_for_verification(&tx, FAKE_SELECTOR).is_err());
+    let prepared = prepare_proof_for_verification(&fake_aggregation(), FAKE_SELECTOR).unwrap();
+    let expected: [u8; 32] = BATCH_AGGREGATION_IMAGE_ID.into();
+    assert_eq!(prepared.image_id, expected);
 }
 
 #[test]
 fn test_prepare_proof_invalid_bytes() {
-    let mut tx = create_minimal_transaction();
-    tx.aggregation_proof = Some(vec![0xFF, 0xFF, 0xFF]);
-    assert!(prepare_proof_for_verification(&tx, FAKE_SELECTOR).is_err());
+    let mut aggregation = fake_aggregation();
+    aggregation.proof = vec![0xFF, 0xFF, 0xFF];
+    assert!(prepare_proof_for_verification(&aggregation, FAKE_SELECTOR).is_err());
 }
 
 #[test]
 fn test_selector_extraction_from_aggregation_proof() {
-    let tx = tx_with_fake_aggregation_proof();
-    let prepared = prepare_proof_for_verification(&tx, FAKE_SELECTOR).unwrap();
+    let prepared = prepare_proof_for_verification(&fake_aggregation(), FAKE_SELECTOR).unwrap();
     assert_eq!(
         prepared.seal.selector, FAKE_SELECTOR,
         "Selector should be extracted correctly"
@@ -43,12 +34,28 @@ fn test_selector_extraction_from_aggregation_proof() {
 
 #[test]
 fn test_prepare_proof_rejects_wrong_selector() {
-    let tx = tx_with_fake_aggregation_proof();
     let wrong_selector = [0x00, 0x00, 0x00, 0x00];
-    let result = prepare_proof_for_verification(&tx, wrong_selector);
+    let result = prepare_proof_for_verification(&fake_aggregation(), wrong_selector);
     match result {
         Err(crate::error::PAError::InvalidProofSelector) => {}
         Err(other) => panic!("Expected InvalidProofSelector, got {:?}", other),
         Ok(_) => panic!("Expected error, got Ok"),
     }
+}
+
+/// The journal digest must be the sha256 of the instance's journal encoding,
+/// so any instance mutation invalidates the prepared proof binding.
+#[test]
+fn test_journal_digest_binds_instance() {
+    let aggregation = fake_aggregation();
+    let prepared = prepare_proof_for_verification(&aggregation, FAKE_SELECTOR).unwrap();
+
+    let mut mutated = aggregation.clone();
+    mutated.instance.actions[0].action_tree_root = arm_core::Digest::from_bytes([0xEE; 32]);
+    let prepared_mutated = prepare_proof_for_verification(&mutated, FAKE_SELECTOR).unwrap();
+
+    assert_ne!(
+        prepared.journal_digest, prepared_mutated.journal_digest,
+        "instance mutation must change the journal digest"
+    );
 }

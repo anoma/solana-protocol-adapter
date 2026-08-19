@@ -1,6 +1,7 @@
-use crate::merkle::{append_to_tree, hash_two, EMPTY_TREE_ROOT_INITIAL, PADDING_LEAF, ZEROS};
+use crate::merkle::{append_to_tree, hash_two, EMPTY_TREE_ROOT_INITIAL, ZEROS};
 use crate::tests::utils::{assert_anchor_err, create_test_pa_state};
 use anchor_lang::solana_program::hash::hashv;
+use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
 use sha2::{Digest as Sha2Digest, Sha256};
 
@@ -8,8 +9,8 @@ use sha2::{Digest as Sha2Digest, Sha256};
 /// The cross-check against ZEROS[1] also confirms the precomputed table uses the same hash impl.
 #[test]
 fn test_sha256_syscall_matches_sha2_crate() {
-    let left = PADDING_LEAF.to_bytes();
-    let right = PADDING_LEAF.to_bytes();
+    let left: [u8; 32] = PADDING_LEAF.into();
+    let right: [u8; 32] = PADDING_LEAF.into();
 
     let mut hasher = Sha256::new();
     hasher.update(left);
@@ -25,7 +26,7 @@ fn test_sha256_syscall_matches_sha2_crate() {
     );
     assert_eq!(
         sha2_result,
-        ZEROS[1].to_bytes(),
+        <[u8; 32]>::from(ZEROS[1]),
         "ZEROS[1] must match the syscall/sha2 output, proving precomputed table uses the same hash"
     );
 }

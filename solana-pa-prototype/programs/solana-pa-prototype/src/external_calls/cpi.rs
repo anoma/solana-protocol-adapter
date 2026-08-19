@@ -57,7 +57,7 @@ fn execute_forwarder_call<'info>(
     call: SolanaExternalCall,
     segment: &[AccountInfo<'info>],
 ) -> Result<(), PAError> {
-    invoke_forwarder(&logic_ref.to_bytes(), &call.instruction_data, segment)?;
+    invoke_forwarder(&(*logic_ref).into(), &call.instruction_data, segment)?;
 
     let forwarder = *segment[0].key;
     let actual_output = read_forwarder_output(&call.output_mode, &forwarder)?;
@@ -73,13 +73,13 @@ fn execute_forwarder_call<'info>(
     Ok(())
 }
 
-/// Execute all external calls from a transaction via CPI.
+/// Execute all external calls from the aggregation instance via CPI.
 pub fn execute_external_calls(
-    tx: &arm_core::transaction::Transaction,
+    instance: &arm_core::aggregation_instance::AggregationInstance,
     remaining_accounts: &[AccountInfo<'_>],
     nullifier_count: usize,
 ) -> Result<(), PAError> {
-    let calls = super::extract_external_calls(tx)?;
+    let calls = super::extract_external_calls(instance)?;
 
     if remaining_accounts.len() < nullifier_count {
         return Err(PAError::InvalidTransactionData);

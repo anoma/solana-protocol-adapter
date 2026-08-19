@@ -1,10 +1,10 @@
-use crate::merkle::PADDING_LEAF;
 use crate::root::{create_root_marker, derive_root_pda, is_root_valid};
 use crate::state::PAStateAccount;
 use crate::tests::utils::{
     assert_anchor_err, create_test_pa_state_with, make_account_info, make_account_info_with_data,
 };
 use anchor_lang::prelude::Pubkey;
+use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
 
 fn state_with_root(root: [u8; 32]) -> PAStateAccount {

@@ -76,6 +76,12 @@ pub struct PAStateAccount {
     /// Expected proof selector (4 bytes), set at initialization.
     /// Validated before sending proofs to the verifier router.
     pub proof_selector: [u8; 4],
+    /// Kind-table commitment every settled aggregation instance must carry,
+    /// set at initialization. The aggregation circuit binds each transaction
+    /// to one kind table; this pin decides which table this deployment
+    /// accepts (sha256 of the concatenated entries; the empty table hashes
+    /// to sha256 of zero bytes).
+    pub kind_table_commitment: [u8; 32],
     /// Pending authority for two-step transfer (propose + accept).
     pub pending_authority: Option<Pubkey>,
     /// Lifecycle state. One-way transition: Running → Stopped.
@@ -93,9 +99,10 @@ pub struct PAStateAccount {
 
 impl PAStateAccount {
     /// discriminator(8) + bump(1) + authority(32) + verifier_router(32) +
-    /// proof_selector(4) + pending_authority(1+32) + lifecycle(1) + root(32) +
-    /// next_index(8) + current_depth(1) + min_expiry_slots(8) + max_expiry_slots(8)
-    pub const BASE_SPACE: usize = 8 + 1 + 32 + 33 + 32 + 4 + 1 + 32 + 8 + 1 + 8 + 8;
+    /// proof_selector(4) + kind_table_commitment(32) + pending_authority(1+32) +
+    /// lifecycle(1) + root(32) + next_index(8) + current_depth(1) +
+    /// min_expiry_slots(8) + max_expiry_slots(8)
+    pub const BASE_SPACE: usize = 8 + 1 + 32 + 32 + 4 + 32 + 33 + 1 + 32 + 8 + 1 + 8 + 8;
 
     pub const VEC_OVERHEAD: usize = 4;
 
@@ -136,7 +143,7 @@ impl PAStateAccount {
     }
 
     pub fn set_frontier(&mut self, level: usize, digest: Digest) {
-        self.frontier[level] = digest.to_bytes();
+        self.frontier[level] = digest.into();
     }
 }
 

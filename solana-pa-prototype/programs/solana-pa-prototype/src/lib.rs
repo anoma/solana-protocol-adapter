@@ -77,7 +77,6 @@ fn allocate_from(pos: usize, floor: usize, layout: std::alloc::Layout) -> Option
     (next_pos >= floor).then_some(next_pos)
 }
 
-pub mod encoding;
 pub mod error;
 pub mod external_calls;
 pub mod groth16;
@@ -91,13 +90,14 @@ pub mod state;
 mod tests;
 pub mod types;
 
-use arm_core::transaction::Transaction;
-use encoding::{compute_action_tree_root, extract_tags_and_logic_refs};
+use arm_core::aggregation_instance::AggregationInstance;
+use arm_core::merkle_path::PADDING_LEAF;
+use arm_core::transaction::{Delta, Transaction};
 pub use error::PAError;
 use groth16::prepare_proof_for_verification;
 use merkle::{
     append_to_tree, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH,
-    MAX_TREE_DEPTH, PADDING_LEAF,
+    MAX_TREE_DEPTH,
 };
 use state::*;
 
@@ -114,6 +114,7 @@ pub mod protocol_adapter {
         ctx: Context<'_, '_, '_, 'info, Initialize<'info>>,
         verifier_router: Pubkey,
         proof_selector: [u8; 4],
+        kind_table_commitment: [u8; 32],
     ) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         state.bump = ctx.bumps.pa_state;
@@ -121,11 +122,12 @@ pub mod protocol_adapter {
         state.pending_authority = None;
         state.verifier_router = verifier_router;
         state.proof_selector = proof_selector;
+        state.kind_table_commitment = kind_table_commitment;
         state.lifecycle = PALifecycle::Running;
 
         state.current_depth = INITIAL_TREE_DEPTH as u8;
-        state.frontier = vec![PADDING_LEAF.to_bytes()];
-        state.root = EMPTY_TREE_ROOT_INITIAL.to_bytes();
+        state.frontier = vec![PADDING_LEAF.into()];
+        state.root = EMPTY_TREE_ROOT_INITIAL.into();
         state.next_index = 0;
         state.min_expiry_slots = MIN_EXPIRY_SLOTS;
         state.max_expiry_slots = MAX_EXPIRY_SLOTS;
@@ -535,7 +537,7 @@ fn maybe_grow_account<'info>(
     Ok(())
 }
 
-/// Require every root consumed by the transaction to be one the adapter accepts.
+/// Require every root consumed by the instance to be one the adapter accepts.
 ///
 /// Takes `state` by shared reference on purpose: validation must not be able to
 /// mutate adapter state. `execute_settlement` holds `&mut PAStateAccount` for its
@@ -543,27 +545,12 @@ fn maybe_grow_account<'info>(
 /// and the ordering would rest on what happens to be written rather than on what
 /// is allowed.
 fn validate_consumed_roots(
-    tx: &Transaction,
+    instance: &AggregationInstance,
     state: &PAStateAccount,
     pa_state_key: &Pubkey,
     remaining_accounts: &[AccountInfo],
 ) -> Result<()> {
-    // Deduplicate roots before validation to avoid redundant PDA derivations.
-    // Each `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
-    // so deduplication saves significant compute when CUs share roots. Pre-sized
-    // to the worst case (one root per CU) so the BPF bump allocator doesn't
-    // accumulate capacity-doubled buffers.
-    let total_cu_count: usize = tx.actions.iter().map(|a| a.compliance_units.len()).sum();
-    let mut unique_roots: Vec<arm_core::Digest> = Vec::with_capacity(total_cu_count);
-    for action in &tx.actions {
-        for cu in &action.compliance_units {
-            let root = settle::read_consumed_root(cu)?;
-            if !unique_roots.contains(&root) {
-                unique_roots.push(root);
-            }
-        }
-    }
-    for root in &unique_roots {
+    for root in &settle::unique_consumed_roots(instance) {
         require!(
             root::is_root_valid(state, &crate::ID, pa_state_key, root, remaining_accounts),
             PAError::NonExistingRoot
@@ -598,15 +585,47 @@ fn execute_settlement<'info>(
 ) -> Result<()> {
     let pa_state_key = pa_state_info.key;
 
-    require!(!tx.actions.is_empty(), PAError::InvalidTransactionData);
+    // The instance is the only proof-backed source of settlement data;
+    // `require_aggregation` also rejects the ambiguous shape carrying both
+    // base actions and an aggregation.
+    let aggregation = tx
+        .aggregation
+        .as_ref()
+        .ok_or_else(|| error!(PAError::AggregationRequired))?;
+    let instance = arm_solana::journal::require_aggregation(tx).map_err(PAError::from)?;
 
-    validate_consumed_roots(tx, state, pa_state_key, remaining_accounts)?;
+    // A witness delta is prover-side private data; settling it would both
+    // leak it on-chain and prove nothing. Reject before any other work.
+    let delta_proof = match &tx.delta_proof {
+        Delta::Proof(proof) => proof,
+        Delta::Witness(_) => return Err(error!(PAError::ExpectedDeltaProof)),
+    };
 
-    let nullifiers = settle::extract_nullifiers(tx)?;
+    require!(
+        !instance.actions.is_empty(),
+        PAError::InvalidTransactionData
+    );
 
-    require!(tx.aggregation_proof.is_some(), PAError::AggregationRequired);
+    // The aggregation guest verifies compliance proofs against whatever
+    // compliance key the prover supplied; pinning it here is what ties the
+    // settlement to *the* compliance circuit.
+    require!(
+        instance.compliance_key == arm_core::constants::COMPLIANCE_VK,
+        PAError::ComplianceKeyMismatch
+    );
+    require!(
+        instance.kind_table_commitment == arm_core::Digest::from_bytes(state.kind_table_commitment),
+        PAError::KindTableCommitmentMismatch
+    );
+    instance
+        .nf_duplication_check()
+        .map_err(|_| error!(PAError::NullifierDuplication))?;
 
-    let prepared = prepare_proof_for_verification(tx, state.proof_selector)
+    validate_consumed_roots(instance, state, pa_state_key, remaining_accounts)?;
+
+    let nullifiers = settle::extract_nullifiers(instance);
+
+    let prepared = prepare_proof_for_verification(aggregation, state.proof_selector)
         .map_err(|e| -> anchor_lang::error::Error { e.into() })?;
 
     msg!("Verifying aggregated proof via verifier_router");
@@ -627,33 +646,35 @@ fn execute_settlement<'info>(
         .map_err(|_| error!(PAError::VerifierRouterFailed))?;
     }
 
-    arm_solana::delta::verify_delta_proof(tx).map_err(PAError::from)?;
+    arm_solana::delta::verify_delta_proof_with_instance(delta_proof, instance)
+        .map_err(PAError::from)?;
 
     // Events enable off-chain indexers to reconstruct action/transaction data.
-    let total_tag_count: usize = tx
-        .actions
-        .iter()
-        .map(|a| a.logic_verifier_inputs.len())
-        .sum();
+    // Order is the instance order the proof commits to: actions in sequence,
+    // consumed resources before created resources within each action.
+    let total_tag_count = settle::total_resource_count(instance);
     let mut all_tags: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
     let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
+    let mut all_is_consumed: Vec<bool> = Vec::with_capacity(total_tag_count);
 
-    for action in &tx.actions {
-        let (tags, logic_refs) = extract_tags_and_logic_refs(action)?;
-        let action_tree_root =
-            compute_action_tree_root(&tags).map_err(|_| error!(PAError::InvalidTransactionData))?;
-
-        for lvi in &action.logic_verifier_inputs {
-            emit_app_data_events(&lvi.tag, &lvi.app_data);
+    for action in &instance.actions {
+        for consumed in &action.consumed_publics {
+            emit_app_data_events(&consumed.resource_nullifier, &consumed.app_data);
+            all_tags.push(consumed.resource_nullifier.into());
+            all_logic_refs.push(consumed.resource_logic_ref.into());
+            all_is_consumed.push(true);
+        }
+        for created in &action.created_publics {
+            emit_app_data_events(&created.resource_commitment, &created.app_data);
+            all_tags.push(created.resource_commitment.into());
+            all_logic_refs.push(created.resource_logic_ref.into());
+            all_is_consumed.push(false);
         }
 
         emit!(ActionExecutedEvent {
-            action_tree_root: action_tree_root.to_bytes(),
-            action_tag_count: tags.len() as u32,
+            action_tree_root: action.action_tree_root.into(),
+            action_tag_count: (action.consumed_publics.len() + action.created_publics.len()) as u32,
         });
-
-        all_tags.extend(tags.iter().map(|d| d.to_bytes()));
-        all_logic_refs.extend(logic_refs.iter().map(|d| d.to_bytes()));
     }
 
     // Runs before nullifier and commitment state changes so that a forwarder
@@ -664,13 +685,16 @@ fn execute_settlement<'info>(
     // in flight, and it can read any account it is handed; running it first
     // bounds what this settlement has written by the time it executes.
     #[cfg(not(test))]
-    external_calls::execute_external_calls(tx, remaining_accounts, nullifiers.len())
+    external_calls::execute_external_calls(instance, remaining_accounts, nullifiers.len())
         .map_err(anchor_lang::error::Error::from)?;
 
-    // Emit TransactionExecuted event (EVM parity)
+    // Emit TransactionExecuted event (EVM parity). `is_consumed` states each
+    // tag's role explicitly — consumed and created resources are grouped per
+    // action rather than alternating, so parity cannot infer it.
     emit!(TransactionExecutedEvent {
         tags: all_tags,
         logic_refs: all_logic_refs,
+        is_consumed: all_is_consumed,
     });
 
     let rent = Rent::get()?;
@@ -684,7 +708,7 @@ fn execute_settlement<'info>(
 
         for (i, nullifier) in nullifiers.iter().enumerate() {
             let marker = &remaining_accounts[i];
-            let nullifier_bytes = nullifier.to_bytes();
+            let nullifier_bytes: [u8; 32] = (*nullifier).into();
             nullifier::check_and_create_nullifier_marker(
                 &crate::ID,
                 pa_state_key,
@@ -698,7 +722,7 @@ fn execute_settlement<'info>(
         msg!("Created {} nullifier PDAs", nullifiers.len());
     }
 
-    let commitments = settle::extract_commitments(tx)?;
+    let commitments = settle::extract_commitments(instance);
     maybe_grow_account(
         pa_state_info,
         state,
@@ -1049,11 +1073,14 @@ pub struct ActionExecutedEvent {
     pub action_tag_count: u32,
 }
 
-/// Matches EVM PA's TransactionExecuted event.
+/// Matches EVM PA's TransactionExecuted event, with each tag's role stated
+/// explicitly: `is_consumed[i]` is true when `tags[i]` is a nullifier and
+/// false when it is a commitment.
 #[event]
 pub struct TransactionExecutedEvent {
     pub tags: Vec<[u8; 32]>,
     pub logic_refs: Vec<[u8; 32]>,
+    pub is_consumed: Vec<bool>,
 }
 
 /// Matches EVM PA's ForwarderCallExecuted event.
@@ -1065,7 +1092,7 @@ pub struct ForwarderCallExecutedEvent {
 }
 
 fn emit_app_data_events(tag: &arm_core::Digest, app_data: &arm_core::logic_instance::AppData) {
-    let tag_bytes = tag.to_bytes();
+    let tag_bytes: [u8; 32] = (*tag).into();
 
     macro_rules! emit_payloads {
         ($payloads:expr, $Event:ident) => {

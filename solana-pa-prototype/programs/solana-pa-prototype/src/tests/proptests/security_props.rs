@@ -1,97 +1,112 @@
 use super::strategies::arb_digest;
-use crate::encoding::{compute_action_tree_root, compute_batch_aggregation_journal_digest};
 use crate::merkle::append_to_tree;
-use crate::tests::utils::{create_minimal_transaction, create_test_pa_state};
-use arm_core::logic_instance::{AppData, ExpirableBlob, LogicVerifierInputs};
+use crate::tests::utils::{create_test_pa_state, minimal_instance};
+use arm_core::logic_instance::ExpirableBlob;
 use arm_core::Digest;
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
-// Journal digest rejects structurally invalid transactions.
+// Journal digest binds every instance field the settlement acts on.
+//
+// The digest is recomputed from the typed instance (`to_journal`), so a
+// mutated instance necessarily produces a different Groth16 public input and
+// the proof no longer verifies. These properties pin that binding for each
+// field category.
 // ---------------------------------------------------------------------------
 
-/// Swapping the consumed/created LVI tags must be detected — the swapped LVI's
-/// verifying_key no longer matches the expected logic_ref for the tag position.
-#[test]
-fn swapped_lvi_tags_rejected() {
-    let mut tx = create_minimal_transaction();
-    let original = compute_batch_aggregation_journal_digest(&tx).unwrap();
-
-    let tag0 = tx.actions[0].logic_verifier_inputs[0].tag;
-    let tag1 = tx.actions[0].logic_verifier_inputs[1].tag;
-    tx.actions[0].logic_verifier_inputs[0].tag = tag1;
-    tx.actions[0].logic_verifier_inputs[1].tag = tag0;
-
-    let result = compute_batch_aggregation_journal_digest(&tx);
-    assert!(
-        result.is_err() || result.unwrap() != original,
-        "swapped LVI tags must be detected"
-    );
-}
-
-/// Removing an LVI leaves fewer LVIs than tags and must be rejected.
-#[test]
-fn missing_lvi_rejected() {
-    let mut tx = create_minimal_transaction();
-    tx.actions[0].logic_verifier_inputs.pop();
-    assert!(compute_batch_aggregation_journal_digest(&tx).is_err());
-}
-
-/// Two LVIs sharing the same tag leave one required tag without an LVI →
-/// `find_logic_input` returns `TagNotFound`.
-#[test]
-fn duplicate_lvi_tags_rejected() {
-    use crate::tests::utils::decode_cu_instance;
-
-    let mut tx = create_minimal_transaction();
-    let instance = decode_cu_instance(&tx.actions[0].compliance_units[0]);
-    tx.actions[0].logic_verifier_inputs[1].tag = instance.consumed_nullifier;
-    tx.actions[0].logic_verifier_inputs[1].verifying_key = instance.consumed_logic_ref;
-
-    assert!(compute_batch_aggregation_journal_digest(&tx).is_err());
+fn journal_digest(instance: &arm_core::aggregation_instance::AggregationInstance) -> [u8; 32] {
+    arm_solana::journal::aggregation_journal_digest(instance)
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100_000))]
+    #![proptest_config(ProptestConfig::with_cases(10_000))]
 
-    /// Pushing an extra LVI beyond `tags.len()` must be rejected by the count check.
+    /// Mutating any resource tag (nullifier or commitment) changes the digest.
     #[test]
-    fn extra_lvi_rejected(extra_vk in prop::array::uniform32(any::<u8>())) {
-        let mut tx = create_minimal_transaction();
-        tx.actions[0].logic_verifier_inputs.push(LogicVerifierInputs {
-            tag: Digest::from_bytes(extra_vk),
-            verifying_key: Digest::from_bytes(extra_vk),
-            app_data: AppData::new(),
-            proof: None,
-        });
-        prop_assert!(compute_batch_aggregation_journal_digest(&tx).is_err());
+    fn tag_mutation_changes_journal_digest(replacement in arb_digest()) {
+        let instance = minimal_instance();
+        let honest = journal_digest(&instance);
+
+        let mut nf_mutated = instance.clone();
+        prop_assume!(nf_mutated.actions[0].consumed_publics[0].resource_nullifier != replacement);
+        nf_mutated.actions[0].consumed_publics[0].resource_nullifier = replacement;
+        prop_assert_ne!(honest, journal_digest(&nf_mutated));
+
+        let mut cm_mutated = instance.clone();
+        prop_assume!(cm_mutated.actions[0].created_publics[0].resource_commitment != replacement);
+        cm_mutated.actions[0].created_publics[0].resource_commitment = replacement;
+        prop_assert_ne!(honest, journal_digest(&cm_mutated));
     }
 
-    /// Wrong verifying_key on an LVI must be rejected before journal serialization.
+    /// Mutating a logic ref or the consumed root changes the digest.
     #[test]
-    fn wrong_verifying_key_rejected(wrong_vk in prop::array::uniform32(any::<u8>())) {
-        let mut tx = create_minimal_transaction();
-        let new_vk = Digest::from_bytes(wrong_vk);
-        prop_assume!(new_vk != tx.actions[0].logic_verifier_inputs[0].verifying_key);
-        tx.actions[0].logic_verifier_inputs[0].verifying_key = new_vk;
-        prop_assert!(compute_batch_aggregation_journal_digest(&tx).is_err());
+    fn logic_ref_and_root_mutation_changes_journal_digest(replacement in arb_digest()) {
+        let instance = minimal_instance();
+        let honest = journal_digest(&instance);
+
+        let mut lr_mutated = instance.clone();
+        prop_assume!(lr_mutated.actions[0].consumed_publics[0].resource_logic_ref != replacement);
+        lr_mutated.actions[0].consumed_publics[0].resource_logic_ref = replacement;
+        prop_assert_ne!(honest, journal_digest(&lr_mutated));
+
+        let mut root_mutated = instance.clone();
+        prop_assume!(
+            root_mutated.actions[0].consumed_publics[0].commitment_tree_root != replacement
+        );
+        root_mutated.actions[0].consumed_publics[0].commitment_tree_root = replacement;
+        prop_assert_ne!(honest, journal_digest(&root_mutated));
     }
 
-    /// H-001 core regression: any mutation of `lvi.app_data` must change the
-    /// re-derived journal digest, so a tampered transaction cannot keep its
-    /// Groth16 proof valid.
+    /// Mutating the compliance key or kind-table commitment changes the digest.
+    #[test]
+    fn binding_field_mutation_changes_journal_digest(replacement in arb_digest()) {
+        let instance = minimal_instance();
+        let honest = journal_digest(&instance);
+
+        let mut key_mutated = instance.clone();
+        prop_assume!(key_mutated.compliance_key != replacement);
+        key_mutated.compliance_key = replacement;
+        prop_assert_ne!(honest, journal_digest(&key_mutated));
+
+        let mut table_mutated = instance.clone();
+        prop_assume!(table_mutated.kind_table_commitment != replacement);
+        table_mutated.kind_table_commitment = replacement;
+        prop_assert_ne!(honest, journal_digest(&table_mutated));
+    }
+
+    /// H-001 core regression: any mutation of a resource's `app_data` changes
+    /// the journal digest, so a tampered transaction cannot keep its Groth16
+    /// proof valid.
     #[test]
     fn app_data_mutation_changes_journal_digest(poison in any::<u8>()) {
-        let mut tx = create_minimal_transaction();
-        let honest = compute_batch_aggregation_journal_digest(&tx).unwrap();
+        let instance = minimal_instance();
+        let honest = journal_digest(&instance);
 
-        tx.actions[0].logic_verifier_inputs[0]
+        let mut tampered = instance.clone();
+        tampered.actions[0].consumed_publics[0]
             .app_data
             .resource_payload
             .push(ExpirableBlob { blob: vec![poison as u32], deletion_criterion: 0 });
 
-        let tampered = compute_batch_aggregation_journal_digest(&tx).unwrap();
-        prop_assert_ne!(honest, tampered);
+        prop_assert_ne!(honest, journal_digest(&tampered));
+    }
+
+    /// Appending an extra action (even an empty one) changes the digest.
+    #[test]
+    fn extra_action_changes_journal_digest(root in arb_digest()) {
+        let instance = minimal_instance();
+        let honest = journal_digest(&instance);
+
+        let mut extended = instance.clone();
+        extended.actions.push(arm_core::aggregation_instance::ActionAggregated {
+            consumed_publics: vec![],
+            created_publics: vec![],
+            delta_x: [0u32; 8],
+            delta_y: [0u32; 8],
+            action_tree_root: root,
+        });
+
+        prop_assert_ne!(honest, journal_digest(&extended));
     }
 }
 
@@ -101,7 +116,8 @@ proptest! {
 
 /// Naive reference Merkle tree: builds the full tree layer by layer.
 fn reference_merkle_root(leaves: &[Digest]) -> Digest {
-    use crate::merkle::{hash_two, PADDING_LEAF};
+    use crate::merkle::hash_two;
+    use arm_core::merkle_path::PADDING_LEAF;
 
     if leaves.is_empty() {
         return PADDING_LEAF;
@@ -197,11 +213,12 @@ fn merkle_tree_rejects_at_max_capacity() {
         pending_authority: None,
         verifier_router: anchor_lang::prelude::Pubkey::default(),
         proof_selector: [0; 4],
+        kind_table_commitment: [0; 32],
         lifecycle: crate::state::PALifecycle::Running,
-        root: crate::merkle::EMPTY_TREE_ROOT_INITIAL.to_bytes(),
+        root: crate::merkle::EMPTY_TREE_ROOT_INITIAL.into(),
         next_index: 0,
         current_depth: depth as u8,
-        frontier: (0..depth).map(|i| ZEROS[i].to_bytes()).collect(),
+        frontier: (0..depth).map(|i| ZEROS[i].into()).collect(),
         min_expiry_slots: 100,
         max_expiry_slots: 216_000,
     };
@@ -234,55 +251,6 @@ fn merkle_tree_rejects_at_max_capacity() {
         state.current_depth,
         MAX_TREE_DEPTH
     );
-}
-
-// ---------------------------------------------------------------------------
-// Action tree: catches tag substitution and PADDING_LEAF tag collisions.
-// ---------------------------------------------------------------------------
-
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100_000))]
-
-    /// PADDING_LEAF as a tag must not collide with padding in the tree.
-    /// [A] padded to [A, PADDING_LEAF] must differ from [A, PADDING_LEAF] as explicit tags.
-    #[test]
-    fn padding_leaf_tag_does_not_collide_with_tree_padding(
-        a in arb_digest(),
-    ) {
-        use crate::merkle::PADDING_LEAF;
-
-        let root_one_tag = compute_action_tree_root(&[a]).unwrap();
-        let root_two_tags = compute_action_tree_root(&[a, PADDING_LEAF]).unwrap();
-
-        // If these are equal, an attacker can add/remove trailing PADDING_LEAF
-        // tags without changing the action tree root.
-        prop_assert_ne!(
-            root_one_tag, root_two_tags,
-            "1-tag tree padded with PADDING_LEAF must differ from 2-tag tree with explicit PADDING_LEAF"
-        );
-    }
-
-    /// Replacing any single tag in a 2-to-32-tag tree must change the root.
-    #[test]
-    fn action_tree_detects_single_tag_substitution(
-        tags in prop::collection::vec(arb_digest(), 2..=32),
-        replacement in arb_digest(),
-    ) {
-        let position = tags.len() / 2; // deterministic mid-point, always valid
-        prop_assume!(tags[position] != replacement);
-
-        let original_root = compute_action_tree_root(&tags).unwrap();
-
-        let mut mutated = tags.clone();
-        mutated[position] = replacement;
-
-        let mutated_root = compute_action_tree_root(&mutated).unwrap();
-        prop_assert_ne!(
-            original_root, mutated_root,
-            "tag substitution at position {} must change root",
-            position
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------

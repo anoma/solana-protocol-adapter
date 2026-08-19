@@ -1,28 +1,10 @@
-use crate::external_calls::{
-    build_forwarder_instruction_data, encode_external_call, extract_external_calls,
-    FORWARD_CALL_DISCRIMINATOR,
-};
 use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
-use crate::tests::utils::{create_minimal_transaction, create_transaction_with_external_payload};
-use crate::types::{OutputMode, SolanaExternalCall};
-use arm_core::compliance::ComplianceInstance;
+use crate::tests::utils::create_minimal_transaction;
 use arm_core::transaction::Transaction;
 use arm_core::Digest;
 
 mod fixture_tests {
     use super::*;
-
-    #[test]
-    fn test_compliance_instance_size() {
-        // 5 Digests (5 × 32 = 160) + 2 × [u32; 8] (2 × 32 = 64) = 224 bytes
-        let instance = ComplianceInstance::default();
-        let serialized = bincode::serialize(&instance).unwrap();
-        assert_eq!(
-            serialized.len(),
-            224,
-            "ComplianceInstance bincode size must be fixed at 224 bytes"
-        );
-    }
 
     #[test]
     fn test_digest_bincode_layout() {
@@ -48,57 +30,16 @@ mod fixture_tests {
     }
 }
 
-mod integration_tests {
-    use super::*;
-
-    #[test]
-    fn test_external_call_transaction_structure() {
-        use block_time_forwarder::RESULT_LT;
-
-        let forwarder_program_id = [0x11; 32];
-        let expected_time: i64 = 0; // Unix epoch - far in past
-        let call = SolanaExternalCall {
-            program_id: forwarder_program_id,
-            instruction_data: expected_time.to_le_bytes().to_vec(),
-            expected_output: vec![RESULT_LT],
-            output_mode: OutputMode::ReturnData,
-            num_accounts: 2,
-        };
-
-        let blob = encode_external_call(&call);
-        let tx = create_transaction_with_external_payload(vec![blob]);
-
-        let extracted = extract_external_calls(&tx).unwrap();
-        assert_eq!(extracted.len(), 1, "Should have 1 external call");
-
-        let (logic_ref, extracted_call) = &extracted[0];
-        assert_eq!(extracted_call.program_id, forwarder_program_id);
-        assert_eq!(
-            extracted_call.instruction_data,
-            expected_time.to_le_bytes().to_vec()
-        );
-        assert_eq!(extracted_call.expected_output, vec![RESULT_LT]);
-
-        let logic_ref_bytes = logic_ref.to_bytes();
-        let ix_data =
-            build_forwarder_instruction_data(&logic_ref_bytes, &extracted_call.instruction_data);
-
-        // discriminator (8) + logic_ref (32) + len (4) + data (8) = 52 bytes
-        assert_eq!(ix_data.len(), 52);
-        assert_eq!(&ix_data[0..8], &FORWARD_CALL_DISCRIMINATOR);
-    }
-}
-
 mod governance_tests {
     use super::*;
 
     #[test]
     fn test_pa_state_account_space_calculation() {
-        assert_eq!(PAStateAccount::INITIAL_SPACE, 204);
-        assert_eq!(PAStateAccount::MAX_SPACE, 1196);
-        assert_eq!(PAStateAccount::space_for_depth(1), 204);
-        assert_eq!(PAStateAccount::space_for_depth(2), 236);
-        assert_eq!(PAStateAccount::space_for_depth(32), 1196);
+        assert_eq!(PAStateAccount::INITIAL_SPACE, 236);
+        assert_eq!(PAStateAccount::MAX_SPACE, 1228);
+        assert_eq!(PAStateAccount::space_for_depth(1), 236);
+        assert_eq!(PAStateAccount::space_for_depth(2), 268);
+        assert_eq!(PAStateAccount::space_for_depth(32), 1228);
     }
 }
 

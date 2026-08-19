@@ -11,8 +11,8 @@ use crate::error::PAError;
 use crate::types::SolanaExternalCall;
 use anchor_lang::prelude::AccountInfo;
 use anchor_lang::solana_program::instruction::AccountMeta;
+use arm_core::aggregation_instance::AggregationInstance;
 use arm_core::logic_instance::ExpirableBlob;
-use arm_core::transaction::Transaction;
 use arm_core::utils::bytes_to_words;
 use arm_core::utils::words_to_bytes;
 use arm_core::Digest;
@@ -53,34 +53,43 @@ pub fn verify_output(expected: &[u8], actual: &[u8]) -> Result<(), PAError> {
     Ok(())
 }
 
-/// Extract external calls from a transaction in compliance-tag order.
+/// Extract external calls from the aggregation instance, in instance order:
+/// actions in sequence, consumed resources before created resources within
+/// each action.
 ///
-/// The aggregation journal is built by walking each action's compliance units and
-/// looking up the matching logic input by tag (`encoding.rs`). Execution order
-/// must come from that same traversal, otherwise the serialized order of
-/// `logic_verifier_inputs` becomes a second authority over effects that the proof
-/// does not bind.
+/// The instance is the single authority over effect order — its serialization
+/// is what the journal digest (and therefore the Groth16 proof) commits to,
+/// so no independently ordered wire structure can reorder effects.
 pub fn extract_external_calls(
-    tx: &Transaction,
+    instance: &AggregationInstance,
 ) -> Result<Vec<(Digest, SolanaExternalCall)>, PAError> {
-    let total: usize = tx
+    let total: usize = instance
         .actions
         .iter()
-        .flat_map(|a| &a.logic_verifier_inputs)
-        .map(|lvi| lvi.app_data.external_payload.len())
+        .map(|a| {
+            a.consumed_publics
+                .iter()
+                .map(|c| c.app_data.external_payload.len())
+                .sum::<usize>()
+                + a.created_publics
+                    .iter()
+                    .map(|c| c.app_data.external_payload.len())
+                    .sum::<usize>()
+        })
         .sum();
     let mut calls = Vec::with_capacity(total);
 
-    for action in &tx.actions {
-        crate::encoding::visit_logic_inputs_in_tag_order(
-            action,
-            |_idx, _action_tree_root, lvi| {
-                for blob in &lvi.app_data.external_payload {
-                    calls.push((lvi.verifying_key, decode_external_call(blob)?));
-                }
-                Ok(())
-            },
-        )?;
+    for action in &instance.actions {
+        for consumed in &action.consumed_publics {
+            for blob in &consumed.app_data.external_payload {
+                calls.push((consumed.resource_logic_ref, decode_external_call(blob)?));
+            }
+        }
+        for created in &action.created_publics {
+            for blob in &created.app_data.external_payload {
+                calls.push((created.resource_logic_ref, decode_external_call(blob)?));
+            }
+        }
     }
 
     Ok(calls)

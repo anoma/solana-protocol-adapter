@@ -70,9 +70,13 @@ pub enum PAError {
     #[msg("Expected delta proof, got witness")]
     ExpectedDeltaProof,
 
-    // Logic verification errors
-    #[msg("Logic verifier input not found for tag")]
-    TagNotFound,
+    // Aggregation instance binding errors
+    #[msg("Aggregation instance compliance key does not match the compliance circuit VK")]
+    ComplianceKeyMismatch,
+    #[msg("Aggregation instance kind-table commitment does not match the configured table")]
+    KindTableCommitmentMismatch,
+    #[msg("Duplicate nullifier within the aggregation instance")]
+    NullifierDuplication,
 
     // Protocol state errors
     #[msg("Protocol adapter is stopped")]
@@ -94,10 +98,6 @@ pub enum PAError {
     #[msg("Account is not owned by this program")]
     InvalidMarker,
 
-    // Compliance instance parsing
-    #[msg("Failed to parse compliance instance from journal bytes")]
-    ComplianceInstanceParseFailed,
-
     // External call encoding
     #[msg("External call expected_output must be non-empty: Solana cannot represent an explicit empty return")]
     EmptyExpectedOutput,
@@ -116,12 +116,13 @@ pub enum PAError {
 impl From<SolanaArmError> for PAError {
     fn from(e: SolanaArmError) -> Self {
         match e {
+            SolanaArmError::MissingAggregation => PAError::AggregationRequired,
+            SolanaArmError::AmbiguousTransaction => PAError::InvalidTransactionData,
             SolanaArmError::ExpectedDeltaProof => PAError::ExpectedDeltaProof,
             SolanaArmError::InvalidDeltaProof => PAError::InvalidDeltaProof,
             SolanaArmError::DeltaPointNotOnCurve => PAError::DeltaPointNotOnCurve,
             SolanaArmError::DeltaProofVerificationFailed => PAError::DeltaProofVerificationFailed,
             SolanaArmError::DeltaMismatch => PAError::DeltaMismatch,
-            SolanaArmError::ComplianceInstanceParseFailed => PAError::ComplianceInstanceParseFailed,
         }
     }
 }

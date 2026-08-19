@@ -4,8 +4,8 @@ use crate::external_calls::{
     encode_external_call, extract_external_calls, FORWARD_CALL_DISCRIMINATOR,
 };
 use crate::tests::utils::{
-    create_minimal_transaction, create_tag_consistent_payload_tx,
-    create_transaction_with_external_payload, make_account_info,
+    instance_with_consumed_and_created_payloads, instance_with_external_payload, make_account_info,
+    minimal_instance,
 };
 use crate::types::{OutputMode, SolanaExternalCall};
 use anchor_lang::prelude::Pubkey;
@@ -14,11 +14,11 @@ use arm_core::Digest;
 
 #[test]
 fn test_extract_external_calls_empty() {
-    let tx = create_minimal_transaction();
-    let calls = extract_external_calls(&tx).unwrap();
+    let instance = minimal_instance();
+    let calls = extract_external_calls(&instance).unwrap();
     assert!(
         calls.is_empty(),
-        "Transaction with no external_payload should return empty vec"
+        "Instance with no external_payload should return empty vec"
     );
 }
 
@@ -33,9 +33,9 @@ fn test_extract_external_calls_single() {
     };
     let blob = encode_external_call(&call);
 
-    let tx = create_transaction_with_external_payload(vec![blob]);
+    let instance = instance_with_external_payload(vec![blob]);
 
-    let extracted = extract_external_calls(&tx).unwrap();
+    let extracted = extract_external_calls(&instance).unwrap();
     assert_eq!(extracted.len(), 1, "Should extract exactly one call");
 
     let (_, extracted_call) = &extracted[0];
@@ -44,11 +44,10 @@ fn test_extract_external_calls_single() {
     assert_eq!(extracted_call.expected_output, call.expected_output);
 }
 
-/// Execution order must follow the compliance-tag traversal, not the wire order
-/// of logic_verifier_inputs. Reversing the wire entries must not change the
-/// order of extracted calls.
+/// Execution order is the instance order the proof commits to: consumed
+/// resources before created resources within each action.
 #[test]
-fn test_extract_external_calls_follows_tag_order_not_wire_order() {
+fn test_extract_external_calls_consumed_before_created() {
     let call_a = SolanaExternalCall {
         program_id: [0xAA; 32],
         instruction_data: vec![0x01],
@@ -64,51 +63,21 @@ fn test_extract_external_calls_follows_tag_order_not_wire_order() {
         num_accounts: 1,
     };
 
-    let tx = create_tag_consistent_payload_tx(
+    let instance = instance_with_consumed_and_created_payloads(
         vec![encode_external_call(&call_a)],
         vec![encode_external_call(&call_b)],
     );
-    let ordered = extract_external_calls(&tx).expect("canonical tx must extract");
+    let ordered = extract_external_calls(&instance).expect("instance must extract");
     assert_eq!(ordered.len(), 2);
-    assert_eq!(ordered[0].1.instruction_data, vec![0x01]);
-    assert_eq!(ordered[1].1.instruction_data, vec![0x02]);
-
-    // Reverse only the wire order. The compliance units are untouched, so the
-    // proof would still verify; extraction order must be unchanged.
-    let mut reversed = tx.clone();
-    reversed.actions[0].logic_verifier_inputs.reverse();
-    let after = extract_external_calls(&reversed).expect("reordered tx must extract");
-
     assert_eq!(
-        after.len(),
-        2,
-        "reordering wire entries must not drop calls"
-    );
-    assert_eq!(
-        after[0].1.instruction_data,
+        ordered[0].1.instruction_data,
         vec![0x01],
-        "first call must still be the consumed-tag call"
+        "first call must be the consumed resource's call"
     );
     assert_eq!(
-        after[1].1.instruction_data,
+        ordered[1].1.instruction_data,
         vec![0x02],
-        "second call must still be the created-tag call"
-    );
-}
-
-/// A tag appearing twice makes the mapping ambiguous and must be rejected.
-#[test]
-fn test_extract_external_calls_rejects_duplicate_tags() {
-    let tx_base = create_minimal_transaction();
-    let mut tx = tx_base.clone();
-    tx.actions[0].logic_verifier_inputs[1].tag = tx.actions[0].logic_verifier_inputs[0].tag;
-
-    let result = extract_external_calls(&tx);
-
-    assert!(
-        matches!(result, Err(PAError::InvalidTransactionData)),
-        "duplicate LVI tags must be rejected, got {:?}",
-        result
+        "second call must be the created resource's call"
     );
 }
 
@@ -119,9 +88,9 @@ fn test_extract_external_calls_invalid_blob() {
         deletion_criterion: 0,
     };
 
-    let tx = create_transaction_with_external_payload(vec![invalid_blob]);
+    let instance = instance_with_external_payload(vec![invalid_blob]);
 
-    let result = extract_external_calls(&tx);
+    let result = extract_external_calls(&instance);
     assert!(result.is_err(), "Invalid blob should return error");
 }
 
@@ -136,20 +105,17 @@ fn test_extract_external_calls_logic_ref_association() {
     };
     let blob = encode_external_call(&call);
 
-    let verifying_key = Digest::from_bytes([0xBB; 32]);
-    let mut tx = create_transaction_with_external_payload(vec![blob]);
-    crate::tests::utils::mutate_cu_instance(&mut tx.actions[0].compliance_units[0], |inst| {
-        inst.consumed_logic_ref = verifying_key
-    });
-    tx.actions[0].logic_verifier_inputs[0].verifying_key = verifying_key;
+    let logic_ref = Digest::from_bytes([0xBB; 32]);
+    let mut instance = instance_with_external_payload(vec![blob]);
+    instance.actions[0].consumed_publics[0].resource_logic_ref = logic_ref;
 
-    let extracted = extract_external_calls(&tx).unwrap();
+    let extracted = extract_external_calls(&instance).unwrap();
     assert_eq!(extracted.len(), 1);
 
-    let (logic_ref, _) = &extracted[0];
+    let (extracted_logic_ref, _) = &extracted[0];
     assert_eq!(
-        *logic_ref, verifying_key,
-        "Logic ref should match verifying_key from LVI"
+        *extracted_logic_ref, logic_ref,
+        "Logic ref should match the resource's logic ref"
     );
 }
 
