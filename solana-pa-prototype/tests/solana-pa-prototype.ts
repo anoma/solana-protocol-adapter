@@ -394,19 +394,20 @@ async function settleFixtureViaTxData(
       .signers([authority]);
 
   const newRootMarker =
-    options?.newRootMarker ?? (await predictRootMarkerPda(requireCommitments(options)));
+    options?.newRootMarker ??
+    (await predictRootMarkerPda(requireCommitments(options?.createdCommitments)));
   return buildSettle(newRootMarker).rpc();
 }
 
 // A settlement expected to succeed must predict its produced-root marker from
 // the transaction's created commitments; one expected to fail passes an
 // explicit (dummy) marker instead.
-function requireCommitments(options?: { createdCommitments?: Buffer[] }): Buffer[] {
+function requireCommitments(createdCommitments?: Buffer[]): Buffer[] {
   assert.ok(
-    options?.createdCommitments,
+    createdCommitments,
     "settlement without an explicit newRootMarker needs createdCommitments to predict it",
   );
-  return options!.createdCommitments!;
+  return createdCommitments!;
 }
 
 function commitmentsOf(fx: Fixture): Buffer[] {
@@ -518,7 +519,8 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
         .signers([authority]);
 
     const newRootMarker =
-      options?.newRootMarker ?? (await predictRootMarkerPda(requireCommitments(options)));
+      options?.newRootMarker ??
+      (await predictRootMarkerPda(requireCommitments(options?.createdCommitments)));
     return buildSettle(newRootMarker).rpc();
   }
 
@@ -2253,6 +2255,7 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     const { uploadId, txData } = await uploadTxData(authority, payload);
     const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
 
+    let caught: any = null;
     try {
       await program.methods
         .settleFromTxdata(uploadId)
@@ -2274,29 +2277,31 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
         ])
         .signers([authority])
         .rpc();
-      assert.fail(
-        "transfer-shape settlement succeeded in the default heap — the fixture no " +
-          "longer exercises the OOM regression; increase its payload sizes",
-      );
     } catch (e: any) {
-      if (e.message?.startsWith("transfer-shape settlement succeeded")) throw e;
-      // The failure must be genuine memory exhaustion, not a later check
-      // (e.g. the dummy root marker) reached after the heap survived: a PA
-      // error code would mean the program ran to a logic check, so the
-      // fixture did NOT exhaust the default heap.
-      const code = extractPAErrorCode(e);
-      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-      assert.isNull(
-        code,
-        `expected a runtime memory failure, got PA error code ${code} — the ` +
-          "fixture settled past the heap in the default budget; increase its " +
-          `payload sizes\nLogs:\n${logs.slice(-15).join("\n")}`,
-      );
-      assert.ok(
-        logs.some((l) => /memory allocation failed|out of memory|Access violation/i.test(l)),
-        `expected a memory-exhaustion log line\nLogs:\n${logs.slice(-15).join("\n")}`,
-      );
+      caught = e;
     }
+    assert.isNotNull(
+      caught,
+      "transfer-shape settlement succeeded in the default heap — the fixture no " +
+        "longer exercises the OOM regression; increase its payload sizes",
+    );
+
+    // The failure must be genuine memory exhaustion, not a later check
+    // (e.g. the dummy root marker) reached after the heap survived: a PA
+    // error code would mean the program ran to a logic check, so the
+    // fixture did NOT exhaust the default heap.
+    const code = extractPAErrorCode(caught);
+    const logs: string[] = caught?.logs ?? caught?.error?.logs ?? [];
+    assert.isNull(
+      code,
+      `expected a runtime memory failure, got PA error code ${code} — the ` +
+        "fixture settled past the heap in the default budget; increase its " +
+        `payload sizes\nLogs:\n${logs.slice(-15).join("\n")}`,
+    );
+    assert.ok(
+      logs.some((l) => /memory allocation failed|out of memory|Access violation/i.test(l)),
+      `expected a memory-exhaustion log line\nLogs:\n${logs.slice(-15).join("\n")}`,
+    );
   });
 
   it("settles the three-action transfer-shape fixture and emits payload events", async () => {

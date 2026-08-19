@@ -672,10 +672,6 @@ const CAPTURED_TRANSFER_WIRE_BYTES: usize = 3020;
 const TRANSFER_SHAPE_RESOURCE_PAYLOAD_WORDS: usize = 512;
 const TRANSFER_SHAPE_DISCOVERY_PAYLOAD_WORDS: usize = 192;
 
-/// Anoma deletion criterion "never delete" — payloads with it are emitted as
-/// on-chain events. Must match `solana_pa::state::DELETION_CRITERION_NEVER`.
-const DELETION_CRITERION_NEVER: u32 = solana_pa::state::DELETION_CRITERION_NEVER;
-
 /// Deterministic payload blob: `words` u32 words derived from the action
 /// index, deletion criterion "never" (emitted as an event at settlement).
 fn transfer_shape_payload_blob(action_idx: usize, words: usize, salt: u32) -> ExpirableBlob {
@@ -683,7 +679,7 @@ fn transfer_shape_payload_blob(action_idx: usize, words: usize, salt: u32) -> Ex
         blob: (0..words as u32)
             .map(|w| (action_idx as u32) << 16 | salt << 8 | (w & 0xff))
             .collect(),
-        deletion_criterion: DELETION_CRITERION_NEVER,
+        deletion_criterion: solana_pa::state::DELETION_CRITERION_NEVER,
     }
 }
 
@@ -723,21 +719,19 @@ async fn generate_transfer_shape_transaction(
             rcv,
         );
 
-        let mut created_app_data = AppData::default();
-        created_app_data
-            .resource_payload
-            .push(transfer_shape_payload_blob(
+        let created_app_data = AppData {
+            resource_payload: vec![transfer_shape_payload_blob(
                 i,
                 TRANSFER_SHAPE_RESOURCE_PAYLOAD_WORDS,
                 1,
-            ));
-        created_app_data
-            .discovery_payload
-            .push(transfer_shape_payload_blob(
+            )],
+            discovery_payload: vec![transfer_shape_payload_blob(
                 i,
                 TRANSFER_SHAPE_DISCOVERY_PAYLOAD_WORDS,
                 2,
-            ));
+            )],
+            ..AppData::default()
+        };
 
         actions.push(prove_action(prover, &witness, AppData::default(), created_app_data).await?);
         rcvs.push(witness.rcv);
