@@ -1,24 +1,21 @@
 use anchor_lang::prelude::{AnchorDeserialize as BorshDeserialize, AnchorSerialize, Pubkey};
 use anyhow::{anyhow, bail, Context, Result};
-use arm::action::{Action, ActionExt};
-use arm::action_tree::MerkleTree;
-use arm::compliance::{initial_root, ComplianceInstance, ComplianceWitness};
-use arm::compliance_unit::{create_compliance_unit, ComplianceUnit};
-use arm::constants::{BATCH_AGGREGATION_PK, BATCH_AGGREGATION_VK, COMPLIANCE_PK, COMPLIANCE_VK};
-use arm::delta_proof::DeltaWitness;
+use arm::action_tree::ActionTree;
+use arm::compliance::{ComplianceWitness, INITIAL_ROOT};
+use arm::compliance_unit::ComplianceUnit;
+use arm::constants::{
+    global_kind_table, init_kind_table_from_file, BATCH_AGGREGATION_PK, BATCH_AGGREGATION_VK,
+    COMPLIANCE_PK, COMPLIANCE_VK,
+};
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
-use arm::logic_proof::{LogicVerifier, LogicVerifierInputsExt};
+use arm::logic_proof::LogicVerifier;
 use arm::merkle_path::MerklePath;
-use arm::nullifier_key::{NullifierKey, NullifierKeyExt};
-use arm::proving_system::encode_seal;
-use arm::proving_system::ProofType as LocalProofType;
-use arm::resource::Resource;
-use arm::transaction::{Delta, Transaction, TransactionExt};
-use arm::utils::core_to_risc0_digest;
-use arm::CoreDeltaWitness;
+use arm::nullifier_key::NullifierKey;
+use arm::proving_system::{encode_seal, ProofType as LocalProofType};
+use arm::resource::{ConsumedResourceWitness, Resource};
+use arm::transaction::{Aggregation, Delta, Transaction};
 use arm::Digest;
-use arm::MerklePathExt;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use heliax_ap_orchestrator_sdk::{
@@ -38,10 +35,11 @@ use verifier_router::Seal;
 
 use passthrough_logic_methods::{PASSTHROUGH_LOGIC_GUEST_ELF, PASSTHROUGH_LOGIC_GUEST_ID};
 
-fn hash_delta_msg(msg: &[u8]) -> [u8; 32] {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(msg).into()
-}
+/// The kind table every fixture commits to: the committed empty table. The
+/// compliance circuit hashes the witness's table into the instance, and the
+/// PA pins that commitment at initialization, so fixtures and deployment
+/// tooling must agree on this file.
+const KIND_TABLE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/kind_table.json");
 
 /// Per-HTTP-request timeout for queue calls. Queue-side job timeouts (5–10 min)
 /// are independent.
@@ -88,7 +86,7 @@ async fn queue_compliance_proof(
         bail!("queue returned compliance proof for a different verifying key");
     }
     Ok(ComplianceUnit {
-        proof: Some(result.receipt),
+        proof: result.receipt,
         instance: result.instance,
     })
 }
@@ -122,7 +120,7 @@ async fn queue_logic_proof<W: Serialize>(
 
 /// Hand the transaction to the queue's GPU aggregation worker. Caller-supplied
 /// `BATCH_AGGREGATION_PK` and `COMPLIANCE_VK` pin the worker to our circuit
-/// images. Returns a transaction with `aggregation_proof` populated and the
+/// images. Returns a transaction with `aggregation` populated and the
 /// individual base proofs erased.
 async fn queue_aggregate_proof(client: &QueueClient, tx: Transaction) -> Result<Transaction> {
     let serialized = bincode::serialize(&tx).context("serialize tx for aggregation")?;
@@ -155,7 +153,7 @@ enum Prover {
 async fn local_compliance_proof(witness: &ComplianceWitness) -> Result<ComplianceUnit> {
     let witness = witness.clone();
     tokio::task::spawn_blocking(move || {
-        create_compliance_unit(&witness, LocalProofType::Succinct)
+        arm::compliance_unit::create(&witness, LocalProofType::Succinct)
             .map_err(|e| anyhow!("local compliance proof: {e:?}"))
     })
     .await
@@ -179,7 +177,7 @@ where
 /// Aggregate a transaction's base proofs into a single Groth16 proof locally.
 async fn local_aggregate_proof(mut tx: Transaction) -> Result<Transaction> {
     tokio::task::spawn_blocking(move || {
-        tx.aggregate(LocalProofType::Groth16)
+        arm::transaction::aggregate(&mut tx, LocalProofType::Groth16)
             .map_err(|e| anyhow!("local aggregate proof: {e:?}"))?;
         Ok(tx)
     })
@@ -219,21 +217,6 @@ async fn aggregate_tx(prover: &Prover, tx: Transaction) -> Result<Transaction> {
         Prover::Queue(client) => queue_aggregate_proof(client, tx).await,
         Prover::Local => local_aggregate_proof(tx).await,
     }
-}
-
-/// `ComplianceUnit::instance` is journal bytes on the wire — parse, mutate
-/// (via `f`), and re-encode in one place.
-fn mutate_compliance_instance<R>(
-    cu: &mut ComplianceUnit,
-    f: impl FnOnce(&mut ComplianceInstance) -> R,
-) -> Result<R> {
-    let mut inst =
-        ComplianceInstance::from_journal(&cu.instance).context("parse compliance instance")?;
-    let r = f(&mut inst);
-    cu.instance = inst
-        .to_journal()
-        .context("re-encode mutated compliance instance")?;
-    Ok(r)
 }
 
 use block_time_forwarder::{RESULT_GT, RESULT_LT};
@@ -314,17 +297,24 @@ enum ForwarderMode {
     TestForwarderSilent,
 }
 
-/// Extract the Groth16 selector from a transaction's aggregation proof.
-/// The selector is the first 4 bytes of the verifier_parameters digest,
-/// which is the last 32 bytes of the serialized proof.
-fn extract_selector(tx: &Transaction) -> Result<String> {
-    let agg_proof = tx
-        .aggregation_proof
+/// The aggregation carried by a transaction, or a clear error if it has none.
+fn require_aggregation(tx: &Transaction) -> Result<&Aggregation> {
+    tx.aggregation
         .as_ref()
-        .ok_or_else(|| anyhow!("no aggregation_proof found for selector extraction"))?;
+        .ok_or_else(|| anyhow!("transaction has no aggregation"))
+}
 
-    let seal: Seal =
-        Seal::try_from_slice(agg_proof).context("decode Seal from aggregation_proof bytes")?;
+fn require_aggregation_mut(tx: &mut Transaction) -> Result<&mut Aggregation> {
+    tx.aggregation
+        .as_mut()
+        .ok_or_else(|| anyhow!("transaction has no aggregation"))
+}
+
+/// Extract the Groth16 selector from a transaction's seal-encoded
+/// aggregation proof.
+fn extract_selector(tx: &Transaction) -> Result<String> {
+    let seal: Seal = Seal::try_from_slice(&require_aggregation(tx)?.proof)
+        .context("decode Seal from aggregation proof bytes")?;
     Ok(format!("0x{}", hex::encode(seal.selector)))
 }
 
@@ -335,11 +325,10 @@ const MOCK_SELECTOR: [u8; 4] = [0xff; 4];
 
 /// Claim digest a mock seal must carry, derived from the transaction alone:
 /// the digest of the batch-aggregation receipt claim over the aggregation
-/// journal the on-chain PA independently recomputes at settle time.
+/// instance's journal, which the on-chain PA independently recomputes at
+/// settle time.
 fn mock_claim_digest(tx: &Transaction) -> Result<risc0_zkvm::sha::Digest> {
-    let journal = tx
-        .construct_aggregation_instance()
-        .map_err(|e| anyhow!("construct aggregation instance: {e:?}"))?;
+    let journal = require_aggregation(tx)?.instance.to_journal();
     Ok(compute_expected_claim_digest(
         &journal,
         &BATCH_AGGREGATION_VK,
@@ -381,43 +370,25 @@ fn encode_mock_seal(
     mock_seal_bytes(derived_claim)
 }
 
+/// Flip one bit of the aggregation instance's first created commitment.
+/// The transaction still decodes and settles structurally, but the journal
+/// digest the PA recomputes from the mutated instance no longer matches the
+/// proof, so verification must fail.
 fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> {
-    let action = tx
+    let instance = &mut require_aggregation_mut(tx)?.instance;
+    let action = instance
         .actions
         .get_mut(0)
-        .ok_or_else(|| anyhow!("tx has no actions"))?;
-    let cu = action
-        .compliance_units
+        .ok_or_else(|| anyhow!("aggregation instance has no actions"))?;
+    let created = action
+        .created_publics
         .get_mut(0)
-        .ok_or_else(|| anyhow!("tx has no compliance units"))?;
+        .ok_or_else(|| anyhow!("aggregation instance has no created resources"))?;
 
-    let (old_created_commitment, new_created_commitment) =
-        mutate_compliance_instance(cu, |instance| {
-            let old = instance.created_commitment;
-            let mut new_bytes = [0u8; 32];
-            new_bytes.copy_from_slice(old.as_bytes());
-            new_bytes[0] ^= 1;
-            let new = Digest::from_bytes(new_bytes);
-            instance.created_commitment = new;
-            (old, new)
-        })?;
-
-    // Update the corresponding created logic verifier input tag so decoding and
-    // digest computation still succeeds (proof must then fail).
-    let mut updated = false;
-    for lvi in action.logic_verifier_inputs.iter_mut() {
-        if lvi.tag == old_created_commitment {
-            lvi.tag = new_created_commitment;
-            updated = true;
-            break;
-        }
-    }
-    if !updated {
-        return Err(anyhow!(
-            "could not find created logic verifier input for tamper"
-        ));
-    }
-
+    let mut new_bytes = [0u8; 32];
+    new_bytes.copy_from_slice(created.resource_commitment.as_bytes());
+    new_bytes[0] ^= 1;
+    created.resource_commitment = Digest::from_bytes(new_bytes);
     Ok(())
 }
 
@@ -491,20 +462,13 @@ fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
     }))
 }
 
-async fn generate_test_transaction_with_external_payload(
-    prover: &Prover,
-    forwarder_mode: ForwarderMode,
-    nonce_seed: Option<u8>,
-    multi_external_call: bool,
-) -> Result<Transaction> {
-    // Use the passthrough logic circuit for both consumed and created resources.
-    // This allows us to bind arbitrary `app_data.external_payload` into real proofs.
-    let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
-
+/// A deterministic ephemeral resource with the given nonce byte, plus its
+/// nullifier under the default nullifier key.
+fn deterministic_ephemeral_resource(nonce_byte: u8) -> Result<(Resource, NullifierKey, Digest)> {
+    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
     let nf_key = NullifierKey::default();
     let nf_key_cm = nf_key.commit();
 
-    // Generate one consumed and one created resource.
     let mut consumed_resource = Resource {
         logic_ref: passthrough_vk,
         nk_commitment: nf_key_cm,
@@ -512,60 +476,40 @@ async fn generate_test_transaction_with_external_payload(
         is_ephemeral: true,
         ..Default::default()
     };
-    // Stable-ish nonce so the fixture is deterministic.
-    // Use different nonce for each fixture variant so they have different nullifiers.
-    // This prevents DuplicateNullifier errors when running multiple fixtures in a test suite.
-    let output_mismatch = matches!(
-        &forwarder_mode,
-        ForwarderMode::BlockTimeForwarder {
-            output_mismatch: true
-        }
-    );
-    let nonce_byte: u8 = nonce_seed.unwrap_or(if output_mismatch { 2 } else { 0 });
     consumed_resource.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
     let consumed_nf = consumed_resource
         .nullifier(&nf_key)
-        .context("compute consumed nullifier")?;
+        .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
+    Ok((consumed_resource, nf_key, consumed_nf))
+}
 
-    let mut created_resource = consumed_resource;
-    created_resource.set_nonce(consumed_nf);
-    let created_cm = created_resource.commitment();
+/// Prove one action (one compliance unit, one consumed + one created
+/// resource) and wrap it into a balanced, delta-proved `Transaction`. The
+/// consumed resource's app_data carries `consumed_app_data`; the created
+/// resource's is empty.
+async fn prove_single_action_transaction(
+    prover: &Prover,
+    compliance_witness: ComplianceWitness,
+    consumed_app_data: AppData,
+) -> Result<Transaction> {
+    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
 
-    // Create ComplianceWitness with fixed rcv for deterministic fixtures.
-    // The consumed resource is ephemeral, so use empty merkle_path and INITIAL_ROOT.
-    let compliance_witness = ComplianceWitness {
-        consumed_resource,
-        created_resource,
-        merkle_path: MerklePath::empty(),
-        rcv: Scalar::ONE.to_bytes().to_vec(),
-        nf_key,
-        ephemeral_root: initial_root(),
-    };
-    let compliance_receipt = prove_compliance(prover, &compliance_witness)
+    let consumed = &compliance_witness.consumed_data[0];
+    let consumed_nf = consumed
+        .resource
+        .nullifier(&consumed.nf_key)
+        .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
+    let created_cm = compliance_witness.created_resources[0].commitment();
+    let rcv = compliance_witness.rcv.clone();
+
+    let compliance_unit = prove_compliance(prover, &compliance_witness)
         .await
         .context("prove compliance")?;
 
     let tags = vec![consumed_nf, created_cm];
-    let action_tree = MerkleTree::from(tags);
-    let root = action_tree.root().context("compute action tree root")?;
-
-    // Create app_data with a real external payload for the consumed logic instance only.
-    let mut consumed_app_data = AppData::default();
-    let external_blob = match &forwarder_mode {
-        ForwarderMode::BlockTimeForwarder { output_mismatch } => {
-            block_time_forwarder_external_payload_blob(*output_mismatch)?
-        }
-        ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob()?,
-        ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
-    };
-    consumed_app_data.external_payload.push(external_blob);
-    if multi_external_call {
-        if let ForwarderMode::BlockTimeForwarder { .. } = &forwarder_mode {
-            consumed_app_data
-                .external_payload
-                .push(block_time_forwarder_external_payload_blob(false)?);
-        }
-    }
+    let root = ActionTree::new(tags)
+        .root()
+        .map_err(|e| anyhow!("compute action tree root: {e:?}"))?;
 
     let consumed_instance = LogicInstance {
         tag: consumed_nf,
@@ -598,39 +542,91 @@ async fn generate_test_transaction_with_external_payload(
     .context("prove created passthrough logic")?;
 
     let consumed_logic = LogicVerifier {
-        proof: Some(consumed_proof),
+        proof: consumed_proof,
         instance: consumed_journal,
         verifying_key: passthrough_vk,
     };
     let created_logic = LogicVerifier {
-        proof: Some(created_proof),
+        proof: created_proof,
         instance: created_journal,
         verifying_key: passthrough_vk,
     };
 
-    let action = Action::new(
-        vec![compliance_receipt],
-        vec![consumed_logic, created_logic],
-    )
-    .context("build action")?;
+    // Logic verifiers in canonical tag order: consumed nullifiers first,
+    // then created commitments — the order the aggregation guest enforces.
+    let action = arm::action::new(compliance_unit, vec![consumed_logic, created_logic])
+        .map_err(|e| anyhow!("build action: {e:?}"))?;
 
-    // Delta witness is derived from compliance witness RCVs.
-    let delta_witness =
-        DeltaWitness::from_bytes_vec(&[compliance_witness.rcv]).context("build delta witness")?;
+    let delta_witness = arm::delta_proof::from_bytes_vec(&[rcv])
+        .map_err(|e| anyhow!("build delta witness: {e:?}"))?;
 
-    let tx = Transaction::create(
-        vec![action],
-        Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
-    );
-    let balanced_tx = tx
-        .generate_delta_proof(hash_delta_msg)
-        .context("generate delta proof")?;
-    balanced_tx
-        .clone()
-        .verify(hash_delta_msg)
-        .context("verify tx")?;
+    let tx = Transaction::create(vec![action], Delta::Witness(delta_witness));
+    let balanced_tx = arm::transaction::generate_delta_proof(tx)
+        .map_err(|e| anyhow!("generate delta proof: {e:?}"))?;
+    arm::transaction::verify(&balanced_tx).map_err(|e| anyhow!("verify tx: {e:?}"))?;
 
     Ok(balanced_tx)
+}
+
+async fn generate_test_transaction_with_external_payload(
+    prover: &Prover,
+    forwarder_mode: ForwarderMode,
+    nonce_seed: Option<u8>,
+    multi_external_call: bool,
+) -> Result<Transaction> {
+    // Stable nonce so the fixture is deterministic. Each fixture variant uses
+    // a different nonce so the variants have different nullifiers; otherwise
+    // running several fixtures in one test suite hits DuplicateNullifier.
+    let output_mismatch = matches!(
+        &forwarder_mode,
+        ForwarderMode::BlockTimeForwarder {
+            output_mismatch: true
+        }
+    );
+    let nonce_byte: u8 = nonce_seed.unwrap_or(if output_mismatch { 2 } else { 0 });
+    let (consumed_resource, nf_key, consumed_nf) = deterministic_ephemeral_resource(nonce_byte)?;
+
+    let mut created_resource = consumed_resource;
+    // The compliance circuit requires created nonces to be derived from the
+    // action's consumed nullifiers (index 0: first created resource).
+    created_resource.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
+        .map_err(|e| anyhow!("derive created nonce: {e:?}"))?;
+
+    // Fixed rcv for deterministic fixtures (the randomized constructors in
+    // arm draw a fresh rcv). The consumed resource is ephemeral: empty
+    // merkle path, INITIAL_ROOT.
+    let compliance_witness = ComplianceWitness::from_parts(
+        &[ConsumedResourceWitness {
+            resource: consumed_resource,
+            cm_merkle_path: MerklePath::empty(),
+            nf_key,
+        }],
+        &[created_resource],
+        INITIAL_ROOT,
+        &Scalar::ONE.to_bytes(),
+        global_kind_table().to_vec(),
+    );
+
+    // Bind the external payload into the consumed resource's app_data via
+    // the passthrough logic circuit, which commits whatever it is given.
+    let mut consumed_app_data = AppData::default();
+    let external_blob = match &forwarder_mode {
+        ForwarderMode::BlockTimeForwarder { output_mismatch } => {
+            block_time_forwarder_external_payload_blob(*output_mismatch)?
+        }
+        ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob()?,
+        ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
+    };
+    consumed_app_data.external_payload.push(external_blob);
+    if multi_external_call {
+        if let ForwarderMode::BlockTimeForwarder { .. } = &forwarder_mode {
+            consumed_app_data
+                .external_payload
+                .push(block_time_forwarder_external_payload_blob(false)?);
+        }
+    }
+
+    prove_single_action_transaction(prover, compliance_witness, consumed_app_data).await
 }
 
 fn generate_error_variant_fixtures(
@@ -666,57 +662,54 @@ fn generate_error_variant_fixtures(
 
     {
         let mut wrong_root = tx.clone();
-        let action = wrong_root
+        let instance = &mut require_aggregation_mut(&mut wrong_root)?.instance;
+        let consumed = instance
             .actions
             .get_mut(0)
-            .ok_or_else(|| anyhow!("tx has no actions"))?;
-        let cu = action
-            .compliance_units
-            .get_mut(0)
-            .ok_or_else(|| anyhow!("tx has no compliance units"))?;
-        mutate_compliance_instance(cu, |instance| {
-            instance.consumed_commitment_tree_root = Digest::from_bytes([1u8; 32]);
-        })?;
+            .and_then(|a| a.consumed_publics.get_mut(0))
+            .ok_or_else(|| anyhow!("aggregation instance has no consumed resources"))?;
+        consumed.commitment_tree_root = Digest::from_bytes([1u8; 32]);
         write_variant("wrong_root.json", &wrong_root)?;
     }
 
     {
         let mut agg_variant = tx.clone();
-        agg_variant.aggregation_proof = None;
+        agg_variant.aggregation = None;
         write_variant("no_aggregation.json", &agg_variant)?;
+    }
 
-        agg_variant.aggregation_proof = Some(vec![0xDE; 64]);
-        write_variant("garbage_proof.json", &agg_variant)?;
+    {
+        let mut garbage = tx.clone();
+        require_aggregation_mut(&mut garbage)?.proof = vec![0xDE; 64];
+        write_variant("garbage_proof.json", &garbage)?;
+    }
+
+    {
+        let mut zero_action = tx.clone();
+        require_aggregation_mut(&mut zero_action)?.instance.actions = Vec::new();
+        write_variant("zero_action.json", &zero_action)?;
     }
 
     Ok(())
 }
 
-fn compliance_instances(tx: &Transaction) -> Result<Vec<ComplianceInstance>> {
-    tx.actions
-        .iter()
-        .flat_map(|action| action.compliance_units.iter())
-        .map(|cu| {
-            ComplianceInstance::from_journal(&cu.instance)
-                .context("decode compliance instance from journal bytes")
-        })
-        .collect()
-}
-
 fn consumed_nullifiers_b64(tx: &Transaction) -> Result<Vec<String>> {
-    Ok(compliance_instances(tx)?
-        .into_iter()
-        .map(|instance| BASE64.encode(instance.consumed_nullifier.as_bytes()))
+    Ok(require_aggregation(tx)?
+        .instance
+        .actions
+        .iter()
+        .flat_map(|a| &a.consumed_publics)
+        .map(|c| BASE64.encode(c.resource_nullifier.as_bytes()))
         .collect())
 }
 
 fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
-    let initial = initial_root();
     let mut roots = BTreeSet::new();
-    for instance in compliance_instances(tx)? {
-        let root = instance.consumed_commitment_tree_root;
-        if root != initial {
-            roots.insert(root.to_bytes());
+    for action in &require_aggregation(tx)?.instance.actions {
+        for consumed in &action.consumed_publics {
+            if consumed.commitment_tree_root != INITIAL_ROOT {
+                roots.insert(<[u8; 32]>::from(consumed.commitment_tree_root));
+            }
         }
     }
     Ok(roots.into_iter().collect())
@@ -818,16 +811,14 @@ fn import_backend_result_fixture(
     let mut tx: Transaction = serde_json::from_slice(&raw)
         .with_context(|| format!("decode backend Transaction JSON {}", input.display()))?;
 
-    tx.verify_aggregation()
-        .context("verify imported backend aggregation proof")?;
+    arm::transaction::verify_aggregation(&tx)
+        .map_err(|e| anyhow!("verify imported backend aggregation proof: {e:?}"))?;
 
     let roots = historical_roots(&tx).context("extract imported historical roots")?;
 
-    let agg_proof_bytes = tx
-        .aggregation_proof
-        .as_ref()
-        .ok_or_else(|| anyhow!("imported transaction is missing aggregation_proof"))?;
-    tx.aggregation_proof = Some(encode_seal(agg_proof_bytes).context("encode imported seal")?);
+    let aggregation = require_aggregation_mut(&mut tx)?;
+    aggregation.proof =
+        encode_seal(&aggregation.proof).map_err(|e| anyhow!("encode imported seal: {e:?}"))?;
 
     let fields = derive_fixture_fields(&tx).context("derive imported fixture fields")?;
     let fixture = Fixture {
@@ -870,15 +861,17 @@ fn finalize_and_write_fixture(
     // receipts go through arm's canonical seal encoding. The fixture is
     // labeled accordingly (aggregation_proof_type, selector).
     let proof_type = timed_phase("encode_seal", || {
-        let agg_proof_bytes = tx.aggregation_proof.take().unwrap();
+        let receipt_bytes = require_aggregation(tx)?.proof.clone();
         let inner: InnerReceipt =
-            bincode::deserialize(&agg_proof_bytes).context("decode aggregation receipt")?;
+            bincode::deserialize(&receipt_bytes).context("decode aggregation receipt")?;
         Ok(if let InnerReceipt::Fake(fake) = inner {
             eprintln!("  dev-mode receipt -> mock seal (selector 0xffffffff)");
-            tx.aggregation_proof = Some(encode_mock_seal(&fake, tx)?);
+            let seal = encode_mock_seal(&fake, tx)?;
+            require_aggregation_mut(tx)?.proof = seal;
             "mock"
         } else {
-            tx.aggregation_proof = Some(encode_seal(&agg_proof_bytes).context("encode seal")?);
+            let seal = encode_seal(&receipt_bytes).map_err(|e| anyhow!("encode seal: {e:?}"))?;
+            require_aggregation_mut(tx)?.proof = seal;
             "groth16"
         })
     })?;
@@ -916,86 +909,73 @@ fn finalize_and_write_fixture(
 /// 8 is unused and avoids a `DuplicateNullifier` collision.
 const HISTORICAL_ROOT_NONCE_BYTE: u8 = 8;
 
-/// Read an existing single-action, single-compliance-unit fixture and return
-/// the digest of its created resource's commitment -- the leaf that
+/// Read an existing single-action, single-created-resource fixture and
+/// return the digest of its created resource's commitment — the leaf that
 /// settlement inserted into the on-chain commitment tree at index 0. Used to
 /// reconstruct, off-chain, the exact tree state the historical-root
 /// committer transaction lands in as leaf index 1.
 fn read_sole_created_commitment(path: &Path) -> Result<Digest> {
     let (_, tx) = load_fixture_tx(path)?;
 
-    if tx.actions.len() != 1 || tx.actions[0].compliance_units.len() != 1 {
+    let instance = &require_aggregation(&tx)?.instance;
+    if instance.actions.len() != 1 || instance.actions[0].created_publics.len() != 1 {
         bail!(
-            "{} must have exactly one action with one compliance unit to serve as \
+            "{} must have exactly one action with one created resource to serve as \
              the known single-leaf tree base for historical-root fixture generation \
              (found {} action(s))",
             path.display(),
-            tx.actions.len()
+            instance.actions.len()
         );
     }
-    let instance = ComplianceInstance::from_journal(&tx.actions[0].compliance_units[0].instance)
-        .context("decode compliance instance")?;
-    Ok(instance.created_commitment)
+    Ok(instance.actions[0].created_publics[0].resource_commitment)
 }
 
-/// Build the (unproven) compliance witness and matching created resource for
-/// the historical-root *committer* transaction: consumes a fresh ephemeral
-/// resource as usual, but its created resource is genuinely non-ephemeral
-/// (`is_ephemeral: false`), so a later transaction can consume it through a
-/// real Merkle-inclusion proof rather than the ephemeral-root shortcut.
-/// Returns the witness plus the created resource and the nullifier key that
-/// unlocks it, both needed to build the consumer transaction afterward.
+/// Build the compliance witness for the historical-root *committer*
+/// transaction: consumes a fresh ephemeral resource as usual, but its
+/// created resource is genuinely non-ephemeral (`is_ephemeral: false`), so a
+/// later transaction can consume it through a real Merkle-inclusion proof
+/// rather than the ephemeral-root shortcut. Returns the witness plus the
+/// created resource and the nullifier key that unlocks it, both needed to
+/// build the consumer transaction afterward.
 fn build_historical_root_committer_witness() -> Result<(ComplianceWitness, Resource, NullifierKey)>
 {
-    let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
-    let nf_key = NullifierKey::default();
-    let nf_key_cm = nf_key.commit();
-
-    let mut consumed_resource = Resource {
-        logic_ref: passthrough_vk,
-        nk_commitment: nf_key_cm,
-        quantity: 1,
-        is_ephemeral: true,
-        ..Default::default()
-    };
-    consumed_resource.nonce = [[HISTORICAL_ROOT_NONCE_BYTE; 16], [0u8; 16]]
-        .concat()
-        .try_into()
-        .unwrap();
-    let consumed_nf = consumed_resource
-        .nullifier(&nf_key)
-        .context("compute committer consumed nullifier")?;
+    let (consumed_resource, nf_key, consumed_nf) =
+        deterministic_ephemeral_resource(HISTORICAL_ROOT_NONCE_BYTE)?;
 
     let mut created_resource = consumed_resource;
-    created_resource.set_nonce(consumed_nf);
+    created_resource.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
+        .map_err(|e| anyhow!("derive committer created nonce: {e:?}"))?;
     created_resource.is_ephemeral = false;
 
-    let compliance_witness = ComplianceWitness {
-        consumed_resource,
-        created_resource,
-        merkle_path: MerklePath::empty(),
-        rcv: Scalar::ONE.to_bytes().to_vec(),
-        nf_key: nf_key.clone(),
-        ephemeral_root: initial_root(),
-    };
+    let compliance_witness = ComplianceWitness::from_parts(
+        &[ConsumedResourceWitness {
+            resource: consumed_resource,
+            cm_merkle_path: MerklePath::empty(),
+            nf_key: nf_key.clone(),
+        }],
+        &[created_resource],
+        INITIAL_ROOT,
+        &Scalar::ONE.to_bytes(),
+        global_kind_table().to_vec(),
+    );
 
     Ok((compliance_witness, created_resource, nf_key))
 }
 
-/// Build the (unproven) compliance witness and matching created resource for
-/// the historical-root *consumer* transaction: genuinely consumes
-/// `committed_resource` (is_ephemeral: false) via `merkle_path`, which must
-/// reconstruct the real on-chain root the committer's settlement produced.
+/// Build the compliance witness for the historical-root *consumer*
+/// transaction: genuinely consumes `committed_resource` (is_ephemeral:
+/// false) via `merkle_path`, which must reconstruct the real on-chain root
+/// the committer's settlement produced.
 fn build_historical_root_consumer_witness(
     committed_resource: Resource,
     committer_nf_key: NullifierKey,
     merkle_path: MerklePath,
-) -> Result<(ComplianceWitness, Resource)> {
-    let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
+) -> Result<ComplianceWitness> {
+    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
 
     let consumed_nf = committed_resource
         .nullifier(&committer_nf_key)
-        .context("compute consumer's consumed nullifier")?;
+        .map_err(|e| anyhow!("compute consumer's consumed nullifier: {e:?}"))?;
 
     let output_nf_key = NullifierKey::default();
     let mut created_resource = Resource {
@@ -1005,112 +985,23 @@ fn build_historical_root_consumer_witness(
         is_ephemeral: true,
         ..Default::default()
     };
-    created_resource.set_nonce(consumed_nf);
+    created_resource.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
+        .map_err(|e| anyhow!("derive consumer created nonce: {e:?}"))?;
 
-    // Built literally (like the committer's witness) rather than via arm's
-    // from_resources_with_path, which draws a random rcv and would make
-    // fixture generation nondeterministic.
-    let compliance_witness = ComplianceWitness {
-        consumed_resource: committed_resource,
-        created_resource,
-        merkle_path,
-        rcv: Scalar::ONE.to_bytes().to_vec(),
-        nf_key: committer_nf_key,
-        ephemeral_root: initial_root(),
-    };
-
-    Ok((compliance_witness, created_resource))
-}
-
-/// Prove `compliance_witness` and wrap it (plus a matching pair of
-/// passthrough logic proofs) into a balanced, delta-proved `Transaction`.
-/// No external call: this is used only by the historical-root committer and
-/// consumer, which test root retention, not the forwarder CPI path.
-async fn prove_historical_root_transaction(
-    prover: &Prover,
-    compliance_witness: ComplianceWitness,
-    created_resource: Resource,
-) -> Result<Transaction> {
-    let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
-
-    let consumed_cm = compliance_witness.consumed_resource.commitment();
-    let consumed_nf = compliance_witness
-        .consumed_resource
-        .nullifier_from_commitment(&compliance_witness.nf_key, &consumed_cm)
-        .context("compute consumed nullifier")?;
-    let created_cm = created_resource.commitment();
-    let rcv = compliance_witness.rcv.clone();
-
-    let compliance_receipt = prove_compliance(prover, &compliance_witness)
-        .await
-        .context("prove compliance")?;
-
-    let tags = vec![consumed_nf, created_cm];
-    let action_tree = MerkleTree::from(tags);
-    let root = action_tree.root().context("compute action tree root")?;
-
-    let consumed_instance = LogicInstance {
-        tag: consumed_nf,
-        is_consumed: true,
-        root,
-        app_data: AppData::default(),
-    };
-    let created_instance = LogicInstance {
-        tag: created_cm,
-        is_consumed: false,
-        root,
-        app_data: AppData::default(),
-    };
-
-    let (consumed_proof, consumed_journal) = prove_logic(
-        prover,
-        PASSTHROUGH_LOGIC_GUEST_ELF,
-        &passthrough_vk,
-        consumed_instance,
-    )
-    .await
-    .context("prove consumed passthrough logic")?;
-    let (created_proof, created_journal) = prove_logic(
-        prover,
-        PASSTHROUGH_LOGIC_GUEST_ELF,
-        &passthrough_vk,
-        created_instance,
-    )
-    .await
-    .context("prove created passthrough logic")?;
-
-    let consumed_logic = LogicVerifier {
-        proof: Some(consumed_proof),
-        instance: consumed_journal,
-        verifying_key: passthrough_vk,
-    };
-    let created_logic = LogicVerifier {
-        proof: Some(created_proof),
-        instance: created_journal,
-        verifying_key: passthrough_vk,
-    };
-
-    let action = Action::new(
-        vec![compliance_receipt],
-        vec![consumed_logic, created_logic],
-    )
-    .context("build action")?;
-
-    let delta_witness = DeltaWitness::from_bytes_vec(&[rcv]).context("build delta witness")?;
-
-    let tx = Transaction::create(
-        vec![action],
-        Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
-    );
-    let balanced_tx = tx
-        .generate_delta_proof(hash_delta_msg)
-        .context("generate delta proof")?;
-    balanced_tx
-        .clone()
-        .verify(hash_delta_msg)
-        .context("verify tx")?;
-
-    Ok(balanced_tx)
+    // Built via from_parts (like the committer's witness) rather than arm's
+    // randomized from_resources* constructors, which draw a fresh rcv and
+    // would make fixture generation nondeterministic.
+    Ok(ComplianceWitness::from_parts(
+        &[ConsumedResourceWitness {
+            resource: committed_resource,
+            cm_merkle_path: merkle_path,
+            nf_key: committer_nf_key,
+        }],
+        &[created_resource],
+        INITIAL_ROOT,
+        &Scalar::ONE.to_bytes(),
+        global_kind_table().to_vec(),
+    ))
 }
 
 /// Generate the historical-root committer and consumer fixtures.
@@ -1128,7 +1019,7 @@ async fn prove_historical_root_transaction(
 /// `hash_two(hash_two(batch_groth16_leaf, committer_leaf), ZEROS[1])`. That
 /// exact computation is replicated here using the PA's own on-chain merkle
 /// constants (`solana_pa::merkle`), and independently cross-checked against
-/// `MerklePathExt::root()` (arm's own hash) before any proof is generated, so
+/// `MerklePath::root()` (arm's own hash) before any proof is generated, so
 /// a divergence between the two hash implementations fails loudly instead of
 /// producing a fixture that can never settle.
 async fn generate_historical_root_fixtures(
@@ -1153,9 +1044,8 @@ async fn generate_historical_root_fixtures(
     let commit_start = Instant::now();
     let (committer_witness, committed_resource, committer_nf_key) =
         build_historical_root_committer_witness()?;
-    let committer_created_resource = committer_witness.created_resource;
     let mut committer_tx =
-        prove_historical_root_transaction(&prover, committer_witness, committer_created_resource)
+        prove_single_action_transaction(&prover, committer_witness, AppData::default())
             .await
             .context("build committer transaction")?;
     eprintln!(
@@ -1172,9 +1062,8 @@ async fn generate_historical_root_fixtures(
         "phase done: aggregate committer ({})",
         fmt_duration(agg_start.elapsed())
     );
-    committer_tx
-        .verify_aggregation()
-        .context("verify committer aggregated proof")?;
+    arm::transaction::verify_aggregation(&committer_tx)
+        .map_err(|e| anyhow!("verify committer aggregated proof: {e:?}"))?;
 
     finalize_and_write_fixture(
         &mut committer_tx,
@@ -1204,22 +1093,22 @@ async fn generate_historical_root_fixtures(
             "historical-root merkle path does not reconstruct the on-chain root: \
              ARM MerklePath::root()={} vs PA on-chain hash_two()={} -- the two hash \
              implementations must match before any proof is generated",
-            hex::encode(path_root.to_bytes()),
-            hex::encode(expected_root.to_bytes())
+            hex::encode(path_root.as_bytes()),
+            hex::encode(expected_root.as_bytes())
         );
     }
     eprintln!(
         "verified: MerklePath::root() matches the PA's own hash_two computation ({})",
-        hex::encode(expected_root.to_bytes())
+        hex::encode(expected_root.as_bytes())
     );
 
     eprintln!("phase: generate historical-root consumer transaction");
     let consume_start = Instant::now();
-    let (consumer_witness, consumer_created_resource) =
+    let consumer_witness =
         build_historical_root_consumer_witness(committed_resource, committer_nf_key, merkle_path)
             .context("build consumer witness")?;
     let mut consumer_tx =
-        prove_historical_root_transaction(&prover, consumer_witness, consumer_created_resource)
+        prove_single_action_transaction(&prover, consumer_witness, AppData::default())
             .await
             .context("build consumer transaction")?;
     eprintln!(
@@ -1236,37 +1125,38 @@ async fn generate_historical_root_fixtures(
         "phase done: aggregate consumer ({})",
         fmt_duration(agg_start.elapsed())
     );
-    consumer_tx
-        .verify_aggregation()
-        .context("verify consumer aggregated proof")?;
+    arm::transaction::verify_aggregation(&consumer_tx)
+        .map_err(|e| anyhow!("verify consumer aggregated proof: {e:?}"))?;
 
     // The whole point of this fixture: the consumed root must be a genuine,
-    // non-padding historical root. If it were PADDING_LEAF, is_root_valid
+    // non-padding historical root. If it were the initial root, is_root_valid
     // would accept it unconditionally before the marker lookup ever runs,
     // exactly the coverage gap this fixture exists to close.
-    let consumer_instance = compliance_instances(&consumer_tx)
-        .context("decode consumer compliance instances")?
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("consumer tx has no compliance instances"))?;
-    if consumer_instance.consumed_commitment_tree_root == initial_root() {
+    let consumer_root = require_aggregation(&consumer_tx)?
+        .instance
+        .actions
+        .first()
+        .and_then(|a| a.consumed_publics.first())
+        .map(|c| c.commitment_tree_root)
+        .ok_or_else(|| anyhow!("consumer tx has no consumed resources"))?;
+    if consumer_root == INITIAL_ROOT {
         bail!(
-            "consumer's consumed_commitment_tree_root is PADDING_LEAF -- this fixture \
+            "consumer's consumed commitment tree root is the initial root -- this fixture \
              would prove nothing about historical root retention"
         );
     }
-    if consumer_instance.consumed_commitment_tree_root.to_bytes() != expected_root.to_bytes() {
+    if consumer_root != expected_root {
         bail!(
-            "consumer's consumed_commitment_tree_root ({}) does not match the expected \
+            "consumer's consumed commitment tree root ({}) does not match the expected \
              historical root ({})",
-            hex::encode(consumer_instance.consumed_commitment_tree_root.to_bytes()),
-            hex::encode(expected_root.to_bytes())
+            hex::encode(consumer_root.as_bytes()),
+            hex::encode(expected_root.as_bytes())
         );
     }
     eprintln!(
-        "confirmed: consumer's consumed_commitment_tree_root = {} (non-padding, matches the \
+        "confirmed: consumer's consumed commitment tree root = {} (non-padding, matches the \
          committer's post-settlement root)",
-        hex::encode(consumer_instance.consumed_commitment_tree_root.to_bytes())
+        hex::encode(consumer_root.as_bytes())
     );
 
     finalize_and_write_fixture(
@@ -1328,16 +1218,27 @@ fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
     let (mut fixture, mut tx) = load_fixture_tx(input)?;
 
     let mut stripped = 0usize;
-    for action in &mut tx.actions {
-        for lvi in &mut action.logic_verifier_inputs {
-            let count = lvi.app_data.external_payload.len();
+    let instance = &mut require_aggregation_mut(&mut tx)?.instance;
+    for action in &mut instance.actions {
+        let resources = action
+            .consumed_publics
+            .iter_mut()
+            .map(|c| (&c.resource_nullifier, &mut c.app_data))
+            .chain(
+                action
+                    .created_publics
+                    .iter_mut()
+                    .map(|c| (&c.resource_commitment, &mut c.app_data)),
+            );
+        for (tag, app_data) in resources {
+            let count = app_data.external_payload.len();
             if count > 0 {
                 eprintln!(
-                    "  Stripping {} external_payload blob(s) from LVI tag {:?}",
+                    "  Stripping {} external_payload blob(s) from resource tag {:?}",
                     count,
-                    &lvi.tag.to_bytes()[..4]
+                    &tag.as_bytes()[..4]
                 );
-                lvi.app_data.external_payload.clear();
+                app_data.external_payload.clear();
                 stripped += count;
             }
         }
@@ -1363,10 +1264,8 @@ fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
 fn mockify_fixture(input: &Path, output: &Path) -> Result<()> {
     let (mut fixture, mut tx) = load_fixture_tx(input)?;
 
-    if tx.aggregation_proof.is_none() {
-        bail!("fixture transaction has no aggregation_proof to replace");
-    }
-    tx.aggregation_proof = Some(mock_seal_bytes(mock_claim_digest(&tx)?)?);
+    let claim = mock_claim_digest(&tx)?;
+    require_aggregation_mut(&mut tx)?.proof = mock_seal_bytes(claim)?;
 
     let fields = derive_fixture_fields(&tx)?;
 
@@ -1403,52 +1302,66 @@ fn dump_fixture(input: &Path) -> Result<()> {
     let (_, tx) = load_fixture_tx(input)?;
 
     eprintln!("Transaction:");
-    eprintln!("  actions: {}", tx.actions.len());
-    for (ai, action) in tx.actions.iter().enumerate() {
-        eprintln!("  Action {}:", ai);
-        eprintln!("    compliance_units: {}", action.compliance_units.len());
-        for (ci, cu) in action.compliance_units.iter().enumerate() {
-            let instance = ComplianceInstance::from_journal(&cu.instance)
-                .context("decode compliance instance for dump")?;
-            let nf = instance.consumed_nullifier.to_bytes();
-            let cm = instance.created_commitment.to_bytes();
+    match &tx.aggregation {
+        Some(aggregation) => {
+            let instance = &aggregation.instance;
+            eprintln!("  aggregation instance:");
             eprintln!(
-                "    CU {}: nullifier={:02x}{:02x}..., commitment={:02x}{:02x}...",
-                ci, nf[0], nf[1], cm[0], cm[1]
+                "    compliance_key: {}",
+                hex::encode(&instance.compliance_key.as_bytes()[..4])
             );
+            eprintln!(
+                "    kind_table_commitment: {}",
+                hex::encode(&instance.kind_table_commitment.as_bytes()[..4])
+            );
+            eprintln!("    actions: {}", instance.actions.len());
+            for (ai, action) in instance.actions.iter().enumerate() {
+                eprintln!("    Action {}:", ai);
+                for (ci, consumed) in action.consumed_publics.iter().enumerate() {
+                    let nf = consumed.resource_nullifier.as_bytes();
+                    eprintln!(
+                        "      consumed {}: nullifier={:02x}{:02x}..., external_payload={}",
+                        ci,
+                        nf[0],
+                        nf[1],
+                        consumed.app_data.external_payload.len()
+                    );
+                }
+                for (ci, created) in action.created_publics.iter().enumerate() {
+                    let cm = created.resource_commitment.as_bytes();
+                    eprintln!(
+                        "      created {}: commitment={:02x}{:02x}..., external_payload={}",
+                        ci,
+                        cm[0],
+                        cm[1],
+                        created.app_data.external_payload.len()
+                    );
+                }
+            }
+            eprintln!("  aggregation proof: {} bytes", aggregation.proof.len());
         }
-        eprintln!(
-            "    logic_verifier_inputs: {}",
-            action.logic_verifier_inputs.len()
-        );
-        for (li, lvi) in action.logic_verifier_inputs.iter().enumerate() {
-            let tag = lvi.tag.to_bytes();
-            let ext = lvi.app_data.external_payload.len();
-            eprintln!(
-                "    LVI {}: tag={:02x}{:02x}..., vk={:02x}{:02x}..., external_payload={}",
-                li,
-                tag[0],
-                tag[1],
-                lvi.verifying_key.to_bytes()[0],
-                lvi.verifying_key.to_bytes()[1],
-                ext
-            );
+        None => {
+            let actions = tx.actions.as_deref().unwrap_or(&[]);
+            eprintln!("  actions (unaggregated): {}", actions.len());
+            for (ai, action) in actions.iter().enumerate() {
+                eprintln!(
+                    "  Action {}: logic_verifier_inputs: {}",
+                    ai,
+                    action.logic_verifier_inputs.len()
+                );
+            }
         }
     }
     eprintln!(
         "  delta_proof: {:?}",
         std::mem::discriminant(&tx.delta_proof)
     );
-    eprintln!(
-        "  aggregation_proof: {} bytes",
-        tx.aggregation_proof.as_ref().map_or(0, |p| p.len())
-    );
     Ok(())
 }
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen mockify <IN> <OUT>           Convert an existing fixture into its mock twin\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - mockify replaces only the aggregation seal of an existing fixture; use it for\n    imported fixtures whose proving inputs are not in this repo.\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen mockify <IN> <OUT>           Convert an existing fixture into its mock twin\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof/zero_action variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - mockify replaces only the aggregation seal of an existing fixture; use it for\n    imported fixtures whose proving inputs are not in this repo.\n"
     );
 }
 
@@ -1760,6 +1673,11 @@ fn resolve_prover(choice: Option<ProverChoice>) -> Result<Prover> {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Every proving and verification path checks witness kind tables against
+    // the globally loaded table, so load the committed table unconditionally.
+    init_kind_table_from_file(Path::new(KIND_TABLE_PATH))
+        .map_err(|e| anyhow!("load kind table {KIND_TABLE_PATH}: {e:?}"))?;
+
     let GenerateArgs {
         debug_assumptions,
         forwarder_mode,
@@ -1871,7 +1789,8 @@ async fn main() -> Result<()> {
     );
 
     timed_phase("verify_aggregation", || {
-        tx.verify_aggregation().context("verify aggregated proof")
+        arm::transaction::verify_aggregation(&tx)
+            .map_err(|e| anyhow!("verify aggregated proof: {e:?}"))
     })?;
 
     let fixture = finalize_and_write_fixture(&mut tx, &out_path, None)?;
@@ -1900,10 +1819,7 @@ fn compute_expected_claim_digest(journal: &[u8], vk: &Digest) -> risc0_zkvm::sha
     let words = arm::utils::bytes_to_words(journal);
     let padded_bytes = arm::utils::words_to_bytes(&words);
     let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
-    let expected_claim = ReceiptClaim::ok(
-        core_to_risc0_digest(vk),
-        MaybePruned::Pruned(journal_digest),
-    );
+    let expected_claim = ReceiptClaim::ok(*vk, MaybePruned::Pruned(journal_digest));
     expected_claim.digest()
 }
 
@@ -1918,95 +1834,39 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
     // Print a small header so the important line can be grepped.
     eprintln!("debug_assumptions: start");
 
-    let mut compliance_idx = 0usize;
-    for action in &tx.actions {
-        for cu in &action.compliance_units {
-            let Some(proof_bytes) = &cu.proof else {
-                eprintln!("debug_assumptions: compliance[{compliance_idx}] proof is None");
-                compliance_idx += 1;
-                continue;
-            };
-
-            let inner: InnerReceipt =
-                bincode::deserialize(proof_bytes).context("decode compliance InnerReceipt")?;
-            // Wire instance is already journal bytes — no re-serialization needed.
-            let journal = cu.instance.clone();
-            let receipt = Receipt::new(inner, journal.clone());
-            let receipt_claim_digest = receipt.claim().context("read compliance claim")?.digest();
-
-            let expected_claim_digest =
-                compute_expected_claim_digest(&journal, &arm::constants::COMPLIANCE_VK);
-
-            eprintln!(
-                "debug_assumptions: receipt_claim_digest={} expected_claim_digest={}",
-                receipt_claim_digest, expected_claim_digest
-            );
-
-            compliance_idx += 1;
-        }
+    let compliance_receipts = arm::transaction::get_compliance_inner_receipts(tx)
+        .map_err(|e| anyhow!("decode compliance receipts: {e:?}"))?;
+    let compliance_journals = arm::transaction::get_compliance_instances(tx);
+    for (idx, (inner, journal)) in compliance_receipts
+        .into_iter()
+        .zip(compliance_journals)
+        .enumerate()
+    {
+        let receipt = Receipt::new(inner, journal.clone());
+        let receipt_claim_digest = receipt.claim().context("read compliance claim")?.digest();
+        let expected_claim_digest = compute_expected_claim_digest(&journal, &COMPLIANCE_VK);
+        eprintln!(
+            "debug_assumptions: compliance[{idx}] receipt_claim_digest={} expected_claim_digest={}",
+            receipt_claim_digest, expected_claim_digest
+        );
     }
 
-    let mut logic_idx = 0usize;
-    for (action_idx, action) in tx.actions.iter().enumerate() {
-        // Mirror `arm::action::Action::get_logic_verifiers` to derive the logic instances that the
-        // batch aggregation circuit verifies.
-        let (tags, logics): (Vec<Digest>, Vec<Digest>) =
-            solana_pa::encoding::extract_tags_and_logic_refs(action)
-                .map_err(|e| anyhow!("extract tags / logic refs: {e:?}"))?;
-
-        let action_tree = arm::action_tree::MerkleTree::from(tags.clone());
-        let root = action_tree.root().context("compute action tree root")?;
-
-        if tags.len() != action.logic_verifier_inputs.len() {
-            return Err(anyhow!(
-                "action[{action_idx}] tag count {} != logic_verifier_inputs {}",
-                tags.len(),
-                action.logic_verifier_inputs.len()
-            ));
-        }
-
-        for (index, (tag, expected_vk)) in tags.iter().zip(logics.iter()).enumerate() {
-            let input = action
-                .logic_verifier_inputs
-                .iter()
-                .find(|input| &input.tag == tag)
-                .ok_or_else(|| anyhow!("action[{action_idx}] missing logic input for tag"))?;
-            if input.verifying_key != *expected_vk {
-                return Err(anyhow!(
-                    "action[{action_idx}] verifying key mismatch for tag"
-                ));
-            }
-
-            let is_consumed = index % 2 == 0;
-            let verifier = input
-                .clone()
-                .to_logic_verifier(is_consumed, root)
-                .context("build logic verifier (instance bytes)")?;
-
-            let Some(proof_bytes) = &verifier.proof else {
-                eprintln!("debug_assumptions: logic[{logic_idx}] proof is None");
-                logic_idx += 1;
-                continue;
-            };
-
-            let inner: InnerReceipt =
-                bincode::deserialize(proof_bytes).context("decode logic InnerReceipt")?;
-            let receipt = Receipt::new(inner, verifier.instance.clone());
-            let receipt_claim_digest = receipt.claim().context("read logic claim")?.digest();
-
-            let expected_claim_digest =
-                compute_expected_claim_digest(&verifier.instance, &verifier.verifying_key);
-
-            eprintln!(
-                "debug_assumptions: logic[{logic_idx}] instance_len={} (mod4={}) receipt_claim_digest={} expected_claim_digest={}",
-                verifier.instance.len(),
-                verifier.instance.len() % 4,
-                receipt_claim_digest,
-                expected_claim_digest
-            );
-
-            logic_idx += 1;
-        }
+    let logic_verifiers = arm::transaction::get_logic_verifiers(tx)
+        .map_err(|e| anyhow!("reconstruct logic verifiers: {e:?}"))?;
+    for (idx, verifier) in logic_verifiers.iter().enumerate() {
+        let inner: InnerReceipt =
+            bincode::deserialize(&verifier.proof).context("decode logic InnerReceipt")?;
+        let receipt = Receipt::new(inner, verifier.instance.clone());
+        let receipt_claim_digest = receipt.claim().context("read logic claim")?.digest();
+        let expected_claim_digest =
+            compute_expected_claim_digest(&verifier.instance, &verifier.verifying_key);
+        eprintln!(
+            "debug_assumptions: logic[{idx}] instance_len={} (mod4={}) receipt_claim_digest={} expected_claim_digest={}",
+            verifier.instance.len(),
+            verifier.instance.len() % 4,
+            receipt_claim_digest,
+            expected_claim_digest
+        );
     }
 
     eprintln!("debug_assumptions: end");
@@ -2016,9 +1876,29 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arm::compliance::ComplianceInstance;
     // Tests build transactions via the local arm prover directly (not through
     // `Prover::Local`/`spawn_blocking`) so they stay synchronous. Requires
     // `RISC0_DEV_MODE=1` to run.
+
+    fn init_test_kind_table() {
+        init_kind_table_from_file(Path::new(KIND_TABLE_PATH)).expect("load committed kind table");
+    }
+
+    /// `ComplianceUnit::instance` is journal bytes on the wire — parse,
+    /// mutate (via `f`), and re-encode in one place.
+    fn mutate_compliance_instance<R>(
+        cu: &mut ComplianceUnit,
+        f: impl FnOnce(&mut ComplianceInstance) -> R,
+    ) -> Result<R> {
+        let mut inst: ComplianceInstance =
+            arm::proving_system::journal_to_instance(&cu.instance)
+                .map_err(|e| anyhow!("parse compliance instance: {e:?}"))?;
+        let r = f(&mut inst);
+        cu.instance = arm::proving_system::instance_to_journal(&inst)
+            .map_err(|e| anyhow!("re-encode mutated compliance instance: {e:?}"))?;
+        Ok(r)
+    }
 
     #[test]
     fn decode_base58_32_system_program() {
@@ -2035,39 +1915,29 @@ mod tests {
     /// Helper: build a minimal valid transaction with a real delta proof.
     /// Uses the passthrough logic circuit and ephemeral resources.
     fn build_valid_tx_with_delta_proof(nonce_byte: u8) -> Transaction {
-        let nf_key = NullifierKey::default();
-        let nf_key_cm = nf_key.commit();
-        let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
-
-        let mut consumed = Resource {
-            logic_ref: passthrough_vk,
-            nk_commitment: nf_key_cm,
-            quantity: 1,
-            is_ephemeral: true,
-            ..Default::default()
-        };
-        consumed.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
-        let consumed_nf = consumed.nullifier(&nf_key).unwrap();
+        init_test_kind_table();
+        let (consumed, nf_key, consumed_nf) = deterministic_ephemeral_resource(nonce_byte).unwrap();
+        let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
 
         let mut created = consumed;
-        created.set_nonce(consumed_nf);
+        created.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf]).unwrap();
+        let created_cm = created.commitment();
 
-        let witness = ComplianceWitness {
-            consumed_resource: consumed,
-            created_resource: created,
-            merkle_path: MerklePath::empty(),
-            rcv: Scalar::ONE.to_bytes().to_vec(),
-            nf_key,
-            ephemeral_root: initial_root(),
-        };
-        let cu = create_compliance_unit(&witness, LocalProofType::Succinct).unwrap();
+        let witness = ComplianceWitness::from_parts(
+            &[ConsumedResourceWitness {
+                resource: consumed,
+                cm_merkle_path: MerklePath::empty(),
+                nf_key,
+            }],
+            &[created],
+            INITIAL_ROOT,
+            &Scalar::ONE.to_bytes(),
+            global_kind_table().to_vec(),
+        );
+        let cu = arm::compliance_unit::create(&witness, LocalProofType::Succinct).unwrap();
 
-        let inst = ComplianceInstance::from_journal(&cu.instance).unwrap();
-        let consumed_nf = inst.consumed_nullifier;
-        let created_cm = inst.created_commitment;
         let tags = vec![consumed_nf, created_cm];
-        let tree = MerkleTree::from(tags);
-        let root = tree.root().unwrap();
+        let root = ActionTree::new(tags).root().unwrap();
 
         let consumed_instance = LogicInstance {
             tag: consumed_nf,
@@ -2096,31 +1966,29 @@ mod tests {
         .unwrap();
 
         let consumed_logic = LogicVerifier {
-            proof: Some(cp),
+            proof: cp,
             instance: cj,
             verifying_key: passthrough_vk,
         };
         let created_logic = LogicVerifier {
-            proof: Some(crp),
+            proof: crp,
             instance: crj,
             verifying_key: passthrough_vk,
         };
 
-        let action = Action::new(vec![cu], vec![consumed_logic, created_logic]).unwrap();
+        let action = arm::action::new(cu, vec![consumed_logic, created_logic]).unwrap();
 
-        let delta_witness = DeltaWitness::from_bytes_vec(&[witness.rcv]).unwrap();
-        let tx = Transaction::create(
-            vec![action],
-            Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
-        );
-        tx.generate_delta_proof(hash_delta_msg).unwrap()
+        let delta_witness =
+            arm::delta_proof::from_bytes_vec(std::slice::from_ref(&witness.rcv)).unwrap();
+        let tx = Transaction::create(vec![action], Delta::Witness(delta_witness));
+        arm::transaction::generate_delta_proof(tx).unwrap()
     }
 
     /// A valid transaction must pass delta verification via the k256 path.
     #[test]
     fn valid_tx_passes_delta_verification() {
         let tx = build_valid_tx_with_delta_proof(100);
-        tx.verify(hash_delta_msg).unwrap();
+        arm::transaction::verify(&tx).unwrap();
     }
 
     /// Swapping the nullifier and commitment tags in the delta message
@@ -2128,18 +1996,22 @@ mod tests {
     #[test]
     fn swapped_tags_invalidate_delta_proof() {
         let tx = build_valid_tx_with_delta_proof(101);
-        tx.clone().verify(hash_delta_msg).unwrap();
+        arm::transaction::verify(&tx).unwrap();
 
-        // Swap nullifier and commitment in the compliance instance.
-        // This changes the delta message (which is [nf, cm] → [cm, nf]),
+        // Swap nullifier and commitment in the compliance instance. This
+        // changes the action tree root and therefore the delta message,
         // invalidating the signature over the original message hash.
         let mut swapped = tx.clone();
-        mutate_compliance_instance(&mut swapped.actions[0].compliance_units[0], |inst| {
-            std::mem::swap(&mut inst.consumed_nullifier, &mut inst.created_commitment);
+        let actions = swapped.actions.as_mut().unwrap();
+        mutate_compliance_instance(&mut actions[0].compliance_unit, |inst| {
+            std::mem::swap(
+                &mut inst.consumed_publics[0].resource_nullifier,
+                &mut inst.created_publics[0].resource_commitment,
+            );
         })
         .unwrap();
 
-        let result = swapped.verify(hash_delta_msg);
+        let result = arm::transaction::verify(&swapped);
         assert!(result.is_err(), "swapped nf/cm must invalidate delta proof");
     }
 
@@ -2147,15 +2019,16 @@ mod tests {
     #[test]
     fn mutated_delta_x_invalidates_proof() {
         let mut tx = build_valid_tx_with_delta_proof(102);
-        tx.clone().verify(hash_delta_msg).unwrap();
+        arm::transaction::verify(&tx).unwrap();
 
         // Flip a word in delta_x
-        mutate_compliance_instance(&mut tx.actions[0].compliance_units[0], |inst| {
+        let actions = tx.actions.as_mut().unwrap();
+        mutate_compliance_instance(&mut actions[0].compliance_unit, |inst| {
             inst.delta_x[0] ^= 0xFFFFFFFF;
         })
         .unwrap();
 
-        let result = tx.verify(hash_delta_msg);
+        let result = arm::transaction::verify(&tx);
         assert!(
             result.is_err(),
             "mutated delta_x must invalidate delta proof"
@@ -2166,15 +2039,16 @@ mod tests {
     #[test]
     fn mutated_nullifier_invalidates_delta_proof() {
         let mut tx = build_valid_tx_with_delta_proof(103);
-        tx.clone().verify(hash_delta_msg).unwrap();
+        arm::transaction::verify(&tx).unwrap();
 
         // Corrupt the nullifier
-        mutate_compliance_instance(&mut tx.actions[0].compliance_units[0], |inst| {
-            inst.consumed_nullifier = Digest::from_bytes([0xFF; 32]);
+        let actions = tx.actions.as_mut().unwrap();
+        mutate_compliance_instance(&mut actions[0].compliance_unit, |inst| {
+            inst.consumed_publics[0].resource_nullifier = Digest::from_bytes([0xFF; 32]);
         })
         .unwrap();
 
-        let result = tx.verify(hash_delta_msg);
+        let result = arm::transaction::verify(&tx);
         assert!(
             result.is_err(),
             "mutated nullifier must invalidate delta proof"

@@ -293,23 +293,22 @@ dependencies = [
 
 [[package]]
 name = "anoma-rm-core"
-version = "1.2.0"
-source = "git+https://github.com/anoma/arm-risc0?branch=solana#9c25e986bc8e190b03d28462fd6b703e6355c4c1"
+version = "2.0.0-rc.4"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-engine#2aa0996a05d0c64e20b7d49d640faf2f4b2df923"
 dependencies = [
  "bincode",
  "borsh 1.5.7",
  "bytemuck",
  "hex",
- "hex-literal",
+ "risc0-zkp",
  "serde",
- "serde_with",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "anoma-rm-risc0"
-version = "1.2.0"
-source = "git+https://github.com/anoma/arm-risc0?branch=solana#9c25e986bc8e190b03d28462fd6b703e6355c4c1"
+version = "2.0.0-rc.4"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-engine#2aa0996a05d0c64e20b7d49d640faf2f4b2df923"
 dependencies = [
  "anoma-rm-core",
  "bincode",
@@ -320,18 +319,18 @@ dependencies = [
  "rand 0.8.5",
  "risc0-zkvm",
  "serde",
+ "serde_json",
  "serde_with",
+ "sha3",
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "anoma-rm-solana"
-version = "1.2.0"
-source = "git+https://github.com/anoma/arm-risc0?branch=solana#9c25e986bc8e190b03d28462fd6b703e6355c4c1"
+version = "2.0.0-rc.4"
+source = "git+https://github.com/anoma/arm-risc0?branch=anthony%2Farm-solana-engine#2aa0996a05d0c64e20b7d49d640faf2f4b2df923"
 dependencies = [
  "anoma-rm-core",
- "bytemuck",
- "sha2 0.10.9",
  "solana-program",
  "solana-secp256k1",
  "thiserror 2.0.18",

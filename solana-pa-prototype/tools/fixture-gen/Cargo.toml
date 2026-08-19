@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 bs58 = "0.5"
-arm = { package = "anoma-rm-risc0", git = "https://github.com/anoma/arm-risc0", branch = "solana", default-features = false, features = ["aggregation", "prove"] }
+arm = { package = "anoma-rm-risc0", git = "https://github.com/anoma/arm-risc0", branch = "anthony/arm-solana-engine", default-features = false, features = ["aggregation", "prove"] }
 sha2 = "0.10"
 verifier_router = { git = "https://github.com/risc0/risc0-solana.git", tag = "v3.0.0" }
 # Proof type for constructing mock seals (verifier_router uses but doesn't re-export)
