@@ -114,6 +114,13 @@ case "${1:-}" in
     run_in_project "cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- $*"
     ;;
 
+  regen-fixtures)
+    # Regenerate the COMPLETE fixture set for one proof mode, sequentially.
+    shift
+    ensure_lockfile_sync
+    run_in_project "./scripts/regen-fixtures.sh ${1:-}"
+    ;;
+
   lock-sync)
     shift
     sync_lockfiles_for_package "${1:-}"
@@ -245,6 +252,9 @@ PYEOF
     echo "               Local: full deterministic integration flow (default)."
     echo "               devnet/mainnet: cluster-safe subset against deployed programs"
     echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
+    echo "  regen-fixtures <real|mock>"
+    echo "               Regenerate the complete fixture set for one proof mode"
+    echo "               (sequential; real mode is hours of CPU proving)"
     echo "  fixture-test Run fixture-gen tests"
     echo "  validator    Start a local Solana validator"
     echo "  update-deps  Regenerate yarn.lock"
