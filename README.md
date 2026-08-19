@@ -45,22 +45,21 @@ The integration suite runs in one of two proof modes:
 
 - **real** (default): fixtures carry Groth16 aggregation proofs (selector
   `0x73c457ba`), verified on-chain by the devnet-cloned RISC0 groth16
-  verifier. Regenerating these fixtures requires full proving (minutes,
-  container runtime): `./scripts/dev.sh gen-fixtures tests/fixtures/batch_groth16.json`.
+  verifier. Regenerating them requires full proving (minutes per fixture,
+  container runtime): `./scripts/dev.sh regen-fixtures real`.
 - **mock** (`--mode mock` / `PA_TEST_MODE=mock`): fixtures carry mock seals
   (selector `0xffffffff`) accepted only by the localnet-only `mock-verifier`
   program, which the validator's synthetic `VerifierEntry` account registers
   in the RISC0 router at genesis. The transactions are byte-identical to the
   real fixtures except the seal; generation executes the circuits without
-  proving and takes seconds:
-  `./scripts/dev.sh gen-fixtures --mock tests/fixtures/mock/batch_groth16.json`.
+  proving and takes seconds: `./scripts/dev.sh regen-fixtures mock`.
 
 The PA program is identical in both modes — each PA instance pins one
 verifier selector at `initialize`, so deployed PAs (pinned to the Groth16
-selector) can never accept mock seals. Mock fixture regeneration recipes:
-each real-fixture command plus `--mock`, output under `tests/fixtures/mock/`
-(the imported AnomaPay fixture uses `fixture-gen mockify` instead, since its
-proving inputs are not in this repo).
+selector) can never accept mock seals. `regen-fixtures` regenerates the
+complete set for one mode sequentially (`scripts/regen-fixtures.sh` is the
+single copy of the recipe); `./scripts/dev.sh gen-fixtures <args>` remains
+the low-level entry point for one-off fixture-gen invocations.
 
 ### Available Commands
 
