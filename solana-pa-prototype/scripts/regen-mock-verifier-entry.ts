@@ -7,10 +7,9 @@
  * router cannot register new verifiers locally (its initialize authority
  * is compile-time-baked into the immutable devnet binary), but the verify
  * path only reads the entry account — so the test validator preloads a
- * synthetic entry for the mock selector 0xffffffff at genesis, exactly
- * like the root-marker account fixtures. The entry embeds the
- * mock-verifier program ID, so rotating that ID strands the committed
- * fixture; this script regenerates it.
+ * synthetic entry for the mock selector 0xffffffff at genesis. The entry
+ * embeds the mock-verifier program ID, so rotating that ID strands the
+ * committed fixture; this script regenerates it.
  *
  * Called by sync_program_ids (validator-deploy.sh) whenever the
  * mock-verifier program ID changes. Standalone:

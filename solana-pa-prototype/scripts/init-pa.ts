@@ -8,9 +8,10 @@ const BPF_LOADER_UPGRADEABLE = new PublicKey(
   "BPFLoaderUpgradeab1e11111111111111111111111"
 );
 
-// `initialize` pins the router and selector this deployment will trust for
-// the lifetime of the PAState account. There is no safe default: guessing
-// wrong installs the wrong verifier. Both must be supplied explicitly.
+// `initialize` pins the router, selector, and kind-table commitment this
+// deployment will trust for the lifetime of the PAState account. There is no
+// safe default: guessing wrong installs the wrong verifier or rejects every
+// settlement. All three must be supplied explicitly.
 function requireVerifierRouter(): PublicKey {
   const raw = process.env.PA_VERIFIER_ROUTER;
   if (!raw) {
@@ -30,24 +31,22 @@ function requireVerifierRouter(): PublicKey {
   }
 }
 
-function requireKindTableCommitment(): number[] {
-  const raw = process.env.PA_KIND_TABLE_COMMITMENT;
+// Read a fixed-width hex byte string from a required environment variable.
+// `missingHelp` says what the value is and why the script will not guess one.
+function requireHexBytes(
+  envVar: string,
+  byteLen: number,
+  missingHelp: string
+): number[] {
+  const raw = process.env[envVar];
   if (!raw) {
-    console.error(
-      "❌ Missing PA_KIND_TABLE_COMMITMENT: the sha256 commitment (hex, 32 " +
-        "bytes) of the kind table every settled aggregation instance must " +
-        "carry.\n" +
-        "   This script will not guess a default — initializing with the " +
-        "wrong commitment rejects every settlement.\n" +
-        "   For the empty table (fixture-gen's committed kind_table.json):\n" +
-        "   e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    );
+    console.error(`❌ Missing ${envVar}: ${missingHelp}`);
     process.exit(1);
   }
   const hex = raw.replace(/^0x/, "");
-  if (hex.length !== 64) {
+  if (hex.length !== byteLen * 2) {
     console.error(
-      `❌ PA_KIND_TABLE_COMMITMENT must be 64 hex chars (32 bytes), got "${raw}"`
+      `❌ ${envVar} must be ${byteLen * 2} hex chars (${byteLen} bytes), got "${raw}"`
     );
     process.exit(1);
   }
@@ -55,25 +54,27 @@ function requireKindTableCommitment(): number[] {
 }
 
 function requireProofSelector(): number[] {
-  const raw = process.env.PA_PROOF_SELECTOR;
-  if (!raw) {
-    console.error(
-      "❌ Missing PA_PROOF_SELECTOR: the 4-byte Groth16 verifier selector " +
-        "(hex, e.g. 0xdeadbeef) registered with the verifier router for the " +
-        "circuit this deployment must accept.\n" +
-        "   This script will not guess a default — initializing with the " +
-        "wrong selector installs the wrong verifier."
-    );
-    process.exit(1);
-  }
-  const hex = raw.replace(/^0x/, "");
-  if (hex.length !== 8) {
-    console.error(
-      `❌ PA_PROOF_SELECTOR must be 8 hex chars (4 bytes), got "${raw}"`
-    );
-    process.exit(1);
-  }
-  return Array.from(Buffer.from(hex, "hex"));
+  return requireHexBytes(
+    "PA_PROOF_SELECTOR",
+    4,
+    "the 4-byte Groth16 verifier selector (hex, e.g. 0xdeadbeef) registered " +
+      "with the verifier router for the circuit this deployment must accept.\n" +
+      "   This script will not guess a default — initializing with the wrong " +
+      "selector installs the wrong verifier."
+  );
+}
+
+function requireKindTableCommitment(): number[] {
+  return requireHexBytes(
+    "PA_KIND_TABLE_COMMITMENT",
+    32,
+    "the sha256 commitment (hex, 32 bytes) of the kind table every settled " +
+      "aggregation instance must carry.\n" +
+      "   This script will not guess a default — initializing with the wrong " +
+      "commitment rejects every settlement.\n" +
+      "   For the empty table (fixture-gen's committed kind_table.json):\n" +
+      "   e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  );
 }
 
 async function main() {

@@ -23,7 +23,6 @@ import {
 import {
   PA_STATE_SEED,
   TX_DATA_SEED,
-  ROOT_MARKER_SEED,
   EMPTY_TREE_ROOT_INITIAL,
   EMPTY_KIND_TABLE_COMMITMENT,
   MIN_EXPIRY_SLOTS,
@@ -38,6 +37,7 @@ import {
   parseSelectorFromFixture,
   fundKeypair,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
+  deriveRootMarkerPda,
 } from "./utils";
 
 // Keypairs funded during tests, drained back to the provider wallet in
@@ -88,10 +88,7 @@ const blockTimeForwarderId = new PublicKey("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJy
 const testForwarderId = new PublicKey("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD");
 
 function deriveRootPda(root: Buffer): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [ROOT_MARKER_SEED, paState.toBuffer(), root],
-    program.programId
-  )[0];
+  return deriveRootMarkerPda(paState, root, program.programId);
 }
 
 // `newRootMarker` is a required named account, so every settle/settleFromTxdata
@@ -161,6 +158,26 @@ async function predictRootMarkerPda(
 
 function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
   return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
+}
+
+// The one set of initialize arguments the whole suite deploys with: the
+// verifier router, the fixture's selector, and the kind-table commitment
+// every fixture's aggregation instance carries. Callers add `.signers()`
+// when the payer is not the provider wallet.
+function buildInitialize(payer: PublicKey) {
+  return program.methods
+    .initialize(
+      VERIFIER_ROUTER_ID,
+      Array.from(PROOF_SELECTOR),
+      Array.from(EMPTY_KIND_TABLE_COMMITMENT)
+    )
+    .accountsPartial({
+      paState,
+      payer,
+      systemProgram: SystemProgram.programId,
+      program: program.programId,
+      programData,
+    });
 }
 
 /**
@@ -391,17 +408,7 @@ describe("protocol-adapter (AUTH-01: initialization authority)", () => {
 
     let caught: any = null;
     try {
-      await program.methods
-        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR), Array.from(EMPTY_KIND_TABLE_COMMITMENT))
-        .accountsPartial({
-          paState,
-          payer: stranger.publicKey,
-          systemProgram: SystemProgram.programId,
-          program: program.programId,
-          programData,
-        })
-        .signers([stranger])
-        .rpc();
+      await buildInitialize(stranger.publicKey).signers([stranger]).rpc();
     } catch (e: any) {
       caught = e;
     }
@@ -487,16 +494,7 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
     try {
       await program.account.paStateAccount.fetch(paState);
     } catch {
-      await program.methods
-        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR), Array.from(EMPTY_KIND_TABLE_COMMITMENT))
-        .accountsPartial({
-          paState,
-          payer: provider.wallet.publicKey,
-          systemProgram: SystemProgram.programId,
-          program: program.programId,
-          programData,
-        })
-        .rpc();
+      await buildInitialize(provider.wallet.publicKey).rpc();
     }
   });
 
@@ -693,16 +691,7 @@ describe("protocol-adapter (Re-initialization guard)", () => {
     // PAState was already initialized in the E2E before() hook.
     // A second initialize call must fail because the account already exists.
     try {
-      await program.methods
-        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR), Array.from(EMPTY_KIND_TABLE_COMMITMENT))
-        .accountsPartial({
-          paState,
-          payer: provider.wallet.publicKey,
-          systemProgram: SystemProgram.programId,
-          program: program.programId,
-          programData,
-        })
-        .rpc();
+      await buildInitialize(provider.wallet.publicKey).rpc();
       assert.fail("expected re-initialization to fail");
     } catch (e: any) {
       const haystack = errorHaystack(e);

@@ -202,16 +202,17 @@ describe("Security: mutation-based settle tests", () => {
     // The seal no longer sits at the end of the wire bytes (the aggregation
     // serializes proof before instance), so locate it by its bincode length
     // prefix (u64 LE 260) followed by the fixture's 4 selector bytes, then
-    // corrupt pi_c[..32] (selector 4 + pi_a 64 + pi_b 128 = offset 196),
-    // which both the real Groth16 check and the mock verifier's claim-digest
-    // check bind. (pi_c's second half is the unused tail, which a mock seal
-    // does not bind.)
+    // corrupt pi_c[..32], which both the real Groth16 check and the mock
+    // verifier's claim-digest check bind. (pi_c's second half is the unused
+    // tail, which a mock seal does not bind.)
+    const PI_C_OFFSET = 196; // selector (4) + pi_a (64) + pi_b (128)
     const sealLenPrefix = Buffer.alloc(8);
     sealLenPrefix.writeBigUInt64LE(260n); // Seal = selector (4) + proof (256)
     const sealMarker = Buffer.concat([sealLenPrefix, PROOF_SELECTOR]);
-    const sealStart = validTx.indexOf(sealMarker);
-    assert.notEqual(sealStart, -1, "seal length prefix + selector not found in tx bytes");
-    const corrupted = flipByte(validTx, sealStart + 8 + 196);
+    const markerStart = validTx.indexOf(sealMarker);
+    assert.notEqual(markerStart, -1, "seal length prefix + selector not found in tx bytes");
+    const sealStart = markerStart + sealLenPrefix.length;
+    const corrupted = flipByte(validTx, sealStart + PI_C_OFFSET);
     await assertRejects(
       () => settleRaw(corrupted, nullifierAccounts),
       "corrupted proof",

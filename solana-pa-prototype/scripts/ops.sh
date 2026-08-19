@@ -93,7 +93,7 @@ Initialization parameters (required by deploy/init when the PA is a target):
   PA_KIND_TABLE_COMMITMENT
                        sha256 commitment (hex, 32 bytes) of the kind table
                        every settled aggregation instance must carry.
-                       Empty table: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+                       Empty table: ${EMPTY_KIND_TABLE_COMMITMENT}
 USAGE
   exit 1
 }
@@ -384,7 +384,7 @@ require_init_params() {
     echo "     PA_VERIFIER_ROUTER=${VERIFIER_ROUTER}" >&2
     echo "     PA_PROOF_SELECTOR=${GROTH16_SELECTOR}" >&2
     echo "   Empty kind table (fixture-gen's committed kind_table.json):" >&2
-    echo "     PA_KIND_TABLE_COMMITMENT=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" >&2
+    echo "     PA_KIND_TABLE_COMMITMENT=${EMPTY_KIND_TABLE_COMMITMENT}" >&2
     exit 1
   fi
 }
@@ -790,8 +790,8 @@ case "$COMMAND" in
   validator)
     require_cmd solana-test-validator
     # start_validator (validator-deploy.sh) clones the RISC0 verifier stack
-    # from devnet and preloads the root-marker account fixtures — a bare
-    # validator cannot settle anything.
+    # from devnet and preloads the synthetic verifier-entry account fixtures
+    # — a bare validator cannot settle anything.
     start_validator
     trap 'stop_validator' EXIT INT TERM
     echo "Validator running (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"

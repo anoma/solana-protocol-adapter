@@ -36,6 +36,10 @@ GROTH16_SELECTOR="0x73c457ba"
 # mock verifier under (risc0 fake-receipt convention)
 MOCK_SELECTOR="0xffffffff"
 
+# Commitment `initialize` must pin for the empty kind table (sha256 of zero
+# bytes) — the table fixture-gen commits to in tools/fixture-gen/kind_table.json
+EMPTY_KIND_TABLE_COMMITMENT="e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+
 VALIDATOR_PID=""
 
 # Package names the build functions below build by name. A program added
@@ -316,7 +320,6 @@ sync_program_ids() {
   ensure_node_modules
   ensure_program_keypairs
 
-  PA_OLD="$(read_declare_id "programs/solana-pa-prototype/src/lib.rs")"
   PA_ID="$(sync_program_id "PA" \
     "target/deploy/protocol_adapter-keypair.json" \
     "programs/solana-pa-prototype/src/lib.rs" \
