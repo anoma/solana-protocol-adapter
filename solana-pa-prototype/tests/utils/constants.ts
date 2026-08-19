@@ -10,6 +10,14 @@ export const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
   "hex"
 );
 
+// Commitment of the empty kind table (sha256 of zero bytes). Every fixture
+// commits to the empty table (fixture-gen's committed kind_table.json), so
+// the test deployment pins the same commitment at initialize.
+export const EMPTY_KIND_TABLE_COMMITMENT = Buffer.from(
+  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "hex"
+);
+
 // Protocol constants matching Rust defaults (from state.rs)
 export const MIN_EXPIRY_SLOTS = 100;
 export const MAX_EXPIRY_SLOTS = 216_000;

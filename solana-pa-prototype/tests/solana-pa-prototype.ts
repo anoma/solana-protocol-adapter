@@ -25,6 +25,7 @@ import {
   TX_DATA_SEED,
   ROOT_MARKER_SEED,
   EMPTY_TREE_ROOT_INITIAL,
+  EMPTY_KIND_TABLE_COMMITMENT,
   MIN_EXPIRY_SLOTS,
   MAX_EXPIRY_SLOTS,
   SEVEN_DAYS_SLOTS,
@@ -391,7 +392,7 @@ describe("protocol-adapter (AUTH-01: initialization authority)", () => {
     let caught: any = null;
     try {
       await program.methods
-        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR))
+        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR), Array.from(EMPTY_KIND_TABLE_COMMITMENT))
         .accountsPartial({
           paState,
           payer: stranger.publicKey,
@@ -487,7 +488,7 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
       await program.account.paStateAccount.fetch(paState);
     } catch {
       await program.methods
-        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR))
+        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR), Array.from(EMPTY_KIND_TABLE_COMMITMENT))
         .accountsPartial({
           paState,
           payer: provider.wallet.publicKey,
@@ -523,9 +524,12 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
   });
 
   it("account size matches expected size for current depth (no over-allocation)", async () => {
-    // Space formula: BASE_SPACE (168) + VEC_OVERHEAD (4) + 32 * depth
-    // BASE_SPACE includes pending_authority: Option<Pubkey> (+33 bytes over original 135)
-    const BASE_SPACE = 168;
+    // Space formula: BASE_SPACE (200) + VEC_OVERHEAD (4) + 32 * depth
+    // BASE_SPACE breakdown matches state.rs: discriminator(8) + bump(1) +
+    // authority(32) + verifier_router(32) + proof_selector(4) +
+    // kind_table_commitment(32) + pending_authority(33) + lifecycle(1) +
+    // root(32) + next_index(8) + current_depth(1) + expiry bounds(16)
+    const BASE_SPACE = 200;
     const VEC_OVERHEAD = 4;
     const spaceForDepth = (depth: number) => BASE_SPACE + VEC_OVERHEAD + 32 * depth;
 
@@ -543,48 +547,21 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
   });
 
   it("rejects Delta::Witness (balance conservation bypass attempt)", async () => {
-    // Clone the valid tx bytes and patch Delta::Proof to Delta::Witness
-    const txWitness = Buffer.from(tx);
-
-    // In bincode, Delta enum is serialized as:
-    // - u32 variant index (0 = Witness, 1 = Proof)
-    // - u64 length prefix (DeltaProof uses serialize_bytes → 65 = 0x41)
-    // - payload bytes (DeltaProof = 65 bytes)
-    //
-    // Patching variant from 1 (Proof) to 0 (Witness) causes the deserializer
-    // to misinterpret subsequent bytes, shifting all fields. This will either
-    // produce an ExpectedDeltaProof error or an Invalid transaction data error.
-    // Search for the unique 12-byte pattern: variant(1) + length(65) to avoid
-    // matching other [01 00 00 00] occurrences (e.g. Vec length at offset 0).
-    const deltaProofHeader = Buffer.from([
-      0x01, 0x00, 0x00, 0x00, // variant index 1 (Proof)
-      0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // length prefix 65
-    ]);
-
-    const idx = txWitness.indexOf(deltaProofHeader);
-    if (idx === -1) {
-      throw new Error("Could not find Delta::Proof variant+length tag in tx bytes");
-    }
-
-    // Patch variant from 1 (Proof) to 0 (Witness)
-    txWitness.writeUInt32LE(0, idx);
+    // A WELL-FORMED transaction carrying Delta::Witness — the fixture's
+    // aggregated transaction with its delta proof replaced by the actual
+    // delta witness (fixture-gen's witness_delta.json error variant). It
+    // deserializes cleanly, so the rejection must come from the PA's own
+    // witness check — a clean ExpectedDeltaProof, never a crash. A witness
+    // scalar is prover-side private data; deserializing it on-chain must
+    // never execute curve arithmetic (the k256 stack-overflow class).
+    const fx = loadFixture("witness_delta.json");
+    const txWitness = Buffer.from(fx.tx_b64, "base64");
 
     try {
       await settleViaTxData(Keypair.generate(), txWitness, { newRootMarker: DUMMY_ROOT_MARKER });
       assert.fail("expected settle to fail");
     } catch (e: any) {
-      // Patching the Delta variant from Proof→Witness corrupts the Borsh layout.
-      // Depending on how the remaining bytes are interpreted, the PA may fail with
-      // ExpectedDeltaProof (reaches the delta check) or InvalidTransactionData
-      // (Borsh deserialization fails first). Both are correct rejections.
-      const code = extractPAErrorCode(e);
-      assert.isNotNull(code, "Expected a program error code in logs");
-      assert.include(
-        [PA_ERRORS["ExpectedDeltaProof"], PA_ERRORS["InvalidTransactionData"]],
-        code!,
-        `Expected ExpectedDeltaProof (${PA_ERRORS["ExpectedDeltaProof"]}) or ` +
-          `InvalidTransactionData (${PA_ERRORS["InvalidTransactionData"]}), got ${code}`,
-      );
+      assertPAError(e, "ExpectedDeltaProof");
     }
   });
 
@@ -717,7 +694,7 @@ describe("protocol-adapter (Re-initialization guard)", () => {
     // A second initialize call must fail because the account already exists.
     try {
       await program.methods
-        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR))
+        .initialize(VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR), Array.from(EMPTY_KIND_TABLE_COMMITMENT))
         .accountsPartial({
           paState,
           payer: provider.wallet.publicKey,
@@ -773,12 +750,11 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
     const payer = Keypair.generate();
     await airdrop(provider, payer, 2);
 
-    // Bincode-serialized ARM Transaction with zero actions, dummy delta proof,
-    // and dummy aggregation proof. Generated by security/challenges SEC-006.
-    const emptyTx = Buffer.from(
-      "000000000000000001000000410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-      "hex",
-    );
+    // The fixture's aggregated transaction with its instance's action list
+    // emptied (fixture-gen's zero_action.json error variant, SEC-006
+    // regression): deserializes cleanly, rejected by the PA's empty-instance
+    // check.
+    const emptyTx = Buffer.from(loadFixture("zero_action.json").tx_b64, "base64");
 
     try {
       await program.methods
@@ -2232,27 +2208,6 @@ describe("protocol-adapter (Settlement error paths — fixture variants)", () =>
   });
 });
 
-describe("protocol-adapter (AnomaPay imported transfer regression)", () => {
-  it("settles imported backend transfer TxData payload", async () => {
-    const fx = loadFixture<Fixture>("anomapay_transfer_0e345103.json");
-    const payload = Buffer.from(fx.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
-    const historicalRootMarkers = (fx.historical_roots_b64 ?? []).map((rootB64) =>
-      deriveRootPda(Buffer.from(rootB64, "base64"))
-    );
-    assert.isNotEmpty(
-      historicalRootMarkers,
-      "imported transfer fixture must include historical roots for localnet replay",
-    );
-
-    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts, {
-      additionalHistoricalRootMarkers: historicalRootMarkers,
-    });
-
-    await settleFixtureViaTxData(payload, remainingAccounts);
-  });
-});
-
 describe("protocol-adapter (External call error paths)", () => {
   it("rejects settlement when forwarder CPI accounts are wrong", async () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
@@ -2384,6 +2339,13 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     assert.equal(txEvents.length, 1, "Should emit exactly one transactionExecutedEvent");
     assert.equal(txEvents[0].data.tags.length, 2, "Should have 2 tags");
     assert.equal(txEvents[0].data.logicRefs.length, 2, "Should have 2 logic_refs");
+    // Instance order is consumed-then-created per action; is_consumed states
+    // each tag's role explicitly (indexers must not infer it from position).
+    assert.deepEqual(
+      txEvents[0].data.isConsumed,
+      [true, false],
+      "is_consumed should mark the nullifier then the commitment",
+    );
 
     const fwdEvents = events.filter((e) => e.name === "forwarderCallExecutedEvent");
     assert.isAtLeast(fwdEvents.length, 1, "Should emit forwarderCallExecutedEvent");

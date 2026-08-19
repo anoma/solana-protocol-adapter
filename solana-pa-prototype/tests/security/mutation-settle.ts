@@ -189,10 +189,7 @@ describe("Security: mutation-based settle tests", () => {
   // --- Zero-action transaction (SEC-006 regression) ---
 
   it("rejects zero-action transaction", async () => {
-    const emptyTx = Buffer.from(
-      "000000000000000001000000410000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001400000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-      "hex",
-    );
+    const emptyTx = Buffer.from(loadFixture("zero_action.json").tx_b64, "base64");
     await assertRejects(
       () => settleRaw(emptyTx),
       "zero-action transaction",
@@ -202,11 +199,19 @@ describe("Security: mutation-based settle tests", () => {
   // --- Proof mutations ---
 
   it("rejects transaction with corrupted proof bytes", async () => {
-    // The tx ends with the 260-byte seal; len-40 lands inside pi_c[..32],
+    // The seal no longer sits at the end of the wire bytes (the aggregation
+    // serializes proof before instance), so locate it by its bincode length
+    // prefix (u64 LE 260) followed by the fixture's 4 selector bytes, then
+    // corrupt pi_c[..32] (selector 4 + pi_a 64 + pi_b 128 = offset 196),
     // which both the real Groth16 check and the mock verifier's claim-digest
-    // check bind. (len-10 would be pi_c's unused tail, which a mock seal
+    // check bind. (pi_c's second half is the unused tail, which a mock seal
     // does not bind.)
-    const corrupted = flipByte(validTx, validTx.length - 40);
+    const sealLenPrefix = Buffer.alloc(8);
+    sealLenPrefix.writeBigUInt64LE(260n); // Seal = selector (4) + proof (256)
+    const sealMarker = Buffer.concat([sealLenPrefix, PROOF_SELECTOR]);
+    const sealStart = validTx.indexOf(sealMarker);
+    assert.notEqual(sealStart, -1, "seal length prefix + selector not found in tx bytes");
+    const corrupted = flipByte(validTx, sealStart + 8 + 196);
     await assertRejects(
       () => settleRaw(corrupted, nullifierAccounts),
       "corrupted proof",
