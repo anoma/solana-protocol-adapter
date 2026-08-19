@@ -131,33 +131,24 @@ pub fn dummy_delta_proof() -> DeltaProof {
     }
 }
 
-/// Wrap an instance in an aggregated wire transaction: no base actions, a
+/// A minimal instance as an aggregated wire transaction: no base actions, a
 /// structurally valid (but cryptographically meaningless) delta proof, and a
 /// fake seal as the aggregation proof bytes.
-pub fn aggregated_tx(instance: AggregationInstance) -> Transaction {
+pub fn create_minimal_transaction() -> Transaction {
     Transaction {
         actions: None,
         delta_proof: Delta::Proof(dummy_delta_proof()),
         expected_balance: None,
         aggregation: Some(Aggregation {
             proof: fake_aggregation_proof_bytes(),
-            instance,
+            instance: minimal_instance(),
         }),
     }
 }
 
-/// One action, one consumed + one created resource.
-pub fn create_minimal_transaction() -> Transaction {
-    aggregated_tx(minimal_instance())
-}
-
 /// Attaches external payloads to the consumed resource of a minimal instance.
 pub fn instance_with_external_payload(payloads: Vec<ExpirableBlob>) -> AggregationInstance {
-    let mut instance = minimal_instance();
-    instance.actions[0].consumed_publics[0]
-        .app_data
-        .external_payload = payloads;
-    instance
+    instance_with_consumed_and_created_payloads(payloads, vec![])
 }
 
 /// One action whose consumed and created resources each carry their own

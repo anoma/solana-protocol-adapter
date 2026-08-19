@@ -1,10 +1,11 @@
-use crate::groth16::{prepare_proof_for_verification, BATCH_AGGREGATION_IMAGE_ID};
-use crate::tests::utils::{minimal_instance, FAKE_SELECTOR};
+use crate::groth16::prepare_proof_for_verification;
+use crate::tests::utils::{fake_aggregation_proof_bytes, minimal_instance, FAKE_SELECTOR};
+use arm_core::constants::BATCH_AGGREGATION_VK;
 use arm_core::transaction::Aggregation;
 
 fn fake_aggregation() -> Aggregation {
     Aggregation {
-        proof: crate::tests::utils::fake_aggregation_proof_bytes(),
+        proof: fake_aggregation_proof_bytes(),
         instance: minimal_instance(),
     }
 }
@@ -12,7 +13,7 @@ fn fake_aggregation() -> Aggregation {
 #[test]
 fn test_prepare_proof_accepts_batch_discriminant() {
     let prepared = prepare_proof_for_verification(&fake_aggregation(), FAKE_SELECTOR).unwrap();
-    let expected: [u8; 32] = BATCH_AGGREGATION_IMAGE_ID.into();
+    let expected: [u8; 32] = BATCH_AGGREGATION_VK.into();
     assert_eq!(prepared.image_id, expected);
 }
 

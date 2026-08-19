@@ -1,12 +1,11 @@
 //! Groth16 proof extraction and preparation for risc0-solana verification.
 
 use crate::error::PAError;
+use arm_core::constants::BATCH_AGGREGATION_VK;
 use arm_core::transaction::Aggregation;
 
 use anchor_lang::prelude::AnchorDeserialize;
 use verifier_router::Seal;
-
-pub use arm_core::constants::BATCH_AGGREGATION_VK as BATCH_AGGREGATION_IMAGE_ID;
 
 /// Prepared proof data for risc0-solana verification.
 #[derive(Clone)]
@@ -41,7 +40,7 @@ pub fn prepare_proof_for_verification(
     let journal_digest = arm_solana::journal::aggregation_journal_digest(&aggregation.instance);
     Ok(PreparedProof {
         seal,
-        image_id: BATCH_AGGREGATION_IMAGE_ID.into(),
+        image_id: BATCH_AGGREGATION_VK.into(),
         journal_digest,
     })
 }

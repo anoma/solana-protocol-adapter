@@ -658,22 +658,16 @@ fn execute_settlement<'info>(
     let mut all_is_consumed: Vec<bool> = Vec::with_capacity(total_tag_count);
 
     for action in &instance.actions {
-        for consumed in &action.consumed_publics {
-            emit_app_data_events(&consumed.resource_nullifier, &consumed.app_data);
-            all_tags.push(consumed.resource_nullifier.into());
-            all_logic_refs.push(consumed.resource_logic_ref.into());
-            all_is_consumed.push(true);
-        }
-        for created in &action.created_publics {
-            emit_app_data_events(&created.resource_commitment, &created.app_data);
-            all_tags.push(created.resource_commitment.into());
-            all_logic_refs.push(created.resource_logic_ref.into());
-            all_is_consumed.push(false);
+        for resource in settle::action_resources(action) {
+            emit_app_data_events(&resource.tag, resource.app_data);
+            all_tags.push(resource.tag.into());
+            all_logic_refs.push(resource.logic_ref.into());
+            all_is_consumed.push(resource.is_consumed);
         }
 
         emit!(ActionExecutedEvent {
             action_tree_root: action.action_tree_root.into(),
-            action_tag_count: (action.consumed_publics.len() + action.created_publics.len()) as u32,
+            action_tag_count: settle::action_resource_count(action) as u32,
         });
     }
 

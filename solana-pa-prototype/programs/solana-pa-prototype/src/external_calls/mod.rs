@@ -8,6 +8,7 @@ mod cpi;
 pub use cpi::execute_external_calls;
 
 use crate::error::PAError;
+use crate::settle::action_resources;
 use crate::types::SolanaExternalCall;
 use anchor_lang::prelude::AccountInfo;
 use anchor_lang::solana_program::instruction::AccountMeta;
@@ -66,29 +67,14 @@ pub fn extract_external_calls(
     let total: usize = instance
         .actions
         .iter()
-        .map(|a| {
-            a.consumed_publics
-                .iter()
-                .map(|c| c.app_data.external_payload.len())
-                .sum::<usize>()
-                + a.created_publics
-                    .iter()
-                    .map(|c| c.app_data.external_payload.len())
-                    .sum::<usize>()
-        })
+        .flat_map(action_resources)
+        .map(|resource| resource.app_data.external_payload.len())
         .sum();
     let mut calls = Vec::with_capacity(total);
 
-    for action in &instance.actions {
-        for consumed in &action.consumed_publics {
-            for blob in &consumed.app_data.external_payload {
-                calls.push((consumed.resource_logic_ref, decode_external_call(blob)?));
-            }
-        }
-        for created in &action.created_publics {
-            for blob in &created.app_data.external_payload {
-                calls.push((created.resource_logic_ref, decode_external_call(blob)?));
-            }
+    for resource in instance.actions.iter().flat_map(action_resources) {
+        for blob in &resource.app_data.external_payload {
+            calls.push((resource.logic_ref, decode_external_call(blob)?));
         }
     }
 
