@@ -1,6 +1,7 @@
 use anchor_lang::prelude::{AnchorDeserialize as BorshDeserialize, AnchorSerialize, Pubkey};
 use anyhow::{anyhow, bail, Context, Result};
 use arm::action_tree::ActionTree;
+use arm::aggregation_instance::ConsumedResourceAggregated;
 use arm::compliance::{ComplianceWitness, INITIAL_ROOT};
 use arm::compliance_unit::ComplianceUnit;
 use arm::constants::{
@@ -385,10 +386,9 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
         .get_mut(0)
         .ok_or_else(|| anyhow!("aggregation instance has no created resources"))?;
 
-    let mut new_bytes = [0u8; 32];
-    new_bytes.copy_from_slice(created.resource_commitment.as_bytes());
-    new_bytes[0] ^= 1;
-    created.resource_commitment = Digest::from_bytes(new_bytes);
+    let mut bytes = <[u8; 32]>::from(created.resource_commitment);
+    bytes[0] ^= 1;
+    created.resource_commitment = Digest::from_bytes(bytes);
     Ok(())
 }
 
@@ -483,6 +483,31 @@ fn deterministic_ephemeral_resource(nonce_byte: u8) -> Result<(Resource, Nullifi
     Ok((consumed_resource, nf_key, consumed_nf))
 }
 
+/// Build the compliance witness for a single-consumed / single-created
+/// action. Built through `from_parts` with a fixed `rcv` rather than arm's
+/// randomized `from_resources*` constructors, which draw a fresh `rcv` and
+/// would make fixture generation nondeterministic. Carries the globally
+/// loaded kind table, so every instance commits to the table hash the PA
+/// pins at initialization.
+fn single_action_compliance_witness(
+    consumed: Resource,
+    cm_merkle_path: MerklePath,
+    nf_key: NullifierKey,
+    created: Resource,
+) -> ComplianceWitness {
+    ComplianceWitness::from_parts(
+        &[ConsumedResourceWitness {
+            resource: consumed,
+            cm_merkle_path,
+            nf_key,
+        }],
+        &[created],
+        INITIAL_ROOT,
+        &Scalar::ONE.to_bytes(),
+        global_kind_table().to_vec(),
+    )
+}
+
 /// Prove one action (one compliance unit, one consumed + one created
 /// resource) and wrap it into a balanced, delta-proved `Transaction`. The
 /// consumed resource's app_data carries `consumed_app_data`; the created
@@ -500,7 +525,6 @@ async fn prove_single_action_transaction(
         .nullifier(&consumed.nf_key)
         .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
     let created_cm = compliance_witness.created_resources[0].commitment();
-    let rcv = compliance_witness.rcv.clone();
 
     let compliance_unit = prove_compliance(prover, &compliance_witness)
         .await
@@ -557,8 +581,9 @@ async fn prove_single_action_transaction(
     let action = arm::action::new(compliance_unit, vec![consumed_logic, created_logic])
         .map_err(|e| anyhow!("build action: {e:?}"))?;
 
-    let delta_witness = arm::delta_proof::from_bytes_vec(&[rcv])
-        .map_err(|e| anyhow!("build delta witness: {e:?}"))?;
+    let delta_witness =
+        arm::delta_proof::from_bytes_vec(std::slice::from_ref(&compliance_witness.rcv))
+            .map_err(|e| anyhow!("build delta witness: {e:?}"))?;
 
     let tx = Transaction::create(vec![action], Delta::Witness(delta_witness));
     let balanced_tx = arm::transaction::generate_delta_proof(tx)
@@ -592,19 +617,12 @@ async fn generate_test_transaction_with_external_payload(
     created_resource.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
         .map_err(|e| anyhow!("derive created nonce: {e:?}"))?;
 
-    // Fixed rcv for deterministic fixtures (the randomized constructors in
-    // arm draw a fresh rcv). The consumed resource is ephemeral: empty
-    // merkle path, INITIAL_ROOT.
-    let compliance_witness = ComplianceWitness::from_parts(
-        &[ConsumedResourceWitness {
-            resource: consumed_resource,
-            cm_merkle_path: MerklePath::empty(),
-            nf_key,
-        }],
-        &[created_resource],
-        INITIAL_ROOT,
-        &Scalar::ONE.to_bytes(),
-        global_kind_table().to_vec(),
+    // The consumed resource is ephemeral, so it needs no inclusion proof.
+    let compliance_witness = single_action_compliance_witness(
+        consumed_resource,
+        MerklePath::empty(),
+        nf_key,
+        created_resource,
     );
 
     // Bind the external payload into the consumed resource's app_data via
@@ -618,12 +636,10 @@ async fn generate_test_transaction_with_external_payload(
         ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
     };
     consumed_app_data.external_payload.push(external_blob);
-    if multi_external_call {
-        if let ForwarderMode::BlockTimeForwarder { .. } = &forwarder_mode {
-            consumed_app_data
-                .external_payload
-                .push(block_time_forwarder_external_payload_blob(false)?);
-        }
+    if multi_external_call && matches!(forwarder_mode, ForwarderMode::BlockTimeForwarder { .. }) {
+        consumed_app_data
+            .external_payload
+            .push(block_time_forwarder_external_payload_blob(false)?);
     }
 
     prove_single_action_transaction(prover, compliance_witness, consumed_app_data).await
@@ -693,25 +709,27 @@ fn generate_error_variant_fixtures(
     Ok(())
 }
 
-fn consumed_nullifiers_b64(tx: &Transaction) -> Result<Vec<String>> {
+/// Every consumed resource of a transaction's aggregation instance, in
+/// action order: the single definition of that traversal.
+fn consumed_publics(tx: &Transaction) -> Result<impl Iterator<Item = &ConsumedResourceAggregated>> {
     Ok(require_aggregation(tx)?
         .instance
         .actions
         .iter()
-        .flat_map(|a| &a.consumed_publics)
+        .flat_map(|action| &action.consumed_publics))
+}
+
+fn consumed_nullifiers_b64(tx: &Transaction) -> Result<Vec<String>> {
+    Ok(consumed_publics(tx)?
         .map(|c| BASE64.encode(c.resource_nullifier.as_bytes()))
         .collect())
 }
 
 fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
-    let mut roots = BTreeSet::new();
-    for action in &require_aggregation(tx)?.instance.actions {
-        for consumed in &action.consumed_publics {
-            if consumed.commitment_tree_root != INITIAL_ROOT {
-                roots.insert(<[u8; 32]>::from(consumed.commitment_tree_root));
-            }
-        }
-    }
+    let roots: BTreeSet<[u8; 32]> = consumed_publics(tx)?
+        .filter(|c| c.commitment_tree_root != INITIAL_ROOT)
+        .map(|c| <[u8; 32]>::from(c.commitment_tree_root))
+        .collect();
     Ok(roots.into_iter().collect())
 }
 
@@ -864,16 +882,15 @@ fn finalize_and_write_fixture(
         let receipt_bytes = require_aggregation(tx)?.proof.clone();
         let inner: InnerReceipt =
             bincode::deserialize(&receipt_bytes).context("decode aggregation receipt")?;
-        Ok(if let InnerReceipt::Fake(fake) = inner {
+        let (seal, proof_type) = if let InnerReceipt::Fake(fake) = inner {
             eprintln!("  dev-mode receipt -> mock seal (selector 0xffffffff)");
-            let seal = encode_mock_seal(&fake, tx)?;
-            require_aggregation_mut(tx)?.proof = seal;
-            "mock"
+            (encode_mock_seal(&fake, tx)?, "mock")
         } else {
             let seal = encode_seal(&receipt_bytes).map_err(|e| anyhow!("encode seal: {e:?}"))?;
-            require_aggregation_mut(tx)?.proof = seal;
-            "groth16"
-        })
+            (seal, "groth16")
+        };
+        require_aggregation_mut(tx)?.proof = seal;
+        Ok(proof_type)
     })?;
 
     let fields = timed_phase("derive_fixture_fields", || derive_fixture_fields(tx))?;
@@ -947,16 +964,11 @@ fn build_historical_root_committer_witness() -> Result<(ComplianceWitness, Resou
         .map_err(|e| anyhow!("derive committer created nonce: {e:?}"))?;
     created_resource.is_ephemeral = false;
 
-    let compliance_witness = ComplianceWitness::from_parts(
-        &[ConsumedResourceWitness {
-            resource: consumed_resource,
-            cm_merkle_path: MerklePath::empty(),
-            nf_key: nf_key.clone(),
-        }],
-        &[created_resource],
-        INITIAL_ROOT,
-        &Scalar::ONE.to_bytes(),
-        global_kind_table().to_vec(),
+    let compliance_witness = single_action_compliance_witness(
+        consumed_resource,
+        MerklePath::empty(),
+        nf_key.clone(),
+        created_resource,
     );
 
     Ok((compliance_witness, created_resource, nf_key))
@@ -988,19 +1000,11 @@ fn build_historical_root_consumer_witness(
     created_resource.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
         .map_err(|e| anyhow!("derive consumer created nonce: {e:?}"))?;
 
-    // Built via from_parts (like the committer's witness) rather than arm's
-    // randomized from_resources* constructors, which draw a fresh rcv and
-    // would make fixture generation nondeterministic.
-    Ok(ComplianceWitness::from_parts(
-        &[ConsumedResourceWitness {
-            resource: committed_resource,
-            cm_merkle_path: merkle_path,
-            nf_key: committer_nf_key,
-        }],
-        &[created_resource],
-        INITIAL_ROOT,
-        &Scalar::ONE.to_bytes(),
-        global_kind_table().to_vec(),
+    Ok(single_action_compliance_witness(
+        committed_resource,
+        merkle_path,
+        committer_nf_key,
+        created_resource,
     ))
 }
 
@@ -1132,11 +1136,8 @@ async fn generate_historical_root_fixtures(
     // non-padding historical root. If it were the initial root, is_root_valid
     // would accept it unconditionally before the marker lookup ever runs,
     // exactly the coverage gap this fixture exists to close.
-    let consumer_root = require_aggregation(&consumer_tx)?
-        .instance
-        .actions
-        .first()
-        .and_then(|a| a.consumed_publics.first())
+    let consumer_root = consumed_publics(&consumer_tx)?
+        .next()
         .map(|c| c.commitment_tree_root)
         .ok_or_else(|| anyhow!("consumer tx has no consumed resources"))?;
     if consumer_root == INITIAL_ROOT {
@@ -1923,17 +1924,8 @@ mod tests {
         created.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf]).unwrap();
         let created_cm = created.commitment();
 
-        let witness = ComplianceWitness::from_parts(
-            &[ConsumedResourceWitness {
-                resource: consumed,
-                cm_merkle_path: MerklePath::empty(),
-                nf_key,
-            }],
-            &[created],
-            INITIAL_ROOT,
-            &Scalar::ONE.to_bytes(),
-            global_kind_table().to_vec(),
-        );
+        let witness =
+            single_action_compliance_witness(consumed, MerklePath::empty(), nf_key, created);
         let cu = arm::compliance_unit::create(&witness, LocalProofType::Succinct).unwrap();
 
         let tags = vec![consumed_nf, created_cm];
