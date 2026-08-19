@@ -26,6 +26,9 @@ export type Fixture = {
   tx_b64: string;
   tx_tampered_b64?: string;
   consumed_nullifiers_b64: string[];
+  // Created commitments in instance order — the leaves settlement appends;
+  // used to predict the produced-root marker. Absent on rejection fixtures.
+  created_commitments_b64?: string[];
   historical_roots_b64?: string[];
 };
 

@@ -49,6 +49,7 @@ gen "${MOCK_FLAG[@]}" --nonce-seed 4 "$OUT_DIR/batch_groth16_v3.json"
 gen "${MOCK_FLAG[@]}" --nonce-seed 5 --multi-external-call "$OUT_DIR/batch_groth16_multi_call.json"
 gen "${MOCK_FLAG[@]}" --nonce-seed 6 --forwarder-fail "$OUT_DIR/batch_forwarder_fail.json"
 gen "${MOCK_FLAG[@]}" --nonce-seed 7 --forwarder-silent "$OUT_DIR/batch_forwarder_silent.json"
+gen "${MOCK_FLAG[@]}" --transfer-shape "$OUT_DIR/batch_groth16_transfer_shape.json"
 gen historical-root "$OUT_DIR/batch_groth16.json" \
   "$OUT_DIR/batch_groth16_historical_root_committer.json" \
   "$OUT_DIR/batch_groth16_historical_root.json" \

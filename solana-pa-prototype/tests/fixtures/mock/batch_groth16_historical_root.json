@@ -9,6 +9,9 @@
   "consumed_nullifiers_b64": [
     "vyZTViysvRkSVq/GlNWTMqe9VcvsdH+HzZ/IMxjGHbs="
   ],
+  "created_commitments_b64": [
+    "mfiGqhkGLrmCQUkDXLRHb+9bdPWHIx5H2zAM2o8/qfE="
+  ],
   "historical_roots_b64": [
     "OCnN8XAEHs2CalPGd6Gb1zBCCDrFSLwIK1KcnMfOrXY="
   ]

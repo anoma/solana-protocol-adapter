@@ -1,5 +1,6 @@
 use anchor_lang::prelude::{AnchorDeserialize as BorshDeserialize, AnchorSerialize, Pubkey};
 use anyhow::{anyhow, bail, Context, Result};
+use arm::action::Action;
 use arm::action_tree::ActionTree;
 use arm::aggregation_instance::ConsumedResourceAggregated;
 use arm::compliance::{ComplianceWitness, INITIAL_ROOT};
@@ -238,6 +239,10 @@ struct Fixture {
     tx_b64: String,
     tx_tampered_b64: String,
     consumed_nullifiers_b64: Vec<String>,
+    /// Created commitments in instance order — the leaves settlement appends.
+    /// Clients derive the produced-root marker address from these plus the
+    /// on-chain tree state.
+    created_commitments_b64: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     historical_roots_b64: Vec<String>,
 }
@@ -270,17 +275,32 @@ enum Command {
         input: PathBuf,
         output: PathBuf,
     },
+    RefreshFields {
+        path: PathBuf,
+    },
 }
 
 struct GenerateArgs {
     debug_assumptions: bool,
-    forwarder_mode: ForwarderMode,
+    shape: GenerateShape,
     nonce_seed: Option<u8>,
-    multi_external_call: bool,
     error_variants_dir: Option<PathBuf>,
     out_path: PathBuf,
     prover_choice: Option<ProverChoice>,
     mock: bool,
+}
+
+/// What kind of transaction the default `Generate` command builds.
+enum GenerateShape {
+    /// One action with an external forwarder call bound into its app data.
+    SingleAction {
+        forwarder_mode: ForwarderMode,
+        multi_external_call: bool,
+    },
+    /// Three single-unit actions with event-emitted payload blobs and no
+    /// external calls — the captured mainnet transfer's shape (OOM
+    /// regression); see `generate_transfer_shape_transaction`.
+    TransferShape,
 }
 
 /// Explicit `--prover` selection. `None` (the flag was not passed) resolves
@@ -484,16 +504,17 @@ fn deterministic_ephemeral_resource(nonce_byte: u8) -> Result<(Resource, Nullifi
 }
 
 /// Build the compliance witness for a single-consumed / single-created
-/// action. Built through `from_parts` with a fixed `rcv` rather than arm's
-/// randomized `from_resources*` constructors, which draw a fresh `rcv` and
-/// would make fixture generation nondeterministic. Carries the globally
-/// loaded kind table, so every instance commits to the table hash the PA
-/// pins at initialization.
-fn single_action_compliance_witness(
+/// action. Built through `from_parts` with a fixed, caller-chosen `rcv`
+/// rather than arm's randomized `from_resources*` constructors, which draw
+/// a fresh `rcv` and would make fixture generation nondeterministic.
+/// Carries the globally loaded kind table, so every instance commits to
+/// the table hash the PA pins at initialization.
+fn single_action_compliance_witness_with_rcv(
     consumed: Resource,
     cm_merkle_path: MerklePath,
     nf_key: NullifierKey,
     created: Resource,
+    rcv: Scalar,
 ) -> ComplianceWitness {
     ComplianceWitness::from_parts(
         &[ConsumedResourceWitness {
@@ -503,20 +524,35 @@ fn single_action_compliance_witness(
         }],
         &[created],
         INITIAL_ROOT,
-        &Scalar::ONE.to_bytes(),
+        &rcv.to_bytes(),
         global_kind_table().to_vec(),
     )
 }
 
+fn single_action_compliance_witness(
+    consumed: Resource,
+    cm_merkle_path: MerklePath,
+    nf_key: NullifierKey,
+    created: Resource,
+) -> ComplianceWitness {
+    single_action_compliance_witness_with_rcv(
+        consumed,
+        cm_merkle_path,
+        nf_key,
+        created,
+        Scalar::ONE,
+    )
+}
+
 /// Prove one action (one compliance unit, one consumed + one created
-/// resource) and wrap it into a balanced, delta-proved `Transaction`. The
-/// consumed resource's app_data carries `consumed_app_data`; the created
-/// resource's is empty.
-async fn prove_single_action_transaction(
+/// resource): the compliance proof plus one passthrough logic proof per
+/// resource, each carrying the given app_data.
+async fn prove_action(
     prover: &Prover,
-    compliance_witness: ComplianceWitness,
+    compliance_witness: &ComplianceWitness,
     consumed_app_data: AppData,
-) -> Result<Transaction> {
+    created_app_data: AppData,
+) -> Result<Action> {
     let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
 
     let consumed = &compliance_witness.consumed_data[0];
@@ -526,7 +562,7 @@ async fn prove_single_action_transaction(
         .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
     let created_cm = compliance_witness.created_resources[0].commitment();
 
-    let compliance_unit = prove_compliance(prover, &compliance_witness)
+    let compliance_unit = prove_compliance(prover, compliance_witness)
         .await
         .context("prove compliance")?;
 
@@ -545,7 +581,7 @@ async fn prove_single_action_transaction(
         tag: created_cm,
         is_consumed: false,
         root,
-        app_data: AppData::default(),
+        app_data: created_app_data,
     };
 
     let (consumed_proof, consumed_journal) = prove_logic(
@@ -578,19 +614,156 @@ async fn prove_single_action_transaction(
 
     // Logic verifiers in canonical tag order: consumed nullifiers first,
     // then created commitments — the order the aggregation guest enforces.
-    let action = arm::action::new(compliance_unit, vec![consumed_logic, created_logic])
-        .map_err(|e| anyhow!("build action: {e:?}"))?;
+    arm::action::new(compliance_unit, vec![consumed_logic, created_logic])
+        .map_err(|e| anyhow!("build action: {e:?}"))
+}
 
-    let delta_witness =
-        arm::delta_proof::from_bytes_vec(std::slice::from_ref(&compliance_witness.rcv))
-            .map_err(|e| anyhow!("build delta witness: {e:?}"))?;
+/// Wrap proven actions into a balanced, delta-proved `Transaction`. The delta
+/// witness composes every action's `rcv`.
+fn assemble_transaction(actions: Vec<Action>, rcvs: &[Vec<u8>]) -> Result<Transaction> {
+    let delta_witness = arm::delta_proof::from_bytes_vec(rcvs)
+        .map_err(|e| anyhow!("build delta witness: {e:?}"))?;
 
-    let tx = Transaction::create(vec![action], Delta::Witness(delta_witness));
+    let tx = Transaction::create(actions, Delta::Witness(delta_witness));
     let balanced_tx = arm::transaction::generate_delta_proof(tx)
         .map_err(|e| anyhow!("generate delta proof: {e:?}"))?;
     arm::transaction::verify(&balanced_tx).map_err(|e| anyhow!("verify tx: {e:?}"))?;
 
     Ok(balanced_tx)
+}
+
+/// Prove a one-action transaction (the shape every single-action fixture uses).
+async fn prove_single_action_transaction(
+    prover: &Prover,
+    compliance_witness: ComplianceWitness,
+    consumed_app_data: AppData,
+) -> Result<Transaction> {
+    let action = prove_action(
+        prover,
+        &compliance_witness,
+        consumed_app_data,
+        AppData::default(),
+    )
+    .await?;
+    assemble_transaction(vec![action], std::slice::from_ref(&compliance_witness.rcv))
+}
+
+/// Shape constants for the transfer-shape fixture, anchored to the real
+/// mainnet AnomaPay shielded transfer captured in May 2026 (commit e17e969,
+/// `anomapay_transfer_0e345103.json`): 3 compliance units and 3,020 wire
+/// bytes. That capture was the suite's heap-exhaustion (OOM) regression;
+/// its proving inputs lived outside this repo and the pipeline that made it
+/// is frozen, so this synthetic reproduction of its shape replaces it.
+const TRANSFER_SHAPE_ACTIONS: usize = 3;
+const CAPTURED_TRANSFER_WIRE_BYTES: usize = 3020;
+/// Per created resource: an encrypted-note-sized resource payload and a
+/// discovery payload, both with deletion criterion "never" so they are
+/// emitted as events at settlement (the indexer-facing path the real
+/// transfer exercised).
+///
+/// Sizing: the adapter's intake ceiling is the TxData account, created in a
+/// single CPI, which Solana caps at 10,240 bytes of allocation — so the
+/// largest settleable transaction is TxData's capacity (10,240 minus its
+/// 89-byte header). The fixture sits just under that ceiling: 512 + 192
+/// words = 2,816 payload bytes per created resource, 8,448 across the
+/// three, for roughly 9.9 KiB of wire. The heap-budget test observes
+/// whether settling a maximum-size transaction exceeds the default 32 KiB
+/// BPF heap (the property the captured transfer's OOM had under v1).
+const TRANSFER_SHAPE_RESOURCE_PAYLOAD_WORDS: usize = 512;
+const TRANSFER_SHAPE_DISCOVERY_PAYLOAD_WORDS: usize = 192;
+
+/// Anoma deletion criterion "never delete" — payloads with it are emitted as
+/// on-chain events. Must match `solana_pa::state::DELETION_CRITERION_NEVER`.
+const DELETION_CRITERION_NEVER: u32 = solana_pa::state::DELETION_CRITERION_NEVER;
+
+/// Deterministic payload blob: `words` u32 words derived from the action
+/// index, deletion criterion "never" (emitted as an event at settlement).
+fn transfer_shape_payload_blob(action_idx: usize, words: usize, salt: u32) -> ExpirableBlob {
+    ExpirableBlob {
+        blob: (0..words as u32)
+            .map(|w| (action_idx as u32) << 16 | salt << 8 | (w & 0xff))
+            .collect(),
+        deletion_criterion: DELETION_CRITERION_NEVER,
+    }
+}
+
+/// Generate the multi-action transfer-shape transaction: three single-unit
+/// actions (nonce bytes `base_seed..base_seed+2`, distinct rcvs so the
+/// delta points differ, as with production's random rcvs), each created
+/// resource carrying event-emitted payload blobs. No external calls — the
+/// real transfer had none.
+async fn generate_transfer_shape_transaction(
+    prover: &Prover,
+    nonce_seed: Option<u8>,
+) -> Result<Transaction> {
+    let base_seed = nonce_seed.unwrap_or(TRANSFER_SHAPE_NONCE_BYTE);
+
+    let mut actions = Vec::with_capacity(TRANSFER_SHAPE_ACTIONS);
+    let mut rcvs = Vec::with_capacity(TRANSFER_SHAPE_ACTIONS);
+    for i in 0..TRANSFER_SHAPE_ACTIONS {
+        let nonce_byte = base_seed
+            .checked_add(i as u8)
+            .ok_or_else(|| anyhow!("nonce seed {base_seed} + {i} overflows a byte"))?;
+        let (consumed_resource, nf_key, consumed_nf) =
+            deterministic_ephemeral_resource(nonce_byte)?;
+
+        let mut created_resource = consumed_resource;
+        created_resource.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
+            .map_err(|e| anyhow!("derive created nonce: {e:?}"))?;
+
+        // Distinct rcv per action: identical rcvs (with identical kinds and
+        // quantities) would collapse the actions' delta points onto one
+        // point, which is not the shape production transactions have.
+        let rcv = Scalar::from((i + 1) as u64);
+        let witness = single_action_compliance_witness_with_rcv(
+            consumed_resource,
+            MerklePath::empty(),
+            nf_key,
+            created_resource,
+            rcv,
+        );
+
+        let mut created_app_data = AppData::default();
+        created_app_data
+            .resource_payload
+            .push(transfer_shape_payload_blob(
+                i,
+                TRANSFER_SHAPE_RESOURCE_PAYLOAD_WORDS,
+                1,
+            ));
+        created_app_data
+            .discovery_payload
+            .push(transfer_shape_payload_blob(
+                i,
+                TRANSFER_SHAPE_DISCOVERY_PAYLOAD_WORDS,
+                2,
+            ));
+
+        actions.push(prove_action(prover, &witness, AppData::default(), created_app_data).await?);
+        rcvs.push(witness.rcv);
+    }
+
+    assemble_transaction(actions, &rcvs)
+}
+
+/// The transfer-shape fixture must be at least as large on the wire as the
+/// captured mainnet transfer it replaces, or the OOM-regression coverage is
+/// weaker than the real transaction it stands in for. Checked against the
+/// final fixture bytes (aggregated, seal-encoded), which is the
+/// representation the capture's 3,020 bytes measured.
+fn check_transfer_shape_wire_size(tx_b64: &str) -> Result<()> {
+    let wire_bytes = BASE64
+        .decode(tx_b64)
+        .context("decode transfer-shape fixture bytes")?
+        .len();
+    if wire_bytes < CAPTURED_TRANSFER_WIRE_BYTES {
+        bail!(
+            "transfer-shape fixture is {wire_bytes} wire bytes, smaller than the \
+             {CAPTURED_TRANSFER_WIRE_BYTES}-byte captured mainnet transfer it replaces — \
+             increase the payload sizes"
+        );
+    }
+    Ok(())
 }
 
 async fn generate_test_transaction_with_external_payload(
@@ -667,6 +840,7 @@ fn generate_error_variant_fixtures(
             tx_b64: BASE64.encode(tx_bytes),
             tx_tampered_b64: String::new(),
             consumed_nullifiers_b64: nullifiers_b64.to_vec(),
+            created_commitments_b64: Vec::new(),
             historical_roots_b64: Vec::new(),
         };
 
@@ -739,6 +913,16 @@ fn consumed_nullifiers_b64(tx: &Transaction) -> Result<Vec<String>> {
         .collect())
 }
 
+fn created_commitments_b64(tx: &Transaction) -> Result<Vec<String>> {
+    Ok(require_aggregation(tx)?
+        .instance
+        .actions
+        .iter()
+        .flat_map(|action| &action.created_publics)
+        .map(|c| BASE64.encode(c.resource_commitment.as_bytes()))
+        .collect())
+}
+
 fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
     let roots: BTreeSet<[u8; 32]> = consumed_publics(tx)?
         .filter(|c| c.commitment_tree_root != INITIAL_ROOT)
@@ -806,6 +990,7 @@ struct DerivedFixtureFields {
     tx_b64: String,
     tx_tampered_b64: String,
     consumed_nullifiers_b64: Vec<String>,
+    created_commitments_b64: Vec<String>,
     historical_roots_b64: Vec<String>,
     selector: String,
 }
@@ -825,6 +1010,7 @@ fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
         tx_b64: BASE64.encode(tx_bytes),
         tx_tampered_b64: BASE64.encode(tampered_bytes),
         consumed_nullifiers_b64: consumed_nullifiers_b64(tx)?,
+        created_commitments_b64: created_commitments_b64(tx)?,
         historical_roots_b64: historical_roots(tx)?
             .iter()
             .map(|root| BASE64.encode(root))
@@ -862,6 +1048,7 @@ fn import_backend_result_fixture(
         tx_b64: fields.tx_b64,
         tx_tampered_b64: fields.tx_tampered_b64,
         consumed_nullifiers_b64: fields.consumed_nullifiers_b64,
+        created_commitments_b64: fields.created_commitments_b64,
         historical_roots_b64: fields.historical_roots_b64,
     };
 
@@ -917,6 +1104,7 @@ fn finalize_and_write_fixture(
         tx_b64: fields.tx_b64,
         tx_tampered_b64: fields.tx_tampered_b64,
         consumed_nullifiers_b64: fields.consumed_nullifiers_b64,
+        created_commitments_b64: fields.created_commitments_b64,
         historical_roots_b64: fields.historical_roots_b64,
     };
 
@@ -935,10 +1123,14 @@ fn finalize_and_write_fixture(
 }
 
 /// Nonce byte reserved for the historical-root committer/consumer pair.
-/// Existing fixtures use 0 (default), 2 (output-mismatch), and 3-7
-/// (`--nonce-seed`, see v2/v3/multi-call/forwarder-fail/forwarder-silent), so
-/// 8 is unused and avoids a `DuplicateNullifier` collision.
+/// Existing fixtures use 0 (default), 2 (output-mismatch), 3-7
+/// (`--nonce-seed`, see v2/v3/multi-call/forwarder-fail/forwarder-silent),
+/// and 9-11 (transfer shape), so 8 avoids a `DuplicateNullifier` collision.
 const HISTORICAL_ROOT_NONCE_BYTE: u8 = 8;
+
+/// Base nonce byte for the transfer-shape fixture's three actions (9-11;
+/// see `HISTORICAL_ROOT_NONCE_BYTE` for the full reservation map).
+const TRANSFER_SHAPE_NONCE_BYTE: u8 = 9;
 
 /// Read an existing single-action, single-created-resource fixture and
 /// return the digest of its created resource's commitment — the leaf that
@@ -1304,12 +1496,53 @@ fn mockify_fixture(input: &Path, output: &Path) -> Result<()> {
 
     fixture.insert("tx_b64".into(), fields.tx_b64.into());
     fixture.insert("tx_tampered_b64".into(), fields.tx_tampered_b64.into());
+    fixture.insert(
+        "created_commitments_b64".into(),
+        fields.created_commitments_b64.into(),
+    );
     fixture.insert("selector".into(), fields.selector.into());
     fixture.insert("aggregation_proof_type".into(), "mock".into());
 
     fs::write(output, serde_json::to_string_pretty(&fixture)?)
         .with_context(|| format!("writing {}", output.display()))?;
     eprintln!("wrote mock fixture: {}", output.display());
+    Ok(())
+}
+
+/// Re-derive every transaction-derived fixture field from the fixture's own
+/// `tx_b64` and rewrite the JSON in place. The transaction (and therefore
+/// the proof) is untouched, so this needs no proving — it exists to migrate
+/// committed fixtures when the derived-field set changes.
+fn refresh_fixture_fields(path: &Path) -> Result<()> {
+    let (mut fixture, tx) = load_fixture_tx(path)?;
+
+    let fields = derive_fixture_fields(&tx)?;
+    if fields.tx_b64 != fixture["tx_b64"].as_str().unwrap_or_default() {
+        bail!("re-serialized transaction differs from tx_b64 — refusing to rewrite");
+    }
+
+    fixture.insert("tx_tampered_b64".into(), fields.tx_tampered_b64.into());
+    fixture.insert("selector".into(), fields.selector.into());
+    fixture.insert(
+        "consumed_nullifiers_b64".into(),
+        fields.consumed_nullifiers_b64.into(),
+    );
+    fixture.insert(
+        "created_commitments_b64".into(),
+        fields.created_commitments_b64.into(),
+    );
+    if fields.historical_roots_b64.is_empty() {
+        fixture.remove("historical_roots_b64");
+    } else {
+        fixture.insert(
+            "historical_roots_b64".into(),
+            fields.historical_roots_b64.into(),
+        );
+    }
+
+    fs::write(path, serde_json::to_string_pretty(&fixture)?)
+        .with_context(|| format!("writing {}", path.display()))?;
+    eprintln!("refreshed fixture fields: {}", path.display());
     Ok(())
 }
 
@@ -1376,7 +1609,7 @@ fn dump_fixture(input: &Path) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen mockify <IN> <OUT>           Convert an existing fixture into its mock twin\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof/zero_action/witness_delta variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - mockify replaces only the aggregation seal of an existing fixture; use it for\n    imported fixtures whose proving inputs are not in this repo.\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen mockify <IN> <OUT>           Convert an existing fixture into its mock twin\n  fixture-gen refresh-fields <FIXTURE>     Re-derive fixture fields from tx_b64 in place (no proving)\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --transfer-shape         Three single-unit actions with event-emitted payload blobs\n                           and no external calls (the captured mainnet transfer's shape);\n                           excludes the forwarder flags. Nonce bytes seed..seed+2 (default 9)\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof/zero_action/witness_delta variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - mockify replaces only the aggregation seal of an existing fixture; use it for\n    imported fixtures whose proving inputs are not in this repo.\n"
     );
 }
 
@@ -1526,6 +1759,13 @@ fn parse_args() -> Result<Command> {
                 let input = PathBuf::from(raw_args.remove(1));
                 return Ok(Command::Mockify { input, output });
             }
+            "refresh-fields" => {
+                if raw_args.len() != 2 {
+                    return Err(anyhow!("Usage: fixture-gen refresh-fields <fixture.json>"));
+                }
+                let path = PathBuf::from(raw_args.remove(1));
+                return Ok(Command::RefreshFields { path });
+            }
             _ => {}
         }
     }
@@ -1535,6 +1775,7 @@ fn parse_args() -> Result<Command> {
     let mut forwarder_mode: Option<ForwarderMode> = None;
     let mut nonce_seed: Option<u8> = None;
     let mut multi_external_call = false;
+    let mut transfer_shape = false;
     let mut error_variants_dir: Option<PathBuf> = None;
     let mut out_path: Option<PathBuf> = None;
     let mut prover_choice: Option<ProverChoice> = None;
@@ -1592,6 +1833,9 @@ fn parse_args() -> Result<Command> {
             "--multi-external-call" => {
                 multi_external_call = true;
             }
+            "--transfer-shape" => {
+                transfer_shape = true;
+            }
             "--mock" => {
                 mock = true;
             }
@@ -1631,15 +1875,27 @@ fn parse_args() -> Result<Command> {
     let out_path = out_path
         .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
 
-    let forwarder_mode = forwarder_mode.unwrap_or(ForwarderMode::BlockTimeForwarder {
-        output_mismatch: false,
-    });
+    let shape = if transfer_shape {
+        if forwarder_mode.is_some() || multi_external_call {
+            return Err(anyhow!(
+                "--transfer-shape has no external calls; it cannot combine with \
+                 --output-mismatch/--forwarder-fail/--forwarder-silent/--multi-external-call"
+            ));
+        }
+        GenerateShape::TransferShape
+    } else {
+        GenerateShape::SingleAction {
+            forwarder_mode: forwarder_mode.unwrap_or(ForwarderMode::BlockTimeForwarder {
+                output_mismatch: false,
+            }),
+            multi_external_call,
+        }
+    };
 
     Ok(Command::Generate(GenerateArgs {
         debug_assumptions,
-        forwarder_mode,
+        shape,
         nonce_seed,
-        multi_external_call,
         error_variants_dir,
         out_path,
         prover_choice,
@@ -1695,9 +1951,8 @@ async fn main() -> Result<()> {
 
     let GenerateArgs {
         debug_assumptions,
-        forwarder_mode,
+        shape,
         nonce_seed,
-        multi_external_call,
         error_variants_dir,
         out_path,
         prover_choice,
@@ -1737,6 +1992,9 @@ async fn main() -> Result<()> {
         Command::Mockify { input, output } => {
             return mockify_fixture(&input, &output);
         }
+        Command::RefreshFields { path } => {
+            return refresh_fixture_fields(&path);
+        }
         Command::Generate(args) => args,
     };
 
@@ -1754,19 +2012,27 @@ async fn main() -> Result<()> {
 
     eprintln!("fixture output: {}", out_path.display());
     eprintln!("mode: aggregated (batch Groth16)");
-    if let ForwarderMode::BlockTimeForwarder {
-        output_mismatch: true,
-    } = &forwarder_mode
-    {
-        eprintln!(
+    match &shape {
+        GenerateShape::SingleAction {
+            forwarder_mode:
+                ForwarderMode::BlockTimeForwarder {
+                    output_mismatch: true,
+                },
+            ..
+        } => eprintln!(
             "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
-        );
+        ),
+        GenerateShape::SingleAction {
+            multi_external_call: true,
+            ..
+        } => eprintln!("mode: multi-external-call (two external payload blobs)"),
+        GenerateShape::SingleAction { .. } => {}
+        GenerateShape::TransferShape => eprintln!(
+            "mode: transfer-shape ({TRANSFER_SHAPE_ACTIONS} actions, event-emitted payloads, no external calls)"
+        ),
     }
     if let Some(seed) = nonce_seed {
         eprintln!("mode: nonce-seed override ({seed})");
-    }
-    if multi_external_call {
-        eprintln!("mode: multi-external-call (two external payload blobs)");
     }
     if let Some(dir) = &error_variants_dir {
         eprintln!("error variants output dir: {}", dir.display());
@@ -1774,13 +2040,24 @@ async fn main() -> Result<()> {
 
     eprintln!("phase: generate_test_transaction");
     let gen_start = Instant::now();
-    let mut tx = generate_test_transaction_with_external_payload(
-        &prover,
-        forwarder_mode,
-        nonce_seed,
-        multi_external_call,
-    )
-    .await?;
+    let is_transfer_shape = matches!(shape, GenerateShape::TransferShape);
+    let mut tx = match shape {
+        GenerateShape::SingleAction {
+            forwarder_mode,
+            multi_external_call,
+        } => {
+            generate_test_transaction_with_external_payload(
+                &prover,
+                forwarder_mode,
+                nonce_seed,
+                multi_external_call,
+            )
+            .await?
+        }
+        GenerateShape::TransferShape => {
+            generate_transfer_shape_transaction(&prover, nonce_seed).await?
+        }
+    };
     eprintln!(
         "phase done: generate_test_transaction ({})",
         fmt_duration(gen_start.elapsed())
@@ -1809,6 +2086,10 @@ async fn main() -> Result<()> {
     })?;
 
     let fixture = finalize_and_write_fixture(&mut tx, &out_path, None)?;
+
+    if is_transfer_shape {
+        check_transfer_shape_wire_size(&fixture.tx_b64)?;
+    }
 
     if let Some(dir) = error_variants_dir.as_deref() {
         timed_phase("write_error_variants", || {

@@ -7,5 +7,6 @@
   "tx_tampered_b64": "",
   "consumed_nullifiers_b64": [
     "NagY4dE24OcQ+TkOw181+HVOsiwdFHFFRa5JJSLB8iI="
-  ]
+  ],
+  "created_commitments_b64": []
 }

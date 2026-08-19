@@ -477,6 +477,10 @@ start_validator() {
   }
   add_genesis_accounts tests/fixtures/verifier-entries verifier-entry-
 
+  # --log-messages-bytes-limit: the default 10 KB truncation drops the tail
+  # of any settlement whose payload events exceed it (the transfer-shape
+  # fixture emits ~11 KB of event data), and both the suite's event
+  # assertions and its root-marker prediction probe read transaction logs.
   solana-test-validator \
     --reset \
     --ledger "$VALIDATOR_LEDGER" \
@@ -489,6 +493,7 @@ start_validator() {
     --clone "$ROUTER_PDA" \
     --clone "$VERIFIER_ENTRY_PDA" \
     "${account_args[@]}" \
+    --log-messages-bytes-limit 1000000 \
     --log \
     >"$VALIDATOR_LOG" 2>&1 &
   VALIDATOR_PID=$!

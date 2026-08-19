@@ -10,6 +10,7 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import { assert } from "chai";
+import { createHash } from "crypto";
 import path from "path";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 
@@ -100,60 +101,71 @@ function deriveRootPda(root: Buffer): PublicKey {
 // the instruction fails earlier.
 const DUMMY_ROOT_MARKER = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
 
-// Predict the produced-root marker PDA for a settlement whose resulting root is
-// only known after commitments are appended on-chain.
+// Predict the produced-root marker PDA for a settlement whose resulting root
+// is only known after commitments are appended on-chain.
 //
-// The address depends on the post-settlement root, so it cannot be derived from
-// instruction inputs. Rather than reimplementing the merkle append (and the
-// bincode commitment extraction it needs) in TypeScript, this runs the real
-// instruction as a simulation against a throwaway marker address. The program
-// reaches the runtime check, `require_keys_eq!(expected_pda, provided)` fails,
-// and Anchor logs both compared pubkeys — "Left:" followed by the expected
-// address, "Right:" followed by the one supplied. Reading "Left:" back out
-// yields the exact address the real send must use. Simulation commits nothing.
-//
-// Uses connection.simulateTransaction directly rather than Anchor's .simulate():
-// Anchor wraps failures in an error whose shape varies by failure mode, while
-// the connection call returns {value: {err, logs}} unconditionally and never
-// throws on program failure.
-//
-// Only valid for settlements expected to succeed. One that fails earlier never
-// reaches the comparison, and this throws rather than returning a wrong address.
-async function predictRootMarkerPda(
-  buildSettle: (marker: PublicKey) => { transaction: () => Promise<Transaction> },
-  feePayer: PublicKey,
-): Promise<PublicKey> {
-  const probeMarker = Keypair.generate().publicKey;
-  const probeTx = await buildSettle(probeMarker).transaction();
-  probeTx.feePayer = feePayer;
+// Mirrors what a production submitter must do: fetch the current tree state
+// and replay the append locally over the transaction's created commitments
+// (merkle.rs `append_to_tree`, including the expand-after-fill growth step).
+// A wrong prediction cannot settle: the program's
+// `require_keys_eq!(expected_pda, provided)` rejects it with RootPdaMismatch,
+// so the on-chain check keeps this replica honest.
+const MAX_TREE_DEPTH = 32;
 
-  const sim = await provider.connection.simulateTransaction(probeTx);
-  const logs = sim.value.logs ?? [];
-  const tail = logs.slice(-20).join("\n");
+function hashTwo(left: Buffer, right: Buffer): Buffer {
+  return createHash("sha256").update(left).update(right).digest();
+}
 
-  if (!sim.value.err) {
-    throw new Error(
-      "Probe settlement unexpectedly succeeded against a random marker address; " +
-        "the produced-root marker check did not run.\n" + tail,
-    );
+// ZEROS[0] = PADDING_LEAF; ZEROS[i] = hash(ZEROS[i-1], ZEROS[i-1]) — the
+// zero-subtree hashes from merkle.rs, derived rather than copied.
+const ZEROS: Buffer[] = (() => {
+  const zeros: Buffer[] = [EMPTY_TREE_ROOT_INITIAL];
+  for (let i = 1; i < MAX_TREE_DEPTH; i++) {
+    zeros.push(hashTwo(zeros[i - 1], zeros[i - 1]));
   }
+  return zeros;
+})();
 
-  const errIdx = logs.findIndex((l) => l.includes("Error Code: RootPdaMismatch"));
-  if (errIdx === -1) {
-    throw new Error(
-      "Could not predict root marker: the probe settlement failed before reaching " +
-        `the produced-root marker check. Simulation error: ${JSON.stringify(sim.value.err)}\n${tail}`,
-    );
+function computeRootAfterAppend(
+  state: { nextIndex: anchor.BN; currentDepth: number; frontier: number[][]; root: number[] },
+  leaves: Buffer[],
+): Buffer {
+  let nextIndex = BigInt(state.nextIndex.toString());
+  let depth = state.currentDepth;
+  const frontier: Buffer[] = state.frontier.map((f) => Buffer.from(f));
+  let root: Buffer = Buffer.from(state.root);
+
+  for (const leaf of leaves) {
+    assert.ok(nextIndex < 1n << BigInt(depth), "tree over capacity in root prediction");
+    let index = nextIndex;
+    nextIndex += 1n;
+
+    let current: Buffer = leaf;
+    for (let level = 0; level < depth; level++) {
+      if ((index & 1n) === 0n) {
+        frontier[level] = current;
+        current = hashTwo(current, ZEROS[level]);
+      } else {
+        current = hashTwo(frontier[level], current);
+      }
+      index >>= 1n;
+    }
+
+    if (nextIndex === 1n << BigInt(depth) && depth < MAX_TREE_DEPTH) {
+      frontier.push(current);
+      current = hashTwo(current, ZEROS[depth]);
+      depth += 1;
+    }
+
+    root = current;
   }
-  const leftIdx = logs.findIndex((l, i) => i > errIdx && l.includes("Left:"));
-  if (leftIdx === -1 || leftIdx + 1 >= logs.length) {
-    throw new Error(`Could not predict root marker: no "Left:" pubkey after RootPdaMismatch.\n${tail}`);
-  }
-  const match = logs[leftIdx + 1].match(/[1-9A-HJ-NP-Za-km-z]{32,44}/);
-  if (!match) {
-    throw new Error(`Could not parse pubkey from simulation log line: "${logs[leftIdx + 1]}"`);
-  }
-  return new PublicKey(match[0]);
+  return root;
+}
+
+async function predictRootMarkerPda(createdCommitments: Buffer[]): Promise<PublicKey> {
+  const state = await program.account.paStateAccount.fetch(paState);
+  const root = computeRootAfterAppend(state, createdCommitments);
+  return deriveRootPda(root);
 }
 
 function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
@@ -354,7 +366,7 @@ function parseAnchorEvents(logs: string[]) {
 async function settleFixtureViaTxData(
   payload: Buffer,
   remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
-  options?: { newRootMarker?: PublicKey },
+  options?: { newRootMarker?: PublicKey; createdCommitments?: Buffer[] },
 ): Promise<string> {
   const authority = Keypair.generate();
   await airdrop(provider, authority, 2);
@@ -382,8 +394,27 @@ async function settleFixtureViaTxData(
       .signers([authority]);
 
   const newRootMarker =
-    options?.newRootMarker ?? (await predictRootMarkerPda(buildSettle, authority.publicKey));
+    options?.newRootMarker ?? (await predictRootMarkerPda(requireCommitments(options)));
   return buildSettle(newRootMarker).rpc();
+}
+
+// A settlement expected to succeed must predict its produced-root marker from
+// the transaction's created commitments; one expected to fail passes an
+// explicit (dummy) marker instead.
+function requireCommitments(options?: { createdCommitments?: Buffer[] }): Buffer[] {
+  assert.ok(
+    options?.createdCommitments,
+    "settlement without an explicit newRootMarker needs createdCommitments to predict it",
+  );
+  return options!.createdCommitments!;
+}
+
+function commitmentsOf(fx: Fixture): Buffer[] {
+  assert.ok(
+    fx.created_commitments_b64?.length,
+    "fixture is missing created_commitments_b64 — regenerate or refresh-fields it",
+  );
+  return fx.created_commitments_b64!.map((b) => Buffer.from(b, "base64"));
 }
 
 async function paStateExists(): Promise<boolean> {
@@ -452,6 +483,7 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
     options?: {
       nullifierAccounts?: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[];
       newRootMarker?: PublicKey;
+      createdCommitments?: Buffer[];
       additionalHistoricalRootMarkers?: PublicKey[];
     }
   ) {
@@ -486,7 +518,7 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
         .signers([authority]);
 
     const newRootMarker =
-      options?.newRootMarker ?? (await predictRootMarkerPda(buildSettle, authority.publicKey));
+      options?.newRootMarker ?? (await predictRootMarkerPda(requireCommitments(options)));
     return buildSettle(newRootMarker).rpc();
   }
 
@@ -605,7 +637,7 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
     const rootBeforeBytes = Buffer.from(stateBefore.root as number[]);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
-    await settleViaTxData(Keypair.generate(), tx);
+    await settleViaTxData(Keypair.generate(), tx, { createdCommitments: commitmentsOf(fixture) });
 
     // Verify nullifier PDAs exist
     for (const pda of nullifierPdas) {
@@ -680,7 +712,9 @@ describe("protocol-adapter (STATE-03 part 1: commit a non-ephemeral leaf)", () =
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     const nextIndexBefore = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
-    await settleFixtureViaTxData(payload, remainingAccounts);
+    await settleFixtureViaTxData(payload, remainingAccounts, {
+      createdCommitments: commitmentsOf(committerFixture),
+    });
     const nextIndexAfter = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
     assert.equal(nextIndexAfter, nextIndexBefore + 1);
   });
@@ -2197,6 +2231,143 @@ describe("protocol-adapter (Settlement error paths — fixture variants)", () =>
   });
 });
 
+describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
+  // Successor of the imported-mainnet-transfer OOM regression: a synthetic
+  // three-action transaction at least as large on the wire as the captured
+  // production transfer (fixture-gen enforces the size), with event-emitted
+  // payload blobs on every created resource. Settling it within the CU and
+  // heap budgets is the regression being tested.
+
+  // Adequacy guard: the original fixture existed because that transfer
+  // could not settle in the default heap (the 256 KiB allocator and the
+  // requestHeapFrame calls landed with it). A replacement only regression-
+  // tests the OOM path if it, too, exhausts the default heap — so this must
+  // FAIL without the heap frame. If it ever starts succeeding, the fixture
+  // no longer stresses the heap and must grow. Runs before the successful
+  // settlement so a surprise success cannot consume the nullifiers first.
+  it("cannot settle the transfer-shape fixture without the extended heap budget", async () => {
+    const fx = loadFixture("batch_groth16_transfer_shape.json");
+    const payload = Buffer.from(fx.tx_b64, "base64");
+    const authority = Keypair.generate();
+    await airdrop(provider, authority, 2);
+    const { uploadId, txData } = await uploadTxData(authority, payload);
+    const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
+
+    try {
+      await program.methods
+        .settleFromTxdata(uploadId)
+        .accountsPartial({
+          paState,
+          txData,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          newRootMarker: DUMMY_ROOT_MARKER,
+          verifierRouterProgram: VERIFIER_ROUTER_ID,
+          router: routerPda,
+          verifierEntry: verifierEntryPda,
+          verifierProgram: VERIFIER_PROGRAM_ID,
+        })
+        .remainingAccounts(nullifierAccounts)
+        .preInstructions([
+          // Full CU budget but NO requestHeapFrame: only the default heap.
+          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ])
+        .signers([authority])
+        .rpc();
+      assert.fail(
+        "transfer-shape settlement succeeded in the default heap — the fixture no " +
+          "longer exercises the OOM regression; increase its payload sizes",
+      );
+    } catch (e: any) {
+      if (e.message?.startsWith("transfer-shape settlement succeeded")) throw e;
+      // The failure must be genuine memory exhaustion, not a later check
+      // (e.g. the dummy root marker) reached after the heap survived: a PA
+      // error code would mean the program ran to a logic check, so the
+      // fixture did NOT exhaust the default heap.
+      const code = extractPAErrorCode(e);
+      const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+      assert.isNull(
+        code,
+        `expected a runtime memory failure, got PA error code ${code} — the ` +
+          "fixture settled past the heap in the default budget; increase its " +
+          `payload sizes\nLogs:\n${logs.slice(-15).join("\n")}`,
+      );
+      assert.ok(
+        logs.some((l) => /memory allocation failed|out of memory|Access violation/i.test(l)),
+        `expected a memory-exhaustion log line\nLogs:\n${logs.slice(-15).join("\n")}`,
+      );
+    }
+  });
+
+  it("settles the three-action transfer-shape fixture and emits payload events", async () => {
+    const fx = loadFixture("batch_groth16_transfer_shape.json");
+    const payload = Buffer.from(fx.tx_b64, "base64");
+    assert.equal(fx.consumed_nullifiers_b64.length, 3, "fixture should have 3 actions");
+
+    const stateBefore = await program.account.paStateAccount.fetch(paState);
+    const nextIndexBefore = stateBefore.nextIndex.toNumber();
+
+    const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
+    const sig = await settleFixtureViaTxData(payload, nullifierAccounts, {
+      createdCommitments: commitmentsOf(fx),
+    });
+
+    const stateAfter = await program.account.paStateAccount.fetch(paState);
+    assert.equal(
+      stateAfter.nextIndex.toNumber(),
+      nextIndexBefore + 3,
+      "three created commitments should be appended",
+    );
+
+    await provider.connection.confirmTransaction(sig, "confirmed");
+    const txResult = await provider.connection.getTransaction(sig, {
+      commitment: "confirmed",
+      maxSupportedTransactionVersion: 0,
+    });
+    assert.ok(txResult, "settlement transaction should be fetchable");
+    const events = parseAnchorEvents(txResult!.meta?.logMessages ?? []);
+
+    const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
+    assert.equal(actionEvents.length, 3, "one actionExecutedEvent per action");
+    for (const ev of actionEvents) {
+      assert.equal(ev.data.actionTagCount, 2, "each action has one consumed + one created");
+    }
+
+    const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
+    assert.equal(txEvents.length, 1);
+    assert.equal(txEvents[0].data.tags.length, 6, "6 tags across 3 actions");
+    assert.deepEqual(
+      txEvents[0].data.isConsumed,
+      [true, false, true, false, true, false],
+      "consumed-then-created per action, in instance order",
+    );
+
+    // Each created resource carries one resource payload (512 words) and one
+    // discovery payload (192 words) with deletion criterion "never", so both
+    // are emitted with index 0 under the created resource's commitment tag.
+    const resourceEvents = events.filter((e) => e.name === "resourcePayloadEvent");
+    const discoveryEvents = events.filter((e) => e.name === "discoveryPayloadEvent");
+    assert.equal(resourceEvents.length, 3, "one resource payload event per created resource");
+    assert.equal(discoveryEvents.length, 3, "one discovery payload event per created resource");
+    const createdTags = txEvents[0].data.tags.filter(
+      (_: unknown, i: number) => !txEvents[0].data.isConsumed[i],
+    );
+    for (const [evs, byteLen] of [
+      [resourceEvents, 2048],
+      [discoveryEvents, 768],
+    ] as const) {
+      for (const ev of evs) {
+        assert.equal(ev.data.index, 0);
+        assert.equal(Buffer.from(ev.data.blob).length, byteLen);
+        assert.ok(
+          createdTags.some((t: number[]) => Buffer.from(t).equals(Buffer.from(ev.data.tag))),
+          "payload event tag should be a created commitment",
+        );
+      }
+    }
+  });
+});
+
 describe("protocol-adapter (External call error paths)", () => {
   it("rejects settlement when forwarder CPI accounts are wrong", async () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
@@ -2285,7 +2456,9 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     const nullifierAccounts = deriveNullifierAccounts(v2Fixture.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
-    v2TxSig = await settleFixtureViaTxData(payload, remainingAccounts);
+    v2TxSig = await settleFixtureViaTxData(payload, remainingAccounts, {
+      createdCommitments: commitmentsOf(v2Fixture),
+    });
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
@@ -2373,7 +2546,9 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     const nullifierAccounts = deriveNullifierAccounts(v3Fixture.consumed_nullifiers_b64);
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
-    await settleFixtureViaTxData(payload, remainingAccounts);
+    await settleFixtureViaTxData(payload, remainingAccounts, {
+      createdCommitments: commitmentsOf(v3Fixture),
+    });
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
@@ -2398,7 +2573,9 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
       { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
     ];
 
-    await settleFixtureViaTxData(payload, remainingAccounts);
+    await settleFixtureViaTxData(payload, remainingAccounts, {
+      createdCommitments: commitmentsOf(multiFixture),
+    });
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
@@ -2495,7 +2672,9 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
     });
 
     const nextIndexBefore = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
-    await settleFixtureViaTxData(payload, remainingAccounts);
+    await settleFixtureViaTxData(payload, remainingAccounts, {
+      createdCommitments: commitmentsOf(consumerFixture),
+    });
     const nextIndexAfter = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
     assert.equal(nextIndexAfter, nextIndexBefore + 1, "consumer settlement should append its commitment");
   });
