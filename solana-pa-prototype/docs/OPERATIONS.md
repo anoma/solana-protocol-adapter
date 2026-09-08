@@ -62,6 +62,19 @@ After a first deployment, update `docs/DEVNET_DEPLOYMENT.md` (or the equivalent 
 
 To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster <c>`. Upgrading replaces the binary in place; it does not touch PAState, markers, or the initialization parameters.
 
+### Upgrades that change the state layout
+
+`upgrade` replaces code only. The state account (`PAStateAccount`, PDA seed `pa_state`) keeps whatever bytes it had, so a binary whose account layout differs from the deployed one cannot read it. The adapter makes that failure explicit instead of accidental:
+
+- Byte 8 of the account data (the first byte after Anchor's discriminator) is the **schema version**, written by `initialize` from `PAStateAccount::SCHEMA_VERSION`. It is a layout number and changes only when the layout does.
+- Every instruction except `initialize` refuses the account with `UnsupportedStateSchema` when that byte is not the binary's own version. An upgrade to a layout-changing binary therefore stops the adapter cold until the account is migrated; nothing misreads old bytes.
+
+A release that changes the layout must ship the migration with it, and the procedure is: upgrade the binary, then run its `migrate_state` instruction once, signed by the PA authority and the upgrade authority, before any other instruction. That instruction reads the account as raw bytes, requires the previous version at byte 8, reallocates the account to the new size, rewrites it in the new layout with whatever new parameters the layout needs, and sets the new version. The operator running it pays the rent difference. Layout changes append fields after the existing ones so that the version byte and every earlier field keep their offsets. The V2 binary ships no `migrate_state` because it is deployed fresh; the first layout change after it must add one.
+
+This covers the state account only. A change to the commitment tree itself (hash, arity, leaf encoding) or to the marker PDA seeds invalidates the existing tree and marker addresses, and no in-place migration recovers that: it is a fresh deployment plus a bulk copy of roots and nullifiers, the same limit the EVM adapter has.
+
+The development build's `dev_set_schema_version` instruction exists only to test the refusal; the release build asserts it is absent, alongside `close_markers_batch`.
+
 ### Verified (reproducible) builds
 
 The deployed PA should be the deterministic `solana-verify` Docker build, so the on-chain bytes are checkable against this repo:
