@@ -117,6 +117,7 @@ pub mod protocol_adapter {
         kind_table_commitment: [u8; 32],
     ) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
+        state.schema_version = PAStateAccount::SCHEMA_VERSION;
         state.bump = ctx.bumps.pa_state;
         state.authority = ctx.accounts.payer.key();
         state.pending_authority = None;

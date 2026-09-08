@@ -208,6 +208,7 @@ fn merkle_tree_rejects_at_max_capacity() {
     // Create a state at depth 3 (capacity = 8) to test the boundary quickly
     let depth = 3usize;
     let mut state = PAStateAccount {
+        schema_version: PAStateAccount::SCHEMA_VERSION,
         bump: 0,
         authority: anchor_lang::prelude::Pubkey::default(),
         pending_authority: None,

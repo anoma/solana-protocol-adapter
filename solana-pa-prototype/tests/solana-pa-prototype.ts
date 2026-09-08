@@ -534,6 +534,11 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
 
   it("initializes with depth 1 (variable-depth tree)", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
+    assert.equal(
+      state.schemaVersion,
+      1,
+      "a freshly initialized adapter carries schema version 1 (PAStateAccount::SCHEMA_VERSION)"
+    );
     assert.isAtLeast(
       state.currentDepth,
       1,
@@ -556,12 +561,13 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
   });
 
   it("account size matches expected size for current depth (no over-allocation)", async () => {
-    // Space formula: BASE_SPACE (200) + VEC_OVERHEAD (4) + 32 * depth
-    // BASE_SPACE breakdown matches state.rs: discriminator(8) + bump(1) +
-    // authority(32) + verifier_router(32) + proof_selector(4) +
-    // kind_table_commitment(32) + pending_authority(33) + lifecycle(1) +
-    // root(32) + next_index(8) + current_depth(1) + expiry bounds(16)
-    const BASE_SPACE = 200;
+    // Space formula: BASE_SPACE (201) + VEC_OVERHEAD (4) + 32 * depth
+    // BASE_SPACE breakdown matches state.rs: discriminator(8) +
+    // schema_version(1) + bump(1) + authority(32) + verifier_router(32) +
+    // proof_selector(4) + kind_table_commitment(32) + pending_authority(33) +
+    // lifecycle(1) + root(32) + next_index(8) + current_depth(1) +
+    // expiry bounds(16)
+    const BASE_SPACE = 201;
     const VEC_OVERHEAD = 4;
     const spaceForDepth = (depth: number) => BASE_SPACE + VEC_OVERHEAD + 32 * depth;
 

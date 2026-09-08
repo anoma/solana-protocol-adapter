@@ -191,6 +191,7 @@ pub fn create_test_pa_state() -> PAStateAccount {
 
 pub fn create_test_pa_state_with(authority: Pubkey, stopped: bool) -> PAStateAccount {
     PAStateAccount {
+        schema_version: PAStateAccount::SCHEMA_VERSION,
         bump: 0,
         authority,
         pending_authority: None,
