@@ -2696,6 +2696,47 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
 // Verifies that teardown operations cannot be performed while the PA is
 // running. Must run BEFORE emergency_stop pauses the protocol.
 
+describe("protocol-adapter (dev_set_schema_version tooling)", () => {
+  it("dev_set_schema_version rejects a non-authority signer", async () => {
+    const intruder = Keypair.generate();
+    await airdrop(provider, intruder, 1);
+    const before = await program.account.paStateAccount.fetch(paState);
+    try {
+      await program.methods
+        .devSetSchemaVersion(before.schemaVersion + 1)
+        .accountsPartial({ paState, authority: intruder.publicKey })
+        .signers([intruder])
+        .rpc();
+      assert.fail("dev_set_schema_version must require the PA authority");
+    } catch (e: any) {
+      assertPAError(e, "Unauthorized");
+    }
+    const after = await program.account.paStateAccount.fetch(paState);
+    assert.equal(after.schemaVersion, before.schemaVersion, "a rejected call must not change the version");
+  });
+
+  it("dev_set_schema_version writes the byte and is reversible", async () => {
+    const before = await program.account.paStateAccount.fetch(paState);
+    const foreign = before.schemaVersion + 1;
+    await program.methods
+      .devSetSchemaVersion(foreign)
+      .accountsPartial({ paState, authority: provider.wallet.publicKey })
+      .rpc();
+    const info = await provider.connection.getAccountInfo(paState);
+    assert.ok(info, "PAState account should exist");
+    assert.equal(info!.data[8], foreign, "the schema version is byte 8 of the account data");
+
+    // The instruction must accept an account of a foreign version, since that
+    // is the state a migration instruction starts from.
+    await program.methods
+      .devSetSchemaVersion(before.schemaVersion)
+      .accountsPartial({ paState, authority: provider.wallet.publicKey })
+      .rpc();
+    const restored = await program.account.paStateAccount.fetch(paState);
+    assert.equal(restored.schemaVersion, before.schemaVersion, "version restored");
+  });
+});
+
 describe("protocol-adapter (close_markers_batch requires stopped state)", () => {
   it("close_markers_batch fails when PA is not stopped", async () => {
     const state = await program.account.paStateAccount.fetch(paState);

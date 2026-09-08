@@ -461,6 +461,21 @@ pub mod protocol_adapter {
         msg!("Closed {} markers", ctx.remaining_accounts.len());
         Ok(())
     }
+
+    /// Overwrite the state account's schema version. Development tooling only.
+    ///
+    /// Exists so the integration suite can present this binary with a state
+    /// account of a foreign schema version and observe every instruction
+    /// refuse it — the guard a future layout-changing upgrade relies on.
+    /// Deliberately carries no schema-version constraint: a migration
+    /// instruction must read an account of the previous version, and this is
+    /// the same access pattern.
+    #[cfg(feature = "dev-teardown")]
+    pub fn dev_set_schema_version(ctx: Context<DevSetSchemaVersion>, version: u8) -> Result<()> {
+        ctx.accounts.pa_state.schema_version = version;
+        msg!("PAState schema version set to {}", version);
+        Ok(())
+    }
 }
 
 /// Floor at 1 lamport because 0-lamport accounts can be garbage-collected.
@@ -1027,6 +1042,20 @@ pub struct CloseMarkersBatch<'info> {
     pub pa_state: Account<'info, PAStateAccount>,
 
     #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[cfg(feature = "dev-teardown")]
+#[derive(Accounts)]
+pub struct DevSetSchemaVersion<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        has_one = authority @ PAError::Unauthorized,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
     pub authority: Signer<'info>,
 }
 

@@ -396,9 +396,10 @@ build_programs_dev() {
 }
 
 # The production build: plain `anchor build`, no dev-teardown feature, so
-# close_markers_batch must be absent from the deployed binary. The IDL is
-# generated for protocol-adapter and checked, so this stays a
-# self-checking command rather than a convention nothing enforces.
+# the dev-only instructions (close_markers_batch, dev_set_schema_version)
+# must be absent from the deployed binary. The IDL is generated for
+# protocol-adapter and checked, so this stays a self-checking command rather
+# than a convention nothing enforces.
 build_programs_release() {
   assert_known_programs
   clean_incremental_artifacts
@@ -416,12 +417,15 @@ build_programs_release() {
     echo "❌ release build: anchor build did not produce an IDL at ${idl_path}" >&2
     exit 1
   fi
-  if grep -q '"close_markers_batch"' "$idl_path"; then
-    echo "❌ release build: close_markers_batch is present in the production IDL (${idl_path})." >&2
-    echo "   dev-teardown must not be enabled for a production build." >&2
-    exit 1
-  fi
-  echo "    ✅ Production build: close_markers_batch is absent from the IDL."
+  local dev_only_ix
+  for dev_only_ix in close_markers_batch dev_set_schema_version; do
+    if grep -q "\"${dev_only_ix}\"" "$idl_path"; then
+      echo "❌ release build: ${dev_only_ix} is present in the production IDL (${idl_path})." >&2
+      echo "   dev-teardown must not be enabled for a production build." >&2
+      exit 1
+    fi
+  done
+  echo "    ✅ Production build: dev-only instructions (close_markers_batch, dev_set_schema_version) are absent from the IDL."
 }
 
 # Validate the required fixture for the given test mode ($1, real|mock):
