@@ -71,9 +71,11 @@ pub struct PAStateAccount {
     /// sits at byte 8 of the account data (after Anchor's discriminator) in
     /// every layout: a later binary that changes the layout reads this byte
     /// through an unchecked account to decide whether it may migrate. Every
-    /// instruction except `initialize` refuses an account whose version is
-    /// not `SCHEMA_VERSION`. Layout changes append fields and bump the
-    /// constant; they never reorder or remove fields ahead of the frontier.
+    /// instruction that reads this account — all but `initialize`, which
+    /// creates it, and the development-only `dev_set_schema_version` —
+    /// refuses an account whose version is not `SCHEMA_VERSION`. Layout
+    /// changes append fields and bump the constant; they never reorder or
+    /// remove fields ahead of the frontier.
     pub schema_version: u8,
     pub bump: u8,
     /// Authority that can call emergency_stop.

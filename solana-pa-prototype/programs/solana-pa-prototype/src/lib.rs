@@ -467,9 +467,11 @@ pub mod protocol_adapter {
     /// Exists so the integration suite can present this binary with a state
     /// account of a foreign schema version and observe every instruction
     /// refuse it — the guard a future layout-changing upgrade relies on.
-    /// Deliberately carries no schema-version constraint: a migration
-    /// instruction must read an account of the previous version, and this is
-    /// the same access pattern.
+    /// Deliberately carries no schema-version constraint. Like a migration
+    /// instruction it accepts an account of a foreign version; it can still
+    /// load the account through the typed layout only because flipping the
+    /// byte does not change the layout, which a real migration cannot
+    /// assume.
     #[cfg(feature = "dev-teardown")]
     pub fn dev_set_schema_version(ctx: Context<DevSetSchemaVersion>, version: u8) -> Result<()> {
         ctx.accounts.pa_state.schema_version = version;

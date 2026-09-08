@@ -395,16 +395,42 @@ build_programs_dev() {
   build_with_filtered_output anchor build -p mock-verifier --no-idl
 }
 
-# Prints the names of instructions gated by `#[cfg(feature = "dev-teardown")]`
-# in the given source file, one per line: any `pub fn` immediately preceded
-# (doc comments and the cfg attribute itself aside) by that attribute. A
-# `#[derive(Accounts)]` line between the attribute and the next item means
-# the attribute gates a struct, not an instruction, and is skipped.
+# Prints the names of instructions gated by a `#[cfg(...)]` attribute whose
+# argument mentions `dev-teardown` (a bare `feature = "dev-teardown"`, no
+# spaces, or wrapped in `all(...)`/`any(...)`), one per line: any `pub fn`
+# following such an attribute, skipping over doc comments (`///`), line
+# comments (`//`), further attributes (e.g. `#[derive(Accounts)]`), and
+# blank lines in between. A cfg attribute whose next item is not a `pub fn`
+# (a struct, an impl block, etc.) gates that item instead of an instruction
+# and is classified silently rather than printed. Every cfg occurrence found
+# must land in one of those two buckets — if end-of-file arrives while an
+# attribute is still waiting for its item, that occurrence is left
+# unclassified and the mismatch is caught below.
 dev_only_instructions() {
-  awk '
-    /#\[cfg\(feature = "dev-teardown"\)\]/ { pending = 1; next }
-    pending && /pub fn/ { match($0, /pub fn ([a-z_]+)/, m); print m[1]; pending = 0; next }
-    pending && !/^[[:space:]]*(#\[|\/\/\/)/ { pending = 0 }
+  awk -v src="$1" '
+    /#\[cfg\(/ && /dev-teardown/ {
+      cfg_count++
+      pending = 1
+      next
+    }
+    pending && /^[[:space:]]*($|#\[|\/\/)/ { next }
+    pending && /pub fn/ {
+      match($0, /pub fn [A-Za-z0-9_]+/)
+      print substr($0, RSTART + 7, RLENGTH - 7)
+      classified++
+      pending = 0
+      next
+    }
+    pending {
+      classified++
+      pending = 0
+    }
+    END {
+      if (cfg_count + 0 != classified + 0) {
+        printf "❌ release build: %d dev-teardown cfg attribute(s) in %s could not be classified as an instruction or an item\n", cfg_count - classified, src > "/dev/stderr"
+        exit 1
+      }
+    }
   ' "$1"
 }
 

@@ -22,10 +22,17 @@ fn serialized(state: &PAStateAccount) -> Vec<u8> {
 
 #[test]
 fn schema_version_is_byte_eight_of_the_account_data() {
-    let bytes = serialized(&create_test_pa_state());
+    // A distinctive value that cannot be mistaken for any other single-byte
+    // field in the account (current_depth, lifecycle, ...), so this test
+    // cannot pass by coincidence if schema_version is not actually the first
+    // field after the discriminator.
+    let state = PAStateAccount {
+        schema_version: 0xA7,
+        ..create_test_pa_state()
+    };
+    let bytes = serialized(&state);
     assert_eq!(
-        bytes[8],
-        PAStateAccount::SCHEMA_VERSION,
+        bytes[8], 0xA7,
         "schema version must be the first field after the 8-byte discriminator; a migrate instruction reads it at this offset"
     );
 }
@@ -49,4 +56,16 @@ fn foreign_schema_version_still_deserializes() {
     let decoded = PAStateAccount::try_deserialize(&mut bytes.as_slice())
         .expect("a foreign version byte is still a well-formed account");
     assert_eq!(decoded.schema_version, PAStateAccount::SCHEMA_VERSION + 1);
+}
+
+/// Anchor ignores trailing bytes, so an older binary can read a newer
+/// account that only appended fields; the per-instruction version
+/// constraint is what refuses that.
+#[test]
+fn trailing_bytes_still_deserialize() {
+    let mut bytes = serialized(&create_test_pa_state());
+    bytes.extend_from_slice(&[0xFF; 16]);
+    let decoded = PAStateAccount::try_deserialize(&mut bytes.as_slice())
+        .expect("trailing bytes appended by a newer layout must not break deserialization");
+    assert_eq!(decoded.schema_version, PAStateAccount::SCHEMA_VERSION);
 }
