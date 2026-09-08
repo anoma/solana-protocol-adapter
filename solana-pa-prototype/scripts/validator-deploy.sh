@@ -395,11 +395,24 @@ build_programs_dev() {
   build_with_filtered_output anchor build -p mock-verifier --no-idl
 }
 
+# Prints the names of instructions gated by `#[cfg(feature = "dev-teardown")]`
+# in the given source file, one per line: any `pub fn` immediately preceded
+# (doc comments and the cfg attribute itself aside) by that attribute. A
+# `#[derive(Accounts)]` line between the attribute and the next item means
+# the attribute gates a struct, not an instruction, and is skipped.
+dev_only_instructions() {
+  awk '
+    /#\[cfg\(feature = "dev-teardown"\)\]/ { pending = 1; next }
+    pending && /pub fn/ { match($0, /pub fn ([a-z_]+)/, m); print m[1]; pending = 0; next }
+    pending && !/^[[:space:]]*(#\[|\/\/\/)/ { pending = 0 }
+  ' "$1"
+}
+
 # The production build: plain `anchor build`, no dev-teardown feature, so
-# the dev-only instructions (close_markers_batch, dev_set_schema_version)
-# must be absent from the deployed binary. The IDL is generated for
-# protocol-adapter and checked, so this stays a self-checking command rather
-# than a convention nothing enforces.
+# the dev-only instructions (derived from `#[cfg(feature = "dev-teardown")]`
+# in lib.rs) must be absent from the deployed binary. The IDL is generated
+# for protocol-adapter and checked, so this stays a self-checking command
+# rather than a convention nothing enforces.
 build_programs_release() {
   assert_known_programs
   clean_incremental_artifacts
@@ -417,15 +430,23 @@ build_programs_release() {
     echo "❌ release build: anchor build did not produce an IDL at ${idl_path}" >&2
     exit 1
   fi
+  local lib_rs="$PROJECT_DIR/programs/solana-pa-prototype/src/lib.rs"
+  local ix_names
+  ix_names="$(dev_only_instructions "$lib_rs")"
+  if [[ -z "$ix_names" ]]; then
+    echo "❌ release build: no dev-teardown-gated instructions found in lib.rs; the IDL self-check cannot run" >&2
+    exit 1
+  fi
+
   local dev_only_ix
-  for dev_only_ix in close_markers_batch dev_set_schema_version; do
+  for dev_only_ix in $ix_names; do
     if grep -q "\"${dev_only_ix}\"" "$idl_path"; then
       echo "❌ release build: ${dev_only_ix} is present in the production IDL (${idl_path})." >&2
       echo "   dev-teardown must not be enabled for a production build." >&2
       exit 1
     fi
   done
-  echo "    ✅ Production build: dev-only instructions (close_markers_batch, dev_set_schema_version) are absent from the IDL."
+  echo "    ✅ Production build: dev-only instructions ($(echo "$ix_names" | paste -sd, -)) are absent from the IDL."
 }
 
 # Validate the required fixture for the given test mode ($1, real|mock):

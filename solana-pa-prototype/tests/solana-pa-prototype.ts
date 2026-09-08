@@ -2697,6 +2697,12 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
 // it; they must run while the PA is Running.
 
 describe("protocol-adapter (dev_set_schema_version tooling)", () => {
+  const setSchemaVersion = (version: number) =>
+    program.methods
+      .devSetSchemaVersion(version)
+      .accountsPartial({ paState, authority: provider.wallet.publicKey })
+      .rpc();
+
   it("dev_set_schema_version rejects a non-authority signer", async () => {
     const intruder = Keypair.generate();
     await airdrop(provider, intruder, 1);
@@ -2718,20 +2724,14 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
   it("dev_set_schema_version writes the byte and is reversible", async () => {
     const before = await program.account.paStateAccount.fetch(paState);
     const foreign = before.schemaVersion + 1;
-    await program.methods
-      .devSetSchemaVersion(foreign)
-      .accountsPartial({ paState, authority: provider.wallet.publicKey })
-      .rpc();
+    await setSchemaVersion(foreign);
     const info = await provider.connection.getAccountInfo(paState);
     assert.ok(info, "PAState account should exist");
     assert.equal(info!.data[8], foreign, "the schema version is byte 8 of the account data");
 
     // The instruction must accept an account of a foreign version, since that
     // is the state a migration instruction starts from.
-    await program.methods
-      .devSetSchemaVersion(before.schemaVersion)
-      .accountsPartial({ paState, authority: provider.wallet.publicKey })
-      .rpc();
+    await setSchemaVersion(before.schemaVersion);
     const restored = await program.account.paStateAccount.fetch(paState);
     assert.equal(restored.schemaVersion, before.schemaVersion, "version restored");
   });
@@ -2739,28 +2739,73 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
   describe("schema version guard", () => {
     let current: number;
 
+    // settle_from_txdata and txdata_extend need a TxData account that already
+    // exists; txdata_init is itself guarded, so these uploads are created
+    // here, before the version flip below.
+    let extendAuthority: Keypair;
+    let extendUploadId: anchor.BN;
+    let extendTxData: PublicKey;
+    let settleAuthority: Keypair;
+    let settleUploadId: anchor.BN;
+    let settleTxData: PublicKey;
+    let settleRemainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[];
+
     before(async () => {
       current = (await program.account.paStateAccount.fetch(paState)).schemaVersion;
-      await program.methods
-        .devSetSchemaVersion(current + 1)
-        .accountsPartial({ paState, authority: provider.wallet.publicKey })
-        .rpc();
+
+      extendAuthority = Keypair.generate();
+      await airdrop(provider, extendAuthority, 2);
+      ({ uploadId: extendUploadId, txData: extendTxData } = await initTxData(extendAuthority, 100));
+
+      settleAuthority = Keypair.generate();
+      await airdrop(provider, settleAuthority, 2);
+      const settleFixture = loadFixture("wrong_root.json");
+      const settlePayload = Buffer.from(settleFixture.tx_b64, "base64");
+      ({ uploadId: settleUploadId, txData: settleTxData } = await uploadTxData(settleAuthority, settlePayload));
+      settleRemainingAccounts = buildSettleRemainingAccounts(
+        deriveNullifierAccounts(settleFixture.consumed_nullifiers_b64)
+      );
+
+      // initTxData/uploadTxData register their TxData account in the
+      // suite-wide openTxDataAccounts array, which the top-level afterEach
+      // closes after every test in the file. These two accounts must
+      // survive across every case below, so un-register them here and close
+      // them explicitly in this describe's own after() instead.
+      const ourTxDataKeys = new Set([extendTxData.toBase58(), settleTxData.toBase58()]);
+      for (let i = openTxDataAccounts.length - 1; i >= 0; i--) {
+        if (ourTxDataKeys.has(openTxDataAccounts[i].txData.toBase58())) {
+          openTxDataAccounts.splice(i, 1);
+        }
+      }
+
+      await setSchemaVersion(current + 1);
     });
 
     after(async () => {
-      await program.methods
-        .devSetSchemaVersion(current)
-        .accountsPartial({ paState, authority: provider.wallet.publicKey })
-        .rpc();
+      await setSchemaVersion(current);
       const restored = await program.account.paStateAccount.fetch(paState);
       assert.equal(restored.schemaVersion, current, "guard tests must leave the version as they found it");
+
+      for (const { uploadId, txData, authority } of [
+        { uploadId: extendUploadId, txData: extendTxData, authority: extendAuthority },
+        { uploadId: settleUploadId, txData: settleTxData, authority: settleAuthority },
+      ]) {
+        const info = await provider.connection.getAccountInfo(txData);
+        if (!info) continue; // already closed by a case's own instruction
+        await program.methods
+          .txdataClose(uploadId)
+          .accountsPartial({ txData, authority: authority.publicKey, refund: authority.publicKey })
+          .signers([authority])
+          .rpc();
+      }
     });
 
     // Each entry is an instruction that loads pa_state as a typed account.
     // With a foreign version byte every one of them must refuse before doing
     // anything else. update_expiry_config is first and uses the account's
     // own values, so on a binary without the guard the red run changes
-    // nothing before the first assertion fails.
+    // nothing before the first assertion fails. emergency_stop is last since
+    // it would otherwise pause the PA for every case that follows.
     const cases: { name: string; run: () => Promise<unknown> }[] = [
       {
         name: "update_expiry_config",
@@ -2781,7 +2826,81 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
             .rpc(),
       },
       {
-        name: "settle_from_txdata (via txdata_init)",
+        name: "accept_authority",
+        run: () =>
+          program.methods
+            .acceptAuthority()
+            .accountsPartial({ paState, newAuthority: provider.wallet.publicKey })
+            .rpc(),
+      },
+      {
+        name: "cancel_authority_transfer",
+        run: () =>
+          program.methods
+            .cancelAuthorityTransfer()
+            .accountsPartial({ paState, authority: provider.wallet.publicKey })
+            .rpc(),
+      },
+      {
+        name: "settle",
+        run: async () => {
+          // A real fixture payload (e.g. wrong_root.json, 832 bytes) plus its
+          // accounts and preInstructions overflows Solana's 1232-byte
+          // transaction limit when passed inline; that is exactly why
+          // settle_from_txdata's chunked upload path exists. The guard fires
+          // during account validation, before transaction_data is parsed, so
+          // the same tiny payload the direct-settle error-path tests already
+          // use (see "rejects garbage transaction_data via settle" above)
+          // reaches the same pa_state constraint without hitting that limit.
+          const payload = Buffer.from([0, 1, 2, 3]);
+          const payer = Keypair.generate();
+          await airdrop(provider, payer, 2);
+          return program.methods
+            .settle(payload)
+            .accountsPartial({
+              paState,
+              payer: payer.publicKey,
+              systemProgram: SystemProgram.programId,
+              newRootMarker: DUMMY_ROOT_MARKER,
+              verifierRouterProgram: VERIFIER_ROUTER_ID,
+              router: routerPda,
+              verifierEntry: verifierEntryPda,
+              verifierProgram: VERIFIER_PROGRAM_ID,
+            })
+            .preInstructions([
+              ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+              ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+            ])
+            .signers([payer])
+            .rpc();
+        },
+      },
+      {
+        name: "settle_from_txdata",
+        run: () =>
+          program.methods
+            .settleFromTxdata(settleUploadId)
+            .accountsPartial({
+              paState,
+              txData: settleTxData,
+              authority: settleAuthority.publicKey,
+              systemProgram: SystemProgram.programId,
+              newRootMarker: DUMMY_ROOT_MARKER,
+              verifierRouterProgram: VERIFIER_ROUTER_ID,
+              router: routerPda,
+              verifierEntry: verifierEntryPda,
+              verifierProgram: VERIFIER_PROGRAM_ID,
+            })
+            .remainingAccounts(settleRemainingAccounts)
+            .preInstructions([
+              ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+              ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+            ])
+            .signers([settleAuthority])
+            .rpc(),
+      },
+      {
+        name: "txdata_init",
         run: async () => {
           const fx = loadFixture("wrong_root.json");
           const payload = Buffer.from(fx.tx_b64, "base64");
@@ -2789,6 +2908,17 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
             deriveNullifierAccounts(fx.consumed_nullifiers_b64)
           );
           return settleFixtureViaTxData(payload, remaining, { newRootMarker: DUMMY_ROOT_MARKER });
+        },
+      },
+      {
+        name: "txdata_extend",
+        run: async () => {
+          const laterExpiry = new anchor.BN((await provider.connection.getSlot("confirmed")) + 20_000);
+          return program.methods
+            .txdataExtend(extendUploadId, laterExpiry)
+            .accountsStrict({ paState, txData: extendTxData, authority: extendAuthority.publicKey })
+            .signers([extendAuthority])
+            .rpc();
         },
       },
       {
