@@ -462,16 +462,10 @@ pub mod protocol_adapter {
         Ok(())
     }
 
-    /// Overwrite the state account's schema version. Development tooling only.
-    ///
-    /// Exists so the integration suite can present this binary with a state
-    /// account of a foreign schema version and observe every instruction
-    /// refuse it — the guard a future layout-changing upgrade relies on.
-    /// Deliberately carries no schema-version constraint. Like a migration
-    /// instruction it accepts an account of a foreign version; it can still
-    /// load the account through the typed layout only because flipping the
-    /// byte does not change the layout, which a real migration cannot
-    /// assume.
+    /// Overwrite the state account's schema version. Development tooling only:
+    /// lets the integration suite observe every instruction refuse a foreign
+    /// version. Carries no version constraint, since like a migration it must
+    /// accept one; the typed load works only because the byte flip keeps the layout.
     #[cfg(feature = "dev-teardown")]
     pub fn dev_set_schema_version(ctx: Context<DevSetSchemaVersion>, version: u8) -> Result<()> {
         ctx.accounts.pa_state.schema_version = version;

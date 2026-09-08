@@ -2766,11 +2766,9 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
         deriveNullifierAccounts(settleFixture.consumed_nullifiers_b64)
       );
 
-      // initTxData/uploadTxData register their TxData account in the
-      // suite-wide openTxDataAccounts array, which the top-level afterEach
-      // closes after every test in the file. These two accounts must
-      // survive across every case below, so un-register them here and close
-      // them explicitly in this describe's own after() instead.
+      // The suite-wide afterEach closes every registered upload after each
+      // test; these two must survive across the cases, so un-register them
+      // until after() hands them back.
       const ourTxDataKeys = new Set([extendTxData.toBase58(), settleTxData.toBase58()]);
       for (let i = openTxDataAccounts.length - 1; i >= 0; i--) {
         if (ourTxDataKeys.has(openTxDataAccounts[i].txData.toBase58())) {
@@ -2785,37 +2783,23 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       await setSchemaVersion(current);
       const restored = await program.account.paStateAccount.fetch(paState);
       assert.equal(restored.schemaVersion, current, "guard tests must leave the version as they found it");
-
-      for (const { uploadId, txData, authority } of [
+      openTxDataAccounts.push(
         { uploadId: extendUploadId, txData: extendTxData, authority: extendAuthority },
         { uploadId: settleUploadId, txData: settleTxData, authority: settleAuthority },
-      ]) {
-        const info = await provider.connection.getAccountInfo(txData);
-        if (!info) continue; // already closed by a case's own instruction
-        await program.methods
-          .txdataClose(uploadId)
-          .accountsPartial({ txData, authority: authority.publicKey, refund: authority.publicKey })
-          .signers([authority])
-          .rpc();
-      }
+      );
     });
 
-    // Each entry is an instruction that loads pa_state as a typed account.
-    // With a foreign version byte every one of them must refuse before doing
-    // anything else. update_expiry_config is first and uses the account's
-    // own values, so on a binary without the guard the red run changes
-    // nothing before the first assertion fails. emergency_stop is last since
-    // it would otherwise pause the PA for every case that follows.
+    // Each case is an instruction that loads pa_state; with a foreign version
+    // byte every one must refuse before doing anything else. emergency_stop is
+    // last: it would stop the PA for every case after it.
     const cases: { name: string; run: () => Promise<unknown> }[] = [
       {
         name: "update_expiry_config",
-        run: async () => {
-          const s = await program.account.paStateAccount.fetch(paState);
-          return program.methods
-            .updateExpiryConfig(s.minExpirySlots, s.maxExpirySlots)
+        run: () =>
+          program.methods
+            .updateExpiryConfig(new anchor.BN(1), new anchor.BN(2))
             .accountsPartial({ paState, authority: provider.wallet.publicKey })
-            .rpc();
-        },
+            .rpc(),
       },
       {
         name: "propose_authority",
@@ -2844,14 +2828,9 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       {
         name: "settle",
         run: async () => {
-          // A real fixture payload (e.g. wrong_root.json, 832 bytes) plus its
-          // accounts and preInstructions overflows Solana's 1232-byte
-          // transaction limit when passed inline; that is exactly why
-          // settle_from_txdata's chunked upload path exists. The guard fires
-          // during account validation, before transaction_data is parsed, so
-          // the same tiny payload the direct-settle error-path tests already
-          // use (see "rejects garbage transaction_data via settle" above)
-          // reaches the same pa_state constraint without hitting that limit.
+          // Tiny payload on purpose: the guard fires during account validation,
+          // before the payload is parsed, and a real fixture exceeds the
+          // transaction size limit when passed inline.
           const payload = Buffer.from([0, 1, 2, 3]);
           const payer = Keypair.generate();
           await airdrop(provider, payer, 2);
