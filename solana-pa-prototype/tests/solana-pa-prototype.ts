@@ -2692,9 +2692,9 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
 });
 
 
-// ── Close-while-running guard ────────────────────────────────────────────
-// Verifies that teardown operations cannot be performed while the PA is
-// running. Must run BEFORE emergency_stop pauses the protocol.
+// ── Schema version guard ──────────────────────────────────────────────────
+// These tests flip the version byte with dev_set_schema_version and restore
+// it; they must run while the PA is Running.
 
 describe("protocol-adapter (dev_set_schema_version tooling)", () => {
   it("dev_set_schema_version rejects a non-authority signer", async () => {
@@ -2735,7 +2735,97 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
     const restored = await program.account.paStateAccount.fetch(paState);
     assert.equal(restored.schemaVersion, before.schemaVersion, "version restored");
   });
+
+  describe("schema version guard", () => {
+    let current: number;
+
+    before(async () => {
+      current = (await program.account.paStateAccount.fetch(paState)).schemaVersion;
+      await program.methods
+        .devSetSchemaVersion(current + 1)
+        .accountsPartial({ paState, authority: provider.wallet.publicKey })
+        .rpc();
+    });
+
+    after(async () => {
+      await program.methods
+        .devSetSchemaVersion(current)
+        .accountsPartial({ paState, authority: provider.wallet.publicKey })
+        .rpc();
+      const restored = await program.account.paStateAccount.fetch(paState);
+      assert.equal(restored.schemaVersion, current, "guard tests must leave the version as they found it");
+    });
+
+    // Each entry is an instruction that loads pa_state as a typed account.
+    // With a foreign version byte every one of them must refuse before doing
+    // anything else. update_expiry_config is first and uses the account's
+    // own values, so on a binary without the guard the red run changes
+    // nothing before the first assertion fails.
+    const cases: { name: string; run: () => Promise<unknown> }[] = [
+      {
+        name: "update_expiry_config",
+        run: async () => {
+          const s = await program.account.paStateAccount.fetch(paState);
+          return program.methods
+            .updateExpiryConfig(s.minExpirySlots, s.maxExpirySlots)
+            .accountsPartial({ paState, authority: provider.wallet.publicKey })
+            .rpc();
+        },
+      },
+      {
+        name: "propose_authority",
+        run: () =>
+          program.methods
+            .proposeAuthority(Keypair.generate().publicKey)
+            .accountsPartial({ paState, authority: provider.wallet.publicKey })
+            .rpc(),
+      },
+      {
+        name: "settle_from_txdata (via txdata_init)",
+        run: async () => {
+          const fx = loadFixture("wrong_root.json");
+          const payload = Buffer.from(fx.tx_b64, "base64");
+          const remaining = buildSettleRemainingAccounts(
+            deriveNullifierAccounts(fx.consumed_nullifiers_b64)
+          );
+          return settleFixtureViaTxData(payload, remaining, { newRootMarker: DUMMY_ROOT_MARKER });
+        },
+      },
+      {
+        name: "close_markers_batch",
+        run: () =>
+          program.methods
+            .closeMarkersBatch()
+            .accountsPartial({ paState, authority: provider.wallet.publicKey })
+            .remainingAccounts([])
+            .rpc(),
+      },
+      {
+        name: "emergency_stop",
+        run: () =>
+          program.methods
+            .emergencyStop()
+            .accountsPartial({ paState, authority: provider.wallet.publicKey })
+            .rpc(),
+      },
+    ];
+
+    for (const c of cases) {
+      it(`${c.name} refuses a foreign schema version`, async () => {
+        try {
+          await c.run();
+          assert.fail(`${c.name} must refuse an account whose schema version is not this binary's`);
+        } catch (e: any) {
+          assertPAError(e, "UnsupportedStateSchema");
+        }
+      });
+    }
+  });
 });
+
+// ── Close-while-running guard ────────────────────────────────────────────
+// Verifies that teardown operations cannot be performed while the PA is
+// running. Must run BEFORE emergency_stop pauses the protocol.
 
 describe("protocol-adapter (close_markers_batch requires stopped state)", () => {
   it("close_markers_batch fails when PA is not stopped", async () => {

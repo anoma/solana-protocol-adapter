@@ -807,6 +807,8 @@ pub struct EmergencyStop<'info> {
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
         has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -820,6 +822,8 @@ pub struct ProposeAuthority<'info> {
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
         has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -832,6 +836,8 @@ pub struct AcceptAuthority<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -845,6 +851,8 @@ pub struct CancelAuthorityTransfer<'info> {
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
         has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -857,6 +865,8 @@ pub struct Settle<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -891,6 +901,8 @@ pub struct SettleFromTxData<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -930,7 +942,12 @@ pub struct SettleFromTxData<'info> {
 #[instruction(upload_id: u64, capacity: u32)]
 pub struct TxDataInit<'info> {
     /// PAState for reading configurable expiry bounds.
-    #[account(seeds = [PA_STATE_SEED], bump = pa_state.bump)]
+    #[account(
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
+    )]
     pub pa_state: Account<'info, PAStateAccount>,
 
     #[account(
@@ -985,7 +1002,12 @@ pub struct TxDataClose<'info> {
 #[instruction(upload_id: u64)]
 pub struct TxDataExtend<'info> {
     /// PAState for reading configurable expiry bounds.
-    #[account(seeds = [PA_STATE_SEED], bump = pa_state.bump)]
+    #[account(
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
+    )]
     pub pa_state: Account<'info, PAStateAccount>,
 
     #[account(
@@ -1024,7 +1046,9 @@ pub struct UpdateExpiryConfig<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized
+        has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -1038,6 +1062,8 @@ pub struct CloseMarkersBatch<'info> {
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
         has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
