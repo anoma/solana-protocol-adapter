@@ -117,6 +117,7 @@ pub mod protocol_adapter {
         kind_table_commitment: [u8; 32],
     ) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
+        state.schema_version = PAStateAccount::SCHEMA_VERSION;
         state.bump = ctx.bumps.pa_state;
         state.authority = ctx.accounts.payer.key();
         state.pending_authority = None;
@@ -460,6 +461,17 @@ pub mod protocol_adapter {
         msg!("Closed {} markers", ctx.remaining_accounts.len());
         Ok(())
     }
+
+    /// Overwrite the state account's schema version. Development tooling only:
+    /// lets the integration suite observe every instruction refuse a foreign
+    /// version. Carries no version constraint, since like a migration it must
+    /// accept one; the typed load works only because the byte flip keeps the layout.
+    #[cfg(feature = "dev-teardown")]
+    pub fn dev_set_schema_version(ctx: Context<DevSetSchemaVersion>, version: u8) -> Result<()> {
+        ctx.accounts.pa_state.schema_version = version;
+        msg!("PAState schema version set to {}", version);
+        Ok(())
+    }
 }
 
 /// Floor at 1 lamport because 0-lamport accounts can be garbage-collected.
@@ -791,6 +803,8 @@ pub struct EmergencyStop<'info> {
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
         has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -804,6 +818,8 @@ pub struct ProposeAuthority<'info> {
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
         has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -816,6 +832,8 @@ pub struct AcceptAuthority<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -829,6 +847,8 @@ pub struct CancelAuthorityTransfer<'info> {
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
         has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -841,6 +861,8 @@ pub struct Settle<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -875,6 +897,8 @@ pub struct SettleFromTxData<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -914,7 +938,12 @@ pub struct SettleFromTxData<'info> {
 #[instruction(upload_id: u64, capacity: u32)]
 pub struct TxDataInit<'info> {
     /// PAState for reading configurable expiry bounds.
-    #[account(seeds = [PA_STATE_SEED], bump = pa_state.bump)]
+    #[account(
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
+    )]
     pub pa_state: Account<'info, PAStateAccount>,
 
     #[account(
@@ -969,7 +998,12 @@ pub struct TxDataClose<'info> {
 #[instruction(upload_id: u64)]
 pub struct TxDataExtend<'info> {
     /// PAState for reading configurable expiry bounds.
-    #[account(seeds = [PA_STATE_SEED], bump = pa_state.bump)]
+    #[account(
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
+    )]
     pub pa_state: Account<'info, PAStateAccount>,
 
     #[account(
@@ -1008,7 +1042,9 @@ pub struct UpdateExpiryConfig<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized
+        has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
@@ -1022,10 +1058,26 @@ pub struct CloseMarkersBatch<'info> {
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
         has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
     #[account(mut)]
+    pub authority: Signer<'info>,
+}
+
+#[cfg(feature = "dev-teardown")]
+#[derive(Accounts)]
+pub struct DevSetSchemaVersion<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        has_one = authority @ PAError::Unauthorized,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
     pub authority: Signer<'info>,
 }
 

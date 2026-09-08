@@ -88,3 +88,5 @@ Production binaries contain no instruction that deletes markers. (Development bu
 - `proof_selector: [u8;4]` — the 4-byte selector every transaction's aggregation proof must carry.
 
 Program IDs, the router addresses for the current devnet deployment, and key custody are in `docs/DEVNET_DEPLOYMENT.md`. Operator procedures (deploy, emergency stop, retirement) are in `docs/OPERATIONS.md`; the fact integrators care about: a stopped deployment rejects settlement and has no resume instruction — recovery is a new deployment with a fresh, empty tree.
+
+The state account (`PAStateAccount`, PDA seed `pa_state`) carries its layout number at byte 8 of the account data, immediately after the Anchor discriminator. A client that decodes the account directly rather than through the published IDL must check that byte against the layout it was written for before reading further fields; the deployed program refuses every instruction that reads the account whose version is not its own, so a mismatch a client sees is a deployment mid-migration, not corrupt data.

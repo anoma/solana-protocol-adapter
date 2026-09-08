@@ -77,8 +77,8 @@ case "${1:-}" in
     ;;
 
   release-build)
-    # Production build: no dev-teardown; verifies close_markers_batch is
-    # absent from the generated IDL.
+    # Production build: no dev-teardown; verifies the dev-only instructions
+    # are absent from the generated IDL.
     run_in_project "./scripts/ops.sh build-release"
     ;;
 
@@ -247,7 +247,7 @@ PYEOF
     echo "  clippy       Run clippy lints"
     echo "  anchor-build Build Anchor programs (development build, dev-teardown enabled)"
     echo "  release-build Build the production binaries (no dev-teardown; verifies"
-    echo "               close_markers_batch is absent from the IDL)"
+    echo "               the dev-only instructions are absent from the IDL)"
     echo "  anchor-test [--cluster <c>]"
     echo "               Local: full deterministic integration flow (default)."
     echo "               devnet/mainnet: cluster-safe subset against deployed programs"
