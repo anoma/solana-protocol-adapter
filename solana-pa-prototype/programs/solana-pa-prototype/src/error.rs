@@ -111,6 +111,10 @@ pub enum PAError {
     // Root retention
     #[msg("Root marker already exists: the commitment tree produced a repeated root")]
     RootMarkerAlreadyExists,
+
+    // State layout
+    #[msg("PAState schema version is not the one this program binary reads; migrate the account first")]
+    UnsupportedStateSchema,
 }
 
 impl From<SolanaArmError> for PAError {

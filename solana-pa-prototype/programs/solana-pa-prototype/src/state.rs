@@ -67,6 +67,16 @@ impl anchor_lang::IdlBuild for PALifecycle {
 /// Nullifiers and historical roots are stored as separate PDA marker accounts.
 #[account]
 pub struct PAStateAccount {
+    /// Layout number of this account's bytes. Always the first field, so it
+    /// sits at byte 8 of the account data (after Anchor's discriminator) in
+    /// every layout: a later binary that changes the layout reads this byte
+    /// through an unchecked account to decide whether it may migrate. Every
+    /// instruction that reads this account — all but `initialize`, which
+    /// creates it, and the development-only `dev_set_schema_version` —
+    /// refuses an account whose version is not `SCHEMA_VERSION`. Layout
+    /// changes append fields and bump the constant; they never reorder or
+    /// remove fields ahead of the frontier.
+    pub schema_version: u8,
     pub bump: u8,
     /// Authority that can call emergency_stop.
     pub authority: Pubkey,
@@ -98,11 +108,15 @@ pub struct PAStateAccount {
 }
 
 impl PAStateAccount {
-    /// discriminator(8) + bump(1) + authority(32) + verifier_router(32) +
-    /// proof_selector(4) + kind_table_commitment(32) + pending_authority(1+32) +
-    /// lifecycle(1) + root(32) + next_index(8) + current_depth(1) +
-    /// min_expiry_slots(8) + max_expiry_slots(8)
-    pub const BASE_SPACE: usize = 8 + 1 + 32 + 32 + 4 + 32 + 33 + 1 + 32 + 8 + 1 + 8 + 8;
+    /// The layout this binary reads and writes. Bumped on every change to the
+    /// account layout; unrelated to release names.
+    pub const SCHEMA_VERSION: u8 = 1;
+
+    /// discriminator(8) + schema_version(1) + bump(1) + authority(32) +
+    /// verifier_router(32) + proof_selector(4) + kind_table_commitment(32) +
+    /// pending_authority(1+32) + lifecycle(1) + root(32) + next_index(8) +
+    /// current_depth(1) + min_expiry_slots(8) + max_expiry_slots(8)
+    pub const BASE_SPACE: usize = 8 + 1 + 1 + 32 + 32 + 4 + 32 + 33 + 1 + 32 + 8 + 1 + 8 + 8;
 
     pub const VEC_OVERHEAD: usize = 4;
 

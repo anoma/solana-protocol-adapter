@@ -662,8 +662,8 @@ cmd_verify_build() {
 # from the program ID), so explorers and generic Anchor clients decode the
 # program's instructions, accounts, and events straight from the cluster.
 # Builds the production IDL first — the build self-checks that the dev-only
-# close_markers_batch instruction is absent, so a dev IDL cannot be
-# published by accident. Signer must be the program's upgrade authority.
+# instructions are absent, so a dev IDL cannot be published by accident.
+# Signer must be the program's upgrade authority.
 cmd_idl_publish() {
   require_cmd anchor
 

@@ -395,10 +395,50 @@ build_programs_dev() {
   build_with_filtered_output anchor build -p mock-verifier --no-idl
 }
 
+# Prints the names of instructions gated by a `#[cfg(...)]` attribute whose
+# argument mentions `dev-teardown` (a bare `feature = "dev-teardown"`, no
+# spaces, or wrapped in `all(...)`/`any(...)`), one per line: any `pub fn`
+# following such an attribute, skipping over doc comments (`///`), line
+# comments (`//`), further attributes (e.g. `#[derive(Accounts)]`), and
+# blank lines in between. A cfg attribute whose next item is not a `pub fn`
+# (a struct, an impl block, etc.) gates that item instead of an instruction
+# and is classified silently rather than printed. Every cfg occurrence found
+# must land in one of those two buckets — if end-of-file arrives while an
+# attribute is still waiting for its item, that occurrence is left
+# unclassified and the mismatch is caught below.
+dev_only_instructions() {
+  awk -v src="$1" '
+    /#\[cfg\(/ && /dev-teardown/ {
+      cfg_count++
+      pending = 1
+      next
+    }
+    pending && /^[[:space:]]*($|#\[|\/\/)/ { next }
+    pending && /pub fn/ {
+      match($0, /pub fn [A-Za-z0-9_]+/)
+      print substr($0, RSTART + 7, RLENGTH - 7)
+      classified++
+      pending = 0
+      next
+    }
+    pending {
+      classified++
+      pending = 0
+    }
+    END {
+      if (cfg_count + 0 != classified + 0) {
+        printf "❌ release build: %d dev-teardown cfg attribute(s) in %s could not be classified as an instruction or an item\n", cfg_count - classified, src > "/dev/stderr"
+        exit 1
+      }
+    }
+  ' "$1"
+}
+
 # The production build: plain `anchor build`, no dev-teardown feature, so
-# close_markers_batch must be absent from the deployed binary. The IDL is
-# generated for protocol-adapter and checked, so this stays a
-# self-checking command rather than a convention nothing enforces.
+# the dev-only instructions (derived from `#[cfg(feature = "dev-teardown")]`
+# in lib.rs) must be absent from the deployed binary. The IDL is generated
+# for protocol-adapter and checked, so this stays a self-checking command
+# rather than a convention nothing enforces.
 build_programs_release() {
   assert_known_programs
   clean_incremental_artifacts
@@ -416,12 +456,23 @@ build_programs_release() {
     echo "❌ release build: anchor build did not produce an IDL at ${idl_path}" >&2
     exit 1
   fi
-  if grep -q '"close_markers_batch"' "$idl_path"; then
-    echo "❌ release build: close_markers_batch is present in the production IDL (${idl_path})." >&2
-    echo "   dev-teardown must not be enabled for a production build." >&2
+  local lib_rs="$PROJECT_DIR/programs/solana-pa-prototype/src/lib.rs"
+  local ix_names
+  ix_names="$(dev_only_instructions "$lib_rs")"
+  if [[ -z "$ix_names" ]]; then
+    echo "❌ release build: no dev-teardown-gated instructions found in lib.rs; the IDL self-check cannot run" >&2
     exit 1
   fi
-  echo "    ✅ Production build: close_markers_batch is absent from the IDL."
+
+  local dev_only_ix
+  for dev_only_ix in $ix_names; do
+    if grep -q "\"${dev_only_ix}\"" "$idl_path"; then
+      echo "❌ release build: ${dev_only_ix} is present in the production IDL (${idl_path})." >&2
+      echo "   dev-teardown must not be enabled for a production build." >&2
+      exit 1
+    fi
+  done
+  echo "    ✅ Production build: dev-only instructions ($(echo "$ix_names" | paste -sd, -)) are absent from the IDL."
 }
 
 # Validate the required fixture for the given test mode ($1, real|mock):
