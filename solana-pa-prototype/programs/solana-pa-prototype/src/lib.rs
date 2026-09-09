@@ -78,6 +78,7 @@ fn allocate_from(pos: usize, floor: usize, layout: std::alloc::Layout) -> Option
 }
 
 pub mod error;
+mod events;
 pub mod external_calls;
 pub mod groth16;
 pub mod marker;
@@ -153,6 +154,11 @@ pub mod protocol_adapter {
         let pa_state_info = ctx.accounts.pa_state.to_account_info();
         let payer = ctx.accounts.payer.to_account_info();
 
+        let events = events::EventCpi {
+            authority: ctx.accounts.event_authority.to_account_info(),
+            bump: ctx.bumps.event_authority,
+        };
+
         execute_settlement(
             &mut ctx.accounts.pa_state,
             &pa_state_info,
@@ -167,6 +173,7 @@ pub mod protocol_adapter {
                 verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
                 verifier_program: ctx.accounts.verifier_program.to_account_info(),
             },
+            &events,
         )?;
 
         msg!("Settlement complete");
@@ -330,6 +337,11 @@ pub mod protocol_adapter {
         let pa_state_info = ctx.accounts.pa_state.to_account_info();
         let payer = ctx.accounts.authority.to_account_info();
 
+        let events = events::EventCpi {
+            authority: ctx.accounts.event_authority.to_account_info(),
+            bump: ctx.bumps.event_authority,
+        };
+
         execute_settlement(
             &mut ctx.accounts.pa_state,
             &pa_state_info,
@@ -344,6 +356,7 @@ pub mod protocol_adapter {
                 verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
                 verifier_program: ctx.accounts.verifier_program.to_account_info(),
             },
+            &events,
         )?;
 
         msg!("Settlement from TxData complete");
@@ -594,6 +607,7 @@ fn execute_settlement<'info>(
     system_program: &AccountInfo<'info>,
     new_root_marker: &AccountInfo<'info>,
     verifier: VerifierAccounts<'info>,
+    events: &events::EventCpi<'info>,
 ) -> Result<()> {
     let pa_state_key = pa_state_info.key;
 
@@ -671,16 +685,16 @@ fn execute_settlement<'info>(
 
     for action in &instance.actions {
         for resource in settle::action_resources(action) {
-            emit_app_data_events(&resource.tag, resource.app_data);
+            emit_app_data_events(events, &resource.tag, resource.app_data)?;
             all_tags.push(resource.tag.into());
             all_logic_refs.push(resource.logic_ref.into());
             all_is_consumed.push(resource.is_consumed);
         }
 
-        emit!(ActionExecutedEvent {
+        events.emit(&ActionExecutedEvent {
             action_tree_root: action.action_tree_root.into(),
             action_tag_count: settle::action_resource_count(action) as u32,
-        });
+        })?;
     }
 
     // Runs before nullifier and commitment state changes so that a forwarder
@@ -691,17 +705,21 @@ fn execute_settlement<'info>(
     // in flight, and it can read any account it is handed; running it first
     // bounds what this settlement has written by the time it executes.
     #[cfg(not(test))]
-    external_calls::execute_external_calls(instance, remaining_accounts, nullifiers.len())
-        .map_err(anchor_lang::error::Error::from)?;
+    for event in
+        external_calls::execute_external_calls(instance, remaining_accounts, nullifiers.len())
+            .map_err(anchor_lang::error::Error::from)?
+    {
+        events.emit(&event)?;
+    }
 
     // Emit TransactionExecuted event (EVM parity). `is_consumed` states each
     // tag's role explicitly — consumed and created resources are grouped per
     // action rather than alternating, so parity cannot infer it.
-    emit!(TransactionExecutedEvent {
+    events.emit(&TransactionExecutedEvent {
         tags: all_tags,
         logic_refs: all_logic_refs,
         is_consumed: all_is_consumed,
-    });
+    })?;
 
     let rent = Rent::get()?;
     let ml = marker_lamports(&rent);
@@ -855,6 +873,7 @@ pub struct CancelAuthorityTransfer<'info> {
     pub authority: Signer<'info>,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 pub struct Settle<'info> {
     #[account(
@@ -890,6 +909,7 @@ pub struct Settle<'info> {
     pub verifier_program: UncheckedAccount<'info>,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 #[instruction(upload_id: u64)]
 pub struct SettleFromTxData<'info> {
@@ -1137,18 +1157,22 @@ pub struct ForwarderCallExecutedEvent {
     pub output: Vec<u8>,
 }
 
-fn emit_app_data_events(tag: &arm_core::Digest, app_data: &arm_core::logic_instance::AppData) {
+fn emit_app_data_events(
+    events: &events::EventCpi,
+    tag: &arm_core::Digest,
+    app_data: &arm_core::logic_instance::AppData,
+) -> Result<()> {
     let tag_bytes: [u8; 32] = (*tag).into();
 
     macro_rules! emit_payloads {
         ($payloads:expr, $Event:ident) => {
             for (i, payload) in $payloads.iter().enumerate() {
                 if payload.deletion_criterion == DELETION_CRITERION_NEVER {
-                    emit!($Event {
+                    events.emit(&$Event {
                         tag: tag_bytes,
                         index: i as u32,
                         blob: arm_core::utils::words_to_bytes(&payload.blob).to_vec(),
-                    });
+                    })?;
                 }
             }
         };
@@ -1158,4 +1182,5 @@ fn emit_app_data_events(tag: &arm_core::Digest, app_data: &arm_core::logic_insta
     emit_payloads!(app_data.discovery_payload, DiscoveryPayloadEvent);
     emit_payloads!(app_data.external_payload, ExternalPayloadEvent);
     emit_payloads!(app_data.application_payload, ApplicationPayloadEvent);
+    Ok(())
 }
