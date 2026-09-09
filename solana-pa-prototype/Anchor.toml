@@ -5,13 +5,13 @@ skip-lint = false
 [programs.devnet]
 block_time_forwarder = "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
 mock_verifier = "H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKvgDhrvVVHvHf"
-protocol_adapter = "9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF"
+protocol_adapter = "28Hvr1YFv2ouGN2fS99aF3ZzYXzkncJVVaHcZNhquLFT"
 test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
 
 [programs.localnet]
 block_time_forwarder = "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
 mock_verifier = "H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKvgDhrvVVHvHf"
-protocol_adapter = "9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF"
+protocol_adapter = "28Hvr1YFv2ouGN2fS99aF3ZzYXzkncJVVaHcZNhquLFT"
 test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
 
 [provider]
