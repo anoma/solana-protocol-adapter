@@ -12,9 +12,6 @@ use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 
-/// Seed of the event authority PDA, as Anchor's `#[event_cpi]` derives it.
-pub const EVENT_AUTHORITY_SEED: &[u8] = b"__event_authority";
-
 /// Instruction data of a CPI event: Anchor's event tag, then the event's own
 /// discriminator and Borsh body (`Event::data` includes the discriminator).
 pub fn event_instruction_data<E: anchor_lang::Event>(event: &E) -> Vec<u8> {
@@ -24,18 +21,13 @@ pub fn event_instruction_data<E: anchor_lang::Event>(event: &E) -> Vec<u8> {
     data
 }
 
-/// The accounts a settlement needs to emit CPI events: the event authority PDA
-/// and its bump, captured from the instruction context.
+/// The event authority PDA and its bump, as `#[event_cpi]` derives them.
 pub struct EventCpi<'info> {
-    authority: AccountInfo<'info>,
-    bump: u8,
+    pub authority: AccountInfo<'info>,
+    pub bump: u8,
 }
 
-impl<'info> EventCpi<'info> {
-    pub fn new(authority: AccountInfo<'info>, bump: u8) -> Self {
-        Self { authority, bump }
-    }
-
+impl EventCpi<'_> {
     /// Emit one event as a self-invocation signed by the event authority.
     pub fn emit<E: anchor_lang::Event>(&self, event: &E) -> Result<()> {
         let ix = Instruction::new_with_bytes(
@@ -46,7 +38,7 @@ impl<'info> EventCpi<'info> {
         invoke_signed(
             &ix,
             std::slice::from_ref(&self.authority),
-            &[&[EVENT_AUTHORITY_SEED, &[self.bump]]],
+            &[&[b"__event_authority", &[self.bump]]],
         )
         .map_err(Error::from)
     }

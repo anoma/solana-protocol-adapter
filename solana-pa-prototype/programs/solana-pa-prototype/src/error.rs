@@ -115,9 +115,6 @@ pub enum PAError {
     // State layout
     #[msg("PAState schema version is not the one this program binary reads; migrate the account first")]
     UnsupportedStateSchema,
-
-    #[msg("Event emission via self-CPI failed")]
-    EventEmissionFailed,
 }
 
 impl From<SolanaArmError> for PAError {

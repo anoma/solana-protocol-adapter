@@ -1,4 +1,4 @@
-use crate::events::{event_instruction_data, EVENT_AUTHORITY_SEED};
+use crate::events::event_instruction_data;
 use crate::ActionExecutedEvent;
 use anchor_lang::Discriminator;
 
@@ -23,9 +23,4 @@ fn event_instruction_data_is_tag_then_discriminator_then_borsh() {
     assert_eq!(&data[16..48], &[7u8; 32]);
     assert_eq!(&data[48..52], &3u32.to_le_bytes());
     assert_eq!(data.len(), 52);
-}
-
-#[test]
-fn event_authority_seed_matches_anchor() {
-    assert_eq!(EVENT_AUTHORITY_SEED, b"__event_authority");
 }

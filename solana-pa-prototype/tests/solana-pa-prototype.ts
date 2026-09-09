@@ -360,11 +360,6 @@ async function waitForSlotPast(
 /** Anchor's CPI event tag: the fixed 8-byte `EVENT_IX_TAG_LE`, the little-endian encoding of the u64 0x1d9acb512ea545e4. */
 const EVENT_IX_TAG_LE = Buffer.from([0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]);
 
-/** The event authority PDA Anchor's #[event_cpi] derives for the adapter. */
-function eventAuthorityPda(): PublicKey {
-  return PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], program.programId)[0];
-}
-
 /**
  * Settlement events are CPI events: inner instructions of the adapter whose
  * data is Anchor's event tag followed by the event's discriminator and Borsh
@@ -407,8 +402,6 @@ function settleFromTxDataBuilder(
       router: routerPda,
       verifierEntry: verifierEntryPda,
       verifierProgram: VERIFIER_PROGRAM_ID,
-      eventAuthority: eventAuthorityPda(),
-      program: program.programId,
     })
     .remainingAccounts(remainingAccounts)
     .preInstructions([
@@ -787,8 +780,6 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -824,8 +815,6 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -866,8 +855,6 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
@@ -902,8 +889,6 @@ describe("protocol-adapter (Settle error paths)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -943,8 +928,6 @@ describe("protocol-adapter (Settle error paths)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
@@ -1008,8 +991,6 @@ describe("protocol-adapter (Settle error paths)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .remainingAccounts(remainingAccounts)
         .preInstructions([
@@ -1856,8 +1837,6 @@ describe("protocol-adapter (TxData authority and bounds checks)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -2134,8 +2113,6 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .remainingAccounts(allRemainingAccounts)
         .preInstructions([
@@ -2364,8 +2341,6 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .remainingAccounts(nullifierAccounts)
         .preInstructions([
@@ -2941,8 +2916,6 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
               router: routerPda,
               verifierEntry: verifierEntryPda,
               verifierProgram: VERIFIER_PROGRAM_ID,
-              eventAuthority: eventAuthorityPda(),
-              program: program.programId,
             })
             .preInstructions([
               ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -2967,8 +2940,6 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
               router: routerPda,
               verifierEntry: verifierEntryPda,
               verifierProgram: VERIFIER_PROGRAM_ID,
-              eventAuthority: eventAuthorityPda(),
-              program: program.programId,
             })
             .remainingAccounts(settleRemainingAccounts)
             .preInstructions([
@@ -3117,8 +3088,6 @@ describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
@@ -3151,8 +3120,6 @@ describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
           router: routerPda,
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
         })
         .preInstructions([
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
