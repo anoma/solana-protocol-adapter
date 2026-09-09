@@ -733,11 +733,14 @@ cmd_test() {
 
   ensure_node_modules
 
-  # Cluster-safe test describe blocks (explicit allowlist).
+  # Cluster-safe test describe blocks (explicit allowlist), anchored to the
+  # "protocol-adapter (<name>)" describe title so a test title that happens to
+  # contain one of these names (the dev_set_schema_version block names its
+  # tests after the instructions it guards) cannot pull its block in.
   # Tests that require test-forwarder or permanently mutate state are excluded.
   local grep_pattern
   grep_pattern=$(cat <<'GREP'
-Groth16 batch aggregation E2E|Re-initialization guard|Direct settle & duplicate nullifier|Settle error paths|Issue #6: Emergency Stop|TxData Expiration|TxData authority and bounds checks|update_expiry_config|TxData expiration enforcement|Settlement error paths — fixture variants|Tree growth and multi-settlement
+protocol-adapter \((Groth16 batch aggregation E2E|Re-initialization guard|Direct settle & duplicate nullifier|Settle error paths|Issue #6: Emergency Stop|TxData Expiration|TxData authority and bounds checks|update_expiry_config|TxData expiration enforcement|Settlement error paths — fixture variants|Tree growth and multi-settlement)\)
 GREP
   )
 
