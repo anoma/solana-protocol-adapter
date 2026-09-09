@@ -79,6 +79,8 @@ Flags:
                    (close_markers_batch enabled). Refused on mainnet.
   --prebuilt       deploy/upgrade: ship the existing target/deploy artifacts
                    without rebuilding (for verify-build output)
+  --grep <re>      test (devnet/mainnet): run the describe blocks matching
+                   this regex instead of the cluster-safe allowlist
   --mode <m>       test: real (default) runs the suite against Groth16
                    fixtures and the devnet-cloned verifier; mock runs it
                    against mock fixtures and the localnet mock verifier.
@@ -108,6 +110,7 @@ RPC_OVERRIDE=""
 NO_IDL=false
 DEV_TEARDOWN=false
 PREBUILT=false
+TEST_GREP=""
 ASSUME_YES=false
 TEST_MODE="real"
 
@@ -139,6 +142,11 @@ while [[ $# -gt 0 ]]; do
     --prebuilt)
       PREBUILT=true
       shift
+      ;;
+    --grep)
+      [[ $# -ge 2 ]] || { echo "❌ --grep requires a value" >&2; exit 1; }
+      TEST_GREP="$2"
+      shift 2
       ;;
     --mode)
       [[ $# -ge 2 ]] || { echo "❌ --mode requires a value" >&2; exit 1; }
@@ -744,7 +752,13 @@ protocol-adapter \((Groth16 batch aggregation E2E|Re-initialization guard|Direct
 GREP
   )
 
-  echo "Running cluster-safe integration tests (${CLUSTER})..."
+  # --grep replaces the allowlist for a deliberate run of one block against a
+  # cluster (for example a settlement block excluded from the routine set).
+  if [[ -n "$TEST_GREP" ]]; then
+    grep_pattern="$TEST_GREP"
+  fi
+
+  echo "Running cluster integration tests (${CLUSTER}) matching: ${grep_pattern}"
   ANCHOR_PROVIDER_URL="$RPC_URL" \
   ANCHOR_WALLET="$WALLET" \
     yarn run ts-mocha -p ./tsconfig.json -t 1000000 \
