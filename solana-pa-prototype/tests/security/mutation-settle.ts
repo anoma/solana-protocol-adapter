@@ -93,6 +93,11 @@ function assertPAError(e: any, errorName: string): void {
   );
 }
 
+/** The event authority PDA Anchor's #[event_cpi] derives for the adapter. */
+function eventAuthorityPda(): PublicKey {
+  return PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], program.programId)[0];
+}
+
 /**
  * Submit raw transaction_data via settle. Throws on failure.
  */
@@ -113,6 +118,8 @@ async function settleRaw(
       router: routerPda,
       verifierEntry: verifierEntryPda,
       verifierProgram: VERIFIER_PROGRAM_ID,
+      eventAuthority: eventAuthorityPda(),
+      program: program.programId,
     })
     .remainingAccounts(remainingAccounts)
     .preInstructions([
