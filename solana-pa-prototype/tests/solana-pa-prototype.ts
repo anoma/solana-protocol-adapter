@@ -2300,17 +2300,18 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   // heap budgets is the regression being tested.
 
   // The mainnet wrap settlement (tx-data path, 24 static keys on the V1
-  // program) measured 1,088 bytes; the V2 program adds new_root_marker and
-  // the two event accounts, 27 keys, 1,184 bytes. The SPL forwarder that
-  // supplies those keys is not on this branch, so this projects that shape
-  // from the in-suite multi-call settlement: each static key in a legacy
-  // message costs exactly 32 bytes and nothing else in the message depends
-  // on the key count. A later account addition fails here instead of on
-  // mainnet. Lookup tables (anoma/dos-pm#60) lift the limit.
-  it("the mainnet wrap settlement shape, projected from the multi-call settlement, fits the 1232-byte limit", async () => {
-    const MAINNET_WRAP_STATIC_KEYS = 27;
-    const STATIC_KEY_BYTES = 32;
+  // program) measured 1,088 bytes; on the V2 program, new_root_marker and
+  // the two event accounts make it 27 keys and 1,184 bytes of the
+  // 1,232-byte limit. The SPL forwarder that supplies those keys is not on
+  // this branch, so the in-suite multi-call settlement stands in for it:
+  // both shapes grow by the same bytes when the adapter gains an account or
+  // instruction data, so the suite's transaction may grow by at most the
+  // mainnet margin over its baseline. Re-measure both baselines when the
+  // shape changes on purpose. Lookup tables (anoma/dos-pm#60) lift the limit.
+  it("the settlement transaction stays within the mainnet wrap settlement's remaining size margin", async () => {
     const TRANSACTION_SIZE_LIMIT = 1232;
+    const MAINNET_WRAP_SETTLEMENT_BYTES = 1184;
+    const MULTI_CALL_SETTLEMENT_BASELINE_BYTES = 633; // 15 static keys, measured on this branch
 
     const fx = loadFixture("batch_groth16_multi_call.json");
     const payload = Buffer.from(fx.tx_b64, "base64");
@@ -2335,24 +2336,16 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     tx.feePayer = authority.publicKey;
     tx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
 
-    const message = tx.compileMessage();
-    const measuredKeys = message.accountKeys.length;
-    assert.isAtLeast(
-      MAINNET_WRAP_STATIC_KEYS,
-      measuredKeys,
-      `in-suite multi-call settlement now uses ${measuredKeys} static keys, at or above the ` +
-        `${MAINNET_WRAP_STATIC_KEYS}-key mainnet wrap shape being projected — update the projection`,
-    );
     const size = tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length;
-    const projected = size + (MAINNET_WRAP_STATIC_KEYS - measuredKeys) * STATIC_KEY_BYTES;
+    const growth = size - MULTI_CALL_SETTLEMENT_BASELINE_BYTES;
     console.log(
-      `multi-call settlement transaction: ${size} bytes, ${measuredKeys} static keys; ` +
-        `projected mainnet wrap shape (${MAINNET_WRAP_STATIC_KEYS} keys): ${projected} bytes of ${TRANSACTION_SIZE_LIMIT}`,
+      `multi-call settlement transaction: ${size} bytes (${tx.compileMessage().accountKeys.length} static keys), ` +
+        `${growth} bytes over baseline; mainnet wrap margin ${TRANSACTION_SIZE_LIMIT - MAINNET_WRAP_SETTLEMENT_BYTES} bytes`,
     );
     assert.isAtMost(
-      projected,
-      TRANSACTION_SIZE_LIMIT,
-      "projected mainnet wrap settlement exceeds the transaction size limit",
+      growth,
+      TRANSACTION_SIZE_LIMIT - MAINNET_WRAP_SETTLEMENT_BYTES,
+      "settlement transaction grew more than the mainnet wrap settlement's remaining margin; re-measure the mainnet shape before adding accounts or instruction data",
     );
   });
 
