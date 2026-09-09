@@ -51,12 +51,13 @@ fn read_forwarder_output(
     }
 }
 
-/// Solana analog to EVM's `_executeForwarderCall`: invoke, verify output, emit event.
-fn execute_forwarder_call<'info>(
+/// Solana analog to EVM's `_executeForwarderCall`: invoke, verify output,
+/// return the event the caller emits.
+fn execute_forwarder_call(
     logic_ref: &arm_core::Digest,
     call: SolanaExternalCall,
-    segment: &[AccountInfo<'info>],
-) -> Result<(), PAError> {
+    segment: &[AccountInfo<'_>],
+) -> Result<crate::ForwarderCallExecutedEvent, PAError> {
     invoke_forwarder(&(*logic_ref).into(), &call.instruction_data, segment)?;
 
     let forwarder = *segment[0].key;
@@ -64,22 +65,22 @@ fn execute_forwarder_call<'info>(
 
     super::verify_output(&call.expected_output, &actual_output)?;
 
-    anchor_lang::prelude::emit!(crate::ForwarderCallExecutedEvent {
+    Ok(crate::ForwarderCallExecutedEvent {
         forwarder,
         input: call.instruction_data,
         output: actual_output,
-    });
-
-    Ok(())
+    })
 }
 
-/// Execute all external calls from the aggregation instance via CPI.
+/// Execute all external calls from the aggregation instance via CPI, returning
+/// one `ForwarderCallExecutedEvent` per call in call order.
 pub fn execute_external_calls(
     instance: &arm_core::aggregation_instance::AggregationInstance,
     remaining_accounts: &[AccountInfo<'_>],
     nullifier_count: usize,
-) -> Result<(), PAError> {
+) -> Result<Vec<crate::ForwarderCallExecutedEvent>, PAError> {
     let calls = super::extract_external_calls(instance)?;
+    let mut events = Vec::with_capacity(calls.len());
 
     if remaining_accounts.len() < nullifier_count {
         return Err(PAError::InvalidTransactionData);
@@ -105,10 +106,14 @@ pub fn execute_external_calls(
             return Err(PAError::UnregisteredForwarder);
         }
 
-        execute_forwarder_call(&logic_ref, call, &external_accounts[cursor..seg_end])?;
+        events.push(execute_forwarder_call(
+            &logic_ref,
+            call,
+            &external_accounts[cursor..seg_end],
+        )?);
 
         cursor = seg_end;
     }
 
-    Ok(())
+    Ok(events)
 }

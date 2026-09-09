@@ -357,10 +357,57 @@ async function waitForSlotPast(
   throw new Error(`Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`);
 }
 
-function parseAnchorEvents(logs: string[]) {
+/** Anchor's CPI event tag: the fixed 8-byte `EVENT_IX_TAG_LE`, the little-endian encoding of the u64 0x1d9acb512ea545e4. */
+const EVENT_IX_TAG_LE = Buffer.from([0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]);
+
+/**
+ * Settlement events are CPI events: inner instructions of the adapter whose
+ * data is Anchor's event tag followed by the event's discriminator and Borsh
+ * body. Read them in emission order from the confirmed transaction.
+ */
+function parseCpiEvents(tx: anchor.web3.VersionedTransactionResponse) {
+  const keys = tx.transaction.message.getAccountKeys({
+    accountKeysFromLookups: tx.meta?.loadedAddresses,
+  });
   const coder = new anchor.BorshCoder(program.idl);
-  const parser = new anchor.EventParser(program.programId, coder);
-  return [...parser.parseLogs(logs)];
+  const events: { name: string; data: any }[] = [];
+  for (const group of tx.meta?.innerInstructions ?? []) {
+    for (const ix of group.instructions) {
+      if (!keys.get(ix.programIdIndex)?.equals(program.programId)) continue;
+      const data = Buffer.from(anchor.utils.bytes.bs58.decode(ix.data));
+      if (data.length < 16 || !data.subarray(0, 8).equals(EVENT_IX_TAG_LE)) continue;
+      const decoded = coder.events.decode(data.subarray(8).toString("base64"));
+      if (decoded) events.push(decoded);
+    }
+  }
+  return events;
+}
+
+function settleFromTxDataBuilder(
+  authority: PublicKey,
+  uploadId: anchor.BN,
+  txData: PublicKey,
+  newRootMarker: PublicKey,
+  remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+) {
+  return program.methods
+    .settleFromTxdata(uploadId)
+    .accountsPartial({
+      paState,
+      txData,
+      authority,
+      systemProgram: SystemProgram.programId,
+      newRootMarker,
+      verifierRouterProgram: VERIFIER_ROUTER_ID,
+      router: routerPda,
+      verifierEntry: verifierEntryPda,
+      verifierProgram: VERIFIER_PROGRAM_ID,
+    })
+    .remainingAccounts(remainingAccounts)
+    .preInstructions([
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+    ]);
 }
 
 async function settleFixtureViaTxData(
@@ -372,31 +419,12 @@ async function settleFixtureViaTxData(
   await airdrop(provider, authority, 2);
   const { uploadId, txData } = await uploadTxData(authority, payload);
 
-  const buildSettle = (newRootMarker: PublicKey) =>
-    program.methods
-      .settleFromTxdata(uploadId)
-      .accountsPartial({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-        newRootMarker,
-        verifierRouterProgram: VERIFIER_ROUTER_ID,
-        router: routerPda,
-        verifierEntry: verifierEntryPda,
-        verifierProgram: VERIFIER_PROGRAM_ID,
-      })
-      .remainingAccounts(remainingAccounts)
-      .preInstructions([
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-      ])
-      .signers([authority]);
-
   const newRootMarker =
     options?.newRootMarker ??
     (await predictRootMarkerPda(requireCommitments(options?.createdCommitments)));
-  return buildSettle(newRootMarker).rpc();
+  return settleFromTxDataBuilder(authority.publicKey, uploadId, txData, newRootMarker, remainingAccounts)
+    .signers([authority])
+    .rpc();
 }
 
 // A settlement expected to succeed must predict its produced-root marker from
@@ -498,25 +526,13 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
     );
 
     const buildSettle = (newRootMarker: PublicKey) =>
-      program.methods
-        .settleFromTxdata(uploadId)
-        .accountsPartial({
-          paState,
-          txData,
-          authority: authority.publicKey,
-          systemProgram: SystemProgram.programId,
-          newRootMarker,
-          verifierRouterProgram: VERIFIER_ROUTER_ID,
-          router: routerPda,
-          verifierEntry: verifierEntryPda,
-          verifierProgram: VERIFIER_PROGRAM_ID,
-        })
-        .remainingAccounts(allRemainingAccounts)
-        .preInstructions([
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-        ])
-        .signers([authority]);
+      settleFromTxDataBuilder(
+        authority.publicKey,
+        uploadId,
+        txData,
+        newRootMarker,
+        allRemainingAccounts
+      ).signers([authority]);
 
     const newRootMarker =
       options?.newRootMarker ??
@@ -2246,6 +2262,56 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   // payload blobs on every created resource. Settling it within the CU and
   // heap budgets is the regression being tested.
 
+  // The mainnet wrap settlement (tx-data path, 24 static keys on the V1
+  // program) measured 1,088 bytes; on the V2 program, new_root_marker and
+  // the two event accounts make it 27 keys and 1,184 bytes of the
+  // 1,232-byte limit. The SPL forwarder that supplies those keys is not on
+  // this branch, so the in-suite multi-call settlement stands in for it:
+  // both shapes grow by the same bytes when the adapter gains an account or
+  // instruction data, so the suite's transaction may grow by at most the
+  // mainnet margin over its baseline. Re-measure both baselines when the
+  // shape changes on purpose. Lookup tables (anoma/dos-pm#60) lift the limit.
+  it("the settlement transaction stays within the mainnet wrap settlement's remaining size margin", async () => {
+    const TRANSACTION_SIZE_LIMIT = 1232;
+    const MAINNET_WRAP_SETTLEMENT_BYTES = 1184;
+    const MULTI_CALL_SETTLEMENT_BASELINE_BYTES = 633; // 15 static keys, measured on this branch
+
+    const fx = loadFixture("batch_groth16_multi_call.json");
+    const payload = Buffer.from(fx.tx_b64, "base64");
+    const authority = Keypair.generate();
+    await airdrop(provider, authority, 2);
+    const { uploadId, txData } = await uploadTxData(authority, payload);
+    const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+    const tx = await settleFromTxDataBuilder(
+      authority.publicKey,
+      uploadId,
+      txData,
+      Keypair.generate().publicKey,
+      remainingAccounts,
+    ).transaction();
+    tx.feePayer = authority.publicKey;
+    tx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
+
+    const size = tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length;
+    const growth = size - MULTI_CALL_SETTLEMENT_BASELINE_BYTES;
+    console.log(
+      `multi-call settlement transaction: ${size} bytes (${tx.compileMessage().accountKeys.length} static keys), ` +
+        `${growth} bytes over baseline; mainnet wrap margin ${TRANSACTION_SIZE_LIMIT - MAINNET_WRAP_SETTLEMENT_BYTES} bytes`,
+    );
+    assert.isAtMost(
+      growth,
+      TRANSACTION_SIZE_LIMIT - MAINNET_WRAP_SETTLEMENT_BYTES,
+      "settlement transaction grew more than the mainnet wrap settlement's remaining margin; re-measure the mainnet shape before adding accounts or instruction data",
+    );
+  });
+
   // Adequacy guard: the original fixture existed because that transfer
   // could not settle in the default heap (the 256 KiB allocator and the
   // requestHeapFrame calls landed with it). A replacement only regression-
@@ -2336,7 +2402,14 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
       maxSupportedTransactionVersion: 0,
     });
     assert.ok(txResult, "settlement transaction should be fetchable");
-    const events = parseAnchorEvents(txResult!.meta?.logMessages ?? []);
+    const events = parseCpiEvents(txResult!);
+    const innerCount =
+      txResult!.meta?.innerInstructions?.reduce((n, g) => n + g.instructions.length, 0) ?? 0;
+    console.log(
+      `transfer-shape settlement: ${txResult!.meta?.computeUnitsConsumed} CU, ` +
+        `${events.length} CPI events, ${innerCount} inner instructions of the ` +
+        "64-instruction trace limit",
+    );
 
     const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
     assert.equal(actionEvents.length, 3, "one actionExecutedEvent per action");
@@ -2494,9 +2567,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     });
     assert.ok(txResult, "v2 transaction should be fetchable");
 
-    const logs = txResult!.meta?.logMessages ?? [];
-
-    const events = parseAnchorEvents(logs);
+    const events = parseCpiEvents(txResult!);
 
     const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
     assert.isAtLeast(actionEvents.length, 1, "Should emit actionExecutedEvent");
