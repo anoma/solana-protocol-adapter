@@ -357,7 +357,7 @@ async function waitForSlotPast(
   throw new Error(`Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`);
 }
 
-/** Anchor's CPI event tag: sha256("anchor:event")[..8] as little-endian bytes. */
+/** Anchor's CPI event tag: the fixed 8-byte `EVENT_IX_TAG_LE`, the little-endian encoding of the u64 0x1d9acb512ea545e4. */
 const EVENT_IX_TAG_LE = Buffer.from([0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]);
 
 /** The event authority PDA Anchor's #[event_cpi] derives for the adapter. */
@@ -533,27 +533,13 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
     );
 
     const buildSettle = (newRootMarker: PublicKey) =>
-      program.methods
-        .settleFromTxdata(uploadId)
-        .accountsPartial({
-          paState,
-          txData,
-          authority: authority.publicKey,
-          systemProgram: SystemProgram.programId,
-          newRootMarker,
-          verifierRouterProgram: VERIFIER_ROUTER_ID,
-          router: routerPda,
-          verifierEntry: verifierEntryPda,
-          verifierProgram: VERIFIER_PROGRAM_ID,
-          eventAuthority: eventAuthorityPda(),
-          program: program.programId,
-        })
-        .remainingAccounts(allRemainingAccounts)
-        .preInstructions([
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-        ])
-        .signers([authority]);
+      settleFromTxDataBuilder(
+        authority.publicKey,
+        uploadId,
+        txData,
+        newRootMarker,
+        allRemainingAccounts
+      ).signers([authority]);
 
     const newRootMarker =
       options?.newRootMarker ??
@@ -2441,11 +2427,14 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
       maxSupportedTransactionVersion: 0,
     });
     assert.ok(txResult, "settlement transaction should be fetchable");
+    const events = parseCpiEvents(txResult!);
+    const innerCount =
+      txResult!.meta?.innerInstructions?.reduce((n, g) => n + g.instructions.length, 0) ?? 0;
     console.log(
       `transfer-shape settlement: ${txResult!.meta?.computeUnitsConsumed} CU, ` +
-        `${parseCpiEvents(txResult!).length} CPI events`,
+        `${events.length} CPI events, ${innerCount} inner instructions of the ` +
+        "64-instruction trace limit",
     );
-    const events = parseCpiEvents(txResult!);
 
     const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
     assert.equal(actionEvents.length, 3, "one actionExecutedEvent per action");
