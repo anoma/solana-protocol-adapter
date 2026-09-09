@@ -56,6 +56,7 @@ fn execute_forwarder_call<'info>(
     logic_ref: &arm_core::Digest,
     call: SolanaExternalCall,
     segment: &[AccountInfo<'info>],
+    events: &crate::events::EventCpi<'info>,
 ) -> Result<(), PAError> {
     invoke_forwarder(&(*logic_ref).into(), &call.instruction_data, segment)?;
 
@@ -64,20 +65,23 @@ fn execute_forwarder_call<'info>(
 
     super::verify_output(&call.expected_output, &actual_output)?;
 
-    anchor_lang::prelude::emit!(crate::ForwarderCallExecutedEvent {
-        forwarder,
-        input: call.instruction_data,
-        output: actual_output,
-    });
+    events
+        .emit(&crate::ForwarderCallExecutedEvent {
+            forwarder,
+            input: call.instruction_data,
+            output: actual_output,
+        })
+        .map_err(|_| PAError::EventEmissionFailed)?;
 
     Ok(())
 }
 
 /// Execute all external calls from the aggregation instance via CPI.
-pub fn execute_external_calls(
+pub fn execute_external_calls<'info>(
     instance: &arm_core::aggregation_instance::AggregationInstance,
-    remaining_accounts: &[AccountInfo<'_>],
+    remaining_accounts: &[AccountInfo<'info>],
     nullifier_count: usize,
+    events: &crate::events::EventCpi<'info>,
 ) -> Result<(), PAError> {
     let calls = super::extract_external_calls(instance)?;
 
@@ -105,7 +109,12 @@ pub fn execute_external_calls(
             return Err(PAError::UnregisteredForwarder);
         }
 
-        execute_forwarder_call(&logic_ref, call, &external_accounts[cursor..seg_end])?;
+        execute_forwarder_call(
+            &logic_ref,
+            call,
+            &external_accounts[cursor..seg_end],
+            events,
+        )?;
 
         cursor = seg_end;
     }
