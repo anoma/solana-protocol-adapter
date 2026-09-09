@@ -12,7 +12,7 @@ resolver = "2"
 solana = "3.1.14"
 
 [workspace.dependencies]
-anchor-lang = "0.31.1"
+anchor-lang = { version = "0.31.1", features = ["event-cpi"] }
 
 [profile.release]
 overflow-checks = true

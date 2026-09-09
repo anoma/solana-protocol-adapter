@@ -2,6 +2,7 @@ pub mod utils;
 
 mod delta_tests;
 mod error_tests;
+mod events_tests;
 mod external_calls_tests;
 mod groth16_tests;
 mod lib_tests;
