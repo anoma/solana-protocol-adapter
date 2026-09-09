@@ -2291,6 +2291,53 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   // payload blobs on every created resource. Settling it within the CU and
   // heap budgets is the regression being tested.
 
+  // The two event accounts consume 64 bytes of a 1,232-byte transaction. The
+  // mainnet wrap settlement, the largest real case, measured 1,088 bytes on
+  // the V1 program; with the V2 root marker and the event accounts it is
+  // 1,184. This pins the in-suite maximum so a later account addition fails
+  // here instead of on mainnet. Lookup tables (anoma/dos-pm#60) lift the limit.
+  it("the largest in-suite settlement transaction fits the 1232-byte limit", async () => {
+    const fx = loadFixture("batch_groth16_multi_call.json");
+    const payload = Buffer.from(fx.tx_b64, "base64");
+    const authority = Keypair.generate();
+    await airdrop(provider, authority, 2);
+    const { uploadId, txData } = await uploadTxData(authority, payload);
+    const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
+    const remainingAccounts = [
+      ...nullifierAccounts,
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+    const tx = await program.methods
+      .settleFromTxdata(uploadId)
+      .accountsPartial({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+        newRootMarker: Keypair.generate().publicKey,
+        verifierRouterProgram: VERIFIER_ROUTER_ID,
+        router: routerPda,
+        verifierEntry: verifierEntryPda,
+        verifierProgram: VERIFIER_PROGRAM_ID,
+        eventAuthority: eventAuthorityPda(),
+        program: program.programId,
+      })
+      .remainingAccounts(remainingAccounts)
+      .preInstructions([
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+      ])
+      .transaction();
+    tx.feePayer = authority.publicKey;
+    tx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
+    const size = tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length;
+    console.log(`multi-call settlement transaction: ${size} bytes of 1232`);
+    assert.isAtMost(size, 1232, "settlement transaction exceeds the Solana transaction size limit");
+  });
+
   // Adequacy guard: the original fixture existed because that transfer
   // could not settle in the default heap (the 256 KiB allocator and the
   // requestHeapFrame calls landed with it). A replacement only regression-
@@ -2383,6 +2430,10 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
       maxSupportedTransactionVersion: 0,
     });
     assert.ok(txResult, "settlement transaction should be fetchable");
+    console.log(
+      `transfer-shape settlement: ${txResult!.meta?.computeUnitsConsumed} CU, ` +
+        `${parseCpiEvents(txResult!).length} CPI events`,
+    );
     const events = parseCpiEvents(txResult!);
 
     const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
