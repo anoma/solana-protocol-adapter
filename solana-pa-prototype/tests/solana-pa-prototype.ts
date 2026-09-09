@@ -388,6 +388,35 @@ function parseCpiEvents(tx: anchor.web3.VersionedTransactionResponse) {
   return events;
 }
 
+function settleFromTxDataBuilder(
+  authority: PublicKey,
+  uploadId: anchor.BN,
+  txData: PublicKey,
+  newRootMarker: PublicKey,
+  remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+) {
+  return program.methods
+    .settleFromTxdata(uploadId)
+    .accountsPartial({
+      paState,
+      txData,
+      authority,
+      systemProgram: SystemProgram.programId,
+      newRootMarker,
+      verifierRouterProgram: VERIFIER_ROUTER_ID,
+      router: routerPda,
+      verifierEntry: verifierEntryPda,
+      verifierProgram: VERIFIER_PROGRAM_ID,
+      eventAuthority: eventAuthorityPda(),
+      program: program.programId,
+    })
+    .remainingAccounts(remainingAccounts)
+    .preInstructions([
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+    ]);
+}
+
 async function settleFixtureViaTxData(
   payload: Buffer,
   remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
@@ -397,33 +426,12 @@ async function settleFixtureViaTxData(
   await airdrop(provider, authority, 2);
   const { uploadId, txData } = await uploadTxData(authority, payload);
 
-  const buildSettle = (newRootMarker: PublicKey) =>
-    program.methods
-      .settleFromTxdata(uploadId)
-      .accountsPartial({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-        newRootMarker,
-        verifierRouterProgram: VERIFIER_ROUTER_ID,
-        router: routerPda,
-        verifierEntry: verifierEntryPda,
-        verifierProgram: VERIFIER_PROGRAM_ID,
-        eventAuthority: eventAuthorityPda(),
-        program: program.programId,
-      })
-      .remainingAccounts(remainingAccounts)
-      .preInstructions([
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-      ])
-      .signers([authority]);
-
   const newRootMarker =
     options?.newRootMarker ??
     (await predictRootMarkerPda(requireCommitments(options?.createdCommitments)));
-  return buildSettle(newRootMarker).rpc();
+  return settleFromTxDataBuilder(authority.publicKey, uploadId, txData, newRootMarker, remainingAccounts)
+    .signers([authority])
+    .rpc();
 }
 
 // A settlement expected to succeed must predict its produced-root marker from
@@ -2291,12 +2299,19 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   // payload blobs on every created resource. Settling it within the CU and
   // heap budgets is the regression being tested.
 
-  // The two event accounts consume 64 bytes of a 1,232-byte transaction. The
-  // mainnet wrap settlement, the largest real case, measured 1,088 bytes on
-  // the V1 program; with the V2 root marker and the event accounts it is
-  // 1,184. This pins the in-suite maximum so a later account addition fails
-  // here instead of on mainnet. Lookup tables (anoma/dos-pm#60) lift the limit.
-  it("the largest in-suite settlement transaction fits the 1232-byte limit", async () => {
+  // The mainnet wrap settlement (tx-data path, 24 static keys on the V1
+  // program) measured 1,088 bytes; the V2 program adds new_root_marker and
+  // the two event accounts, 27 keys, 1,184 bytes. The SPL forwarder that
+  // supplies those keys is not on this branch, so this projects that shape
+  // from the in-suite multi-call settlement: each static key in a legacy
+  // message costs exactly 32 bytes and nothing else in the message depends
+  // on the key count. A later account addition fails here instead of on
+  // mainnet. Lookup tables (anoma/dos-pm#60) lift the limit.
+  it("the mainnet wrap settlement shape, projected from the multi-call settlement, fits the 1232-byte limit", async () => {
+    const MAINNET_WRAP_STATIC_KEYS = 27;
+    const STATIC_KEY_BYTES = 32;
+    const TRANSACTION_SIZE_LIMIT = 1232;
+
     const fx = loadFixture("batch_groth16_multi_call.json");
     const payload = Buffer.from(fx.tx_b64, "base64");
     const authority = Keypair.generate();
@@ -2310,32 +2325,35 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
       { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
       { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
     ];
-    const tx = await program.methods
-      .settleFromTxdata(uploadId)
-      .accountsPartial({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-        newRootMarker: Keypair.generate().publicKey,
-        verifierRouterProgram: VERIFIER_ROUTER_ID,
-        router: routerPda,
-        verifierEntry: verifierEntryPda,
-        verifierProgram: VERIFIER_PROGRAM_ID,
-        eventAuthority: eventAuthorityPda(),
-        program: program.programId,
-      })
-      .remainingAccounts(remainingAccounts)
-      .preInstructions([
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-      ])
-      .transaction();
+    const tx = await settleFromTxDataBuilder(
+      authority.publicKey,
+      uploadId,
+      txData,
+      Keypair.generate().publicKey,
+      remainingAccounts,
+    ).transaction();
     tx.feePayer = authority.publicKey;
     tx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
+
+    const message = tx.compileMessage();
+    const measuredKeys = message.accountKeys.length;
+    assert.isAtLeast(
+      MAINNET_WRAP_STATIC_KEYS,
+      measuredKeys,
+      `in-suite multi-call settlement now uses ${measuredKeys} static keys, at or above the ` +
+        `${MAINNET_WRAP_STATIC_KEYS}-key mainnet wrap shape being projected — update the projection`,
+    );
     const size = tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length;
-    console.log(`multi-call settlement transaction: ${size} bytes of 1232`);
-    assert.isAtMost(size, 1232, "settlement transaction exceeds the Solana transaction size limit");
+    const projected = size + (MAINNET_WRAP_STATIC_KEYS - measuredKeys) * STATIC_KEY_BYTES;
+    console.log(
+      `multi-call settlement transaction: ${size} bytes, ${measuredKeys} static keys; ` +
+        `projected mainnet wrap shape (${MAINNET_WRAP_STATIC_KEYS} keys): ${projected} bytes of ${TRANSACTION_SIZE_LIMIT}`,
+    );
+    assert.isAtMost(
+      projected,
+      TRANSACTION_SIZE_LIMIT,
+      "projected mainnet wrap settlement exceeds the transaction size limit",
+    );
   });
 
   // Adequacy guard: the original fixture existed because that transfer
