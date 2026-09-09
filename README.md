@@ -433,6 +433,12 @@ const [rootMarker] = PublicKey.findProgramAddressSync(
   [ROOT_MARKER_SEED, paState.toBuffer(), rootBytes],
   programId
 );
+
+// Event authority (signs the program's self-CPI event emissions)
+const [eventAuthorityPda] = PublicKey.findProgramAddressSync(
+  [Buffer.from("__event_authority")],
+  programId
+);
 ```
 
 ### remaining_accounts Layout
