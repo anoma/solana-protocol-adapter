@@ -4,7 +4,21 @@ Live state is always what `./scripts/dev.sh status --cluster devnet` reports; th
 
 **Record last verified:** 2026-08-11
 
-## Current deployment (beta)
+## Current deployment (V2)
+
+| Program | ID | State |
+|---|---|---|
+| Protocol Adapter | `28Hvr1YFv2ouGN2fS99aF3ZzYXzkncJVVaHcZNhquLFT` | deployed 2026-09-09 from `anthony/arm-v2-port` `76648e6` (production build, `dev.sh deploy pa --cluster devnet`) in slot 495845894, signature `VPqWWoWTvp6RmCJjtg7skek1XFFsj5zLq2BPsJcc6jGwWxd5WwpXWQCoRpFZFfE4U3Mv3VQhQe8A9zBFstQbrP1`; PAState initialized with the empty kind table (`e3b0c442…`) and selector `0x73c457ba`; production IDL published on chain (IDL account `D6yXDGXaZYW13cz5L3VsAF89jjexMxiTh8DbYJf4DE5T`) |
+| Block Time Forwarder | `3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf` | deployed (stateless), shared across PA deployments |
+
+- **PAState PDA:** `9E8AZkYW1RN11iDJGQ2CQgqwGCaamqV4v5nZmhfqdPLn`
+- **Operator wallet** (PA authority, upgrade authority, IDL authority): `5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9` (`scripts/devnet-wallet.json`)
+- **Program keypair:** `target/deploy/protocol_adapter-keypair.json` on this branch (needed only for the first deploy)
+- **Indexing:** the Solana Envio project in anoma-envio (`solana/config.yaml`) indexes this program from slot 495845894.
+
+The V1 beta below keeps serving V1 clients from `main`; this deployment does not touch it.
+
+## V1 beta deployment (main)
 
 | Program | ID | State |
 |---|---|---|
