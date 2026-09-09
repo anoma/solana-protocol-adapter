@@ -154,10 +154,10 @@ pub mod protocol_adapter {
         let pa_state_info = ctx.accounts.pa_state.to_account_info();
         let payer = ctx.accounts.payer.to_account_info();
 
-        let events = events::EventCpi::new(
-            ctx.accounts.event_authority.to_account_info(),
-            ctx.bumps.event_authority,
-        );
+        let events = events::EventCpi {
+            authority: ctx.accounts.event_authority.to_account_info(),
+            bump: ctx.bumps.event_authority,
+        };
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
@@ -337,10 +337,10 @@ pub mod protocol_adapter {
         let pa_state_info = ctx.accounts.pa_state.to_account_info();
         let payer = ctx.accounts.authority.to_account_info();
 
-        let events = events::EventCpi::new(
-            ctx.accounts.event_authority.to_account_info(),
-            ctx.bumps.event_authority,
-        );
+        let events = events::EventCpi {
+            authority: ctx.accounts.event_authority.to_account_info(),
+            bump: ctx.bumps.event_authority,
+        };
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
@@ -705,8 +705,12 @@ fn execute_settlement<'info>(
     // in flight, and it can read any account it is handed; running it first
     // bounds what this settlement has written by the time it executes.
     #[cfg(not(test))]
-    external_calls::execute_external_calls(instance, remaining_accounts, nullifiers.len(), events)
-        .map_err(anchor_lang::error::Error::from)?;
+    for event in
+        external_calls::execute_external_calls(instance, remaining_accounts, nullifiers.len())
+            .map_err(anchor_lang::error::Error::from)?
+    {
+        events.emit(&event)?;
+    }
 
     // Emit TransactionExecuted event (EVM parity). `is_consumed` states each
     // tag's role explicitly — consumed and created resources are grouped per

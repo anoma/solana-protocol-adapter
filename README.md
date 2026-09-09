@@ -386,8 +386,6 @@ Clients submit RM transactions to the PA for settlement.
        router: routerPda,
        verifierEntry: verifierEntryPda,
        verifierProgram: groth16VerifierId,
-       eventAuthority: eventAuthorityPda, // required: PDA that signs the program's self-CPI event emissions
-       program: programId,                // required: this program's own address, target of the self-CPI
      })
      .remainingAccounts([
        // Nullifier marker PDAs (one per consumed resource)
@@ -431,12 +429,6 @@ const [txData] = PublicKey.findProgramAddressSync(
 // Root marker
 const [rootMarker] = PublicKey.findProgramAddressSync(
   [ROOT_MARKER_SEED, paState.toBuffer(), rootBytes],
-  programId
-);
-
-// Event authority (signs the program's self-CPI event emissions)
-const [eventAuthorityPda] = PublicKey.findProgramAddressSync(
-  [Buffer.from("__event_authority")],
   programId
 );
 ```

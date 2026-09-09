@@ -24,7 +24,7 @@ idl-build = ["anchor-lang/idl-build"]
 dev-teardown = []
 
 [dependencies]
-anchor-lang = { workspace = true }
+anchor-lang = { workspace = true, features = ["event-cpi"] }
 solana-system-interface = "1.0"
 
 # Serialization - must match arm-risc0 exactly
