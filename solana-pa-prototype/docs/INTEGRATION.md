@@ -55,15 +55,17 @@ The chunked path's buffer account, created per upload. Facts an integrator must 
 
 ## Events
 
-All events are Anchor events: base64 payloads in the program log, prefixed with an 8-byte discriminator derived from the event's name, body Borsh-encoded. A settlement emits, in this order:
+All events are Anchor CPI events. The program emits each event by invoking itself with the event as instruction data, signed by its event authority PDA (`["__event_authority"]`). Readers take the settlement transaction's inner instructions whose program is the adapter and whose data begins with Anchor's event tag (`sha256("anchor:event")[..8]`, little-endian bytes `e4 45 a5 2e 51 cb 9a 1d`); the remaining bytes are the event's 8-byte discriminator (`sha256("event:<Name>")[..8]`) followed by the Borsh-encoded body. Events are not written to the program log, so the runtime's 10 KB per-transaction log limit cannot drop them; a settlement's events are complete exactly when the transaction succeeded. Both settle instructions take two additional accounts for this: `event_authority` (the PDA above, read-only) and `program` (the adapter's own address, read-only). A settlement emits, in this order:
 
 1. Per action, in action order: first that action's **payload events** (one per emitted payload entry of each of its resources — see the filtering rule below), then that action's `ActionExecutedEvent { action_tree_root: [u8;32], action_tag_count: u32 }`. Payload events of action N+1 therefore come after action N's `ActionExecutedEvent`.
 2. Per external call, in call order: `ForwarderCallExecutedEvent { forwarder: Pubkey, input: Vec<u8>, output: Vec<u8> }`.
 3. Once: `TransactionExecutedEvent { tags: Vec<[u8;32]>, logic_refs: Vec<[u8;32]> }`.
 
+Every event is one instruction in the transaction's instruction trace, so the runtime's limit of 64 instructions per transaction (`max_instruction_trace_length`) bounds the number of events a settlement can emit, alongside its outer instructions and verifier and forwarder calls.
+
 **Tag semantics** (`extract_tags_and_logic_refs` in `encoding.rs`): for each compliance unit (one consumed/created resource pair) of each action, two tags are appended in order — the consumed resource's nullifier, then the created resource's commitment. `logic_refs` is index-parallel to `tags`. `TransactionExecutedEvent` therefore lists every state change of the settlement: even-indexed entries are nullifiers, odd-indexed entries are commitments, and the commitments appear in exactly the order they were appended to the commitment tree.
 
-**Payload events** carry application data blobs. There are four structs with identical bodies `{ tag: [u8;32], index: u32, blob: Vec<u8> }` — `ResourcePayloadEvent`, `DiscoveryPayloadEvent`, `ExternalPayloadEvent`, `ApplicationPayloadEvent` — one per payload category. Four distinct structs exist so each category gets its own Anchor discriminator and indexers can filter at the log-parsing level without decoding bodies. Rules (`emit_app_data_events` in `lib.rs`):
+**Payload events** carry application data blobs. There are four structs with identical bodies `{ tag: [u8;32], index: u32, blob: Vec<u8> }` — `ResourcePayloadEvent`, `DiscoveryPayloadEvent`, `ExternalPayloadEvent`, `ApplicationPayloadEvent` — one per payload category. Four distinct structs exist so each category gets its own Anchor discriminator and indexers can filter on the discriminator without decoding bodies. Rules (`emit_app_data_events` in `lib.rs`):
 
 - A payload entry is emitted **only if its deletion criterion says "store forever"** (`deletion_criterion == DELETION_CRITERION_NEVER`, defined in `state.rs`). Entries with any other criterion never appear in events; an indexer cannot reconstruct them and must not expect to.
 - `tag` is the resource tag the payload belongs to; `index` is the entry's position within its own category's payload list for that resource (not a global index).

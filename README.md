@@ -386,6 +386,8 @@ Clients submit RM transactions to the PA for settlement.
        router: routerPda,
        verifierEntry: verifierEntryPda,
        verifierProgram: groth16VerifierId,
+       eventAuthority: eventAuthorityPda, // required: PDA that signs the program's self-CPI event emissions
+       program: programId,                // required: this program's own address, target of the self-CPI
      })
      .remainingAccounts([
        // Nullifier marker PDAs (one per consumed resource)
