@@ -6,8 +6,8 @@ use arm::aggregation_instance::ConsumedResourceAggregated;
 use arm::compliance::{ComplianceWitness, INITIAL_ROOT};
 use arm::compliance_unit::ComplianceUnit;
 use arm::constants::{
-    global_kind_table, init_kind_table_from_file, BATCH_AGGREGATION_PK, BATCH_AGGREGATION_VK,
-    COMPLIANCE_PK, COMPLIANCE_VK,
+    init_kind_table_from_file, kind_table, kind_table_hash, BATCH_AGGREGATION_PK,
+    BATCH_AGGREGATION_VK, COMPLIANCE_PK, COMPLIANCE_VK,
 };
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
@@ -517,15 +517,15 @@ fn single_action_compliance_witness_with_rcv(
     rcv: Scalar,
 ) -> ComplianceWitness {
     ComplianceWitness::from_parts(
-        &[ConsumedResourceWitness {
+        vec![ConsumedResourceWitness {
             resource: consumed,
             cm_merkle_path,
             nf_key,
         }],
-        &[created],
+        vec![created],
         INITIAL_ROOT,
         &rcv.to_bytes(),
-        global_kind_table().to_vec(),
+        kind_table().to_vec(),
     )
 }
 
@@ -627,7 +627,9 @@ fn assemble_transaction(actions: Vec<Action>, rcvs: &[Vec<u8>]) -> Result<Transa
     let tx = Transaction::create(actions, Delta::Witness(delta_witness));
     let balanced_tx = arm::transaction::generate_delta_proof(tx)
         .map_err(|e| anyhow!("generate delta proof: {e:?}"))?;
-    arm::transaction::verify(&balanced_tx).map_err(|e| anyhow!("verify tx: {e:?}"))?;
+    let kind_table_commitment = *kind_table_hash().ok_or_else(|| anyhow!("kind table not loaded"))?;
+    arm::transaction::verify(&balanced_tx, kind_table_commitment)
+        .map_err(|e| anyhow!("verify tx: {e:?}"))?;
 
     Ok(balanced_tx)
 }
@@ -2269,7 +2271,7 @@ mod tests {
     #[test]
     fn valid_tx_passes_delta_verification() {
         let tx = build_valid_tx_with_delta_proof(100);
-        arm::transaction::verify(&tx).unwrap();
+        arm::transaction::verify(&tx, *kind_table_hash().unwrap()).unwrap();
     }
 
     /// Swapping the nullifier and commitment tags in the delta message
@@ -2277,7 +2279,7 @@ mod tests {
     #[test]
     fn swapped_tags_invalidate_delta_proof() {
         let tx = build_valid_tx_with_delta_proof(101);
-        arm::transaction::verify(&tx).unwrap();
+        arm::transaction::verify(&tx, *kind_table_hash().unwrap()).unwrap();
 
         // Swap nullifier and commitment in the compliance instance. This
         // changes the action tree root and therefore the delta message,
@@ -2292,7 +2294,7 @@ mod tests {
         })
         .unwrap();
 
-        let result = arm::transaction::verify(&swapped);
+        let result = arm::transaction::verify(&swapped, *kind_table_hash().unwrap());
         assert!(result.is_err(), "swapped nf/cm must invalidate delta proof");
     }
 
@@ -2300,7 +2302,7 @@ mod tests {
     #[test]
     fn mutated_delta_x_invalidates_proof() {
         let mut tx = build_valid_tx_with_delta_proof(102);
-        arm::transaction::verify(&tx).unwrap();
+        arm::transaction::verify(&tx, *kind_table_hash().unwrap()).unwrap();
 
         // Flip a word in delta_x
         let actions = tx.actions.as_mut().unwrap();
@@ -2309,7 +2311,7 @@ mod tests {
         })
         .unwrap();
 
-        let result = arm::transaction::verify(&tx);
+        let result = arm::transaction::verify(&tx, *kind_table_hash().unwrap());
         assert!(
             result.is_err(),
             "mutated delta_x must invalidate delta proof"
@@ -2320,7 +2322,7 @@ mod tests {
     #[test]
     fn mutated_nullifier_invalidates_delta_proof() {
         let mut tx = build_valid_tx_with_delta_proof(103);
-        arm::transaction::verify(&tx).unwrap();
+        arm::transaction::verify(&tx, *kind_table_hash().unwrap()).unwrap();
 
         // Corrupt the nullifier
         let actions = tx.actions.as_mut().unwrap();
@@ -2329,7 +2331,7 @@ mod tests {
         })
         .unwrap();
 
-        let result = arm::transaction::verify(&tx);
+        let result = arm::transaction::verify(&tx, *kind_table_hash().unwrap());
         assert!(
             result.is_err(),
             "mutated nullifier must invalidate delta proof"
