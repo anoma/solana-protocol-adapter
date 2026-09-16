@@ -114,6 +114,46 @@ fn test_wrap_input_parsing() {
 }
 
 #[test]
+fn wrap_input_round_trips_through_to_bytes() {
+    let input = WrapInput {
+        token_mint: Pubkey::new_unique(),
+        amount: 100_000_000,
+        user: Pubkey::new_unique(),
+        nonce: 7,
+        deadline: 4_102_444_800,
+        action_tree_root: [0xab; 32],
+        signature: [0xcd; 64],
+        ed25519_ix_index: 3,
+    };
+    let bytes = input.to_bytes();
+    assert_eq!(bytes.len(), WrapInput::SIZE);
+    let parsed = WrapInput::try_from_bytes(&bytes).unwrap();
+    assert_eq!(parsed.token_mint, input.token_mint);
+    assert_eq!(parsed.amount, input.amount);
+    assert_eq!(parsed.user, input.user);
+    assert_eq!(parsed.nonce, input.nonce);
+    assert_eq!(parsed.deadline, input.deadline);
+    assert_eq!(parsed.action_tree_root, input.action_tree_root);
+    assert_eq!(parsed.signature, input.signature);
+    assert_eq!(parsed.ed25519_ix_index, input.ed25519_ix_index);
+}
+
+#[test]
+fn unwrap_input_round_trips_through_to_bytes() {
+    let input = UnwrapInput {
+        token_mint: Pubkey::new_unique(),
+        amount: 50_000_000,
+        recipient: Pubkey::new_unique(),
+    };
+    let bytes = input.to_bytes();
+    assert_eq!(bytes.len(), UnwrapInput::SIZE);
+    let parsed = UnwrapInput::try_from_bytes(&bytes).unwrap();
+    assert_eq!(parsed.token_mint, input.token_mint);
+    assert_eq!(parsed.amount, input.amount);
+    assert_eq!(parsed.recipient, input.recipient);
+}
+
+#[test]
 fn test_unwrap_input_parsing() {
     let mut data = vec![0u8; UnwrapInput::SIZE];
 

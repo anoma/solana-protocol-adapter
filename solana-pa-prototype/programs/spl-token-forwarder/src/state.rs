@@ -308,6 +308,22 @@ impl WrapInput {
         })
     }
 
+    /// Serialize with the layout `try_from_bytes` parses (excluding the op
+    /// code byte).
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut bytes = [0u8; Self::SIZE];
+        bytes[Self::OFF_TOKEN_MINT..Self::OFF_AMOUNT].copy_from_slice(&self.token_mint.to_bytes());
+        bytes[Self::OFF_AMOUNT..Self::OFF_USER].copy_from_slice(&self.amount.to_le_bytes());
+        bytes[Self::OFF_USER..Self::OFF_NONCE].copy_from_slice(&self.user.to_bytes());
+        bytes[Self::OFF_NONCE..Self::OFF_DEADLINE].copy_from_slice(&self.nonce.to_le_bytes());
+        bytes[Self::OFF_DEADLINE..Self::OFF_ACTION_ROOT]
+            .copy_from_slice(&self.deadline.to_le_bytes());
+        bytes[Self::OFF_ACTION_ROOT..Self::OFF_SIGNATURE].copy_from_slice(&self.action_tree_root);
+        bytes[Self::OFF_SIGNATURE..Self::OFF_IX_INDEX].copy_from_slice(&self.signature);
+        bytes[Self::OFF_IX_INDEX] = self.ed25519_ix_index;
+        bytes
+    }
+
     /// Convert to WrapMessage for hashing/verification.
     ///
     /// # Arguments
@@ -374,5 +390,15 @@ impl UnwrapInput {
             amount,
             recipient,
         })
+    }
+
+    /// Serialize with the layout `try_from_bytes` parses (excluding the op
+    /// code byte).
+    pub fn to_bytes(&self) -> [u8; Self::SIZE] {
+        let mut bytes = [0u8; Self::SIZE];
+        bytes[Self::OFF_TOKEN_MINT..Self::OFF_AMOUNT].copy_from_slice(&self.token_mint.to_bytes());
+        bytes[Self::OFF_AMOUNT..Self::OFF_RECIPIENT].copy_from_slice(&self.amount.to_le_bytes());
+        bytes[Self::OFF_RECIPIENT..Self::SIZE].copy_from_slice(&self.recipient.to_bytes());
+        bytes
     }
 }
