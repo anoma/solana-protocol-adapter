@@ -2997,9 +2997,9 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
   // The fixture's seeded actors. The user is also the mint authority, so
   // the unwrap test can fund the escrow without depending on the wrap.
-  const user = Keypair.fromSeed(Buffer.from(wrap.user_secret_key_b64, "base64"));
-  const mintKeypair = Keypair.fromSeed(Buffer.from(wrap.mint_seed_b64, "base64"));
-  const recipient = Keypair.fromSeed(Buffer.from(unwrap.recipient_seed_b64, "base64"));
+  const user = seededKeypair(wrap.user_seed_label);
+  const mintKeypair = seededKeypair(wrap.mint_seed_label);
+  const recipient = seededKeypair(unwrap.recipient_seed_label);
   const mint = mintKeypair.publicKey;
   const { escrowPda, escrowAta } = escrowAccounts(forwarderProgram.programId, mint);
   const emergencyCommittee = seededKeypair(EMERGENCY_COMMITTEE_LABEL);
@@ -3009,7 +3009,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   const unwrapAmount = BigInt(unwrap.amount);
   const [nonceBitmapPda] = deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, wrapNonce);
   assert.equal(wrapReplayFixture.spl_token_wrap!.nonce, wrap.nonce, "the replay fixture reuses the wrap nonce");
-  assert.equal(wrap.mint_seed_b64, unwrap.mint_seed_b64, "both fixtures must name the same mint");
+  assert.equal(wrap.mint_seed_label, unwrap.mint_seed_label, "both fixtures must name the same mint");
 
   let userAta: PublicKey;
   let recipientAta: PublicKey;

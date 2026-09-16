@@ -17,10 +17,12 @@ const FIXTURE_DIR: string = (() => {
     : path.resolve(process.cwd(), "tests", "fixtures");
 })();
 
-// Replay data of an SPL forwarder wrap fixture (fixture-gen's SplTokenWrapMetadata).
+// Replay data of an SPL forwarder wrap fixture (fixture-gen's
+// SplTokenWrapMetadata). The actors are keypairs seeded with sha256 of a
+// label (`seededKeypair`); the fixture carries the labels, not key material.
 export type SplTokenWrapMetadata = {
-  user_secret_key_b64: string;
-  mint_seed_b64: string;
+  user_seed_label: string;
+  mint_seed_label: string;
   amount: number;
   nonce: number;
   // The 44 bytes the user signed: base64 of the wrap message hash.
@@ -30,9 +32,9 @@ export type SplTokenWrapMetadata = {
 };
 
 export type SplTokenUnwrapMetadata = {
-  mint_seed_b64: string;
+  mint_seed_label: string;
   amount: number;
-  recipient_seed_b64: string;
+  recipient_seed_label: string;
   logic_ref_b64: string;
 };
 
