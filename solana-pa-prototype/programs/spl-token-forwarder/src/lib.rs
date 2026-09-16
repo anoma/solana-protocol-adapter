@@ -70,7 +70,8 @@ const SPL_TRANSFER_OPCODE: u8 = 3;
 const SPL_CLOSE_ACCOUNT_OPCODE: u8 = 9;
 const SPL_TOKEN_PROGRAM_ID: Pubkey =
     anchor_lang::solana_program::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
-/// Offset of `amount` in an SPL token account: mint(32) + owner(32).
+/// SPL token account layout: mint(32), owner(32), amount(8), ...
+const TOKEN_ACCOUNT_OWNER_OFFSET: usize = 32;
 const TOKEN_ACCOUNT_AMOUNT_OFFSET: usize = 64;
 
 #[program]
@@ -166,6 +167,7 @@ pub mod spl_token_forwarder {
         ctx: Context<ForwardEmergencyCall>,
         input: Vec<u8>,
     ) -> Result<()> {
+        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         let withdraw = UnwrapInput::try_from_bytes(&input)?;
 
         let [escrow_ata, recipient_ata, escrow_pda, token_program, ..] = ctx.remaining_accounts
@@ -177,6 +179,7 @@ pub mod spl_token_forwarder {
             return Err(ErrorCode::InsufficientRemainingAccounts.into());
         };
 
+        require_token_account_owner(recipient_ata, &withdraw.recipient)?;
         transfer_signed_by_escrow(
             ctx.program_id,
             &withdraw.token_mint,
@@ -202,6 +205,7 @@ pub mod spl_token_forwarder {
         ctx: Context<SetEmergencyCaller>,
         new_emergency_caller: Pubkey,
     ) -> Result<()> {
+        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         require!(
             new_emergency_caller != Pubkey::default(),
             ErrorCode::ZeroAddressNotAllowed
@@ -233,21 +237,14 @@ pub mod spl_token_forwarder {
 
         let balance = token_account_amount(&ctx.accounts.escrow_ata)?;
         if balance > 0 {
-            let transfer_ix = spl_transfer_ix(
-                ctx.accounts.escrow_ata.key,
-                ctx.accounts.recipient_ata.key,
-                ctx.accounts.escrow_pda.key,
+            transfer_signed_by_escrow(
+                ctx.program_id,
+                &token_mint_key,
+                &ctx.accounts.escrow_ata,
+                &ctx.accounts.recipient_ata,
+                &ctx.accounts.escrow_pda,
+                &ctx.accounts.token_program,
                 balance,
-            );
-            invoke_signed(
-                &transfer_ix,
-                &[
-                    ctx.accounts.escrow_ata.to_account_info(),
-                    ctx.accounts.recipient_ata.to_account_info(),
-                    ctx.accounts.escrow_pda.to_account_info(),
-                    ctx.accounts.token_program.to_account_info(),
-                ],
-                signer_seeds,
             )?;
         }
 
@@ -293,6 +290,40 @@ fn token_account_amount(token_account: &AccountInfo) -> Result<u64> {
         .get(TOKEN_ACCOUNT_AMOUNT_OFFSET..TOKEN_ACCOUNT_AMOUNT_OFFSET + 8)
         .ok_or(ErrorCode::InvalidTokenAccountData)?;
     Ok(u64::from_le_bytes(amount.try_into().unwrap()))
+}
+
+/// The destination of a forwarded transfer is chosen by the submitter, not
+/// by the proof; it must belong to the party the proof-bound input names.
+fn require_token_account_owner(token_account: &AccountInfo, owner: &Pubkey) -> Result<()> {
+    let data = token_account.try_borrow_data()?;
+    let actual = data
+        .get(TOKEN_ACCOUNT_OWNER_OFFSET..TOKEN_ACCOUNT_OWNER_OFFSET + 32)
+        .ok_or(ErrorCode::InvalidTokenAccountData)?;
+    if actual != owner.as_ref() {
+        msg!(
+            "Token account {} is owned by {}, expected {}",
+            token_account.key(),
+            Pubkey::new_from_array(actual.try_into().unwrap()),
+            owner
+        );
+        return Err(ErrorCode::WrongTokenAccountOwner.into());
+    }
+    Ok(())
+}
+
+/// Both emergency instructions require the adapter to be stopped. Mirrors
+/// EVM's _checkEmergencyStopped(): the state account's address derives from
+/// the configured adapter, and the lifecycle is read through the adapter's type.
+fn require_stopped_adapter(config: &Config, pa_state: &AccountInfo) -> Result<()> {
+    require!(
+        pa_state.key() == derive_pa_state_pda(&config.protocol_adapter).0,
+        ErrorCode::InvalidPaState
+    );
+    require!(
+        pa_is_stopped(&pa_state.try_borrow_data()?)?,
+        ErrorCode::ProtocolAdapterNotStopped
+    );
+    Ok(())
 }
 
 fn spl_transfer_ix(
@@ -392,11 +423,11 @@ fn execute_wrap<'info>(
         return Err(ErrorCode::DeadlineExpired.into());
     }
 
-    let [user_ata, escrow_ata, escrow_pda, nonce_bitmap_pda, token_program, token_mint_account, ..] =
+    let [user_ata, escrow_ata, escrow_pda, nonce_bitmap_pda, token_program, ..] =
         ctx.remaining_accounts
     else {
         msg!(
-            "Expected 6 remaining accounts for wrap, got {}",
+            "Expected 5 remaining accounts for wrap, got {}",
             ctx.remaining_accounts.len()
         );
         return Err(ErrorCode::InsufficientRemainingAccounts.into());
@@ -425,6 +456,10 @@ fn execute_wrap<'info>(
         return Err(ErrorCode::NonceAlreadyUsed.into());
     }
 
+    // The proof binds the mint (through the escrow PDA) but not the
+    // destination account; it must be one the escrow authority owns.
+    require_token_account_owner(escrow_ata, escrow_pda.key)?;
+
     ed25519::verify_ed25519_instruction(
         &ctx.accounts.ix_sysvar,
         wrap.ed25519_ix_index,
@@ -432,10 +467,6 @@ fn execute_wrap<'info>(
         &wrap.to_message(ctx.program_id).signed_message(),
     )?;
 
-    require!(
-        token_mint_account.key() == wrap.token_mint,
-        ErrorCode::TokenMintMismatch
-    );
     transfer_signed_by_escrow(
         ctx.program_id,
         &wrap.token_mint,
@@ -462,20 +493,15 @@ fn execute_wrap<'info>(
 fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let unwrap = UnwrapInput::try_from_bytes(input)?;
 
-    let [escrow_ata, recipient_ata, escrow_pda, token_program, token_mint_account, ..] =
-        ctx.remaining_accounts
-    else {
+    let [escrow_ata, recipient_ata, escrow_pda, token_program, ..] = ctx.remaining_accounts else {
         msg!(
-            "Expected 5 remaining accounts for unwrap, got {}",
+            "Expected 4 remaining accounts for unwrap, got {}",
             ctx.remaining_accounts.len()
         );
         return Err(ErrorCode::InsufficientRemainingAccounts.into());
     };
 
-    require!(
-        token_mint_account.key() == unwrap.token_mint,
-        ErrorCode::TokenMintMismatch
-    );
+    require_token_account_owner(recipient_ata, &unwrap.recipient)?;
     transfer_signed_by_escrow(
         ctx.program_id,
         &unwrap.token_mint,
@@ -555,13 +581,7 @@ pub struct ForwardEmergencyCall<'info> {
     )]
     pub config: Account<'info, Config>,
 
-    /// The adapter's state account, which must be emergency stopped.
-    /// Mirrors EVM's _checkEmergencyStopped().
-    /// CHECK: Address derived from config.protocol_adapter; lifecycle read through the adapter's type.
-    #[account(
-        constraint = pa_state.key() == derive_pa_state_pda(&config.protocol_adapter).0 @ ErrorCode::InvalidPaState,
-        constraint = pa_is_stopped(&pa_state.try_borrow_data()?)? @ ErrorCode::ProtocolAdapterNotStopped,
-    )]
+    /// CHECK: Checked by require_stopped_adapter in the handler.
     pub pa_state: AccountInfo<'info>,
 }
 
@@ -577,13 +597,7 @@ pub struct SetEmergencyCaller<'info> {
     )]
     pub config: Account<'info, Config>,
 
-    /// The adapter's state account, which must be emergency stopped.
-    /// Mirrors EVM's _checkEmergencyStopped().
-    /// CHECK: Address derived from config.protocol_adapter; lifecycle read through the adapter's type.
-    #[account(
-        constraint = pa_state.key() == derive_pa_state_pda(&config.protocol_adapter).0 @ ErrorCode::InvalidPaState,
-        constraint = pa_is_stopped(&pa_state.try_borrow_data()?)? @ ErrorCode::ProtocolAdapterNotStopped,
-    )]
+    /// CHECK: Checked by require_stopped_adapter in the handler.
     pub pa_state: AccountInfo<'info>,
 }
 

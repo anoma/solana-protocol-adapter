@@ -520,11 +520,6 @@ fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
     }))
 }
 
-fn sha256_hash(data: &[u8]) -> [u8; 32] {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(data).into()
-}
-
 const USER_SEED_LABEL: &str = "spl_token_forwarder_test_user";
 const MINT_SEED_LABEL: &str = "spl_token_forwarder_test_mint";
 const RECIPIENT_SEED_LABEL: &str = "spl_token_forwarder_test_recipient";
@@ -532,7 +527,8 @@ const RECIPIENT_SEED_LABEL: &str = "spl_token_forwarder_test_recipient";
 /// A keypair seeded with sha256 of a label, as the TypeScript test's
 /// `seededKeypair(label)` rebuilds it.
 fn seeded_keypair(label: &str) -> SigningKey {
-    SigningKey::from_bytes(&sha256_hash(label.as_bytes()))
+    use sha2::Digest as _;
+    SigningKey::from_bytes(&sha2::Sha256::digest(label).into())
 }
 
 fn passthrough_logic_ref_b64() -> String {
@@ -579,8 +575,8 @@ fn spl_token_forwarder_wrap_external_payload(
         expected_output: vec![SPL_RESULT_SUCCESS],
         output_mode: OutputMode::ReturnData,
         // [program, config, ix_sysvar, user_ata, escrow_ata, escrow_pda,
-        //  nonce_bitmap, token_program, mint]
-        num_accounts: 9,
+        //  nonce_bitmap, token_program]
+        num_accounts: 8,
     });
 
     let metadata = SplTokenWrapMetadata {
@@ -620,8 +616,8 @@ fn spl_token_forwarder_unwrap_external_payload() -> Result<(ExpirableBlob, SplTo
         expected_output: vec![SPL_RESULT_SUCCESS],
         output_mode: OutputMode::ReturnData,
         // [program, config, ix_sysvar, escrow_ata, recipient_ata, escrow_pda,
-        //  token_program, mint]
-        num_accounts: 8,
+        //  token_program]
+        num_accounts: 7,
     });
 
     let metadata = SplTokenUnwrapMetadata {
@@ -933,8 +929,8 @@ async fn generate_test_transaction_with_external_payload(
         ForwarderMode::BlockTimeForwarder {
             output_mismatch: true,
         } => 2,
-        ForwarderMode::SplTokenWrap => SPL_TOKEN_WRAP_NONCE_BYTE,
-        ForwarderMode::SplTokenUnwrap => SPL_TOKEN_UNWRAP_NONCE_BYTE,
+        ForwarderMode::SplTokenWrap => 20,
+        ForwarderMode::SplTokenUnwrap => 22,
         _ => 0,
     });
     let (consumed_resource, nf_key, consumed_nf) = deterministic_ephemeral_resource(nonce_byte)?;
@@ -1301,12 +1297,6 @@ fn finalize_and_write_fixture(
 /// 9-11 (transfer shape), and 20-22 (SPL forwarder wrap, wrap replay,
 /// unwrap), so 8 avoids a `DuplicateNullifier` collision.
 const HISTORICAL_ROOT_NONCE_BYTE: u8 = 8;
-
-/// Nonce bytes of the SPL forwarder fixtures (see the reservation map on
-/// `HISTORICAL_ROOT_NONCE_BYTE`). The wrap-replay fixture takes 21 through
-/// `--nonce-seed`: same wrap terms, a different nullifier.
-const SPL_TOKEN_WRAP_NONCE_BYTE: u8 = 20;
-const SPL_TOKEN_UNWRAP_NONCE_BYTE: u8 = 22;
 
 /// Base nonce byte for the transfer-shape fixture's three actions (9-11;
 /// see `HISTORICAL_ROOT_NONCE_BYTE` for the full reservation map).
@@ -2217,14 +2207,6 @@ async fn main() -> Result<()> {
             multi_external_call: true,
             ..
         } => eprintln!("mode: multi-external-call (two external payload blobs)"),
-        GenerateShape::SingleAction {
-            forwarder_mode: ForwarderMode::SplTokenWrap,
-            ..
-        } => eprintln!("mode: spl-token-wrap (ed25519-authorized wrap into the forwarder escrow)"),
-        GenerateShape::SingleAction {
-            forwarder_mode: ForwarderMode::SplTokenUnwrap,
-            ..
-        } => eprintln!("mode: spl-token-unwrap (escrow release to the seeded recipient)"),
         GenerateShape::SingleAction { .. } => {}
         GenerateShape::TransferShape => eprintln!(
             "mode: transfer-shape ({TRANSFER_SHAPE_ACTIONS} actions, event-emitted payloads, no external calls)"

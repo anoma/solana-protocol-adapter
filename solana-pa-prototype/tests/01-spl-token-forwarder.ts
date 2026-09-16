@@ -16,9 +16,12 @@ import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
   EMERGENCY_COMMITTEE_LABEL,
+  OP_UNWRAP,
+  assertRejects,
   deriveConfigPda,
   derivePaStatePda,
   encodeUnwrapInput,
+  initializeForwarder,
   makeFunder,
   requireFixture,
   seededKeypair,
@@ -40,9 +43,8 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
 
   // The logic ref the fixtures were proven under (the passthrough guest);
   // the config must authorize it for the adapter suite's wrap and unwrap.
-  const logicRef = Buffer.from(
-    requireFixture("spl_token_wrap.json", "--spl-token-wrap").spl_token_wrap!.logic_ref_b64,
-    "base64"
+  const logicRef = Array.from(
+    Buffer.from(requireFixture("spl_token_wrap.json", "--spl-token-wrap").spl_token_wrap!.logic_ref_b64, "base64")
   );
 
   before(async () => {
@@ -50,53 +52,28 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
     await funder.fund(emergencyCommittee, 1);
   });
 
-  function initialize(protocolAdapter: PublicKey, logicRef: number[], committee: PublicKey) {
-    return forwarderProgram.methods
-      .initialize(protocolAdapter, logicRef, committee)
-      .accounts({ authority: authority.publicKey })
-      .signers([authority])
-      .rpc();
-  }
+  const initialize = (adapter: PublicKey, ref: number[], committee: PublicKey) =>
+    initializeForwarder(forwarderProgram, adapter, ref, committee, authority.publicKey).signers([authority]).rpc();
 
   describe("initialize", () => {
-    // Mirrors ForwarderBase.t.sol: test_constructor_reverts_if_the_protocol_adapter_address_is_zero
-    it("rejects a zero protocol adapter address", async () => {
-      try {
-        await initialize(PublicKey.default, Array.from(logicRef), emergencyCommittee.publicKey);
-        assert.fail("expected initialize to fail");
-      } catch (e: any) {
-        assert.include(e.toString(), "ZeroAddressNotAllowed");
-      }
-    });
-
-    // Mirrors ForwarderBase.t.sol: test_constructor_reverts_if_the_logic_ref_is_zero
-    it("rejects a zero logic ref", async () => {
-      try {
-        await initialize(paProgram.programId, Array(32).fill(0), emergencyCommittee.publicKey);
-        assert.fail("expected initialize to fail");
-      } catch (e: any) {
-        assert.include(e.toString(), "ZeroAddressNotAllowed");
-      }
-    });
-
-    // Mirrors EmergencyMigratableForwarderBase.t.sol: test_constructor_reverts_if_the_emergency_committe_address_is_zero
-    it("rejects a zero emergency committee", async () => {
-      try {
-        await initialize(paProgram.programId, Array.from(logicRef), PublicKey.default);
-        assert.fail("expected initialize to fail");
-      } catch (e: any) {
-        assert.include(e.toString(), "ZeroAddressNotAllowed");
-      }
-    });
+    // Mirrors ForwarderBase.t.sol and EmergencyMigratableForwarderBase.t.sol:
+    // test_constructor_reverts_if_the_{protocol_adapter_address,logic_ref,emergency_committe_address}_is_zero
+    for (const [name, adapter, ref, committee] of [
+      ["protocol adapter address", PublicKey.default, logicRef, emergencyCommittee.publicKey],
+      ["logic ref", paProgram.programId, Array(32).fill(0), emergencyCommittee.publicKey],
+      ["emergency committee", paProgram.programId, logicRef, PublicKey.default],
+    ] as const) {
+      it(`rejects a zero ${name}`, () => assertRejects(initialize(adapter, ref, committee), /ZeroAddressNotAllowed/));
+    }
 
     // Mirrors ForwarderBase.t.sol getProtocolAdapter/getLogicRef and
     // EmergencyMigratableForwarderBase.t.sol emergencyCaller-is-zero-before-set.
     it("stores the adapter, logic ref and committee, with no emergency caller", async () => {
-      await initialize(paProgram.programId, Array.from(logicRef), emergencyCommittee.publicKey);
+      await initialize(paProgram.programId, logicRef, emergencyCommittee.publicKey);
 
       const config = await forwarderProgram.account.config.fetch(configPda);
       assert.ok(config.protocolAdapter.equals(paProgram.programId));
-      assert.deepEqual(config.logicRef, Array.from(logicRef));
+      assert.deepEqual(config.logicRef, logicRef);
       assert.ok(config.emergencyCommittee.equals(emergencyCommittee.publicKey));
       assert.ok(config.emergencyCaller.equals(PublicKey.default));
     });
@@ -106,34 +83,29 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
     // Mirrors ForwarderBase.t.sol: test_forwardCall_reverts_if_the_pa_is_not_the_caller.
     // The forwarder reads the current top-level instruction's program id from
     // the instructions sysvar; a direct call sees itself, not the adapter.
-    it("rejects forward_call that is not a CPI from the adapter", async () => {
-      const input = encodeUnwrapInput(Keypair.generate().publicKey, 1000n, Keypair.generate().publicKey);
-      try {
-        await forwarderProgram.methods
-          .forwardCall(Array.from(logicRef), input)
+    it("rejects forward_call that is not a CPI from the adapter", () => {
+      const operand = encodeUnwrapInput(Keypair.generate().publicKey, 1000n, Keypair.generate().publicKey);
+      return assertRejects(
+        forwarderProgram.methods
+          .forwardCall(logicRef, Buffer.concat([Buffer.from([OP_UNWRAP]), operand]))
           .accountsPartial({ config: configPda, ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY })
-          .rpc();
-        assert.fail("expected forward_call to fail");
-      } catch (e: any) {
-        assert.include(e.toString(), "UnauthorizedCaller");
-      }
+          .rpc(),
+        /UnauthorizedCaller/
+      );
     });
 
     // Mirrors EmergencyMigratableForwarderBase.t.sol: test_setEmergencyCaller_reverts_if_the_caller_is_not_the_emergency_committee
     it("rejects set_emergency_caller from a non-committee signer", async () => {
       const impostor = Keypair.generate();
       await funder.fund(impostor, 1);
-
-      try {
-        await forwarderProgram.methods
+      await assertRejects(
+        forwarderProgram.methods
           .setEmergencyCaller(Keypair.generate().publicKey)
           .accounts({ committee: impostor.publicKey, paState })
           .signers([impostor])
-          .rpc();
-        assert.fail("expected set_emergency_caller to fail");
-      } catch (e: any) {
-        assert.include(e.toString(), "UnauthorizedCaller");
-      }
+          .rpc(),
+        /UnauthorizedCaller/
+      );
     });
   });
 

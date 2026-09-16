@@ -1,6 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import {
+  AccountMeta,
   PublicKey,
   SystemProgram,
   Keypair,
@@ -34,6 +35,7 @@ import {
   PA_STATE_SEED,
   TX_DATA_SEED,
   EMPTY_TREE_ROOT_INITIAL,
+  EMPTY_KIND_TABLE_COMMITMENT,
   MIN_EXPIRY_SLOTS,
   MAX_EXPIRY_SLOTS,
   SEVEN_DAYS_SLOTS,
@@ -48,18 +50,20 @@ import {
   createdCommitmentsOf as commitmentsOf,
   fundKeypair,
   drainKeypairs,
-  paInitializeBuilder,
   uploadTxData as uploadTxDataTo,
   predictRootMarkerPda as predictRootMarkerPdaOf,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
   deriveProgramDataPda,
   deriveRootMarkerPda,
   EMERGENCY_COMMITTEE_LABEL,
-  NONCES_PER_WORD,
+  assertRejects,
   deriveConfigPda,
   deriveNonceBitmapPda,
   escrowAccounts,
-  isNonceUsed,
+  escrowTransferAccounts,
+  initializeForwarder,
+  makeFunder,
+  nonceWordIndex,
   seededKeypair,
 } from "./utils";
 
@@ -125,8 +129,24 @@ function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; 
   return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
 }
 
+// The one set of initialize arguments the whole suite deploys with: the
+// verifier router, the fixture's selector, and the kind-table commitment
+// every fixture's aggregation instance carries. Callers add `.signers()`
+// when the payer is not the provider wallet.
 function buildInitialize(payer: PublicKey) {
-  return paInitializeBuilder(program, payer, PROOF_SELECTOR);
+  return program.methods
+    .initialize(
+      VERIFIER_ROUTER_ID,
+      Array.from(PROOF_SELECTOR),
+      Array.from(EMPTY_KIND_TABLE_COMMITMENT)
+    )
+    .accountsPartial({
+      paState,
+      payer,
+      systemProgram: SystemProgram.programId,
+      program: program.programId,
+      programData,
+    });
 }
 
 /**
@@ -2964,6 +2984,8 @@ describe("protocol-adapter (close_markers_batch requires stopped state)", () => 
 describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
+  // The block's actors stay out of the suite-wide afterEach drain.
+  const funder = makeFunder(provider);
 
   const wrapFixture = requireFixture("spl_token_wrap.json", "--spl-token-wrap");
   // The same wrap terms (user, mint, amount, nonce) under a different
@@ -2987,33 +3009,33 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   const unwrapAmount = BigInt(unwrap.amount);
   const [nonceBitmapPda] = deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, wrapNonce);
   assert.equal(wrapReplayFixture.spl_token_wrap!.nonce, wrap.nonce, "the replay fixture reuses the wrap nonce");
+  assert.equal(wrap.mint_seed_label, unwrap.mint_seed_label, "both fixtures must name the same mint");
 
   let userAta: PublicKey;
+  let recipientAta: PublicKey;
 
   before(async () => {
-    assert.equal(wrap.mint_seed_label, unwrap.mint_seed_label, "both fixtures must name the same mint");
-
-    // The suite's afterEach drains every funded keypair after each test, so
-    // each test below funds the actors it uses.
-    await airdrop(provider, user, 2);
+    await funder.fund(user, 5);
+    await funder.fund(recipient, 1);
 
     // 01-spl-token-forwarder.ts initializes the config; a --grep run of this
     // block alone initializes it here.
     if (!(await provider.connection.getAccountInfo(configPda))) {
-      await forwarderProgram.methods
-        .initialize(
-          program.programId,
-          Array.from(Buffer.from(wrap.logic_ref_b64, "base64")),
-          emergencyCommittee.publicKey
-        )
-        .accounts({ authority: provider.wallet.publicKey })
-        .rpc();
+      await initializeForwarder(
+        forwarderProgram,
+        program.programId,
+        Array.from(Buffer.from(wrap.logic_ref_b64, "base64")),
+        emergencyCommittee.publicKey,
+        provider.wallet.publicKey
+      ).rpc();
     }
 
     await createMint(provider.connection, user, user.publicKey, null, 6, mintKeypair);
     userAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, user.publicKey)).address;
     await mintTo(provider.connection, user, mint, userAta, user, Number(wrapAmount) * 2);
     await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, escrowPda, true);
+    recipientAta = (await getOrCreateAssociatedTokenAccount(provider.connection, recipient, mint, recipient.publicKey)).address;
+    await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
   });
 
   /**
@@ -3023,11 +3045,11 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
    */
   async function settleForwarderFixture(
     fx: Fixture,
-    forwarderAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+    forwarderAccounts: AccountMeta[],
     preInstructions: anchor.web3.TransactionInstruction[]
   ): Promise<string> {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
     const { uploadId, txData } = await uploadTxData(authority, Buffer.from(fx.tx_b64, "base64"));
     const newRootMarker = await predictRootMarkerPda(commitmentsOf(fx));
     return settleFromTxDataBuilder(
@@ -3042,158 +3064,120 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       .rpc();
   }
 
-  function forwarderSegmentHead() {
-    return [
-      { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
-      { pubkey: configPda, isWritable: false, isSigner: false },
-      { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
-    ];
-  }
+  const segmentHead: AccountMeta[] = [
+    { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
+    { pubkey: configPda, isWritable: false, isSigner: false },
+    { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
+  ];
 
-  /**
-   * The permissionless instruction that creates the user's bitmap for the
-   * wrap nonce's word, paid by the provider wallet (which co-signs every
-   * settlement here as its fee payer).
-   */
-  function initNonceBitmapIx() {
-    return forwarderProgram.methods
-      .initNonceBitmap(user.publicKey, new anchor.BN((wrapNonce / NONCES_PER_WORD).toString()))
+  const wrapSegment = (destination = escrowAta): AccountMeta[] => [
+    ...segmentHead,
+    { pubkey: userAta, isWritable: true, isSigner: false },
+    { pubkey: destination, isWritable: true, isSigner: false },
+    { pubkey: escrowPda, isWritable: false, isSigner: false },
+    { pubkey: nonceBitmapPda, isWritable: true, isSigner: false },
+    { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+  ];
+
+  const unwrapSegment = (destination = recipientAta): AccountMeta[] => [
+    ...segmentHead,
+    ...escrowTransferAccounts(escrowAta, destination, escrowPda),
+  ];
+
+  /** The ed25519 instruction carrying the fixture's signature over its signed message. */
+  const wrapAuthorizationIx = (fx: Fixture) =>
+    Ed25519Program.createInstructionWithPublicKey({
+      publicKey: user.publicKey.toBytes(),
+      message: Buffer.from(fx.spl_token_wrap!.signed_message_b64, "base64"),
+      signature: Buffer.from(fx.spl_token_wrap!.signature_b64, "base64"),
+    });
+
+  /** The permissionless instruction that creates the user's bitmap for the wrap nonce's word. */
+  const initNonceBitmapIx = () =>
+    forwarderProgram.methods
+      .initNonceBitmap(user.publicKey, new anchor.BN(nonceWordIndex(wrapNonce).toString()))
       .accountsPartial({
         payer: provider.wallet.publicKey,
         nonceBitmap: nonceBitmapPda,
         systemProgram: SystemProgram.programId,
       })
       .instruction();
-  }
 
-  function wrapSegment() {
-    return [
-      ...forwarderSegmentHead(),
-      { pubkey: userAta, isWritable: true, isSigner: false },
-      { pubkey: escrowAta, isWritable: true, isSigner: false },
-      { pubkey: escrowPda, isWritable: false, isSigner: false },
-      { pubkey: nonceBitmapPda, isWritable: true, isSigner: false },
-      { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
-      { pubkey: mint, isWritable: false, isSigner: false },
-    ];
-  }
-
-  /** The ed25519 instruction carrying the fixture's signature over its signed message. */
-  function wrapAuthorizationIx(fx: Fixture) {
-    const meta = fx.spl_token_wrap!;
-    return Ed25519Program.createInstructionWithPublicKey({
-      publicKey: user.publicKey.toBytes(),
-      message: Buffer.from(meta.signed_message_b64, "base64"),
-      signature: Buffer.from(meta.signature_b64, "base64"),
-    });
-  }
+  const balances = (...atas: PublicKey[]) => Promise.all(atas.map((ata) => getAccount(provider.connection, ata).then((a) => a.amount)));
 
   // Mirrors EmergencyMigratableForwarderBase.t.sol: test_setEmergencyCaller_reverts_if_the_pa_is_not_stopped
   it("rejects set_emergency_caller while the adapter is running", async () => {
-    await airdrop(provider, emergencyCommittee, 1);
+    await funder.fund(emergencyCommittee, 1);
     const state = await program.account.paStateAccount.fetch(paState);
     assert.deepEqual(state.lifecycle, { running: {} }, "the adapter must be running here");
-
-    try {
-      await forwarderProgram.methods
+    await assertRejects(
+      forwarderProgram.methods
         .setEmergencyCaller(Keypair.generate().publicKey)
         .accounts({ committee: emergencyCommittee.publicKey, paState })
         .signers([emergencyCommittee])
-        .rpc();
-      assert.fail("expected set_emergency_caller to fail");
-    } catch (e: any) {
-      assert.include(e.toString(), "ProtocolAdapterNotStopped");
-    }
+        .rpc(),
+      /ProtocolAdapterNotStopped/
+    );
   });
 
   // The adapter forwards no signer to the forwarder, so the forwarder cannot
   // create the bitmap during the wrap; a wrap on a word without one fails.
   it("rejects a wrap whose nonce bitmap does not exist", async () => {
-    await airdrop(provider, user, 1);
-    await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
     assert.isNull(await provider.connection.getAccountInfo(nonceBitmapPda), "no bitmap yet for this word");
+    await assertRejects(settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]), /NonceBitmapMissing/);
+  });
 
-    try {
-      await settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]);
-      assert.fail("expected the wrap to fail without a nonce bitmap");
-    } catch (e: any) {
-      assert.match(errorHaystack(e), /NonceBitmapMissing/);
-    }
+  // The destination account is chosen by the submitter, not by the proof.
+  it("rejects a wrap whose destination the escrow does not own", async () => {
+    await assertRejects(
+      settleForwarderFixture(wrapFixture, wrapSegment(recipientAta), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]),
+      /WrongTokenAccountOwner/
+    );
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_wrap_pulls_funds_from_user. The
   // first wrap on a word carries init_nonce_bitmap in the same transaction,
   // after the ed25519 instruction the wrap input points at (index 0).
   it("settles a wrap: escrow receives the tokens and the nonce is marked used", async () => {
-    await airdrop(provider, user, 1);
-    await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
+    const [userBefore, escrowBefore] = await balances(userAta, escrowAta);
 
-    const userBefore = (await getAccount(provider.connection, userAta)).amount;
-    const escrowBefore = (await getAccount(provider.connection, escrowAta)).amount;
+    await settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]);
 
-    await settleForwarderFixture(wrapFixture, wrapSegment(), [
-      wrapAuthorizationIx(wrapFixture),
-      await initNonceBitmapIx(),
-    ]);
-
-    const userAfter = (await getAccount(provider.connection, userAta)).amount;
-    const escrowAfter = (await getAccount(provider.connection, escrowAta)).amount;
+    const [userAfter, escrowAfter] = await balances(userAta, escrowAta);
     assert.equal(userAfter, userBefore - wrapAmount, "user balance decreases by the wrap amount");
     assert.equal(escrowAfter, escrowBefore + wrapAmount, "escrow holds the wrapped tokens");
 
-    const bitmap = await provider.connection.getAccountInfo(nonceBitmapPda);
-    assert.ok(bitmap, "the nonce bitmap account exists after the wrap");
-    assert.ok(bitmap!.owner.equals(forwarderProgram.programId), "the forwarder owns the nonce bitmap");
-    assert.ok(isNonceUsed(bitmap!.data, wrapNonce), "the wrap's nonce is marked used");
+    const bitmap = await forwarderProgram.account.nonceBitmap.fetch(nonceBitmapPda);
+    const bit = Number(wrapNonce % 256n);
+    assert.ok(bitmap.bits[bit >> 3] & (1 << (bit & 7)), "the wrap's nonce is marked used");
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_wrap_reverts_if_the_signature_was_already_used
   it("rejects a wrap that replays a used nonce", async () => {
-    await airdrop(provider, user, 1);
     await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
-    const escrowBefore = (await getAccount(provider.connection, escrowAta)).amount;
+    const [escrowBefore] = await balances(escrowAta);
+    await assertRejects(settleForwarderFixture(wrapReplayFixture, wrapSegment(), [wrapAuthorizationIx(wrapReplayFixture)]), /NonceAlreadyUsed/);
+    assert.deepEqual(await balances(escrowAta), [escrowBefore], "escrow is unchanged");
+  });
 
-    try {
-      await settleForwarderFixture(wrapReplayFixture, wrapSegment(), [
-        wrapAuthorizationIx(wrapReplayFixture),
-      ]);
-      assert.fail("expected the replayed nonce to be rejected");
-    } catch (e: any) {
-      assert.match(errorHaystack(e), /NonceAlreadyUsed/);
-    }
-    assert.equal((await getAccount(provider.connection, escrowAta)).amount, escrowBefore, "escrow is unchanged");
+  // The recipient account is chosen by the submitter, not by the proof.
+  it("rejects an unwrap to a token account the recipient does not own", async () => {
+    await mintTo(provider.connection, user, mint, escrowAta, user, Number(unwrapAmount));
+    await assertRejects(settleForwarderFixture(unwrapFixture, unwrapSegment(userAta), []), /WrongTokenAccountOwner/);
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_unwrap_sends_funds_to_the_user
   it("settles an unwrap: the recipient receives the tokens from escrow", async () => {
-    await airdrop(provider, user, 1);
-    await airdrop(provider, recipient, 1);
-    await mintTo(provider.connection, user, mint, escrowAta, user, Number(unwrapAmount));
-    const recipientAta = (
-      await getOrCreateAssociatedTokenAccount(provider.connection, recipient, mint, recipient.publicKey)
-    ).address;
+    const [escrowBefore, recipientBefore] = await balances(escrowAta, recipientAta);
 
-    const escrowBefore = (await getAccount(provider.connection, escrowAta)).amount;
-    const recipientBefore = (await getAccount(provider.connection, recipientAta)).amount;
+    await settleForwarderFixture(unwrapFixture, unwrapSegment(), []);
 
-    await settleForwarderFixture(
-      unwrapFixture,
-      [
-        ...forwarderSegmentHead(),
-        { pubkey: escrowAta, isWritable: true, isSigner: false },
-        { pubkey: recipientAta, isWritable: true, isSigner: false },
-        { pubkey: escrowPda, isWritable: false, isSigner: false },
-        { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
-        { pubkey: mint, isWritable: false, isSigner: false },
-      ],
-      []
-    );
-
-    const escrowAfter = (await getAccount(provider.connection, escrowAta)).amount;
-    const recipientAfter = (await getAccount(provider.connection, recipientAta)).amount;
+    const [escrowAfter, recipientAfter] = await balances(escrowAta, recipientAta);
     assert.equal(escrowAfter, escrowBefore - unwrapAmount, "escrow balance decreases by the unwrap amount");
     assert.equal(recipientAfter, recipientBefore + unwrapAmount, "recipient receives the unwrapped tokens");
   });
+
+  after(() => funder.drainAll());
 });
 
 // MUST BE LAST: emergency_stop permanently pauses PAState. No further

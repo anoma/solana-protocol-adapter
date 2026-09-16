@@ -1,7 +1,6 @@
-import { PublicKey } from "@solana/web3.js";
+import { AccountMeta, PublicKey } from "@solana/web3.js";
 import {
   CONFIG_SEED,
-  ESCROW_SEED,
   NONCE_BITMAP_SEED,
   NONCES_PER_WORD,
   NULLIFIER_SEED,
@@ -52,7 +51,7 @@ export function deriveNullifierAccounts(
   nullifierB64s: string[],
   paState: PublicKey,
   programId: PublicKey
-): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
+): AccountMeta[] {
   return nullifierB64s.map((nfB64) => {
     const nf = Buffer.from(nfB64, "base64");
     const [pubkey] = deriveNullifierPda(programId, paState, nf);
@@ -66,14 +65,9 @@ export function deriveConfigPda(forwarderProgramId: PublicKey): [PublicKey, numb
   return PublicKey.findProgramAddressSync([CONFIG_SEED], forwarderProgramId);
 }
 
-export function deriveEscrowPda(
-  forwarderProgramId: PublicKey,
-  tokenMint: PublicKey
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [ESCROW_SEED, tokenMint.toBuffer()],
-    forwarderProgramId
-  );
+/** The 256-nonce word a nonce belongs to. */
+export function nonceWordIndex(nonce: bigint): bigint {
+  return nonce / NONCES_PER_WORD;
 }
 
 /** One bitmap account per (user, 256-nonce word), as the forwarder derives it. */
@@ -83,7 +77,7 @@ export function deriveNonceBitmapPda(
   nonce: bigint
 ): [PublicKey, number] {
   const wordIndex = Buffer.alloc(8);
-  wordIndex.writeBigUInt64LE(nonce / NONCES_PER_WORD);
+  wordIndex.writeBigUInt64LE(nonceWordIndex(nonce));
   return PublicKey.findProgramAddressSync(
     [NONCE_BITMAP_SEED, user.toBuffer(), wordIndex],
     forwarderProgramId

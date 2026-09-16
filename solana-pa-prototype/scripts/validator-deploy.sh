@@ -337,10 +337,11 @@ sync_program_ids() {
     sed -i -E "s/blockTimeForwarderId = new PublicKey\(\"[^\"]+\"\)/blockTimeForwarderId = new PublicKey(\"${BTF_ID}\")/" tests/solana-pa-prototype.ts
   fi
 
-  STF_ID="$(sync_program_id "STF" \
+  # Nothing else carries the STF id: fixture-gen and the tests read the crate's ID.
+  sync_program_id "STF" \
     "target/deploy/spl_token_forwarder-keypair.json" \
     "programs/spl-token-forwarder/src/lib.rs" \
-    "spl_token_forwarder")"
+    "spl_token_forwarder" >/dev/null
 
   TF_OLD="$(read_declare_id "programs/test-forwarder/src/lib.rs")"
   TF_ID="$(sync_program_id "TF" \
@@ -454,7 +455,9 @@ build_programs_release() {
   echo "    Building programs (production build)..."
   build_with_filtered_output anchor build -p protocol-adapter
   build_with_filtered_output anchor build -p block-time-forwarder --no-idl
-  build_with_filtered_output anchor build -p spl-token-forwarder --no-idl
+  # The forwarder's operator script resolves the program through the Anchor
+  # workspace, which needs its IDL and types.
+  build_with_filtered_output anchor build -p spl-token-forwarder
   build_with_filtered_output anchor build -p test-forwarder --no-idl
   build_with_filtered_output anchor build -p mock-verifier --no-idl
 

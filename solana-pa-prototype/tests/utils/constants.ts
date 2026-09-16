@@ -24,12 +24,8 @@ export const SEVEN_DAYS_SLOTS = 1_512_000;
 
 // SPL token forwarder: PDA seeds and layout (programs/spl-token-forwarder/src/state.rs)
 export const CONFIG_SEED = Buffer.from("config");
-export const ESCROW_SEED = Buffer.from("escrow");
 export const NONCE_BITMAP_SEED = Buffer.from("nonce_bitmap");
 export const NONCES_PER_WORD = 256n;
-// A nonce bitmap account: Anchor discriminator, then the 32-byte word.
-export const NONCE_BITMAP_ACCOUNT_SIZE = 8 + 32;
-export const NONCE_BITMAP_DATA_OFFSET = 8;
 // forward_call operation code of an unwrap (programs/spl-token-forwarder/src/lib.rs)
 export const OP_UNWRAP = 1;
 

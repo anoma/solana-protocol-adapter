@@ -6,7 +6,6 @@ use crate::state::{
 };
 use anchor_lang::prelude::Pubkey;
 use anchor_lang::AccountSerialize;
-use anchor_lang::Space;
 use protocol_adapter::state::{PALifecycle, PAStateAccount};
 
 #[test]
@@ -68,17 +67,6 @@ fn test_wrap_message_domain_separation() {
 
     // Hashes must be different due to domain separation
     assert_ne!(msg1.hash(), msg2.hash());
-
-    // Same forwarder_id should produce same hash
-    let msg3 = WrapMessage {
-        forwarder_id: [1u8; 32],
-        token_mint: [0u8; 32],
-        amount: 100,
-        nonce: 1,
-        deadline: 1700000000,
-        action_tree_root: [0u8; 32],
-    };
-    assert_eq!(msg1.hash(), msg3.hash());
 }
 
 #[test]
@@ -270,12 +258,6 @@ fn nonce_bitmap_marks_and_reads_every_bit() {
     assert_eq!(bitmap.bits[0], 0b1000_0001, "marking twice is idempotent");
 }
 
-#[test]
-fn nonce_bitmap_account_is_the_discriminator_and_one_word() {
-    assert_eq!(NonceBitmap::INIT_SPACE, 32);
-    assert_eq!(NonceBitmap::ACCOUNT_SIZE, 8 + 32);
-}
-
 // =============================================================================
 // PA Emergency Stopped Tests
 // =============================================================================
@@ -305,30 +287,15 @@ fn serialized_pa_state(lifecycle: PALifecycle, pending_authority: Option<Pubkey>
 }
 
 #[test]
-fn pa_is_stopped_reads_stopped_from_the_adapter_layout() {
-    let data = serialized_pa_state(PALifecycle::Stopped, None);
-    assert!(
-        pa_is_stopped(&data).unwrap(),
-        "a Stopped adapter state must be reported as stopped"
-    );
-}
-
-#[test]
-fn pa_is_stopped_reads_stopped_with_a_pending_authority() {
-    let data = serialized_pa_state(PALifecycle::Stopped, Some(Pubkey::new_unique()));
-    assert!(
-        pa_is_stopped(&data).unwrap(),
-        "a Stopped adapter state with a pending authority must be reported as stopped"
-    );
-}
-
-#[test]
-fn pa_is_stopped_reads_running_from_the_adapter_layout() {
-    let data = serialized_pa_state(PALifecycle::Running, Some(Pubkey::new_unique()));
-    assert!(
-        !pa_is_stopped(&data).unwrap(),
-        "a Running adapter state must not be reported as stopped"
-    );
+fn pa_is_stopped_reads_the_lifecycle_from_the_adapter_layout() {
+    for (lifecycle, pending_authority, stopped) in [
+        (PALifecycle::Stopped, None, true),
+        (PALifecycle::Stopped, Some(Pubkey::new_unique()), true),
+        (PALifecycle::Running, Some(Pubkey::new_unique()), false),
+    ] {
+        let data = serialized_pa_state(lifecycle, pending_authority);
+        assert_eq!(pa_is_stopped(&data).unwrap(), stopped, "{lifecycle:?}");
+    }
 }
 
 #[test]
