@@ -1,5 +1,3 @@
-import { PublicKey } from "@solana/web3.js";
-
 export const PA_STATE_SEED = Buffer.from("pa_state");
 export const NULLIFIER_SEED = Buffer.from("nullifier");
 export const TX_DATA_SEED = Buffer.from("tx_data");
@@ -23,6 +21,18 @@ export const MIN_EXPIRY_SLOTS = 100;
 export const MAX_EXPIRY_SLOTS = 216_000;
 // 7 days at 400ms/slot — matches SEVEN_DAYS_SLOTS in state.rs
 export const SEVEN_DAYS_SLOTS = 1_512_000;
+
+// SPL token forwarder: PDA seeds and layout (programs/spl-token-forwarder/src/state.rs)
+export const CONFIG_SEED = Buffer.from("config");
+export const NONCE_BITMAP_SEED = Buffer.from("nonce_bitmap");
+export const NONCES_PER_WORD = 256n;
+// forward_call operation code of an unwrap (programs/spl-token-forwarder/src/lib.rs)
+export const OP_UNWRAP = 1;
+
+// Deterministic keypair labels shared across the forwarder test files: 01
+// initializes the config with this committee, zz and zzz act as it.
+export const EMERGENCY_COMMITTEE_LABEL = "emergency_committee_seed";
+export const EMERGENCY_CALLER_LABEL = "emergency_caller_seed";
 
 // Anchor constraint error patterns for assertion matching
 export const AUTHORITY_MISMATCH_PATTERN = /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i;
