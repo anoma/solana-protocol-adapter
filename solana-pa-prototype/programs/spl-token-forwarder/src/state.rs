@@ -82,8 +82,33 @@ pub const NONCE_BITMAP_SEED: &[u8] = b"nonce_bitmap";
 /// Number of nonces per bitmap word (256 bits = 32 bytes)
 pub const NONCES_PER_WORD: u64 = 256;
 
-/// Size of a nonce bitmap in bytes (256 bits)
-pub const NONCE_BITMAP_SIZE: usize = 32;
+/// One 256-nonce word of a user's wrap nonces (Permit2's bitmap pattern).
+///
+/// Seeds: ["nonce_bitmap", user, word_index_le_bytes]. Created by anyone
+/// through `init_nonce_bitmap`, which pays its rent; a wrap only reads and
+/// sets bits, so no signer reaches the forwarder through the adapter's CPI.
+#[account]
+#[derive(InitSpace, Default)]
+pub struct NonceBitmap {
+    pub bits: [u8; 32],
+}
+
+impl NonceBitmap {
+    /// Account size: Anchor discriminator plus the word.
+    pub const ACCOUNT_SIZE: usize = 8 + Self::INIT_SPACE;
+
+    pub fn is_used(&self, bit_position: u8) -> bool {
+        let byte_index = (bit_position / 8) as usize;
+        let bit_offset = bit_position % 8;
+        (self.bits[byte_index] & (1 << bit_offset)) != 0
+    }
+
+    pub fn mark_used(&mut self, bit_position: u8) {
+        let byte_index = (bit_position / 8) as usize;
+        let bit_offset = bit_position % 8;
+        self.bits[byte_index] |= 1 << bit_offset;
+    }
+}
 
 /// Derive the config PDA address.
 pub fn derive_config_pda(program_id: &Pubkey) -> (Pubkey, u8) {
@@ -125,39 +150,6 @@ pub fn nonce_to_word_and_bit(nonce: u64) -> (u64, u8) {
     let word_index = nonce / NONCES_PER_WORD;
     let bit_position = (nonce % NONCES_PER_WORD) as u8;
     (word_index, bit_position)
-}
-
-/// Check if a nonce bit is set in a bitmap.
-///
-/// # Arguments
-/// * `bitmap` - 32-byte bitmap data
-/// * `bit_position` - bit position (0-255)
-///
-/// # Returns
-/// `true` if the nonce has been used, `false` otherwise.
-#[inline]
-pub fn is_nonce_used(bitmap: &[u8], bit_position: u8) -> bool {
-    if bitmap.len() < NONCE_BITMAP_SIZE {
-        return false;
-    }
-    let byte_index = (bit_position / 8) as usize;
-    let bit_offset = bit_position % 8;
-    (bitmap[byte_index] & (1 << bit_offset)) != 0
-}
-
-/// Set a nonce bit in a bitmap.
-///
-/// # Arguments
-/// * `bitmap` - mutable 32-byte bitmap data
-/// * `bit_position` - bit position (0-255)
-#[inline]
-pub fn set_nonce_used(bitmap: &mut [u8], bit_position: u8) {
-    if bitmap.len() < NONCE_BITMAP_SIZE {
-        return;
-    }
-    let byte_index = (bit_position / 8) as usize;
-    let bit_offset = bit_position % 8;
-    bitmap[byte_index] |= 1 << bit_offset;
 }
 
 // =============================================================================

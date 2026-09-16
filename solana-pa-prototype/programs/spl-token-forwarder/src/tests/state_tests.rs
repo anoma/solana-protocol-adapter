@@ -1,12 +1,13 @@
 //! Tests for state types and PDA derivation
 
 use crate::state::{
-    derive_config_pda, derive_escrow_pda, derive_nonce_bitmap_pda, is_nonce_used,
-    nonce_to_word_and_bit, pa_is_stopped, set_nonce_used, UnwrapInput, WrapInput, WrapMessage,
-    CONFIG_SEED, ESCROW_SEED, NONCES_PER_WORD, NONCE_BITMAP_SEED, NONCE_BITMAP_SIZE,
+    derive_config_pda, derive_escrow_pda, derive_nonce_bitmap_pda, nonce_to_word_and_bit,
+    pa_is_stopped, NonceBitmap, UnwrapInput, WrapInput, WrapMessage, CONFIG_SEED, ESCROW_SEED,
+    NONCES_PER_WORD, NONCE_BITMAP_SEED,
 };
 use anchor_lang::prelude::Pubkey;
 use anchor_lang::AccountSerialize;
+use anchor_lang::Space;
 use protocol_adapter::state::{PALifecycle, PAStateAccount};
 
 #[test]
@@ -234,58 +235,37 @@ fn test_nonce_to_word_and_bit() {
     // Large nonce
     assert_eq!(nonce_to_word_and_bit(1000), (3, 232)); // 1000 / 256 = 3, 1000 % 256 = 232
 
-    // Verify constants
     assert_eq!(NONCES_PER_WORD, 256);
-    assert_eq!(NONCE_BITMAP_SIZE, 32);
 }
 
 #[test]
-fn test_nonce_bitmap_operations() {
-    let mut bitmap = [0u8; NONCE_BITMAP_SIZE];
-
-    // Initially all bits should be unset
-    for i in 0..=255u8 {
-        assert!(!is_nonce_used(&bitmap, i), "Bit {} should be unset", i);
+fn nonce_bitmap_marks_and_reads_every_bit() {
+    let mut bitmap = NonceBitmap::default();
+    for bit in 0..=255u8 {
+        assert!(!bitmap.is_used(bit), "bit {bit} starts unset");
     }
 
-    // Set bit 0
-    set_nonce_used(&mut bitmap, 0);
-    assert!(is_nonce_used(&bitmap, 0));
-    assert!(!is_nonce_used(&bitmap, 1));
+    bitmap.mark_used(0);
+    assert!(bitmap.is_used(0));
+    assert!(!bitmap.is_used(1));
 
-    // Set bit 7 (end of first byte)
-    set_nonce_used(&mut bitmap, 7);
-    assert!(is_nonce_used(&bitmap, 7));
-    assert_eq!(bitmap[0], 0b10000001); // bits 0 and 7 set
+    bitmap.mark_used(7);
+    assert_eq!(bitmap.bits[0], 0b1000_0001);
 
-    // Set bit 8 (start of second byte)
-    set_nonce_used(&mut bitmap, 8);
-    assert!(is_nonce_used(&bitmap, 8));
-    assert_eq!(bitmap[1], 0b00000001);
+    bitmap.mark_used(8);
+    assert_eq!(bitmap.bits[1], 0b0000_0001);
 
-    // Set bit 255 (last bit of last byte)
-    set_nonce_used(&mut bitmap, 255);
-    assert!(is_nonce_used(&bitmap, 255));
-    assert_eq!(bitmap[31], 0b10000000); // bit 7 of byte 31
+    bitmap.mark_used(255);
+    assert_eq!(bitmap.bits[31], 0b1000_0000);
 
-    // Verify idempotence - setting same bit twice is safe
-    set_nonce_used(&mut bitmap, 0);
-    assert!(is_nonce_used(&bitmap, 0));
-    assert_eq!(bitmap[0], 0b10000001); // unchanged
+    bitmap.mark_used(0);
+    assert_eq!(bitmap.bits[0], 0b1000_0001, "marking twice is idempotent");
 }
 
 #[test]
-fn test_bitmap_undersized_handling() {
-    let small_bitmap = [0u8; 16]; // Less than NONCE_BITMAP_SIZE
-
-    // Should return false for undersized bitmap (not panic)
-    assert!(!is_nonce_used(&small_bitmap, 0));
-    assert!(!is_nonce_used(&small_bitmap, 255));
-
-    let mut small_mut = [0u8; 16];
-    // Should be no-op for undersized bitmap (not panic)
-    set_nonce_used(&mut small_mut, 0);
-    assert_eq!(small_mut, [0u8; 16]); // unchanged
+fn nonce_bitmap_account_is_the_discriminator_and_one_word() {
+    assert_eq!(NonceBitmap::INIT_SPACE, 32);
+    assert_eq!(NonceBitmap::ACCOUNT_SIZE, 8 + 32);
 }
 
 // =============================================================================

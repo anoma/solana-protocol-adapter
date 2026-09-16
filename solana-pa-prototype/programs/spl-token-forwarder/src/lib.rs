@@ -179,13 +179,27 @@ pub mod spl_token_forwarder {
         Ok(())
     }
 
+    /// Create the nonce bitmap for one 256-nonce word of `user`, paid by
+    /// whoever signs. Permissionless: the bitmap holds nothing but used
+    /// bits, and a wrap requires it to exist. The adapter forwards no
+    /// signer to a forwarder, so the account cannot be created during the
+    /// wrap itself; a submitter adds this instruction ahead of settlement
+    /// when the word's bitmap is missing.
+    pub fn init_nonce_bitmap(
+        _ctx: Context<InitNonceBitmap>,
+        _user: Pubkey,
+        _word_index: u64,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     /// Forward a wrap or unwrap call from the Protocol Adapter.
     ///
     /// Note: Unlike EVM which doesn't check stopped state here (trusting PA won't call if stopped),
     /// we also don't check here. The PA is responsible for not calling forwarders when stopped.
     /// This matches the EVM ForwarderBase.forwardCall() pattern exactly.
-    pub fn forward_call(
-        ctx: Context<ForwardCall>,
+    pub fn forward_call<'info>(
+        ctx: Context<'_, '_, 'info, 'info, ForwardCall<'info>>,
         logic_ref: [u8; 32],
         input: Vec<u8>,
     ) -> Result<()> {
@@ -402,10 +416,8 @@ pub mod spl_token_forwarder {
                 bitmap.owner == ctx.program_id,
                 ErrorCode::InvalidAccountOwner
             );
-            require!(
-                bitmap.data_len() == NONCE_BITMAP_SIZE,
-                ErrorCode::InvalidNonceBitmapPda
-            );
+            NonceBitmap::try_deserialize(&mut &bitmap.try_borrow_data()?[..])
+                .map_err(|_| ErrorCode::InvalidNonceBitmapPda)?;
 
             let lamports = bitmap.lamports();
             **bitmap.lamports.borrow_mut() = 0;
@@ -499,7 +511,10 @@ fn spl_close_account_ix(
 // Wrap Operation
 // =============================================================================
 
-fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
+fn execute_wrap<'info>(
+    ctx: &Context<'_, '_, 'info, 'info, ForwardCall<'info>>,
+    input: &[u8],
+) -> Result<()> {
     let wrap_input = WrapInput::try_from_bytes(input)?;
 
     msg!("Wrap operation");
@@ -528,9 +543,9 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     // Extract remaining accounts early for nonce check (DoS prevention: check cheap
     // conditions before expensive Ed25519 signature verification)
     let remaining = &ctx.remaining_accounts;
-    if remaining.len() < 8 {
+    if remaining.len() < 6 {
         msg!(
-            "Expected 8 remaining accounts for wrap, got {}",
+            "Expected 6 remaining accounts for wrap, got {}",
             remaining.len()
         );
         return Err(ErrorCode::InsufficientRemainingAccounts.into());
@@ -541,14 +556,12 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let escrow_pda = &remaining[2];
     let nonce_bitmap_pda = &remaining[3];
     let token_program = &remaining[4];
-    let system_program = &remaining[5];
-    let payer = &remaining[6];
-    let token_mint_account = &remaining[7];
+    let token_mint_account = &remaining[5];
 
     // Verify nonce bitmap PDA derivation and check nonce BEFORE signature verification
     // (Permit2-style bitmap pattern - rejects replays without wasting compute on sig verify)
     let (word_index, bit_position) = nonce_to_word_and_bit(wrap_input.nonce);
-    let (expected_bitmap_pda, bitmap_bump) =
+    let (expected_bitmap_pda, _) =
         derive_nonce_bitmap_pda(ctx.program_id, &wrap_input.user, word_index);
     require!(
         nonce_bitmap_pda.key() == expected_bitmap_pda,
@@ -560,21 +573,24 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         bit_position
     );
 
-    // Check if bitmap exists and if nonce bit is already set
-    let bitmap_exists = nonce_bitmap_pda.data_len() >= NONCE_BITMAP_SIZE
-        && nonce_bitmap_pda.owner == ctx.program_id;
-
-    if bitmap_exists {
-        let bitmap_data = nonce_bitmap_pda.try_borrow_data()?;
-        if is_nonce_used(&bitmap_data, bit_position) {
-            msg!(
-                "Nonce {} already used for user {}",
-                wrap_input.nonce,
-                wrap_input.user
-            );
-            return Err(ErrorCode::NonceAlreadyUsed.into());
-        }
-        drop(bitmap_data);
+    // The bitmap must already exist (init_nonce_bitmap); the adapter's CPI
+    // carries no signer that could pay for creating it here.
+    let mut nonce_bitmap = Account::<NonceBitmap>::try_from(nonce_bitmap_pda).map_err(|_| {
+        msg!(
+            "Nonce bitmap {} for user {} word {} does not exist",
+            nonce_bitmap_pda.key(),
+            wrap_input.user,
+            word_index
+        );
+        ErrorCode::NonceBitmapMissing
+    })?;
+    if nonce_bitmap.is_used(bit_position) {
+        msg!(
+            "Nonce {} already used for user {}",
+            wrap_input.nonce,
+            wrap_input.user
+        );
+        return Err(ErrorCode::NonceAlreadyUsed.into());
     }
     debug_msg!("  nonce {} not used", wrap_input.nonce);
 
@@ -746,56 +762,13 @@ fn execute_wrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
 
     // Mark nonce as used in bitmap (Permit2-style pattern)
     // Each bitmap PDA stores 256 nonces, reducing account bloat by 256x
-    if bitmap_exists {
-        // Bitmap exists - just set the bit
-        let mut bitmap_data = nonce_bitmap_pda.try_borrow_mut_data()?;
-        set_nonce_used(&mut bitmap_data, bit_position);
-        debug_msg!(
-            "  nonce {} marked in existing bitmap (word={})",
-            wrap_input.nonce,
-            word_index
-        );
-    } else {
-        // Bitmap doesn't exist - create it with this nonce set
-        let rent = Rent::get()?;
-        let lamports = rent.minimum_balance(NONCE_BITMAP_SIZE);
-
-        let word_bytes = word_index.to_le_bytes();
-        let bitmap_seeds = &[
-            NONCE_BITMAP_SEED,
-            wrap_input.user.as_ref(),
-            &word_bytes,
-            &[bitmap_bump],
-        ];
-        let bitmap_signer_seeds = &[&bitmap_seeds[..]];
-
-        let create_account_ix = anchor_lang::solana_program::system_instruction::create_account(
-            payer.key,
-            nonce_bitmap_pda.key,
-            lamports,
-            NONCE_BITMAP_SIZE as u64,
-            ctx.program_id,
-        );
-
-        invoke_signed(
-            &create_account_ix,
-            &[
-                payer.to_account_info(),
-                nonce_bitmap_pda.to_account_info(),
-                system_program.to_account_info(),
-            ],
-            bitmap_signer_seeds,
-        )?;
-
-        // Set the nonce bit in the newly created bitmap
-        let mut bitmap_data = nonce_bitmap_pda.try_borrow_mut_data()?;
-        set_nonce_used(&mut bitmap_data, bit_position);
-        debug_msg!(
-            "  created bitmap for word {} and marked nonce {}",
-            word_index,
-            wrap_input.nonce
-        );
-    }
+    nonce_bitmap.mark_used(bit_position);
+    nonce_bitmap.exit(ctx.program_id)?;
+    debug_msg!(
+        "  nonce {} marked in bitmap (word={})",
+        wrap_input.nonce,
+        word_index
+    );
 
     // Emit structured event (mirrors EVM Wrapped event)
     emit!(Wrapped {
@@ -1039,6 +1012,24 @@ pub struct Initialize<'info> {
         bump
     )]
     pub config: Account<'info, Config>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+#[instruction(user: Pubkey, word_index: u64)]
+pub struct InitNonceBitmap<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        space = NonceBitmap::ACCOUNT_SIZE,
+        seeds = [NONCE_BITMAP_SEED, user.as_ref(), &word_index.to_le_bytes()],
+        bump
+    )]
+    pub nonce_bitmap: Account<'info, NonceBitmap>,
 
     pub system_program: Program<'info, System>,
 }

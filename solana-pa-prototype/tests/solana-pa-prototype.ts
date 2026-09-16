@@ -57,6 +57,7 @@ import {
   deriveProgramDataPda,
   deriveRootMarkerPda,
   EMERGENCY_COMMITTEE_LABEL,
+  NONCES_PER_WORD,
   createWrapMessageHash,
   deriveConfigPda,
   deriveEscrowPda,
@@ -2984,6 +2985,9 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     }
   }
   const wrapFixture = requireForwarderFixture("spl_token_wrap.json", "--spl-token-wrap");
+  // The same wrap terms (user, mint, amount, nonce) under a different
+  // nullifier: a replay of the nonce the adapter cannot catch.
+  const wrapReplayFixture = requireForwarderFixture("spl_token_wrap_replay.json", "--spl-token-wrap --nonce-seed 21");
   const unwrapFixture = requireForwarderFixture("spl_token_unwrap.json", "--spl-token-unwrap");
   const wrap = wrapFixture.spl_token_wrap!;
   const unwrap = unwrapFixture.spl_token_unwrap!;
@@ -3000,6 +3004,8 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   const wrapAmount = BigInt(wrap.amount);
   const wrapNonce = BigInt(wrap.nonce);
   const unwrapAmount = BigInt(unwrap.amount);
+  const [nonceBitmapPda] = deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, wrapNonce);
+  assert.equal(wrapReplayFixture.spl_token_wrap!.nonce, wrap.nonce, "the replay fixture reuses the wrap nonce");
 
   let userAta: PublicKey;
   let escrowAta: PublicKey;
@@ -3044,7 +3050,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   async function settleForwarderFixture(
     fx: Fixture,
     forwarderAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
-    preInstructions: (authority: Keypair) => anchor.web3.TransactionInstruction[]
+    preInstructions: anchor.web3.TransactionInstruction[]
   ): Promise<string> {
     const authority = Keypair.generate();
     await airdrop(provider, authority, 2);
@@ -3057,7 +3063,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       newRootMarker,
       [...deriveNullifierAccounts(fx.consumed_nullifiers_b64), ...forwarderAccounts]
     )
-      .preInstructions(preInstructions(authority), true)
+      .preInstructions(preInstructions, true)
       .signers([authority])
       .rpc();
   }
@@ -3068,6 +3074,35 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       { pubkey: configPda, isWritable: false, isSigner: false },
       { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
       { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+  }
+
+  /**
+   * Create the user's bitmap for the wrap nonce's word, paid by the provider
+   * wallet. Its own transaction: a settlement carrying the ed25519
+   * instruction and a wrap segment sits a few bytes under Solana's
+   * transaction size limit, so the init cannot ride along with it.
+   */
+  async function initNonceBitmap() {
+    await forwarderProgram.methods
+      .initNonceBitmap(user.publicKey, new anchor.BN((wrapNonce / NONCES_PER_WORD).toString()))
+      .accountsPartial({
+        payer: provider.wallet.publicKey,
+        nonceBitmap: nonceBitmapPda,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+  }
+
+  function wrapSegment(userAta: PublicKey, escrowAta: PublicKey) {
+    return [
+      ...forwarderSegmentHead(),
+      { pubkey: userAta, isWritable: true, isSigner: false },
+      { pubkey: escrowAta, isWritable: true, isSigner: false },
+      { pubkey: escrowPda, isWritable: false, isSigner: false },
+      { pubkey: nonceBitmapPda, isWritable: true, isSigner: false },
+      { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+      { pubkey: mint, isWritable: false, isSigner: false },
     ];
   }
 
@@ -3107,30 +3142,32 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     }
   });
 
-  // Mirrors ERC20Forwarder.t.sol: test_wrap_pulls_funds_from_user
+  // The adapter forwards no signer to the forwarder, so the forwarder cannot
+  // create the bitmap during the wrap; a wrap on a word without one fails.
+  it("rejects a wrap whose nonce bitmap does not exist", async () => {
+    await airdrop(provider, user, 1);
+    await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
+    assert.isNull(await provider.connection.getAccountInfo(nonceBitmapPda), "no bitmap yet for this word");
+
+    try {
+      await settleForwarderFixture(wrapFixture, wrapSegment(userAta, escrowAta), [wrapAuthorizationIx(wrapFixture)]);
+      assert.fail("expected the wrap to fail without a nonce bitmap");
+    } catch (e: any) {
+      assert.match(errorHaystack(e), /NonceBitmapMissing/);
+    }
+  });
+
+  // Mirrors ERC20Forwarder.t.sol: test_wrap_pulls_funds_from_user. The
+  // first wrap on a word is preceded by init_nonce_bitmap.
   it("settles a wrap: escrow receives the tokens and the nonce is marked used", async () => {
     await airdrop(provider, user, 1);
     await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
-    const [nonceBitmapPda] = deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, wrapNonce);
+    await initNonceBitmap();
 
     const userBefore = (await getAccount(provider.connection, userAta)).amount;
     const escrowBefore = (await getAccount(provider.connection, escrowAta)).amount;
 
-    await settleForwarderFixture(
-      wrapFixture,
-      [
-        ...forwarderSegmentHead(),
-        { pubkey: userAta, isWritable: true, isSigner: false },
-        { pubkey: escrowAta, isWritable: true, isSigner: false },
-        { pubkey: escrowPda, isWritable: false, isSigner: false },
-        { pubkey: nonceBitmapPda, isWritable: true, isSigner: false },
-        { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
-        { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
-        { pubkey: provider.wallet.publicKey, isWritable: true, isSigner: false },
-        { pubkey: mint, isWritable: false, isSigner: false },
-      ],
-      () => [wrapAuthorizationIx(wrapFixture)]
-    );
+    await settleForwarderFixture(wrapFixture, wrapSegment(userAta, escrowAta), [wrapAuthorizationIx(wrapFixture)]);
 
     const userAfter = (await getAccount(provider.connection, userAta)).amount;
     const escrowAfter = (await getAccount(provider.connection, escrowAta)).amount;
@@ -3141,6 +3178,23 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     assert.ok(bitmap, "the nonce bitmap account exists after the wrap");
     assert.ok(bitmap!.owner.equals(forwarderProgram.programId), "the forwarder owns the nonce bitmap");
     assert.ok(isNonceUsed(bitmap!.data, wrapNonce), "the wrap's nonce is marked used");
+  });
+
+  // Mirrors ERC20Forwarder.t.sol: test_wrap_reverts_if_the_signature_was_already_used
+  it("rejects a wrap that replays a used nonce", async () => {
+    await airdrop(provider, user, 1);
+    await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
+    const escrowBefore = (await getAccount(provider.connection, escrowAta)).amount;
+
+    try {
+      await settleForwarderFixture(wrapReplayFixture, wrapSegment(userAta, escrowAta), [
+        wrapAuthorizationIx(wrapReplayFixture),
+      ]);
+      assert.fail("expected the replayed nonce to be rejected");
+    } catch (e: any) {
+      assert.match(errorHaystack(e), /NonceAlreadyUsed/);
+    }
+    assert.equal((await getAccount(provider.connection, escrowAta)).amount, escrowBefore, "escrow is unchanged");
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_unwrap_sends_funds_to_the_user
@@ -3165,7 +3219,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
         { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
         { pubkey: mint, isWritable: false, isSigner: false },
       ],
-      () => []
+      []
     );
 
     const escrowAfter = (await getAccount(provider.connection, escrowAta)).amount;

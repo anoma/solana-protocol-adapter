@@ -602,8 +602,8 @@ fn spl_token_forwarder_wrap_external_payload(
         expected_output: vec![SPL_RESULT_SUCCESS],
         output_mode: OutputMode::ReturnData,
         // [program, config, ix_sysvar, clock, user_ata, escrow_ata, escrow_pda,
-        //  nonce_bitmap, token_program, system_program, payer, mint]
-        num_accounts: 12,
+        //  nonce_bitmap, token_program, mint]
+        num_accounts: 10,
     });
 
     let metadata = SplTokenWrapMetadata {
