@@ -21,15 +21,15 @@ use crate::ErrorCode;
 /// signature seven u16 LE fields (signature offset and instruction index,
 /// public key offset and instruction index, message offset, size and
 /// instruction index), then the data those offsets point at.
-pub const SIGNATURE_OFFSETS_SERIALIZED_SIZE: usize = 14;
-pub const ED25519_MIN_INSTRUCTION_SIZE: usize = 2 + SIGNATURE_OFFSETS_SERIALIZED_SIZE;
+pub const ED25519_MIN_INSTRUCTION_SIZE: usize = 16;
 /// Instruction index meaning "the data is in this instruction".
 pub const CURRENT_INSTRUCTION_INDEX: u16 = 0xFFFF;
 
-/// Where the first signature's data lies within the instruction data.
+/// Where the first signature's public key and message lie within the
+/// instruction data. The signature itself is never read: the precompile
+/// verified it before this program ran.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ed25519Offsets {
-    pub signature_offset: usize,
     pub pubkey_offset: usize,
     pub message_offset: usize,
     pub message_size: usize,
@@ -55,7 +55,6 @@ pub fn parse_ed25519_offsets(ix_data: &[u8]) -> core::result::Result<Ed25519Offs
     }
 
     Ok(Ed25519Offsets {
-        signature_offset: field(0) as usize,
         pubkey_offset: field(2) as usize,
         message_offset: field(4) as usize,
         message_size: field(5) as usize,
@@ -70,8 +69,7 @@ pub fn validate_ed25519_data(
     expected_message: &[u8],
 ) -> core::result::Result<(), ErrorCode> {
     let pubkey_in_ix = ix_data
-        .get(offsets.signature_offset..offsets.signature_offset + 64)
-        .and(ix_data.get(offsets.pubkey_offset..offsets.pubkey_offset + 32))
+        .get(offsets.pubkey_offset..offsets.pubkey_offset + 32)
         .ok_or(ErrorCode::InvalidEd25519Instruction)?;
     if pubkey_in_ix != expected_pubkey {
         return Err(ErrorCode::Ed25519PubkeyMismatch);

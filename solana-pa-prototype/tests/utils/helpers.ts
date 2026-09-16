@@ -1,6 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import {
+  AccountMeta,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
@@ -14,21 +15,11 @@ import {
   mintTo,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
+import { assert } from "chai";
 import { createHash } from "crypto";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
-import { VERIFIER_ROUTER_ID } from "../../scripts/verifier-utils";
-import {
-  EMPTY_KIND_TABLE_COMMITMENT,
-  NONCE_BITMAP_ACCOUNT_SIZE,
-  NONCE_BITMAP_DATA_OFFSET,
-  NONCES_PER_WORD,
-  OP_UNWRAP,
-  TX_DATA_SEED,
-} from "./constants";
-import { deriveEscrowPda, derivePaStatePda, deriveProgramDataPda } from "./pda";
-
-export type AccountMeta = { pubkey: PublicKey; isWritable: boolean; isSigner: boolean };
+import { TX_DATA_SEED } from "./constants";
 
 /**
  * Fund a keypair from the provider wallet, topping up to the requested amount.
@@ -65,6 +56,7 @@ export async function drainKeypairs(
   const MIN_DRAIN = 5000;
   let recovered = 0;
   let drained = 0;
+  const { blockhash } = await provider.connection.getLatestBlockhash();
   for (const kp of keypairs) {
     const balance = await provider.connection.getBalance(kp.publicKey);
     if (balance <= MIN_DRAIN) continue;
@@ -76,7 +68,7 @@ export async function drainKeypairs(
         lamports: drainAmount,
       })
     );
-    drainTx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
+    drainTx.recentBlockhash = blockhash;
     drainTx.feePayer = kp.publicKey;
     drainTx.sign(kp);
     const sig = await provider.connection.sendRawTransaction(drainTx.serialize());
@@ -107,31 +99,26 @@ export function seededKeypair(label: string): Keypair {
   return Keypair.fromSeed(createHash("sha256").update(label).digest());
 }
 
-/**
- * The one set of initialize arguments the whole suite deploys with: the
- * verifier router, the fixture's selector, and the kind-table commitment
- * every fixture's aggregation instance carries. Callers add `.signers()`
- * when the payer is not the provider wallet.
- */
-export function paInitializeBuilder(
-  program: Program<ProtocolAdapter>,
-  payer: PublicKey,
-  selector: Buffer
-) {
-  const [paState] = derivePaStatePda(program.programId);
-  return program.methods
-    .initialize(
-      VERIFIER_ROUTER_ID,
-      Array.from(selector),
-      Array.from(EMPTY_KIND_TABLE_COMMITMENT)
-    )
-    .accountsPartial({
-      paState,
-      payer,
-      systemProgram: SystemProgram.programId,
-      program: program.programId,
-      programData: deriveProgramDataPda(program.programId),
-    });
+/** Everything an error carries that names the failure: message, Anchor code, and program logs. */
+export function errorHaystack(e: any): string {
+  const parts: string[] = [];
+  if (e?.message) parts.push(e.message);
+  if (e?.error?.errorMessage) parts.push(e.error.errorMessage);
+  if (e?.error?.errorCode?.code) parts.push(e.error.errorCode.code);
+  const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
+  parts.push(...logs);
+  return parts.join("\n");
+}
+
+/** Assert that `action` rejects with an error naming `expected` somewhere in its message, code or logs. */
+export async function assertRejects(action: Promise<unknown>, expected: RegExp | string): Promise<void> {
+  try {
+    await action;
+  } catch (e: any) {
+    assert.match(errorHaystack(e), expected instanceof RegExp ? expected : new RegExp(expected));
+    return;
+  }
+  assert.fail(`expected rejection matching ${expected}`);
 }
 
 /**
@@ -182,28 +169,16 @@ export async function uploadTxData(
 // SPL token forwarder
 
 /**
- * The unwrap operand (72 bytes: token_mint, amount u64 LE, recipient),
- * which is also the whole input of forward_emergency_call. Prefixed with
- * the op code for forward_call.
+ * The 72-byte unwrap operand (token_mint, amount u64 LE, recipient): the
+ * whole input of forward_emergency_call, and forward_call's input after
+ * the op-code byte.
  */
-export function encodeUnwrapInput(
-  tokenMint: PublicKey,
-  amount: bigint,
-  recipient: PublicKey,
-  withOpCode = true
-): Buffer {
+export function encodeUnwrapInput(tokenMint: PublicKey, amount: bigint, recipient: PublicKey): Buffer {
   const operand = Buffer.alloc(72);
   tokenMint.toBuffer().copy(operand, 0);
   operand.writeBigUInt64LE(amount, 32);
   recipient.toBuffer().copy(operand, 40);
-  return withOpCode ? Buffer.concat([Buffer.from([OP_UNWRAP]), operand]) : operand;
-}
-
-/** Whether `nonce`'s bit is set in a nonce bitmap account's data. */
-export function isNonceUsed(bitmapAccountData: Buffer, nonce: bigint): boolean {
-  const bit = Number(nonce % NONCES_PER_WORD);
-  const byte = bitmapAccountData[NONCE_BITMAP_DATA_OFFSET + (bit >> 3)];
-  return (byte & (1 << (bit & 7))) !== 0;
+  return operand;
 }
 
 /** A mint's escrow: the forwarder's PDA authority and its associated token account. */
@@ -211,7 +186,7 @@ export function escrowAccounts(
   forwarderProgramId: PublicKey,
   mint: PublicKey
 ): { escrowPda: PublicKey; escrowAta: PublicKey } {
-  const [escrowPda] = deriveEscrowPda(forwarderProgramId, mint);
+  const [escrowPda] = PublicKey.findProgramAddressSync([Buffer.from("escrow"), mint.toBuffer()], forwarderProgramId);
   return { escrowPda, escrowAta: getAssociatedTokenAddressSync(mint, escrowPda, true) };
 }
 
@@ -232,8 +207,25 @@ export async function createFundedEscrow(
   return { mint, escrowPda, escrowAta };
 }
 
-/** The remaining accounts of forward_emergency_call, in the order the program reads them. */
-export function emergencyWithdrawAccounts(
+/** The forwarder's `initialize`; callers add signers and send. */
+export function initializeForwarder(
+  forwarder: Program<SplTokenForwarder>,
+  adapterProgramId: PublicKey,
+  logicRef: number[],
+  committee: PublicKey,
+  authority: PublicKey
+) {
+  return forwarder.methods
+    .initialize(adapterProgramId, logicRef, committee)
+    .accounts({ authority });
+}
+
+/**
+ * The accounts of an escrow release, in the order the program reads them:
+ * the unwrap's remaining accounts after the segment head, and the whole of
+ * forward_emergency_call's.
+ */
+export function escrowTransferAccounts(
   escrowAta: PublicKey,
   recipientAta: PublicKey,
   escrowPda: PublicKey
@@ -244,6 +236,38 @@ export function emergencyWithdrawAccounts(
     { pubkey: escrowPda, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
   ];
+}
+
+/** `forward_emergency_call` by `caller`; callers add signers and send. */
+export function emergencyWithdraw(
+  forwarder: Program<SplTokenForwarder>,
+  paState: PublicKey,
+  caller: PublicKey,
+  withdrawal: { mint: PublicKey; amount: bigint; recipient: PublicKey },
+  accounts: { escrowAta: PublicKey; recipientAta: PublicKey; escrowPda: PublicKey }
+) {
+  return forwarder.methods
+    .forwardEmergencyCall(encodeUnwrapInput(withdrawal.mint, withdrawal.amount, withdrawal.recipient))
+    .accounts({ caller, paState })
+    .remainingAccounts(escrowTransferAccounts(accounts.escrowAta, accounts.recipientAta, accounts.escrowPda));
+}
+
+/** `close_escrow` by `authority`, draining the escrow to `recipientAta`; callers add signers and send. */
+export function closeEscrow(
+  forwarder: Program<SplTokenForwarder>,
+  configPda: PublicKey,
+  authority: PublicKey,
+  accounts: { mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey }
+) {
+  return forwarder.methods.closeEscrow().accountsPartial({
+    authority,
+    config: configPda,
+    escrowAta: accounts.escrowAta,
+    escrowPda: accounts.escrowPda,
+    recipientAta: accounts.recipientAta,
+    tokenMint: accounts.mint,
+    tokenProgram: TOKEN_PROGRAM_ID,
+  });
 }
 
 /**
@@ -257,16 +281,14 @@ export async function closeAllNonceBitmaps(
   authority: PublicKey,
   signers: Keypair[]
 ): Promise<number> {
-  const bitmaps = await forwarder.provider.connection.getProgramAccounts(forwarder.programId, {
-    filters: [{ dataSize: NONCE_BITMAP_ACCOUNT_SIZE }],
-  });
+  const bitmaps = await forwarder.account.nonceBitmap.all();
   const BATCH_SIZE = 20;
   for (let i = 0; i < bitmaps.length; i += BATCH_SIZE) {
     await forwarder.methods
       .closeNonceBitmapsBatch()
       .accountsPartial({ authority, config: configPda })
       .remainingAccounts(
-        bitmaps.slice(i, i + BATCH_SIZE).map(({ pubkey }) => ({ pubkey, isWritable: true, isSigner: false }))
+        bitmaps.slice(i, i + BATCH_SIZE).map(({ publicKey }) => ({ pubkey: publicKey, isWritable: true, isSigner: false }))
       )
       .signers(signers)
       .rpc();

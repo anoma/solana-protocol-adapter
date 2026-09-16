@@ -6,24 +6,15 @@ import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
 import { deriveRootMarkerPda } from "./pda";
 
-// Predict the produced-root marker PDA for a settlement whose resulting root
-// is only known after commitments are appended on-chain.
-//
-// Mirrors what a production submitter must do: fetch the current tree state
-// and replay the append locally over the transaction's created commitments
-// (merkle.rs `append_to_tree`, including the expand-after-fill growth step).
-// A wrong prediction cannot settle: the program's
-// `require_keys_eq!(expected_pda, provided)` rejects it with RootPdaMismatch,
-// so the on-chain check keeps this replica honest.
-export const MAX_TREE_DEPTH = 32;
+const MAX_TREE_DEPTH = 32;
 
-export function hashTwo(left: Buffer, right: Buffer): Buffer {
+function hashTwo(left: Buffer, right: Buffer): Buffer {
   return createHash("sha256").update(left).update(right).digest();
 }
 
 // ZEROS[0] = PADDING_LEAF; ZEROS[i] = hash(ZEROS[i-1], ZEROS[i-1]) — the
 // zero-subtree hashes from merkle.rs, derived rather than copied.
-export const ZEROS: Buffer[] = (() => {
+const ZEROS: Buffer[] = (() => {
   const zeros: Buffer[] = [EMPTY_TREE_ROOT_INITIAL];
   for (let i = 1; i < MAX_TREE_DEPTH; i++) {
     zeros.push(hashTwo(zeros[i - 1], zeros[i - 1]));
@@ -31,14 +22,14 @@ export const ZEROS: Buffer[] = (() => {
   return zeros;
 })();
 
-export type TreeState = {
+type TreeState = {
   nextIndex: anchor.BN;
   currentDepth: number;
   frontier: number[][];
   root: number[];
 };
 
-export function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
+function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
   let nextIndex = BigInt(state.nextIndex.toString());
   let depth = state.currentDepth;
   const frontier: Buffer[] = state.frontier.map((f) => Buffer.from(f));
@@ -73,7 +64,14 @@ export function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buff
   return root;
 }
 
-/** The marker PDA of the root the adapter will hold after appending `createdCommitments`. */
+/**
+ * The marker PDA of the root the adapter will hold after appending
+ * `createdCommitments`: the produced root is only known after the append,
+ * so a submitter fetches the tree state and replays the append locally
+ * (merkle.rs `append_to_tree`, including the expand-after-fill growth step).
+ * A wrong prediction cannot settle: the program rejects it with
+ * RootPdaMismatch, so the on-chain check keeps this replica honest.
+ */
 export async function predictRootMarkerPda(
   program: Program<ProtocolAdapter>,
   paState: PublicKey,

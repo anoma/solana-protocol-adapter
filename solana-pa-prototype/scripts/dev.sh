@@ -195,14 +195,7 @@ src_files = []
 test_files = []
 for fi in files:
     fname = fi.get("file", "")
-    if "block-time-forwarder/" in fname:
-        short = "btf/" + fname.split("block-time-forwarder/")[-1]
-    elif "spl-token-forwarder/" in fname:
-        short = "stf/" + fname.split("spl-token-forwarder/")[-1]
-    elif "solana-pa-prototype/programs/solana-pa-prototype/" in fname:
-        short = fname.split("solana-pa-prototype/programs/solana-pa-prototype/")[-1]
-    else:
-        short = fname
+    short = fname.split("/programs/")[-1]
     cov = int(fi.get("covered_lines", 0))
     tot = int(fi.get("total_lines", 0))
     pct = float(fi.get("percent_covered", "0"))

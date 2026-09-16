@@ -13,11 +13,11 @@ import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
   EMERGENCY_CALLER_LABEL,
   EMERGENCY_COMMITTEE_LABEL,
+  assertRejects,
   createFundedEscrow,
   deriveConfigPda,
   derivePaStatePda,
-  emergencyWithdrawAccounts,
-  encodeUnwrapInput,
+  emergencyWithdraw,
   makeFunder,
   seededKeypair,
 } from "./utils";
@@ -38,7 +38,7 @@ describe("zz-forwarder-emergency (adapter stopped)", () => {
   const emergencyCaller = seededKeypair(EMERGENCY_CALLER_LABEL);
   const recipient = Keypair.generate();
 
-  let tokenMint: PublicKey;
+  let mint: PublicKey;
   let escrowPda: PublicKey;
   let escrowAta: PublicKey;
   let recipientAta: PublicKey;
@@ -49,65 +49,44 @@ describe("zz-forwarder-emergency (adapter stopped)", () => {
     await funder.fund(emergencyCommittee, 1);
     await funder.fund(emergencyCaller, 1);
 
-    const state = await paProgram.account.paStateAccount.fetch(paState);
-    assert.deepEqual(
-      state.lifecycle,
-      { stopped: {} },
-      "the adapter suite's final emergency-stop test must have run before this file"
-    );
-    assert.ok(
-      await provider.connection.getAccountInfo(configPda),
-      "01-spl-token-forwarder.ts must have initialized the forwarder config"
-    );
+    const [state, config] = await Promise.all([
+      paProgram.account.paStateAccount.fetch(paState),
+      provider.connection.getAccountInfo(configPda),
+    ]);
+    assert.deepEqual(state.lifecycle, { stopped: {} }, "the adapter suite's final emergency-stop test must have run before this file");
+    assert.ok(config, "01-spl-token-forwarder.ts must have initialized the forwarder config");
 
-    ({ mint: tokenMint, escrowPda, escrowAta } = await createFundedEscrow(
-      provider,
-      forwarderProgram.programId,
-      authority,
-      100_000_000n
-    ));
-    recipientAta = await createAccount(provider.connection, recipient, tokenMint, recipient.publicKey);
+    ({ mint, escrowPda, escrowAta } = await createFundedEscrow(provider, forwarderProgram.programId, authority, 100_000_000n));
+    recipientAta = await createAccount(provider.connection, recipient, mint, recipient.publicKey);
   });
 
-  function withdraw(caller: Keypair, amount: bigint) {
-    return forwarderProgram.methods
-      .forwardEmergencyCall(encodeUnwrapInput(tokenMint, amount, recipient.publicKey, false))
-      .accounts({ caller: caller.publicKey, paState })
-      .remainingAccounts(emergencyWithdrawAccounts(escrowAta, recipientAta, escrowPda))
+  const withdraw = (caller: Keypair, amount: bigint) =>
+    emergencyWithdraw(
+      forwarderProgram,
+      paState,
+      caller.publicKey,
+      { mint, amount, recipient: recipient.publicKey },
+      { escrowAta, recipientAta, escrowPda }
+    )
       .signers([caller])
       .rpc();
-  }
 
-  function setEmergencyCaller(caller: PublicKey) {
-    return forwarderProgram.methods
+  const setEmergencyCaller = (caller: PublicKey) =>
+    forwarderProgram.methods
       .setEmergencyCaller(caller)
       .accounts({ committee: emergencyCommittee.publicKey, paState })
       .signers([emergencyCommittee])
       .rpc();
-  }
 
   // Mirrors: test_forwardEmergencyCall_reverts_if_the_pa_is_stopped_but_the_emergency_caller_is_not_set
   it("rejects forward_emergency_call before an emergency caller is set", async () => {
     const config = await forwarderProgram.account.config.fetch(configPda);
     assert.ok(config.emergencyCaller.equals(PublicKey.default), "no emergency caller yet");
-
-    try {
-      await withdraw(emergencyCaller, 1000n);
-      assert.fail("expected forward_emergency_call to fail");
-    } catch (e: any) {
-      assert.include(e.toString(), "EmergencyCallerNotSet");
-    }
+    await assertRejects(withdraw(emergencyCaller, 1000n), /EmergencyCallerNotSet/);
   });
 
   // Mirrors: test_setEmergencyCaller_reverts_if_the_new_emergency_caller_is_the_zero_address
-  it("rejects a zero emergency caller", async () => {
-    try {
-      await setEmergencyCaller(PublicKey.default);
-      assert.fail("expected set_emergency_caller to fail");
-    } catch (e: any) {
-      assert.include(e.toString(), "ZeroAddressNotAllowed");
-    }
-  });
+  it("rejects a zero emergency caller", () => assertRejects(setEmergencyCaller(PublicKey.default), /ZeroAddressNotAllowed/));
 
   // Mirrors: test_setEmergencyCaller_sets_the_emergency_caller and
   // test_emergencyCaller_returns_the_emergency_caller_after_it_has_been_set
@@ -118,42 +97,42 @@ describe("zz-forwarder-emergency (adapter stopped)", () => {
   });
 
   // Mirrors: test_setEmergencyCaller_reverts_if_the_emergency_caller_has_already_been_set
-  it("rejects setting the emergency caller twice", async () => {
-    try {
-      await setEmergencyCaller(Keypair.generate().publicKey);
-      assert.fail("expected set_emergency_caller to fail");
-    } catch (e: any) {
-      assert.include(e.toString(), "EmergencyCallerAlreadySet");
-    }
-  });
+  it("rejects setting the emergency caller twice", () =>
+    assertRejects(setEmergencyCaller(Keypair.generate().publicKey), /EmergencyCallerAlreadySet/));
 
   // Mirrors: test_forwardEmergencyCall_reverts_if_the_pa_is_stopped_but_the_caller_is_not_the_emergency_caller
   it("rejects forward_emergency_call from anyone but the emergency caller", async () => {
     const wrongCaller = Keypair.generate();
     await funder.fund(wrongCaller, 1);
+    await assertRejects(withdraw(wrongCaller, 1000n), /UnauthorizedCaller/);
+  });
 
-    try {
-      await withdraw(wrongCaller, 1000n);
-      assert.fail("expected forward_emergency_call to fail");
-    } catch (e: any) {
-      assert.include(e.toString(), "UnauthorizedCaller");
-    }
+  // The destination is chosen by the caller, not by the input; it must be the recipient's.
+  it("rejects a withdrawal to a token account the recipient does not own", async () => {
+    const foreignAta = await createAccount(provider.connection, authority, mint, authority.publicKey);
+    await assertRejects(
+      emergencyWithdraw(
+        forwarderProgram,
+        paState,
+        emergencyCaller.publicKey,
+        { mint, amount: 1000n, recipient: recipient.publicKey },
+        { escrowAta, recipientAta: foreignAta, escrowPda }
+      )
+        .signers([emergencyCaller])
+        .rpc(),
+      /WrongTokenAccountOwner/
+    );
   });
 
   // Mirrors: test_forwardEmergencyCall_forwards_calls_if_the_pa_is_stopped_and_the_caller_is_the_emergency_caller
   it("lets the emergency caller withdraw from escrow", async () => {
     const amount = 25_000_000n;
-    const [escrowBefore, recipientBefore] = await Promise.all([
-      getAccount(provider.connection, escrowAta),
-      getAccount(provider.connection, recipientAta),
-    ]);
+    const balances = () => Promise.all([getAccount(provider.connection, escrowAta), getAccount(provider.connection, recipientAta)]);
+    const [escrowBefore, recipientBefore] = await balances();
 
     await withdraw(emergencyCaller, amount);
 
-    const [escrowAfter, recipientAfter] = await Promise.all([
-      getAccount(provider.connection, escrowAta),
-      getAccount(provider.connection, recipientAta),
-    ]);
+    const [escrowAfter, recipientAfter] = await balances();
     assert.equal(escrowAfter.amount, escrowBefore.amount - amount);
     assert.equal(recipientAfter.amount, recipientBefore.amount + amount);
   });

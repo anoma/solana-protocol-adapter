@@ -605,11 +605,6 @@ cmd_forwarder() {
     echo "Run: ./scripts/dev.sh deploy stf --cluster ${CLUSTER}"
     exit 1
   fi
-  if [[ -z "$TARGET" ]]; then
-    echo "❌ forwarder needs a command: init, close-config, set-emergency-caller," >&2
-    echo "   emergency-withdraw, drain-escrow, teardown" >&2
-    exit 1
-  fi
   run_ts scripts/forwarder.ts "$TARGET"
 }
 

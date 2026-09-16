@@ -2,7 +2,7 @@
 
 use crate::ed25519::{
     parse_ed25519_offsets, validate_ed25519_data, Ed25519Offsets, CURRENT_INSTRUCTION_INDEX,
-    ED25519_MIN_INSTRUCTION_SIZE, SIGNATURE_OFFSETS_SERIALIZED_SIZE,
+    ED25519_MIN_INSTRUCTION_SIZE,
 };
 use crate::ErrorCode;
 
@@ -38,18 +38,10 @@ fn valid_ix_data() -> Vec<u8> {
 }
 
 #[test]
-fn test_constants() {
-    assert_eq!(SIGNATURE_OFFSETS_SERIALIZED_SIZE, 14);
-    assert_eq!(ED25519_MIN_INSTRUCTION_SIZE, 16);
-    assert_eq!(CURRENT_INSTRUCTION_INDEX, 0xFFFF);
-}
-
-#[test]
 fn parses_the_first_signature_offsets() {
     assert_eq!(
         parse_ed25519_offsets(&valid_ix_data()).unwrap(),
         Ed25519Offsets {
-            signature_offset: 16,
             pubkey_offset: 80,
             message_offset: 112,
             message_size: 32,
@@ -123,18 +115,8 @@ fn rejects_offsets_past_the_end_of_the_data() {
     let data = valid_ix_data();
     for (name, offsets) in [
         (
-            "signature",
-            Ed25519Offsets {
-                signature_offset: 144 - 63,
-                pubkey_offset: 80,
-                message_offset: 112,
-                message_size: 32,
-            },
-        ),
-        (
             "pubkey",
             Ed25519Offsets {
-                signature_offset: 16,
                 pubkey_offset: 144 - 31,
                 message_offset: 112,
                 message_size: 32,
@@ -143,7 +125,6 @@ fn rejects_offsets_past_the_end_of_the_data() {
         (
             "message",
             Ed25519Offsets {
-                signature_offset: 16,
                 pubkey_offset: 80,
                 message_offset: 113,
                 message_size: 32,
@@ -152,7 +133,6 @@ fn rejects_offsets_past_the_end_of_the_data() {
         (
             "u16 maximum",
             Ed25519Offsets {
-                signature_offset: u16::MAX as usize,
                 pubkey_offset: u16::MAX as usize,
                 message_offset: u16::MAX as usize,
                 message_size: u16::MAX as usize,
