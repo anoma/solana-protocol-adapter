@@ -2,14 +2,18 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import {
   AccountMeta,
+  AddressLookupTableAccount,
   PublicKey,
   SystemProgram,
   Keypair,
   LAMPORTS_PER_SOL,
   ComputeBudgetProgram,
   Ed25519Program,
+  PACKET_DATA_SIZE,
   SYSVAR_CLOCK_PUBKEY,
   SYSVAR_INSTRUCTIONS_PUBKEY,
+  TransactionMessage,
+  VersionedTransaction,
 } from "@solana/web3.js";
 import {
   approve,
@@ -59,12 +63,16 @@ import {
   assertRejects,
   deriveConfigPda,
   deriveNonceBitmapPda,
+  ensureSettlementLookupTable,
   escrowAccounts,
   escrowTransferAccounts,
+  fetchLookupTable,
   initializeForwarder,
   makeFunder,
   nonceWordIndex,
   seededKeypair,
+  sendV0,
+  settlementLookupKeys,
 } from "./utils";
 
 // Keypairs funded during tests, drained back to the provider wallet in
@@ -2198,56 +2206,6 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   // payload blobs on every created resource. Settling it within the CU and
   // heap budgets is the regression being tested.
 
-  // The mainnet wrap settlement (tx-data path, 24 static keys on the V1
-  // program) measured 1,088 bytes; on the V2 program, new_root_marker and
-  // the two event accounts make it 27 keys and 1,184 bytes of the
-  // 1,232-byte limit. The SPL forwarder that supplies those keys is not on
-  // this branch, so the in-suite multi-call settlement stands in for it:
-  // both shapes grow by the same bytes when the adapter gains an account or
-  // instruction data, so the suite's transaction may grow by at most the
-  // mainnet margin over its baseline. Re-measure both baselines when the
-  // shape changes on purpose. Lookup tables (anoma/dos-pm#60) lift the limit.
-  it("the settlement transaction stays within the mainnet wrap settlement's remaining size margin", async () => {
-    const TRANSACTION_SIZE_LIMIT = 1232;
-    const MAINNET_WRAP_SETTLEMENT_BYTES = 1184;
-    const MULTI_CALL_SETTLEMENT_BASELINE_BYTES = 633; // 15 static keys, measured on this branch
-
-    const fx = loadFixture("batch_groth16_multi_call.json");
-    const payload = Buffer.from(fx.tx_b64, "base64");
-    const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
-    const { uploadId, txData } = await uploadTxData(authority, payload);
-    const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
-    const remainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
-      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
-      { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
-      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
-    ];
-    const tx = await settleFromTxDataBuilder(
-      authority.publicKey,
-      uploadId,
-      txData,
-      Keypair.generate().publicKey,
-      remainingAccounts,
-    ).transaction();
-    tx.feePayer = authority.publicKey;
-    tx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
-
-    const size = tx.serialize({ requireAllSignatures: false, verifySignatures: false }).length;
-    const growth = size - MULTI_CALL_SETTLEMENT_BASELINE_BYTES;
-    console.log(
-      `multi-call settlement transaction: ${size} bytes (${tx.compileMessage().accountKeys.length} static keys), ` +
-        `${growth} bytes over baseline; mainnet wrap margin ${TRANSACTION_SIZE_LIMIT - MAINNET_WRAP_SETTLEMENT_BYTES} bytes`,
-    );
-    assert.isAtMost(
-      growth,
-      TRANSACTION_SIZE_LIMIT - MAINNET_WRAP_SETTLEMENT_BYTES,
-      "settlement transaction grew more than the mainnet wrap settlement's remaining margin; re-measure the mainnet shape before adding accounts or instruction data",
-    );
-  });
-
   // Adequacy guard: the original fixture existed because that transfer
   // could not settle in the default heap (the 256 KiB allocator and the
   // requestHeapFrame calls landed with it). A replacement only regression-
@@ -3013,6 +2971,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
   let userAta: PublicKey;
   let recipientAta: PublicKey;
+  let settlementTable: AddressLookupTableAccount;
 
   before(async () => {
     await funder.fund(user, 5);
@@ -3036,12 +2995,29 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, escrowPda, true);
     recipientAta = (await getOrCreateAssociatedTokenAccount(provider.connection, recipient, mint, recipient.publicKey)).address;
     await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
+
+    const { address } = await ensureSettlementLookupTable(
+      provider.connection,
+      (provider.wallet as anchor.Wallet).payer,
+      settlementLookupKeys({
+        paProgram: program.programId,
+        verifierRouter: VERIFIER_ROUTER_ID,
+        proofSelector: PROOF_SELECTOR,
+        verifierProgram: VERIFIER_PROGRAM_ID,
+        blockTimeForwarder: blockTimeForwarderId,
+        splTokenForwarder: forwarderProgram.programId,
+        mints: [mint],
+      }),
+    );
+    settlementTable = await fetchLookupTable(provider.connection, address);
   });
 
   /**
    * Settle `fx` from a TxData upload with the forwarder's account segment
    * after the nullifier markers. `preInstructions` are prepended so an
-   * ed25519 instruction lands at index 0, where the wrap input points.
+   * ed25519 instruction lands at index 0, where the wrap input points. The
+   * settlement is a v0 transaction against the deployment's lookup table,
+   * the shape every submitter sends.
    */
   async function settleForwarderFixture(
     fx: Fixture,
@@ -3052,16 +3028,14 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     await funder.fund(authority, 2);
     const { uploadId, txData } = await uploadTxData(authority, Buffer.from(fx.tx_b64, "base64"));
     const newRootMarker = await predictRootMarkerPda(commitmentsOf(fx));
-    return settleFromTxDataBuilder(
+    const settle = await settleFromTxDataBuilder(
       authority.publicKey,
       uploadId,
       txData,
       newRootMarker,
       [...deriveNullifierAccounts(fx.consumed_nullifiers_b64), ...forwarderAccounts]
-    )
-      .preInstructions(preInstructions, true)
-      .signers([authority])
-      .rpc();
+    ).transaction();
+    return sendV0(provider, [...preInstructions, ...settle.instructions], [authority], settlementTable);
   }
 
   const segmentHead: AccountMeta[] = [
@@ -3117,6 +3091,46 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
         .signers([emergencyCommittee])
         .rpc(),
       /ProtocolAdapterNotStopped/
+    );
+  });
+
+  // The largest settlement shape in the suite: the ed25519 authorization,
+  // the inline bitmap init and the settle with an 8-account wrap segment.
+  // Compiled as a v0 message against the deployment's lookup table it must
+  // fit one packet, and every key the table holds must be looked up rather
+  // than carried as a static key — otherwise the table is not doing its job.
+  // The exception is a program this message invokes at the top level: the
+  // compiler keeps invoked programs static by rule, and here the forwarder
+  // is one (init_nonce_bitmap), though a settlement without the init looks
+  // it up like any other CPI target.
+  it("compiles the first-wrap settlement as a v0 message within the packet size", async () => {
+    const authority = Keypair.generate();
+    await funder.fund(authority, 2);
+    const { uploadId, txData } = await uploadTxData(authority, Buffer.from(wrapFixture.tx_b64, "base64"));
+    const settle = await settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, [
+      ...deriveNullifierAccounts(wrapFixture.consumed_nullifiers_b64),
+      ...wrapSegment(),
+    ]).transaction();
+    const instructions = [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx(), ...settle.instructions];
+    const message = new TransactionMessage({
+      payerKey: provider.wallet.publicKey,
+      recentBlockhash: (await provider.connection.getLatestBlockhash()).blockhash,
+      instructions,
+    }).compileToV0Message([settlementTable]);
+    const size = new VersionedTransaction(message).serialize().length;
+    const lookedUp = message.addressTableLookups.reduce((n, l) => n + l.writableIndexes.length + l.readonlyIndexes.length, 0);
+    console.log(
+      `first-wrap settlement as v0: ${size} bytes, ${message.staticAccountKeys.length} static keys, ${lookedUp} looked up`,
+    );
+    assert.isAtMost(size, PACKET_DATA_SIZE, "the first-wrap settlement must fit one packet");
+    const invoked = instructions.map((ix) => ix.programId);
+    const leaked = message.staticAccountKeys.filter(
+      (k) => settlementTable.state.addresses.some((a) => a.equals(k)) && !invoked.some((p) => p.equals(k)),
+    );
+    assert.deepEqual(
+      leaked.map((k) => k.toBase58()),
+      [],
+      "every key the table holds must be looked up unless this message invokes it",
     );
   });
 
