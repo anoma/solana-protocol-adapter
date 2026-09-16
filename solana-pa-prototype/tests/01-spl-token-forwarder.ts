@@ -10,7 +10,7 @@
  */
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { Keypair, PublicKey, SYSVAR_CLOCK_PUBKEY, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { Keypair, PublicKey, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
@@ -18,11 +18,9 @@ import {
   EMERGENCY_COMMITTEE_LABEL,
   deriveConfigPda,
   derivePaStatePda,
-  drainKeypairs,
   encodeUnwrapInput,
-  fundKeypair,
-  loadFixture,
-  regenerateCommand,
+  makeFunder,
+  requireFixture,
   seededKeypair,
 } from "./utils";
 
@@ -35,47 +33,36 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
 
   const [paState] = derivePaStatePda(paProgram.programId);
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
-
-  const fundedKeypairs: Keypair[] = [];
-  async function fund(kp: Keypair, sol: number) {
-    await fundKeypair(provider, kp, sol);
-    fundedKeypairs.push(kp);
-  }
+  const funder = makeFunder(provider);
 
   const authority = Keypair.generate();
   const emergencyCommittee = seededKeypair(EMERGENCY_COMMITTEE_LABEL);
 
   // The logic ref the fixtures were proven under (the passthrough guest);
   // the config must authorize it for the adapter suite's wrap and unwrap.
-  let logicRef: Buffer;
+  const logicRef = Buffer.from(
+    requireFixture("spl_token_wrap.json", "--spl-token-wrap").spl_token_wrap!.logic_ref_b64,
+    "base64"
+  );
 
   before(async () => {
-    await fund(authority, 2);
-    await fund(emergencyCommittee, 1);
-
-    let wrapFixture;
-    try {
-      wrapFixture = loadFixture("spl_token_wrap.json");
-    } catch (e: any) {
-      throw new Error(
-        `SPL wrap fixture missing (${e.message}); generate with: ${regenerateCommand("spl_token_wrap.json", "--spl-token-wrap")}`
-      );
-    }
-    if (!wrapFixture.spl_token_wrap) {
-      throw new Error("spl_token_wrap.json carries no spl_token_wrap metadata");
-    }
-    logicRef = Buffer.from(wrapFixture.spl_token_wrap.logic_ref_b64, "base64");
+    await funder.fund(authority, 2);
+    await funder.fund(emergencyCommittee, 1);
   });
+
+  function initialize(protocolAdapter: PublicKey, logicRef: number[], committee: PublicKey) {
+    return forwarderProgram.methods
+      .initialize(protocolAdapter, logicRef, committee)
+      .accounts({ authority: authority.publicKey })
+      .signers([authority])
+      .rpc();
+  }
 
   describe("initialize", () => {
     // Mirrors ForwarderBase.t.sol: test_constructor_reverts_if_the_protocol_adapter_address_is_zero
     it("rejects a zero protocol adapter address", async () => {
       try {
-        await forwarderProgram.methods
-          .initialize(PublicKey.default, Array.from(logicRef), emergencyCommittee.publicKey)
-          .accounts({ authority: authority.publicKey })
-          .signers([authority])
-          .rpc();
+        await initialize(PublicKey.default, Array.from(logicRef), emergencyCommittee.publicKey);
         assert.fail("expected initialize to fail");
       } catch (e: any) {
         assert.include(e.toString(), "ZeroAddressNotAllowed");
@@ -85,11 +72,7 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
     // Mirrors ForwarderBase.t.sol: test_constructor_reverts_if_the_logic_ref_is_zero
     it("rejects a zero logic ref", async () => {
       try {
-        await forwarderProgram.methods
-          .initialize(paProgram.programId, Array(32).fill(0), emergencyCommittee.publicKey)
-          .accounts({ authority: authority.publicKey })
-          .signers([authority])
-          .rpc();
+        await initialize(paProgram.programId, Array(32).fill(0), emergencyCommittee.publicKey);
         assert.fail("expected initialize to fail");
       } catch (e: any) {
         assert.include(e.toString(), "ZeroAddressNotAllowed");
@@ -99,11 +82,7 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
     // Mirrors EmergencyMigratableForwarderBase.t.sol: test_constructor_reverts_if_the_emergency_committe_address_is_zero
     it("rejects a zero emergency committee", async () => {
       try {
-        await forwarderProgram.methods
-          .initialize(paProgram.programId, Array.from(logicRef), PublicKey.default)
-          .accounts({ authority: authority.publicKey })
-          .signers([authority])
-          .rpc();
+        await initialize(paProgram.programId, Array.from(logicRef), PublicKey.default);
         assert.fail("expected initialize to fail");
       } catch (e: any) {
         assert.include(e.toString(), "ZeroAddressNotAllowed");
@@ -113,11 +92,7 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
     // Mirrors ForwarderBase.t.sol getProtocolAdapter/getLogicRef and
     // EmergencyMigratableForwarderBase.t.sol emergencyCaller-is-zero-before-set.
     it("stores the adapter, logic ref and committee, with no emergency caller", async () => {
-      await forwarderProgram.methods
-        .initialize(paProgram.programId, Array.from(logicRef), emergencyCommittee.publicKey)
-        .accounts({ authority: authority.publicKey })
-        .signers([authority])
-        .rpc();
+      await initialize(paProgram.programId, Array.from(logicRef), emergencyCommittee.publicKey);
 
       const config = await forwarderProgram.account.config.fetch(configPda);
       assert.ok(config.protocolAdapter.equals(paProgram.programId));
@@ -136,11 +111,7 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
       try {
         await forwarderProgram.methods
           .forwardCall(Array.from(logicRef), input)
-          .accountsPartial({
-            config: configPda,
-            ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
-            clock: SYSVAR_CLOCK_PUBKEY,
-          })
+          .accountsPartial({ config: configPda, ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY })
           .rpc();
         assert.fail("expected forward_call to fail");
       } catch (e: any) {
@@ -151,7 +122,7 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
     // Mirrors EmergencyMigratableForwarderBase.t.sol: test_setEmergencyCaller_reverts_if_the_caller_is_not_the_emergency_committee
     it("rejects set_emergency_caller from a non-committee signer", async () => {
       const impostor = Keypair.generate();
-      await fund(impostor, 1);
+      await funder.fund(impostor, 1);
 
       try {
         await forwarderProgram.methods
@@ -166,8 +137,5 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
     });
   });
 
-  after(async () => {
-    await drainKeypairs(provider, fundedKeypairs);
-    fundedKeypairs.length = 0;
-  });
+  after(() => funder.drainAll());
 });

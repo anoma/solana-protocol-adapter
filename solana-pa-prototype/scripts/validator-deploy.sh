@@ -332,22 +332,15 @@ sync_program_ids() {
     "programs/block-time-forwarder/src/lib.rs" \
     "block_time_forwarder")"
 
-  # BTF ID also appears in fixture-gen and integration tests
+  # BTF ID also appears in the integration tests (fixture-gen reads the crate's ID)
   if [[ "$BTF_OLD" != "$BTF_ID" ]]; then
-    sed -i -E "s/decode_base58_32\(\"${BTF_OLD}\"\)/decode_base58_32(\"${BTF_ID}\")/" tools/fixture-gen/src/main.rs
     sed -i -E "s/blockTimeForwarderId = new PublicKey\(\"[^\"]+\"\)/blockTimeForwarderId = new PublicKey(\"${BTF_ID}\")/" tests/solana-pa-prototype.ts
   fi
 
-  STF_OLD="$(read_declare_id "programs/spl-token-forwarder/src/lib.rs")"
   STF_ID="$(sync_program_id "STF" \
     "target/deploy/spl_token_forwarder-keypair.json" \
     "programs/spl-token-forwarder/src/lib.rs" \
     "spl_token_forwarder")"
-
-  # STF ID also appears in fixture-gen and the forwarder test constants
-  if [[ "$STF_OLD" != "$STF_ID" ]]; then
-    sed -i -E "s/decode_base58_32\(\"${STF_OLD}\"\)/decode_base58_32(\"${STF_ID}\")/" tools/fixture-gen/src/main.rs
-  fi
 
   TF_OLD="$(read_declare_id "programs/test-forwarder/src/lib.rs")"
   TF_ID="$(sync_program_id "TF" \
@@ -355,9 +348,8 @@ sync_program_ids() {
     "programs/test-forwarder/src/lib.rs" \
     "test_forwarder")"
 
-  # TF ID also appears in fixture-gen and integration tests
+  # TF ID also appears in the integration tests (fixture-gen reads the crate's ID)
   if [[ "$TF_OLD" != "$TF_ID" ]]; then
-    sed -i -E "s/decode_base58_32\(\"${TF_OLD}\"\)/decode_base58_32(\"${TF_ID}\")/" tools/fixture-gen/src/main.rs
     sed -i -E "s/testForwarderId = new PublicKey\(\"[^\"]+\"\)/testForwarderId = new PublicKey(\"${TF_ID}\")/" tests/solana-pa-prototype.ts
   fi
 

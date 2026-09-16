@@ -17,8 +17,8 @@
  *   drain-escrow          (committee) Drain STF_TOKEN_MINT's escrow to
  *                                     STF_RECIPIENT and close the escrow ATA.
  *   teardown              (committee) Close every nonce bitmap, drain and
- *                                     close STF_TOKEN_MINT's escrow, close
- *                                     the config.
+ *                                     close STF_TOKEN_MINT's escrow to the
+ *                                     committee, close the config.
  *
  * Environment (read per command):
  *   STF_LOGIC_REF           32-byte hex: the resource logic the config
@@ -34,54 +34,17 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { LAMPORTS_PER_SOL, PublicKey } from "@solana/web3.js";
-import {
-  getAssociatedTokenAddress,
-  getOrCreateAssociatedTokenAccount,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
-  NONCE_BITMAP_ACCOUNT_SIZE,
-  OP_EMERGENCY_WITHDRAW,
-} from "../tests/utils/constants";
-import { encodeEmergencyWithdrawInput } from "../tests/utils/helpers";
-import { deriveConfigPda, deriveEscrowPda, derivePaStatePda } from "../tests/utils/pda";
-
-function fail(message: string): never {
-  console.error(`❌ ${message}`);
-  process.exit(1);
-}
-
-function requireEnv(name: string, what: string): string {
-  const value = process.env[name];
-  if (!value) fail(`Missing ${name}: ${what}`);
-  return value;
-}
-
-function requirePubkey(name: string, what: string): PublicKey {
-  const raw = requireEnv(name, what);
-  try {
-    return new PublicKey(raw);
-  } catch {
-    return fail(`${name} is not a valid pubkey: "${raw}"`);
-  }
-}
-
-function requireLogicRef(): number[] {
-  const hex = requireEnv(
-    "STF_LOGIC_REF",
-    "the 32-byte hex logic ref (verifying key) of the resource logic this forwarder serves"
-  ).replace(/^0x/, "");
-  if (!/^[0-9a-fA-F]{64}$/.test(hex)) fail(`STF_LOGIC_REF must be 64 hex chars, got "${hex}"`);
-  return Array.from(Buffer.from(hex, "hex"));
-}
-
-function requireAmount(): bigint {
-  const raw = requireEnv("STF_AMOUNT", "the amount to withdraw, in the token's raw units");
-  if (!/^\d+$/.test(raw)) fail(`STF_AMOUNT must be a non-negative integer, got "${raw}"`);
-  return BigInt(raw);
-}
+  closeAllNonceBitmaps,
+  emergencyWithdrawAccounts,
+  encodeUnwrapInput,
+  escrowAccounts,
+} from "../tests/utils/helpers";
+import { deriveConfigPda, derivePaStatePda } from "../tests/utils/pda";
+import { fail, requireEnv, requireHexBytes, requirePubkey } from "./cli-utils";
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
@@ -92,12 +55,12 @@ const adapter = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 const [configPda] = deriveConfigPda(forwarder.programId);
 const [paState] = derivePaStatePda(adapter.programId);
 
+const requireMint = () => requirePubkey("STF_TOKEN_MINT", "the mint whose escrow to operate on");
+const requireRecipient = () => requirePubkey("STF_RECIPIENT", "the owner of the receiving token account");
+
 async function requireConfig() {
-  try {
-    return await forwarder.account.config.fetch(configPda);
-  } catch {
-    return fail(`forwarder config ${configPda.toBase58()} does not exist — run 'forwarder init' first`);
-  }
+  const config = await forwarder.account.config.fetchNullable(configPda);
+  return config ?? fail(`forwarder config ${configPda.toBase58()} does not exist — run 'forwarder init' first`);
 }
 
 async function requireCommittee() {
@@ -108,14 +71,29 @@ async function requireCommittee() {
   return config;
 }
 
-async function escrowFor(mint: PublicKey) {
-  const [escrowPda] = deriveEscrowPda(forwarder.programId, mint);
-  const escrowAta = await getAssociatedTokenAddress(mint, escrowPda, true);
-  return { escrowPda, escrowAta };
-}
-
 async function recipientAtaFor(mint: PublicKey, owner: PublicKey): Promise<PublicKey> {
   return (await getOrCreateAssociatedTokenAccount(connection, wallet.payer, mint, owner)).address;
+}
+
+/** Drain a mint's escrow to `recipientOwner` and close the escrow ATA, as the committee. */
+async function closeEscrowFor(mint: PublicKey, recipientOwner: PublicKey) {
+  const { escrowPda, escrowAta } = escrowAccounts(forwarder.programId, mint);
+  const balance = await connection.getTokenAccountBalance(escrowAta).catch(() => null);
+  if (!balance) fail(`escrow ATA ${escrowAta.toBase58()} does not exist; nothing to drain`);
+  const recipientAta = await recipientAtaFor(mint, recipientOwner);
+  await forwarder.methods
+    .closeEscrow()
+    .accountsPartial({
+      authority: wallet.publicKey,
+      config: configPda,
+      escrowAta,
+      escrowPda,
+      recipientAta,
+      tokenMint: mint,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .rpc();
+  console.log(`✅ Drained ${balance!.value.uiAmountString} of ${mint.toBase58()} to ${recipientAta.toBase58()} and closed the escrow ATA`);
 }
 
 function sol(lamports: number): string {
@@ -123,15 +101,19 @@ function sol(lamports: number): string {
 }
 
 async function init() {
-  const logicRef = requireLogicRef();
+  const logicRef = requireHexBytes(
+    "STF_LOGIC_REF",
+    32,
+    "the 32-byte hex logic ref (verifying key) of the resource logic this forwarder serves"
+  );
   const committee = requirePubkey("STF_EMERGENCY_COMMITTEE", "the committee that can name an emergency caller and close accounts");
 
-  if (await connection.getAccountInfo(configPda)) {
-    const config = await forwarder.account.config.fetch(configPda);
+  const existing = await forwarder.account.config.fetchNullable(configPda);
+  if (existing) {
     console.log(`Config ${configPda.toBase58()} already initialized`);
-    console.log(`  adapter:   ${config.protocolAdapter.toBase58()}`);
-    console.log(`  logic ref: ${Buffer.from(config.logicRef).toString("hex")}`);
-    console.log(`  committee: ${config.emergencyCommittee.toBase58()}`);
+    console.log(`  adapter:   ${existing.protocolAdapter.toBase58()}`);
+    console.log(`  logic ref: ${Buffer.from(existing.logicRef).toString("hex")}`);
+    console.log(`  committee: ${existing.emergencyCommittee.toBase58()}`);
   } else {
     console.log(`Initializing config ${configPda.toBase58()}`);
     console.log(`  adapter:   ${adapter.programId.toBase58()}`);
@@ -147,7 +129,7 @@ async function init() {
   const mintRaw = process.env.STF_TOKEN_MINT;
   if (mintRaw) {
     const mint = new PublicKey(mintRaw);
-    const [escrowPda] = deriveEscrowPda(forwarder.programId, mint);
+    const { escrowPda } = escrowAccounts(forwarder.programId, mint);
     const escrowAta = await getOrCreateAssociatedTokenAccount(connection, wallet.payer, mint, escrowPda, true);
     console.log(`✅ Escrow for ${mint.toBase58()}: PDA ${escrowPda.toBase58()}, ATA ${escrowAta.address.toBase58()}`);
   }
@@ -182,91 +164,44 @@ async function setEmergencyCaller() {
 }
 
 async function emergencyWithdraw() {
-  const mint = requirePubkey("STF_TOKEN_MINT", "the mint whose escrow to withdraw from");
-  const recipient = requirePubkey("STF_RECIPIENT", "the owner of the receiving token account");
-  const amount = requireAmount();
+  const mint = requireMint();
+  const recipient = requireRecipient();
+  const rawAmount = requireEnv("STF_AMOUNT", "the amount to withdraw, in the token's raw units");
+  if (!/^\d+$/.test(rawAmount)) fail(`STF_AMOUNT must be a non-negative integer, got "${rawAmount}"`);
+  const amount = BigInt(rawAmount);
   const config = await requireConfig();
   if (!config.emergencyCaller.equals(wallet.publicKey)) {
     fail(`wallet ${wallet.publicKey.toBase58()} is not the emergency caller (${config.emergencyCaller.toBase58()})`);
   }
-  const { escrowPda, escrowAta } = await escrowFor(mint);
+  const { escrowPda, escrowAta } = escrowAccounts(forwarder.programId, mint);
   const recipientAta = await recipientAtaFor(mint, recipient);
 
   await forwarder.methods
-    .forwardEmergencyCall(encodeEmergencyWithdrawInput(OP_EMERGENCY_WITHDRAW, mint, amount, recipient))
+    .forwardEmergencyCall(encodeUnwrapInput(mint, amount, recipient, false))
     .accounts({ caller: wallet.publicKey, paState })
-    .remainingAccounts([
-      { pubkey: escrowAta, isSigner: false, isWritable: true },
-      { pubkey: recipientAta, isSigner: false, isWritable: true },
-      { pubkey: escrowPda, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-    ])
+    .remainingAccounts(emergencyWithdrawAccounts(escrowAta, recipientAta, escrowPda))
     .rpc();
   console.log(`✅ Withdrew ${amount} raw units of ${mint.toBase58()} to ${recipientAta.toBase58()}`);
 }
 
 async function drainEscrow() {
-  const mint = requirePubkey("STF_TOKEN_MINT", "the mint whose escrow to drain");
-  const recipient = requirePubkey("STF_RECIPIENT", "the owner of the receiving token account");
+  const mint = requireMint();
+  const recipient = requireRecipient();
   await requireCommittee();
-  const { escrowPda, escrowAta } = await escrowFor(mint);
-  if (!(await connection.getAccountInfo(escrowAta))) {
-    fail(`escrow ATA ${escrowAta.toBase58()} does not exist; nothing to drain`);
-  }
-  const balance = (await connection.getTokenAccountBalance(escrowAta)).value;
-  const recipientAta = await recipientAtaFor(mint, recipient);
-
-  await forwarder.methods
-    .closeEscrow()
-    .accountsPartial({
-      authority: wallet.publicKey,
-      config: configPda,
-      escrowAta,
-      escrowPda,
-      recipientAta,
-      tokenMint: mint,
-      tokenProgram: TOKEN_PROGRAM_ID,
-    })
-    .rpc();
-  console.log(`✅ Drained ${balance.uiAmountString} of ${mint.toBase58()} to ${recipientAta.toBase58()} and closed the escrow ATA`);
+  await closeEscrowFor(mint, recipient);
 }
 
 async function teardown() {
-  const mint = requirePubkey("STF_TOKEN_MINT", "the mint whose escrow to drain before closing the config");
+  const mint = requireMint();
   await requireCommittee();
   const before = await connection.getBalance(wallet.publicKey);
 
-  const bitmaps = await connection.getProgramAccounts(forwarder.programId, {
-    filters: [{ dataSize: NONCE_BITMAP_ACCOUNT_SIZE }],
-  });
-  console.log(`Closing ${bitmaps.length} nonce bitmap(s)`);
-  const BATCH_SIZE = 20;
-  for (let i = 0; i < bitmaps.length; i += BATCH_SIZE) {
-    await forwarder.methods
-      .closeNonceBitmapsBatch()
-      .accountsPartial({ authority: wallet.publicKey, config: configPda })
-      .remainingAccounts(
-        bitmaps.slice(i, i + BATCH_SIZE).map(({ pubkey }) => ({ pubkey, isWritable: true, isSigner: false }))
-      )
-      .rpc();
-  }
+  const closed = await closeAllNonceBitmaps(forwarder, configPda, wallet.publicKey, []);
+  console.log(`Closed ${closed} nonce bitmap(s)`);
 
-  const { escrowPda, escrowAta } = await escrowFor(mint);
+  const { escrowAta } = escrowAccounts(forwarder.programId, mint);
   if (await connection.getAccountInfo(escrowAta)) {
-    const recipientAta = await recipientAtaFor(mint, wallet.publicKey);
-    await forwarder.methods
-      .closeEscrow()
-      .accountsPartial({
-        authority: wallet.publicKey,
-        config: configPda,
-        escrowAta,
-        escrowPda,
-        recipientAta,
-        tokenMint: mint,
-        tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .rpc();
-    console.log(`Escrow ${escrowAta.toBase58()} drained to ${recipientAta.toBase58()} and closed`);
+    await closeEscrowFor(mint, wallet.publicKey);
   } else {
     console.log(`Escrow ATA ${escrowAta.toBase58()} does not exist; skipping`);
   }

@@ -20,23 +20,19 @@ const FIXTURE_DIR: string = (() => {
 // Replay data of an SPL forwarder wrap fixture (fixture-gen's SplTokenWrapMetadata).
 export type SplTokenWrapMetadata = {
   user_secret_key_b64: string;
-  user_pubkey_b64: string;
   mint_seed_b64: string;
-  token_mint_b58: string;
   amount: number;
   nonce: number;
-  deadline: number;
-  action_tree_root_b64: string;
+  // The 44 bytes the user signed: base64 of the wrap message hash.
+  signed_message_b64: string;
   signature_b64: string;
   logic_ref_b64: string;
 };
 
 export type SplTokenUnwrapMetadata = {
   mint_seed_b64: string;
-  token_mint_b58: string;
   amount: number;
   recipient_seed_b64: string;
-  recipient_b58: string;
   logic_ref_b64: string;
 };
 
@@ -65,10 +61,17 @@ export function loadFixture<T = Fixture>(filename: string): T {
   return readJson<T>(path.join(FIXTURE_DIR, filename));
 }
 
-/** The command that regenerates `filename` in the current proof mode. */
-export function regenerateCommand(filename: string, flags: string): string {
-  const mock = process.env.PA_TEST_MODE === "mock" ? "--mock " : "";
-  return `./scripts/dev.sh gen-fixtures ${mock}${flags} ${path.relative(process.cwd(), path.join(FIXTURE_DIR, filename))}`;
+/** Load a fixture, or fail naming the fixture-gen command that produces it. */
+export function requireFixture(filename: string, flags: string): Fixture {
+  try {
+    return loadFixture(filename);
+  } catch (e: any) {
+    const mock = process.env.PA_TEST_MODE === "mock" ? "--mock " : "";
+    const target = path.relative(process.cwd(), path.join(FIXTURE_DIR, filename));
+    throw new Error(
+      `${filename} missing (${e.message}); generate with: ./scripts/dev.sh gen-fixtures ${mock}${flags} ${target}`
+    );
+  }
 }
 
 export function parseSelectorFromFixture(selectorHex: string): Buffer {

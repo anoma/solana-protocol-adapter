@@ -24,3 +24,6 @@ anchor-lang = { workspace = true }
 # The adapter's state account type, so the emergency-stopped check reads the
 # lifecycle field through the adapter's own layout instead of byte offsets.
 protocol-adapter = { path = "../solana-pa-prototype", default-features = false, features = ["no-entrypoint"] }
+
+[dev-dependencies]
+hex-literal = "0.4"
