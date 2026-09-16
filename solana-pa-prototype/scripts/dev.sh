@@ -90,7 +90,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh test $(printf '%q ' "$@")"
     ;;
 
-  deploy|upgrade|teardown|close-pdas|init|estop|status|balance|sync-ids|idl-publish|verify-build)
+  deploy|upgrade|teardown|close-pdas|init|forwarder|estop|status|balance|sync-ids|idl-publish|verify-build)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
