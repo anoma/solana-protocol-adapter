@@ -610,9 +610,6 @@ cmd_forwarder() {
     echo "   emergency-withdraw, drain-escrow, teardown" >&2
     exit 1
   fi
-  if [[ "$TARGET" == "init" ]]; then
-    require_forwarder_init_params
-  fi
   run_ts scripts/forwarder.ts "$TARGET"
 }
 

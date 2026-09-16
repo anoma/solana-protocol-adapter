@@ -1,9 +1,8 @@
-//! Tests for state types and PDA derivation
+//! Tests for the wire formats, the nonce bitmap, and the adapter-state read.
 
 use crate::state::{
-    derive_config_pda, derive_escrow_pda, derive_nonce_bitmap_pda, nonce_to_word_and_bit,
-    pa_is_stopped, NonceBitmap, UnwrapInput, WrapInput, WrapMessage, CONFIG_SEED, ESCROW_SEED,
-    NONCES_PER_WORD, NONCE_BITMAP_SEED,
+    base64_of_hash, nonce_to_word_and_bit, pa_is_stopped, NonceBitmap, UnwrapInput, WrapInput,
+    WrapMessage, NONCES_PER_WORD, SIGNED_MESSAGE_LEN,
 };
 use anchor_lang::prelude::Pubkey;
 use anchor_lang::AccountSerialize;
@@ -172,47 +171,56 @@ fn test_unwrap_input_parsing() {
 }
 
 #[test]
-fn test_pda_derivation() {
-    let program_id = Pubkey::new_unique();
-    let token_mint = Pubkey::new_unique();
-    let user = Pubkey::new_unique();
+fn wrap_input_rejects_any_other_length() {
+    assert!(WrapInput::try_from_bytes(&[0u8; WrapInput::SIZE - 1]).is_err());
+    assert!(WrapInput::try_from_bytes(&[0u8; WrapInput::SIZE + 1]).is_err());
+    assert!(WrapInput::try_from_bytes(&[0u8; WrapInput::SIZE]).is_ok());
+}
 
-    // Config PDA
-    let (config_pda, config_bump) = derive_config_pda(&program_id);
-    let expected_config_pda =
-        Pubkey::create_program_address(&[CONFIG_SEED, &[config_bump]], &program_id).unwrap();
-    assert_eq!(config_pda, expected_config_pda);
-    assert_ne!(config_pda, Pubkey::default());
+#[test]
+fn unwrap_input_rejects_any_other_length() {
+    assert!(UnwrapInput::try_from_bytes(&[0u8; UnwrapInput::SIZE - 1]).is_err());
+    assert!(UnwrapInput::try_from_bytes(&[0u8; UnwrapInput::SIZE + 1]).is_err());
+    assert!(UnwrapInput::try_from_bytes(&[0u8; UnwrapInput::SIZE]).is_ok());
+}
 
-    // Escrow PDA
-    let (escrow_pda, escrow_bump) = derive_escrow_pda(&program_id, &token_mint);
-    let expected_escrow_pda = Pubkey::create_program_address(
-        &[ESCROW_SEED, token_mint.as_ref(), &[escrow_bump]],
-        &program_id,
-    )
-    .unwrap();
-    assert_eq!(escrow_pda, expected_escrow_pda);
-    assert_ne!(escrow_pda, Pubkey::default());
+#[test]
+fn base64_of_hash_matches_standard_base64() {
+    assert_eq!(
+        &base64_of_hash(&[0u8; 32]),
+        b"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    );
+    // sha256("") in standard base64
+    let sha256_empty: [u8; 32] =
+        hex_literal::hex!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    assert_eq!(
+        &base64_of_hash(&sha256_empty),
+        b"47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU="
+    );
+    let mut all_ones = [0xffu8; 32];
+    all_ones[31] = 0xfe;
+    assert_eq!(
+        &base64_of_hash(&all_ones),
+        b"//////////////////////////////////////////4="
+    );
+}
 
-    // Nonce Bitmap PDA (Permit2-style)
-    // Nonces 0-255 map to word_index 0
-    let (bitmap_pda_0, bitmap_bump_0) = derive_nonce_bitmap_pda(&program_id, &user, 0);
-    let word_0 = 0u64.to_le_bytes();
-    let expected_bitmap_pda_0 = Pubkey::create_program_address(
-        &[NONCE_BITMAP_SEED, user.as_ref(), &word_0, &[bitmap_bump_0]],
-        &program_id,
-    )
-    .unwrap();
-    assert_eq!(bitmap_pda_0, expected_bitmap_pda_0);
-    assert_ne!(bitmap_pda_0, Pubkey::default());
-
-    // Nonces 256-511 map to word_index 1 (different PDA)
-    let (bitmap_pda_1, _) = derive_nonce_bitmap_pda(&program_id, &user, 1);
-    assert_ne!(bitmap_pda_0, bitmap_pda_1);
-
-    // Same word_index should give same PDA
-    let (bitmap_pda_0_again, _) = derive_nonce_bitmap_pda(&program_id, &user, 0);
-    assert_eq!(bitmap_pda_0, bitmap_pda_0_again);
+#[test]
+fn signed_message_is_base64_of_the_message_hash() {
+    let msg = WrapMessage {
+        forwarder_id: [1u8; 32],
+        token_mint: [2u8; 32],
+        amount: 100,
+        nonce: 1,
+        deadline: 1700000000,
+        action_tree_root: [3u8; 32],
+    };
+    let signed = msg.signed_message();
+    assert_eq!(signed.len(), SIGNED_MESSAGE_LEN);
+    assert_eq!(signed, base64_of_hash(&msg.hash()));
+    assert!(signed
+        .iter()
+        .all(|c| c.is_ascii_alphanumeric() || b"+/=".contains(c)));
 }
 
 #[test]

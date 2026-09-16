@@ -9,7 +9,6 @@ import {
   Ed25519Program,
   SYSVAR_CLOCK_PUBKEY,
   SYSVAR_INSTRUCTIONS_PUBKEY,
-  Transaction,
 } from "@solana/web3.js";
 import {
   approve,
@@ -20,7 +19,6 @@ import {
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
-import { createHash } from "crypto";
 import path from "path";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
@@ -36,7 +34,6 @@ import {
   PA_STATE_SEED,
   TX_DATA_SEED,
   EMPTY_TREE_ROOT_INITIAL,
-  EMPTY_KIND_TABLE_COMMITMENT,
   MIN_EXPIRY_SLOTS,
   MAX_EXPIRY_SLOTS,
   SEVEN_DAYS_SLOTS,
@@ -45,25 +42,24 @@ import {
   ADDRESS_MISMATCH_PATTERN,
   readJson,
   loadFixture,
+  requireFixture,
   type Fixture,
   parseSelectorFromFixture,
-  createdCommitmentsOf,
+  createdCommitmentsOf as commitmentsOf,
   fundKeypair,
   drainKeypairs,
   paInitializeBuilder,
   uploadTxData as uploadTxDataTo,
-  computeRootAfterAppend,
+  predictRootMarkerPda as predictRootMarkerPdaOf,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
   deriveProgramDataPda,
   deriveRootMarkerPda,
   EMERGENCY_COMMITTEE_LABEL,
   NONCES_PER_WORD,
-  createWrapMessageHash,
   deriveConfigPda,
-  deriveEscrowPda,
   deriveNonceBitmapPda,
+  escrowAccounts,
   isNonceUsed,
-  regenerateCommand,
   seededKeypair,
 } from "./utils";
 
@@ -121,10 +117,8 @@ function deriveRootPda(root: Buffer): PublicKey {
 // the instruction fails earlier.
 const DUMMY_ROOT_MARKER = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
 
-async function predictRootMarkerPda(createdCommitments: Buffer[]): Promise<PublicKey> {
-  const state = await program.account.paStateAccount.fetch(paState);
-  const root = computeRootAfterAppend(state, createdCommitments);
-  return deriveRootPda(root);
+function predictRootMarkerPda(createdCommitments: Buffer[]): Promise<PublicKey> {
+  return predictRootMarkerPdaOf(program, paState, createdCommitments);
 }
 
 function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[] {
@@ -366,10 +360,6 @@ function requireCommitments(createdCommitments?: Buffer[]): Buffer[] {
     "settlement without an explicit newRootMarker needs createdCommitments to predict it",
   );
   return createdCommitments!;
-}
-
-function commitmentsOf(fx: Fixture): Buffer[] {
-  return createdCommitmentsOf(fx);
 }
 
 async function paStateExists(): Promise<boolean> {
@@ -2962,8 +2952,6 @@ describe("protocol-adapter (close_markers_batch requires stopped state)", () => 
   });
 });
 
-// MUST BE LAST: emergency_stop permanently pauses PAState. No further
-// settle operations can succeed after this block runs.
 // ── SPL token forwarder through the adapter ──────────────────────────────
 //
 // A wrap and an unwrap settled with fixtures whose external calls target the
@@ -2977,18 +2965,11 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
 
-  function requireForwarderFixture(filename: string, flags: string): Fixture {
-    try {
-      return loadFixture(filename);
-    } catch (e: any) {
-      throw new Error(`${filename} missing (${e.message}); generate with: ${regenerateCommand(filename, flags)}`);
-    }
-  }
-  const wrapFixture = requireForwarderFixture("spl_token_wrap.json", "--spl-token-wrap");
+  const wrapFixture = requireFixture("spl_token_wrap.json", "--spl-token-wrap");
   // The same wrap terms (user, mint, amount, nonce) under a different
   // nullifier: a replay of the nonce the adapter cannot catch.
-  const wrapReplayFixture = requireForwarderFixture("spl_token_wrap_replay.json", "--spl-token-wrap --nonce-seed 21");
-  const unwrapFixture = requireForwarderFixture("spl_token_unwrap.json", "--spl-token-unwrap");
+  const wrapReplayFixture = requireFixture("spl_token_wrap_replay.json", "--spl-token-wrap --nonce-seed 21");
+  const unwrapFixture = requireFixture("spl_token_unwrap.json", "--spl-token-unwrap");
   const wrap = wrapFixture.spl_token_wrap!;
   const unwrap = unwrapFixture.spl_token_unwrap!;
 
@@ -2998,7 +2979,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   const mintKeypair = seededKeypair(wrap.mint_seed_label);
   const recipient = seededKeypair(unwrap.recipient_seed_label);
   const mint = mintKeypair.publicKey;
-  const [escrowPda] = deriveEscrowPda(forwarderProgram.programId, mint);
+  const { escrowPda, escrowAta } = escrowAccounts(forwarderProgram.programId, mint);
   const emergencyCommittee = seededKeypair(EMERGENCY_COMMITTEE_LABEL);
 
   const wrapAmount = BigInt(wrap.amount);
@@ -3008,16 +2989,9 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   assert.equal(wrapReplayFixture.spl_token_wrap!.nonce, wrap.nonce, "the replay fixture reuses the wrap nonce");
 
   let userAta: PublicKey;
-  let escrowAta: PublicKey;
 
   before(async () => {
-    assert.ok(
-      user.publicKey.equals(new PublicKey(Buffer.from(wrap.user_pubkey_b64, "base64"))),
-      "seeded user must match the fixture's user"
-    );
-    assert.equal(mint.toBase58(), wrap.token_mint_b58, "seeded mint must match the wrap fixture's mint");
-    assert.equal(mint.toBase58(), unwrap.token_mint_b58, "both fixtures must name the same mint");
-    assert.equal(recipient.publicKey.toBase58(), unwrap.recipient_b58, "seeded recipient must match the fixture");
+    assert.equal(wrap.mint_seed_label, unwrap.mint_seed_label, "both fixtures must name the same mint");
 
     // The suite's afterEach drains every funded keypair after each test, so
     // each test below funds the actors it uses.
@@ -3039,7 +3013,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     await createMint(provider.connection, user, user.publicKey, null, 6, mintKeypair);
     userAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, user.publicKey)).address;
     await mintTo(provider.connection, user, mint, userAta, user, Number(wrapAmount) * 2);
-    escrowAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, escrowPda, true)).address;
+    await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, escrowPda, true);
   });
 
   /**
@@ -3073,7 +3047,6 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
       { pubkey: configPda, isWritable: false, isSigner: false },
       { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
-      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
     ];
   }
 
@@ -3094,7 +3067,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       .rpc();
   }
 
-  function wrapSegment(userAta: PublicKey, escrowAta: PublicKey) {
+  function wrapSegment() {
     return [
       ...forwarderSegmentHead(),
       { pubkey: userAta, isWritable: true, isSigner: false },
@@ -3106,20 +3079,12 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     ];
   }
 
-  /** The ed25519 instruction proving the fixture's signature over base64(sha256(wrap message)). */
+  /** The ed25519 instruction carrying the fixture's signature over its signed message. */
   function wrapAuthorizationIx(fx: Fixture) {
     const meta = fx.spl_token_wrap!;
-    const messageHash = createWrapMessageHash(
-      forwarderProgram.programId,
-      mint,
-      BigInt(meta.amount),
-      BigInt(meta.nonce),
-      BigInt(meta.deadline),
-      Buffer.from(meta.action_tree_root_b64, "base64")
-    );
     return Ed25519Program.createInstructionWithPublicKey({
       publicKey: user.publicKey.toBytes(),
-      message: Buffer.from(messageHash.toString("base64")),
+      message: Buffer.from(meta.signed_message_b64, "base64"),
       signature: Buffer.from(meta.signature_b64, "base64"),
     });
   }
@@ -3150,7 +3115,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     assert.isNull(await provider.connection.getAccountInfo(nonceBitmapPda), "no bitmap yet for this word");
 
     try {
-      await settleForwarderFixture(wrapFixture, wrapSegment(userAta, escrowAta), [wrapAuthorizationIx(wrapFixture)]);
+      await settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]);
       assert.fail("expected the wrap to fail without a nonce bitmap");
     } catch (e: any) {
       assert.match(errorHaystack(e), /NonceBitmapMissing/);
@@ -3167,7 +3132,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const userBefore = (await getAccount(provider.connection, userAta)).amount;
     const escrowBefore = (await getAccount(provider.connection, escrowAta)).amount;
 
-    await settleForwarderFixture(wrapFixture, wrapSegment(userAta, escrowAta), [wrapAuthorizationIx(wrapFixture)]);
+    await settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]);
 
     const userAfter = (await getAccount(provider.connection, userAta)).amount;
     const escrowAfter = (await getAccount(provider.connection, escrowAta)).amount;
@@ -3187,7 +3152,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const escrowBefore = (await getAccount(provider.connection, escrowAta)).amount;
 
     try {
-      await settleForwarderFixture(wrapReplayFixture, wrapSegment(userAta, escrowAta), [
+      await settleForwarderFixture(wrapReplayFixture, wrapSegment(), [
         wrapAuthorizationIx(wrapReplayFixture),
       ]);
       assert.fail("expected the replayed nonce to be rejected");
@@ -3229,6 +3194,8 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   });
 });
 
+// MUST BE LAST: emergency_stop permanently pauses PAState. No further
+// settle operations can succeed after this block runs.
 describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
   it("emergency_stop pauses protocol", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);

@@ -5,22 +5,17 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
-import {
-  createMint,
-  getAccount,
-  getOrCreateAssociatedTokenAccount,
-  mintTo,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { createMint, getAccount, getOrCreateAssociatedTokenAccount, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { assert } from "chai";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
   EMERGENCY_COMMITTEE_LABEL,
   NONCE_BITMAP_ACCOUNT_SIZE,
+  closeAllNonceBitmaps,
+  createFundedEscrow,
   deriveConfigPda,
-  deriveEscrowPda,
-  drainKeypairs,
-  fundKeypair,
+  escrowAccounts,
+  makeFunder,
   seededKeypair,
 } from "./utils";
 
@@ -30,14 +25,10 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
 
   const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
-
-  const fundedKeypairs: Keypair[] = [];
-  async function fund(kp: Keypair, sol: number) {
-    await fundKeypair(provider, kp, sol);
-    fundedKeypairs.push(kp);
-  }
+  const funder = makeFunder(provider);
 
   const emergencyCommittee = seededKeypair(EMERGENCY_COMMITTEE_LABEL);
+  const impostor = Keypair.generate();
 
   let tokenMint: PublicKey;
   let escrowPda: PublicKey;
@@ -45,22 +36,20 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
   let recipientAta: PublicKey;
   const ESCROW_FUNDING = 500_000_000n;
 
-  async function escrowFor(mint: PublicKey): Promise<{ escrowPda: PublicKey; escrowAta: PublicKey }> {
-    const [pda] = deriveEscrowPda(forwarderProgram.programId, mint);
-    const ata = (await getOrCreateAssociatedTokenAccount(provider.connection, emergencyCommittee, mint, pda, true)).address;
-    return { escrowPda: pda, escrowAta: ata };
-  }
-
   before(async () => {
-    await fund(emergencyCommittee, 5);
+    await funder.fund(emergencyCommittee, 5);
+    await funder.fund(impostor, 1);
     assert.ok(
       await provider.connection.getAccountInfo(configPda),
       "01-spl-token-forwarder.ts must have initialized the forwarder config"
     );
 
-    tokenMint = await createMint(provider.connection, emergencyCommittee, emergencyCommittee.publicKey, null, 6);
-    ({ escrowPda, escrowAta } = await escrowFor(tokenMint));
-    await mintTo(provider.connection, emergencyCommittee, tokenMint, escrowAta, emergencyCommittee, Number(ESCROW_FUNDING));
+    ({ mint: tokenMint, escrowPda, escrowAta } = await createFundedEscrow(
+      provider,
+      forwarderProgram.programId,
+      emergencyCommittee,
+      ESCROW_FUNDING
+    ));
     recipientAta = (
       await getOrCreateAssociatedTokenAccount(provider.connection, emergencyCommittee, tokenMint, emergencyCommittee.publicKey)
     ).address;
@@ -83,8 +72,6 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
   }
 
   it("close_escrow rejects a non-committee authority", async () => {
-    const impostor = Keypair.generate();
-    await fund(impostor, 1);
     try {
       await closeEscrow(impostor, { escrowAta, escrowPda, recipientAta, tokenMint });
       assert.fail("expected close_escrow to fail");
@@ -94,14 +81,8 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
   });
 
   it("close_nonce_bitmaps_batch rejects a non-committee authority", async () => {
-    const impostor = Keypair.generate();
-    await fund(impostor, 1);
     try {
-      await forwarderProgram.methods
-        .closeNonceBitmapsBatch()
-        .accountsPartial({ authority: impostor.publicKey, config: configPda })
-        .signers([impostor])
-        .rpc();
+      await closeAllNonceBitmaps(forwarderProgram, configPda, impostor.publicKey, [impostor]);
       assert.fail("expected close_nonce_bitmaps_batch to fail");
     } catch (e: any) {
       assert.include(e.toString(), "UnauthorizedCaller");
@@ -109,8 +90,6 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
   });
 
   it("close_config rejects a non-committee authority", async () => {
-    const impostor = Keypair.generate();
-    await fund(impostor, 1);
     try {
       await forwarderProgram.methods
         .closeConfig()
@@ -139,30 +118,20 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
   });
 
   it("closes the nonce bitmaps the wrap tests created and refunds their rent", async () => {
-    const bitmaps = await provider.connection.getProgramAccounts(forwarderProgram.programId, {
-      filters: [{ dataSize: NONCE_BITMAP_ACCOUNT_SIZE }],
-    });
-    assert.isAbove(bitmaps.length, 0, "02-spl-token-forwarder-pa.ts must have created at least one nonce bitmap");
-
     const committeeBefore = await provider.connection.getBalance(emergencyCommittee.publicKey);
-    const BATCH_SIZE = 20;
-    for (let i = 0; i < bitmaps.length; i += BATCH_SIZE) {
-      await forwarderProgram.methods
-        .closeNonceBitmapsBatch()
-        .accountsPartial({ authority: emergencyCommittee.publicKey, config: configPda })
-        .remainingAccounts(
-          bitmaps.slice(i, i + BATCH_SIZE).map(({ pubkey }) => ({ pubkey, isWritable: true, isSigner: false }))
-        )
-        .signers([emergencyCommittee])
-        .rpc();
-    }
 
+    const closed = await closeAllNonceBitmaps(forwarderProgram, configPda, emergencyCommittee.publicKey, [emergencyCommittee]);
+
+    assert.isAbove(closed, 0, "the adapter suite's wrap must have created at least one nonce bitmap");
     const remaining = await provider.connection.getProgramAccounts(forwarderProgram.programId, {
       filters: [{ dataSize: NONCE_BITMAP_ACCOUNT_SIZE }],
     });
     assert.equal(remaining.length, 0, "every nonce bitmap is closed");
-    const committeeAfter = await provider.connection.getBalance(emergencyCommittee.publicKey);
-    assert.isAbove(committeeAfter, committeeBefore, "the committee recovers more rent than it pays in fees");
+    assert.isAbove(
+      await provider.connection.getBalance(emergencyCommittee.publicKey),
+      committeeBefore,
+      "the committee recovers more rent than it pays in fees"
+    );
   });
 
   it("close_escrow rejects a mint that does not match the escrow PDA", async () => {
@@ -190,7 +159,8 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
 
   it("close_escrow closes an empty escrow", async () => {
     const emptyMint = await createMint(provider.connection, emergencyCommittee, emergencyCommittee.publicKey, null, 6);
-    const empty = await escrowFor(emptyMint);
+    const empty = escrowAccounts(forwarderProgram.programId, emptyMint);
+    await getOrCreateAssociatedTokenAccount(provider.connection, emergencyCommittee, emptyMint, empty.escrowPda, true);
     const emptyRecipientAta = (
       await getOrCreateAssociatedTokenAccount(provider.connection, emergencyCommittee, emptyMint, emergencyCommittee.publicKey)
     ).address;
@@ -214,8 +184,5 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
     assert.isAbove(await provider.connection.getBalance(emergencyCommittee.publicKey), committeeBefore, "rent returns to the committee");
   });
 
-  after(async () => {
-    await drainKeypairs(provider, fundedKeypairs);
-    fundedKeypairs.length = 0;
-  });
+  after(() => funder.drainAll());
 });

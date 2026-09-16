@@ -7,22 +7,31 @@ import {
   SystemProgram,
   Transaction,
 } from "@solana/web3.js";
+import {
+  createMint,
+  getAssociatedTokenAddressSync,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import { createHash } from "crypto";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
+import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { VERIFIER_ROUTER_ID } from "../../scripts/verifier-utils";
 import {
   EMPTY_KIND_TABLE_COMMITMENT,
+  NONCE_BITMAP_ACCOUNT_SIZE,
   NONCE_BITMAP_DATA_OFFSET,
   NONCES_PER_WORD,
   OP_UNWRAP,
-  OP_WRAP,
   TX_DATA_SEED,
 } from "./constants";
-import { derivePaStatePda, deriveProgramDataPda } from "./pda";
+import { deriveEscrowPda, derivePaStatePda, deriveProgramDataPda } from "./pda";
+
+export type AccountMeta = { pubkey: PublicKey; isWritable: boolean; isSigner: boolean };
 
 /**
  * Fund a keypair from the provider wallet, topping up to the requested amount.
- * Returns the keypair for tracking (caller can add to a drain list).
  */
 export async function fundKeypair(
   provider: anchor.AnchorProvider,
@@ -76,6 +85,21 @@ export async function drainKeypairs(
     drained++;
   }
   return { recovered, drained };
+}
+
+/** A funder that remembers what it funded, so a suite can drain it all in `after`. */
+export function makeFunder(provider: anchor.AnchorProvider) {
+  const funded: Keypair[] = [];
+  return {
+    async fund(kp: Keypair, sol: number) {
+      await fundKeypair(provider, kp, sol);
+      funded.push(kp);
+    },
+    async drainAll() {
+      await drainKeypairs(provider, funded);
+      funded.length = 0;
+    },
+  };
 }
 
 /** A keypair every test file can rebuild from the same label. */
@@ -155,91 +179,24 @@ export async function uploadTxData(
   return { uploadId, uploadIdLe, txData, expiresSlot };
 }
 
-// SPL token forwarder encodings (programs/spl-token-forwarder/src/state.rs)
+// SPL token forwarder
 
 /**
- * sha256 of the 120-byte wrap message the user authorizes; must match
- * Rust `WrapMessage::to_bytes()` + `hash()`.
- *
- * | Offset | Size | Field            |
- * |--------|------|------------------|
- * | 0      | 32   | forwarder_id     |
- * | 32     | 32   | token_mint       |
- * | 64     | 8    | amount (u64 LE)  |
- * | 72     | 8    | nonce (u64 LE)   |
- * | 80     | 8    | deadline (i64 LE)|
- * | 88     | 32   | action_tree_root |
+ * The unwrap operand (72 bytes: token_mint, amount u64 LE, recipient),
+ * which is also the whole input of forward_emergency_call. Prefixed with
+ * the op code for forward_call.
  */
-export function createWrapMessageHash(
-  forwarderId: PublicKey,
-  tokenMint: PublicKey,
-  amount: bigint,
-  nonce: bigint,
-  deadline: bigint,
-  actionTreeRoot: Buffer
-): Buffer {
-  const message = Buffer.alloc(120);
-  forwarderId.toBuffer().copy(message, 0);
-  tokenMint.toBuffer().copy(message, 32);
-  message.writeBigUInt64LE(amount, 64);
-  message.writeBigUInt64LE(nonce, 72);
-  message.writeBigInt64LE(deadline, 80);
-  actionTreeRoot.copy(message, 88);
-  return createHash("sha256").update(message).digest();
-}
-
-/**
- * forward_call input for a wrap: op(1) + token_mint(32) + amount(8) +
- * user(32) + nonce(8) + deadline(8) + action_tree_root(32) + signature(64)
- * + ed25519_ix_index(1) = 186 bytes.
- */
-export function encodeWrapInput(
-  tokenMint: PublicKey,
-  amount: bigint,
-  user: PublicKey,
-  nonce: bigint,
-  deadline: bigint,
-  actionTreeRoot: Buffer,
-  signature: Buffer,
-  ed25519IxIndex: number
-): Buffer {
-  const input = Buffer.alloc(186);
-  input.writeUInt8(OP_WRAP, 0);
-  tokenMint.toBuffer().copy(input, 1);
-  input.writeBigUInt64LE(amount, 33);
-  user.toBuffer().copy(input, 41);
-  input.writeBigUInt64LE(nonce, 73);
-  input.writeBigInt64LE(deadline, 81);
-  actionTreeRoot.copy(input, 89);
-  signature.copy(input, 121);
-  input.writeUInt8(ed25519IxIndex, 185);
-  return input;
-}
-
-/** forward_call input for an unwrap: op(1) + token_mint(32) + amount(8) + recipient(32) = 73 bytes. */
 export function encodeUnwrapInput(
   tokenMint: PublicKey,
   amount: bigint,
-  recipient: PublicKey
+  recipient: PublicKey,
+  withOpCode = true
 ): Buffer {
-  const input = Buffer.alloc(73);
-  input.writeUInt8(OP_UNWRAP, 0);
-  tokenMint.toBuffer().copy(input, 1);
-  input.writeBigUInt64LE(amount, 33);
-  recipient.toBuffer().copy(input, 41);
-  return input;
-}
-
-/** forward_emergency_call input: op(1) + token_mint(32) + amount(8) + recipient(32) = 73 bytes. */
-export function encodeEmergencyWithdrawInput(
-  op: number,
-  tokenMint: PublicKey,
-  amount: bigint,
-  recipient: PublicKey
-): Buffer {
-  const input = encodeUnwrapInput(tokenMint, amount, recipient);
-  input.writeUInt8(op, 0);
-  return input;
+  const operand = Buffer.alloc(72);
+  tokenMint.toBuffer().copy(operand, 0);
+  operand.writeBigUInt64LE(amount, 32);
+  recipient.toBuffer().copy(operand, 40);
+  return withOpCode ? Buffer.concat([Buffer.from([OP_UNWRAP]), operand]) : operand;
 }
 
 /** Whether `nonce`'s bit is set in a nonce bitmap account's data. */
@@ -247,4 +204,72 @@ export function isNonceUsed(bitmapAccountData: Buffer, nonce: bigint): boolean {
   const bit = Number(nonce % NONCES_PER_WORD);
   const byte = bitmapAccountData[NONCE_BITMAP_DATA_OFFSET + (bit >> 3)];
   return (byte & (1 << (bit & 7))) !== 0;
+}
+
+/** A mint's escrow: the forwarder's PDA authority and its associated token account. */
+export function escrowAccounts(
+  forwarderProgramId: PublicKey,
+  mint: PublicKey
+): { escrowPda: PublicKey; escrowAta: PublicKey } {
+  const [escrowPda] = deriveEscrowPda(forwarderProgramId, mint);
+  return { escrowPda, escrowAta: getAssociatedTokenAddressSync(mint, escrowPda, true) };
+}
+
+/**
+ * A fresh 6-decimal mint with `payer` as its authority, its escrow ATA
+ * created and holding `amount` raw units.
+ */
+export async function createFundedEscrow(
+  provider: anchor.AnchorProvider,
+  forwarderProgramId: PublicKey,
+  payer: Keypair,
+  amount: bigint
+): Promise<{ mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey }> {
+  const mint = await createMint(provider.connection, payer, payer.publicKey, null, 6);
+  const { escrowPda, escrowAta } = escrowAccounts(forwarderProgramId, mint);
+  await getOrCreateAssociatedTokenAccount(provider.connection, payer, mint, escrowPda, true);
+  await mintTo(provider.connection, payer, mint, escrowAta, payer, Number(amount));
+  return { mint, escrowPda, escrowAta };
+}
+
+/** The remaining accounts of forward_emergency_call, in the order the program reads them. */
+export function emergencyWithdrawAccounts(
+  escrowAta: PublicKey,
+  recipientAta: PublicKey,
+  escrowPda: PublicKey
+): AccountMeta[] {
+  return [
+    { pubkey: escrowAta, isSigner: false, isWritable: true },
+    { pubkey: recipientAta, isSigner: false, isWritable: true },
+    { pubkey: escrowPda, isSigner: false, isWritable: false },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+}
+
+/**
+ * Close every nonce bitmap the forwarder owns, in batches, as the committee
+ * `authority` (signing with `signers`, or the provider wallet when empty).
+ * Returns how many were closed.
+ */
+export async function closeAllNonceBitmaps(
+  forwarder: Program<SplTokenForwarder>,
+  configPda: PublicKey,
+  authority: PublicKey,
+  signers: Keypair[]
+): Promise<number> {
+  const bitmaps = await forwarder.provider.connection.getProgramAccounts(forwarder.programId, {
+    filters: [{ dataSize: NONCE_BITMAP_ACCOUNT_SIZE }],
+  });
+  const BATCH_SIZE = 20;
+  for (let i = 0; i < bitmaps.length; i += BATCH_SIZE) {
+    await forwarder.methods
+      .closeNonceBitmapsBatch()
+      .accountsPartial({ authority, config: configPda })
+      .remainingAccounts(
+        bitmaps.slice(i, i + BATCH_SIZE).map(({ pubkey }) => ({ pubkey, isWritable: true, isSigner: false }))
+      )
+      .signers(signers)
+      .rpc();
+  }
+  return bitmaps.length;
 }

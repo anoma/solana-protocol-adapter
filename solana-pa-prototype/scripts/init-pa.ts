@@ -2,55 +2,20 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { PA_STATE_SEED } from "../tests/utils/constants";
-
-const BPF_LOADER_UPGRADEABLE = new PublicKey(
-  "BPFLoaderUpgradeab1e11111111111111111111111"
-);
+import { derivePaStatePda, deriveProgramDataPda } from "../tests/utils/pda";
+import { requireHexBytes, requirePubkey } from "./cli-utils";
 
 // `initialize` pins the router, selector, and kind-table commitment this
 // deployment will trust for the lifetime of the PAState account. There is no
 // safe default: guessing wrong installs the wrong verifier or rejects every
 // settlement. All three must be supplied explicitly.
 function requireVerifierRouter(): PublicKey {
-  const raw = process.env.PA_VERIFIER_ROUTER;
-  if (!raw) {
-    console.error(
-      "❌ Missing PA_VERIFIER_ROUTER: the RISC0 verifier router program ID " +
-        "this deployment must trust, as a base58 pubkey.\n" +
-        "   This script will not guess a default — initializing against the " +
-        "wrong router installs the wrong verifier."
-    );
-    process.exit(1);
-  }
-  try {
-    return new PublicKey(raw);
-  } catch {
-    console.error(`❌ PA_VERIFIER_ROUTER is not a valid pubkey: "${raw}"`);
-    process.exit(1);
-  }
-}
-
-// Read a fixed-width hex byte string from a required environment variable.
-// `missingHelp` says what the value is and why the script will not guess one.
-function requireHexBytes(
-  envVar: string,
-  byteLen: number,
-  missingHelp: string
-): number[] {
-  const raw = process.env[envVar];
-  if (!raw) {
-    console.error(`❌ Missing ${envVar}: ${missingHelp}`);
-    process.exit(1);
-  }
-  const hex = raw.replace(/^0x/, "");
-  if (hex.length !== byteLen * 2) {
-    console.error(
-      `❌ ${envVar} must be ${byteLen * 2} hex chars (${byteLen} bytes), got "${raw}"`
-    );
-    process.exit(1);
-  }
-  return Array.from(Buffer.from(hex, "hex"));
+  return requirePubkey(
+    "PA_VERIFIER_ROUTER",
+    "the RISC0 verifier router program ID this deployment must trust, as a " +
+      "base58 pubkey.\n   This script will not guess a default — initializing " +
+      "against the wrong router installs the wrong verifier."
+  );
 }
 
 function requireProofSelector(): number[] {
@@ -87,14 +52,8 @@ async function main() {
   const proofSelector = requireProofSelector();
   const kindTableCommitment = requireKindTableCommitment();
 
-  const [paState] = PublicKey.findProgramAddressSync(
-    [PA_STATE_SEED],
-    program.programId
-  );
-  const [programData] = PublicKey.findProgramAddressSync(
-    [program.programId.toBuffer()],
-    BPF_LOADER_UPGRADEABLE
-  );
+  const [paState] = derivePaStatePda(program.programId);
+  const programData = deriveProgramDataPda(program.programId);
 
   // Idempotent: skip if PAState already exists
   try {

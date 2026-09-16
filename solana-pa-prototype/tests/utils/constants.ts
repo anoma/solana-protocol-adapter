@@ -30,10 +30,8 @@ export const NONCES_PER_WORD = 256n;
 // A nonce bitmap account: Anchor discriminator, then the 32-byte word.
 export const NONCE_BITMAP_ACCOUNT_SIZE = 8 + 32;
 export const NONCE_BITMAP_DATA_OFFSET = 8;
-// forward_call operation codes (programs/spl-token-forwarder/src/lib.rs)
-export const OP_WRAP = 0;
+// forward_call operation code of an unwrap (programs/spl-token-forwarder/src/lib.rs)
 export const OP_UNWRAP = 1;
-export const OP_EMERGENCY_WITHDRAW = 0;
 
 // Deterministic keypair labels shared across the forwarder test files: 01
 // initializes the config with this committee, zz and zzz act as it.

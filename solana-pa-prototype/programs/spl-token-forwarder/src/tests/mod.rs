@@ -1,9 +1,5 @@
-//! All tests for spl-token-forwarder.
-//!
-//! Auditors: exclude this entire directory from review.
-//! Production code is in the parent src/ directory.
+//! Unit tests for the pure parts of the forwarder. Everything that needs a
+//! validator is in the TypeScript integration suite.
 
 mod ed25519_tests;
-mod forwarder_tests;
-mod lib_tests;
 mod state_tests;

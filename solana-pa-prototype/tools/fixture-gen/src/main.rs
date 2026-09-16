@@ -238,13 +238,11 @@ use test_forwarder::{MODE_FAIL, MODE_SILENT};
 #[derive(Clone, Debug, Serialize)]
 struct SplTokenWrapMetadata {
     user_seed_label: &'static str,
-    user_pubkey_b64: String,
     mint_seed_label: &'static str,
-    token_mint_b58: String,
     amount: u64,
     nonce: u64,
-    deadline: i64,
-    action_tree_root_b64: String,
+    /// The 44 bytes the user signed: base64 of the wrap message hash.
+    signed_message_b64: String,
     signature_b64: String,
     logic_ref_b64: String,
 }
@@ -252,26 +250,21 @@ struct SplTokenWrapMetadata {
 #[derive(Clone, Debug, Serialize)]
 struct SplTokenUnwrapMetadata {
     mint_seed_label: &'static str,
-    token_mint_b58: String,
     amount: u64,
     recipient_seed_label: &'static str,
-    recipient_b58: String,
     logic_ref_b64: String,
 }
 
 /// Fixture fields that are not derived from the transaction: what kind of
 /// forwarder call it carries and, for the SPL forwarder, the replay data.
-#[derive(Default)]
+#[derive(Default, Serialize)]
 struct FixtureLabels {
+    #[serde(skip_serializing_if = "Option::is_none")]
     forwarder_type: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     spl_token_wrap: Option<SplTokenWrapMetadata>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     spl_token_unwrap: Option<SplTokenUnwrapMetadata>,
-}
-
-/// A generated transaction together with the labels its fixture carries.
-struct GeneratedTransaction {
-    tx: Transaction,
-    labels: FixtureLabels,
 }
 
 #[derive(Serialize)]
@@ -282,8 +275,8 @@ struct Fixture {
     /// Groth16 verifier selector extracted from the proof's verifier_parameters.
     /// Format: "0x" + 4-byte hex (e.g., "0x73c457ba").
     selector: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    forwarder_type: Option<&'static str>,
+    #[serde(flatten)]
+    labels: FixtureLabels,
     tx_b64: String,
     tx_tampered_b64: String,
     consumed_nullifiers_b64: Vec<String>,
@@ -293,10 +286,6 @@ struct Fixture {
     created_commitments_b64: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     historical_roots_b64: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    spl_token_wrap: Option<SplTokenWrapMetadata>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    spl_token_unwrap: Option<SplTokenUnwrapMetadata>,
 }
 
 const FIXTURE_FORMAT: &str = "arm-risc0:Transaction(bincode)";
@@ -475,13 +464,8 @@ fn decode_base58_32(s: &str) -> Result<[u8; 32]> {
         .map_err(|v: Vec<u8>| anyhow!("expected 32 bytes, got {}", v.len()))
 }
 
-fn test_forwarder_program_id() -> Result<[u8; 32]> {
-    decode_base58_32("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD")
-}
-
 fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
-    // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-    let program_id = decode_base58_32("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf")?;
+    let program_id = block_time_forwarder::ID.to_bytes();
 
     // Use -1 so expected_time < current_time for any reasonable cluster clock.
     // The forwarder will return RESULT_LT (0x00).
@@ -512,7 +496,7 @@ fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
     // test-forwarder's IntentionalFailure can propagate, so we pin a non-empty
     // expected value; it is never compared because the CPI itself fails first.
     Ok(encode_external_call(&SolanaExternalCall {
-        program_id: test_forwarder_program_id()?,
+        program_id: test_forwarder::ID.to_bytes(),
         instruction_data: vec![MODE_FAIL],
         expected_output: vec![0x2a],
         output_mode: OutputMode::ReturnData,
@@ -528,17 +512,12 @@ fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
     // forwarder path a genuine output mismatch (expected [0x2a], got nothing)
     // rather than conflating "expected empty" with "returned nothing".
     Ok(encode_external_call(&SolanaExternalCall {
-        program_id: test_forwarder_program_id()?,
+        program_id: test_forwarder::ID.to_bytes(),
         instruction_data: vec![MODE_SILENT],
         expected_output: vec![0x2a],
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
     }))
-}
-
-fn spl_token_forwarder_program_id() -> Result<[u8; 32]> {
-    // Must match `programs/spl-token-forwarder/src/lib.rs::declare_id!`.
-    decode_base58_32("5CrHbBeHjg53UyL3Htn9dCYYTy68fMcrbDoeAdo4yQrx")
 }
 
 fn sha256_hash(data: &[u8]) -> [u8; 32] {
@@ -568,7 +547,7 @@ fn passthrough_logic_ref_b64() -> String {
 fn spl_token_forwarder_wrap_external_payload(
     action_tree_root: &Digest,
 ) -> Result<(ExpirableBlob, SplTokenWrapMetadata)> {
-    let program_id = spl_token_forwarder_program_id()?;
+    let program_id = spl_token_forwarder::ID.to_bytes();
     let user_key = seeded_keypair(USER_SEED_LABEL);
     let mint_key = seeded_keypair(MINT_SEED_LABEL);
     let user = Pubkey::new_from_array(user_key.verifying_key().to_bytes());
@@ -587,10 +566,8 @@ fn spl_token_forwarder_wrap_external_payload(
         signature: [0u8; 64],
         ed25519_ix_index: 0,
     };
-    let message_hash = input.to_message(&Pubkey::new_from_array(program_id)).hash();
-    input.signature = user_key
-        .sign(BASE64.encode(message_hash).as_bytes())
-        .to_bytes();
+    let signed_message = input.to_message(&spl_token_forwarder::ID).signed_message();
+    input.signature = user_key.sign(&signed_message).to_bytes();
 
     let mut instruction_data = Vec::with_capacity(1 + WrapInput::SIZE);
     instruction_data.push(OP_WRAP);
@@ -601,20 +578,17 @@ fn spl_token_forwarder_wrap_external_payload(
         instruction_data,
         expected_output: vec![SPL_RESULT_SUCCESS],
         output_mode: OutputMode::ReturnData,
-        // [program, config, ix_sysvar, clock, user_ata, escrow_ata, escrow_pda,
+        // [program, config, ix_sysvar, user_ata, escrow_ata, escrow_pda,
         //  nonce_bitmap, token_program, mint]
-        num_accounts: 10,
+        num_accounts: 9,
     });
 
     let metadata = SplTokenWrapMetadata {
         user_seed_label: USER_SEED_LABEL,
-        user_pubkey_b64: BASE64.encode(user.to_bytes()),
         mint_seed_label: MINT_SEED_LABEL,
-        token_mint_b58: token_mint.to_string(),
         amount: input.amount,
         nonce: input.nonce,
-        deadline: input.deadline,
-        action_tree_root_b64: BASE64.encode(input.action_tree_root),
+        signed_message_b64: BASE64.encode(signed_message),
         signature_b64: BASE64.encode(input.signature),
         logic_ref_b64: passthrough_logic_ref_b64(),
     };
@@ -625,7 +599,7 @@ fn spl_token_forwarder_wrap_external_payload(
 /// mint released from escrow to the seeded recipient.
 fn spl_token_forwarder_unwrap_external_payload() -> Result<(ExpirableBlob, SplTokenUnwrapMetadata)>
 {
-    let program_id = spl_token_forwarder_program_id()?;
+    let program_id = spl_token_forwarder::ID.to_bytes();
     let mint_key = seeded_keypair(MINT_SEED_LABEL);
     let recipient_key = seeded_keypair(RECIPIENT_SEED_LABEL);
     let token_mint = Pubkey::new_from_array(mint_key.verifying_key().to_bytes());
@@ -645,17 +619,15 @@ fn spl_token_forwarder_unwrap_external_payload() -> Result<(ExpirableBlob, SplTo
         instruction_data,
         expected_output: vec![SPL_RESULT_SUCCESS],
         output_mode: OutputMode::ReturnData,
-        // [program, config, ix_sysvar, clock, escrow_ata, recipient_ata,
-        //  escrow_pda, token_program, mint]
-        num_accounts: 9,
+        // [program, config, ix_sysvar, escrow_ata, recipient_ata, escrow_pda,
+        //  token_program, mint]
+        num_accounts: 8,
     });
 
     let metadata = SplTokenUnwrapMetadata {
         mint_seed_label: MINT_SEED_LABEL,
-        token_mint_b58: token_mint.to_string(),
         amount: input.amount,
         recipient_seed_label: RECIPIENT_SEED_LABEL,
-        recipient_b58: recipient.to_string(),
         logic_ref_b64: passthrough_logic_ref_b64(),
     };
     Ok((blob, metadata))
@@ -952,7 +924,7 @@ async fn generate_test_transaction_with_external_payload(
     forwarder_mode: ForwarderMode,
     nonce_seed: Option<u8>,
     multi_external_call: bool,
-) -> Result<GeneratedTransaction> {
+) -> Result<(Transaction, FixtureLabels)> {
     // Stable nonce so the fixture is deterministic. Each fixture variant uses
     // a different nonce so the variants have different nullifiers; otherwise
     // running several fixtures in one test suite hits DuplicateNullifier.
@@ -1013,7 +985,7 @@ async fn generate_test_transaction_with_external_payload(
     }
 
     let tx = prove_single_action_transaction(prover, compliance_witness, consumed_app_data).await?;
-    Ok(GeneratedTransaction { tx, labels })
+    Ok((tx, labels))
 }
 
 fn generate_error_variant_fixtures(
@@ -1034,14 +1006,12 @@ fn generate_error_variant_fixtures(
             aggregation_strategy: "batch",
             aggregation_proof_type: proof_type,
             selector: selector.to_owned(),
-            forwarder_type: None,
+            labels: FixtureLabels::default(),
             tx_b64: BASE64.encode(tx_bytes),
             tx_tampered_b64: String::new(),
             consumed_nullifiers_b64: nullifiers_b64.to_vec(),
             created_commitments_b64: Vec::new(),
             historical_roots_b64: Vec::new(),
-            spl_token_wrap: None,
-            spl_token_unwrap: None,
         };
 
         let out_path = out_dir.join(file_name);
@@ -1244,14 +1214,15 @@ fn import_backend_result_fixture(
         aggregation_strategy: "batch",
         aggregation_proof_type: "groth16",
         selector: fields.selector,
-        forwarder_type: Some("anomapay_transfer"),
+        labels: FixtureLabels {
+            forwarder_type: Some("anomapay_transfer"),
+            ..Default::default()
+        },
         tx_b64: fields.tx_b64,
         tx_tampered_b64: fields.tx_tampered_b64,
         consumed_nullifiers_b64: fields.consumed_nullifiers_b64,
         created_commitments_b64: fields.created_commitments_b64,
         historical_roots_b64: fields.historical_roots_b64,
-        spl_token_wrap: None,
-        spl_token_unwrap: None,
     };
 
     if let Some(parent) = output.parent() {
@@ -1302,14 +1273,12 @@ fn finalize_and_write_fixture(
         aggregation_strategy: "batch",
         aggregation_proof_type: proof_type,
         selector: fields.selector,
-        forwarder_type: labels.forwarder_type,
+        labels,
         tx_b64: fields.tx_b64,
         tx_tampered_b64: fields.tx_tampered_b64,
         consumed_nullifiers_b64: fields.consumed_nullifiers_b64,
         created_commitments_b64: fields.created_commitments_b64,
         historical_roots_b64: fields.historical_roots_b64,
-        spl_token_wrap: labels.spl_token_wrap,
-        spl_token_unwrap: labels.spl_token_unwrap,
     };
 
     timed_phase("write_fixture", || {
@@ -2271,7 +2240,7 @@ async fn main() -> Result<()> {
     eprintln!("phase: generate_test_transaction");
     let gen_start = Instant::now();
     let is_transfer_shape = matches!(shape, GenerateShape::TransferShape);
-    let GeneratedTransaction { mut tx, labels } = match shape {
+    let (mut tx, labels) = match shape {
         GenerateShape::SingleAction {
             forwarder_mode,
             multi_external_call,
@@ -2284,10 +2253,10 @@ async fn main() -> Result<()> {
             )
             .await?
         }
-        GenerateShape::TransferShape => GeneratedTransaction {
-            tx: generate_transfer_shape_transaction(&prover, nonce_seed).await?,
-            labels: FixtureLabels::default(),
-        },
+        GenerateShape::TransferShape => (
+            generate_transfer_shape_transaction(&prover, nonce_seed).await?,
+            FixtureLabels::default(),
+        ),
     };
     eprintln!(
         "phase done: generate_test_transaction ({})",
