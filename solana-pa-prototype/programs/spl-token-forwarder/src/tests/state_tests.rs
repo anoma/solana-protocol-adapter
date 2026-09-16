@@ -2,11 +2,12 @@
 
 use crate::state::{
     derive_config_pda, derive_escrow_pda, derive_nonce_bitmap_pda, is_nonce_used,
-    is_pa_emergency_stopped, nonce_to_word_and_bit, set_nonce_used, UnwrapInput, WrapInput,
-    WrapMessage, CONFIG_SEED, ESCROW_SEED, NONCES_PER_WORD, NONCE_BITMAP_SEED, NONCE_BITMAP_SIZE,
-    PA_PENDING_AUTH_OFFSET,
+    nonce_to_word_and_bit, pa_is_stopped, set_nonce_used, UnwrapInput, WrapInput, WrapMessage,
+    CONFIG_SEED, ESCROW_SEED, NONCES_PER_WORD, NONCE_BITMAP_SEED, NONCE_BITMAP_SIZE,
 };
 use anchor_lang::prelude::Pubkey;
+use anchor_lang::AccountSerialize;
+use protocol_adapter::state::{PALifecycle, PAStateAccount};
 
 #[test]
 fn test_wrap_message_serialization() {
@@ -251,72 +252,70 @@ fn test_bitmap_undersized_handling() {
 // PA Emergency Stopped Tests
 // =============================================================================
 
-/// Build fake PA state data with pending_authority=None and the given lifecycle byte.
-fn make_pa_state_none(lifecycle: u8) -> Vec<u8> {
-    // Layout: discriminator(8) + bump(1) + authority(32) + verifier_router(32) +
-    //   proof_selector(4) + pending_authority(Option: 0x00 for None) + lifecycle(1)
-    let lifecycle_offset = PA_PENDING_AUTH_OFFSET + 1; // None tag = 1 byte
-    let mut data = vec![0u8; lifecycle_offset + 1];
-    data[PA_PENDING_AUTH_OFFSET] = 0x00; // None
-    data[lifecycle_offset] = lifecycle;
+/// A PA state account exactly as the adapter serializes it (discriminator
+/// plus the current layout), with the given lifecycle.
+fn serialized_pa_state(lifecycle: PALifecycle, pending_authority: Option<Pubkey>) -> Vec<u8> {
+    let state = PAStateAccount {
+        schema_version: PAStateAccount::SCHEMA_VERSION,
+        bump: 254,
+        authority: Pubkey::new_unique(),
+        verifier_router: Pubkey::new_unique(),
+        proof_selector: [0x73, 0xc4, 0x57, 0xba],
+        kind_table_commitment: [0u8; 32],
+        pending_authority,
+        lifecycle,
+        root: [7u8; 32],
+        next_index: 3,
+        current_depth: 2,
+        frontier: vec![[1u8; 32], [2u8; 32]],
+        min_expiry_slots: 100,
+        max_expiry_slots: 216_000,
+    };
+    let mut data = Vec::new();
+    state.try_serialize(&mut data).unwrap();
     data
 }
 
-/// Build fake PA state data with pending_authority=Some and the given lifecycle byte.
-fn make_pa_state_some(lifecycle: u8) -> Vec<u8> {
-    // pending_authority = Some(Pubkey) → 0x01 + 32 bytes
-    let lifecycle_offset = PA_PENDING_AUTH_OFFSET + 33; // Some tag + 32-byte pubkey
-    let mut data = vec![0u8; lifecycle_offset + 1];
-    data[PA_PENDING_AUTH_OFFSET] = 0x01; // Some
-    data[lifecycle_offset] = lifecycle;
-    data
+#[test]
+fn pa_is_stopped_reads_stopped_from_the_adapter_layout() {
+    let data = serialized_pa_state(PALifecycle::Stopped, None);
+    assert!(
+        pa_is_stopped(&data).unwrap(),
+        "a Stopped adapter state must be reported as stopped"
+    );
 }
 
 #[test]
-fn test_is_pa_emergency_stopped_not_paused_none() {
-    let pa_state = make_pa_state_none(0); // Running
-    assert!(!is_pa_emergency_stopped(&pa_state));
+fn pa_is_stopped_reads_stopped_with_a_pending_authority() {
+    let data = serialized_pa_state(PALifecycle::Stopped, Some(Pubkey::new_unique()));
+    assert!(
+        pa_is_stopped(&data).unwrap(),
+        "a Stopped adapter state with a pending authority must be reported as stopped"
+    );
 }
 
 #[test]
-fn test_is_pa_emergency_stopped_paused_none() {
-    let pa_state = make_pa_state_none(1); // Stopped
-    assert!(is_pa_emergency_stopped(&pa_state));
+fn pa_is_stopped_reads_running_from_the_adapter_layout() {
+    let data = serialized_pa_state(PALifecycle::Running, Some(Pubkey::new_unique()));
+    assert!(
+        !pa_is_stopped(&data).unwrap(),
+        "a Running adapter state must not be reported as stopped"
+    );
 }
 
 #[test]
-fn test_is_pa_emergency_stopped_not_paused_some() {
-    let pa_state = make_pa_state_some(0); // Running, with pending authority
-    assert!(!is_pa_emergency_stopped(&pa_state));
+fn pa_is_stopped_rejects_data_that_is_not_a_pa_state_account() {
+    let mut data = serialized_pa_state(PALifecycle::Stopped, None);
+    data[0] ^= 0xff; // corrupt the discriminator
+    assert!(
+        pa_is_stopped(&data).is_err(),
+        "a foreign account must be an error, not \"not stopped\""
+    );
 }
 
 #[test]
-fn test_is_pa_emergency_stopped_paused_some() {
-    let pa_state = make_pa_state_some(1); // Stopped, with pending authority
-    assert!(is_pa_emergency_stopped(&pa_state));
-}
-
-#[test]
-fn test_is_pa_emergency_stopped_any_nonzero_is_stopped() {
-    let pa_state_255 = make_pa_state_none(255);
-    assert!(is_pa_emergency_stopped(&pa_state_255));
-
-    let pa_state_42 = make_pa_state_none(42);
-    assert!(is_pa_emergency_stopped(&pa_state_42));
-}
-
-#[test]
-fn test_is_pa_emergency_stopped_undersized_data() {
-    let small_data = vec![0u8; PA_PENDING_AUTH_OFFSET]; // too small for Option tag
-    assert!(!is_pa_emergency_stopped(&small_data));
-
-    let empty_data: Vec<u8> = vec![];
-    assert!(!is_pa_emergency_stopped(&empty_data));
-}
-
-#[test]
-fn test_pa_pending_auth_offset_value() {
-    // discriminator(8) + bump(1) + authority(32) + verifier_router(32) + proof_selector(4)
-    assert_eq!(PA_PENDING_AUTH_OFFSET, 8 + 1 + 32 + 32 + 4);
-    assert_eq!(PA_PENDING_AUTH_OFFSET, 77);
+fn pa_is_stopped_rejects_truncated_data() {
+    let data = serialized_pa_state(PALifecycle::Stopped, None);
+    assert!(pa_is_stopped(&data[..40]).is_err());
+    assert!(pa_is_stopped(&[]).is_err());
 }

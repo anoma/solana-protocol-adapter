@@ -248,7 +248,7 @@ pub mod spl_token_forwarder {
         // Verify PA is emergency stopped (mirrors EVM _checkEmergencyStopped)
         let pa_state_data = ctx.accounts.pa_state.try_borrow_data()?;
         require!(
-            is_pa_emergency_stopped(&pa_state_data),
+            pa_is_stopped(&pa_state_data)?,
             ErrorCode::ProtocolAdapterNotStopped
         );
         drop(pa_state_data);
@@ -296,7 +296,7 @@ pub mod spl_token_forwarder {
         // Verify PA is emergency stopped (mirrors EVM _checkEmergencyStopped)
         let pa_state_data = ctx.accounts.pa_state.try_borrow_data()?;
         require!(
-            is_pa_emergency_stopped(&pa_state_data),
+            pa_is_stopped(&pa_state_data)?,
             ErrorCode::ProtocolAdapterNotStopped
         );
         drop(pa_state_data);

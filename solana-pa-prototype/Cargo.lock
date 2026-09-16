@@ -2787,6 +2787,7 @@ name = "spl-token-forwarder"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "protocol-adapter",
 ]
 
 [[package]]
