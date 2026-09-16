@@ -2,16 +2,17 @@
 
 Live state is always what `./scripts/dev.sh status --cluster devnet` reports; this file records what was deployed, by whom, and when. Update it after every deploy, upgrade, estop, or teardown.
 
-**Record last verified:** 2026-08-11
+**Record last verified:** 2026-09-16
 
 ## Current deployment (V2)
 
 | Program | ID | State |
 |---|---|---|
-| Protocol Adapter | `28Hvr1YFv2ouGN2fS99aF3ZzYXzkncJVVaHcZNhquLFT` | deployed 2026-09-09 from `anthony/arm-v2-port` `76648e6` (production build, `dev.sh deploy pa --cluster devnet`) in slot 495845894, signature `VPqWWoWTvp6RmCJjtg7skek1XFFsj5zLq2BPsJcc6jGwWxd5WwpXWQCoRpFZFfE4U3Mv3VQhQe8A9zBFstQbrP1`; PAState initialized with the empty kind table (`e3b0c442…`) and selector `0x73c457ba`; production IDL published on chain (IDL account `D6yXDGXaZYW13cz5L3VsAF89jjexMxiTh8DbYJf4DE5T`) |
+| Protocol Adapter | `28Hvr1YFv2ouGN2fS99aF3ZzYXzkncJVVaHcZNhquLFT` | deployed 2026-09-09 from `anthony/arm-v2-port` `76648e6` (production build, `dev.sh deploy pa --cluster devnet`) in slot 495845894, signature `VPqWWoWTvp6RmCJjtg7skek1XFFsj5zLq2BPsJcc6jGwWxd5WwpXWQCoRpFZFfE4U3Mv3VQhQe8A9zBFstQbrP1`; PAState initialized with the empty kind table (`e3b0c442…`) and selector `0x73c457ba`; production IDL published on chain (IDL account `D6yXDGXaZYW13cz5L3VsAF89jjexMxiTh8DbYJf4DE5T`); upgraded 2026-09-16 from `anthony/settle-lookup-table` `30f13a4` (production build, `dev.sh upgrade pa --cluster devnet`, signature `1RWCxVagNbrndMMRdkGRXnQFPxY3SQiHwusvdgzHR1vHzbyUPcmXU1vX4EM8WgGUMBu2ti43zfJbnpoDfcMyJ6W`), IDL republished |
 | Block Time Forwarder | `3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf` | deployed (stateless), shared across PA deployments |
 
 - **PAState PDA:** `9E8AZkYW1RN11iDJGQ2CQgqwGCaamqV4v5nZmhfqdPLn`
+- **Settlement lookup table:** `CKAMrsJSf1SDgsmaM7hsKEwmi2efQsoCAuMNf4msGRSW` (created 2026-09-16 by the operator wallet, which remains its authority; signature `YkjCunBAEpBx3cRaifSaDZQTxX92Gv4SmgscF9XKhCg22nzFqruBuN5famsFe6tVwKXqBGyVDoeVVjjW84fFz2L`; 13 keys: PAState, system program, verifier router `BetEAE4n…`, router PDA, verifier entry, Groth16 verifier `2Yfa83Lz…`, event authority `9G3rrSgA…`, instructions and clock sysvars, block-time forwarder, SPL token forwarder `5CrHbBeH…` and its config PDA, SPL token program). Extend it with each mint's escrow accounts when the forwarder is initialized for a mint (`lookup-table` with `STF_TOKEN_MINTS`). Shipped as `SETTLE_LOOKUP_TABLE` in anoma-pa-solana-client.
 - **Operator wallet** (PA authority, upgrade authority, IDL authority): `5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9` (`scripts/devnet-wallet.json`)
 - **Program keypair:** `target/deploy/protocol_adapter-keypair.json` on this branch (needed only for the first deploy)
 - **Indexing:** the Solana Envio project in anoma-envio (`solana/config.yaml`) indexes this program from slot 495845894.
