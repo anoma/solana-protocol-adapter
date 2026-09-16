@@ -5,8 +5,8 @@
   "selector": "0x73c457ba",
   "forwarder_type": "spl_token_wrap",
   "spl_token_wrap": {
-    "user_secret_key_b64": "+UNkeJY1WGGm0zGUrl+VPAjW0bq4LTYP3IObBgHeANE=",
-    "mint_seed_b64": "RyW222NPBiAFONWbN4SEkpPRwxRXh0b5E7khmu8YNWA=",
+    "user_seed_label": "spl_token_forwarder_test_user",
+    "mint_seed_label": "spl_token_forwarder_test_mint",
     "amount": 100000000,
     "nonce": 1,
     "signed_message_b64": "ZURpMUpSZnBMWm1oMnZIQ21KbjM3T2d2cmpsTm5FTG9Gd3ZXLytxOVBpRT0=",

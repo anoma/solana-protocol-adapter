@@ -232,10 +232,13 @@ use test_forwarder::{MODE_FAIL, MODE_SILENT};
 /// Everything the SPL forwarder wrap test needs to replay the fixture's
 /// external call: the seeded user and mint keypairs, the wrap terms, and the
 /// signature the fixture's proof is bound to.
+/// The actors are keypairs seeded with sha256 of a label, so the fixture
+/// carries the labels and the test rebuilds the keypairs: no key material
+/// is stored, only the public recipe.
 #[derive(Clone, Debug, Serialize)]
 struct SplTokenWrapMetadata {
-    user_secret_key_b64: String,
-    mint_seed_b64: String,
+    user_seed_label: &'static str,
+    mint_seed_label: &'static str,
     amount: u64,
     nonce: u64,
     /// The 44 bytes the user signed: base64 of the wrap message hash.
@@ -246,9 +249,9 @@ struct SplTokenWrapMetadata {
 
 #[derive(Clone, Debug, Serialize)]
 struct SplTokenUnwrapMetadata {
-    mint_seed_b64: String,
+    mint_seed_label: &'static str,
     amount: u64,
-    recipient_seed_b64: String,
+    recipient_seed_label: &'static str,
     logic_ref_b64: String,
 }
 
@@ -517,12 +520,15 @@ fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
     }))
 }
 
-/// A keypair derived from a fixed seed, so the TypeScript test can rebuild
-/// it with `Keypair.fromSeed`.
-fn seeded_keypair(label: &[u8]) -> ([u8; 32], SigningKey) {
+const USER_SEED_LABEL: &str = "spl_token_forwarder_test_user";
+const MINT_SEED_LABEL: &str = "spl_token_forwarder_test_mint";
+const RECIPIENT_SEED_LABEL: &str = "spl_token_forwarder_test_recipient";
+
+/// A keypair seeded with sha256 of a label, as the TypeScript test's
+/// `seededKeypair(label)` rebuilds it.
+fn seeded_keypair(label: &str) -> SigningKey {
     use sha2::Digest as _;
-    let seed: [u8; 32] = sha2::Sha256::digest(label).into();
-    (seed, SigningKey::from_bytes(&seed))
+    SigningKey::from_bytes(&sha2::Sha256::digest(label).into())
 }
 
 fn passthrough_logic_ref_b64() -> String {
@@ -538,8 +544,8 @@ fn spl_token_forwarder_wrap_external_payload(
     action_tree_root: &Digest,
 ) -> Result<(ExpirableBlob, SplTokenWrapMetadata)> {
     let program_id = spl_token_forwarder::ID.to_bytes();
-    let (user_seed, user_key) = seeded_keypair(b"spl_token_forwarder_test_user");
-    let (mint_seed, mint_key) = seeded_keypair(b"spl_token_forwarder_test_mint");
+    let user_key = seeded_keypair(USER_SEED_LABEL);
+    let mint_key = seeded_keypair(MINT_SEED_LABEL);
     let user = Pubkey::new_from_array(user_key.verifying_key().to_bytes());
     let token_mint = Pubkey::new_from_array(mint_key.verifying_key().to_bytes());
 
@@ -574,8 +580,8 @@ fn spl_token_forwarder_wrap_external_payload(
     });
 
     let metadata = SplTokenWrapMetadata {
-        user_secret_key_b64: BASE64.encode(user_seed),
-        mint_seed_b64: BASE64.encode(mint_seed),
+        user_seed_label: USER_SEED_LABEL,
+        mint_seed_label: MINT_SEED_LABEL,
         amount: input.amount,
         nonce: input.nonce,
         signed_message_b64: BASE64.encode(signed_message),
@@ -590,8 +596,8 @@ fn spl_token_forwarder_wrap_external_payload(
 fn spl_token_forwarder_unwrap_external_payload() -> Result<(ExpirableBlob, SplTokenUnwrapMetadata)>
 {
     let program_id = spl_token_forwarder::ID.to_bytes();
-    let (mint_seed, mint_key) = seeded_keypair(b"spl_token_forwarder_test_mint");
-    let (recipient_seed, recipient_key) = seeded_keypair(b"spl_token_forwarder_test_recipient");
+    let mint_key = seeded_keypair(MINT_SEED_LABEL);
+    let recipient_key = seeded_keypair(RECIPIENT_SEED_LABEL);
     let token_mint = Pubkey::new_from_array(mint_key.verifying_key().to_bytes());
     let recipient = Pubkey::new_from_array(recipient_key.verifying_key().to_bytes());
 
@@ -615,9 +621,9 @@ fn spl_token_forwarder_unwrap_external_payload() -> Result<(ExpirableBlob, SplTo
     });
 
     let metadata = SplTokenUnwrapMetadata {
-        mint_seed_b64: BASE64.encode(mint_seed),
+        mint_seed_label: MINT_SEED_LABEL,
         amount: input.amount,
-        recipient_seed_b64: BASE64.encode(recipient_seed),
+        recipient_seed_label: RECIPIENT_SEED_LABEL,
         logic_ref_b64: passthrough_logic_ref_b64(),
     };
     Ok((blob, metadata))
