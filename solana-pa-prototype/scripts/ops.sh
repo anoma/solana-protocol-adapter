@@ -55,6 +55,10 @@ Commands:
                          set-emergency-caller, emergency-withdraw,
                          drain-escrow, teardown. Parameters are STF_*
                          environment variables; see scripts/forwarder.ts.
+  lookup-table           Create the deployment's settlement lookup table, or
+                         extend the one in PA_LOOKUP_TABLE with any missing
+                         key; STF_TOKEN_MINTS adds mints' escrow accounts.
+                         See scripts/lookup-table.ts.
   estop                  EMERGENCY STOP the PA — terminal, no resume.
                          Requires --yes.
   status                 Show deployment status + wallet balance
@@ -608,6 +612,19 @@ cmd_forwarder() {
   run_ts scripts/forwarder.ts "$TARGET"
 }
 
+cmd_lookup_table() {
+  require_cmd npx
+
+  local pid
+  pid="$(get_program_id "protocol_adapter")"
+  if ! is_deployed "$pid"; then
+    echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
+    echo "Run: ./scripts/dev.sh deploy pa --cluster ${CLUSTER}"
+    exit 1
+  fi
+  run_ts scripts/lookup-table.ts
+}
+
 cmd_estop() {
   require_cmd npx
 
@@ -902,7 +919,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|teardown|close-pdas|init|forwarder|estop|status|balance|idl-publish)
+  deploy|upgrade|teardown|close-pdas|init|forwarder|lookup-table|estop|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster
