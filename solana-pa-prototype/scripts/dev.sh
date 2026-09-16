@@ -90,7 +90,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh test $(printf '%q ' "$@")"
     ;;
 
-  deploy|upgrade|teardown|close-pdas|init|estop|status|balance|sync-ids|idl-publish|verify-build)
+  deploy|upgrade|teardown|close-pdas|init|forwarder|estop|status|balance|sync-ids|idl-publish|verify-build)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -155,7 +155,7 @@ case "${1:-}" in
 
   coverage)
     echo "Building test binaries..."
-    BUILD_JSON=$(run_in_project "cargo test -p protocol-adapter -p block-time-forwarder --no-run --message-format=json 2>/dev/null")
+    BUILD_JSON=$(run_in_project "cargo test -p protocol-adapter -p block-time-forwarder -p spl-token-forwarder --no-run --message-format=json 2>/dev/null")
     BINS=$(echo "$BUILD_JSON" | jq -r 'select(.executable != null and .profile.test == true) | .executable')
 
     if [[ -z "$BINS" ]]; then
@@ -195,12 +195,7 @@ src_files = []
 test_files = []
 for fi in files:
     fname = fi.get("file", "")
-    if "block-time-forwarder/" in fname:
-        short = "btf/" + fname.split("block-time-forwarder/")[-1]
-    elif "solana-pa-prototype/programs/solana-pa-prototype/" in fname:
-        short = fname.split("solana-pa-prototype/programs/solana-pa-prototype/")[-1]
-    else:
-        short = fname
+    short = fname.split("/programs/")[-1]
     cov = int(fi.get("covered_lines", 0))
     tot = int(fi.get("total_lines", 0))
     pct = float(fi.get("percent_covered", "0"))

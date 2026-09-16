@@ -1,0 +1,26 @@
+[package]
+name = "spl-token-forwarder"
+version = "0.1.0"
+description = "SPL Token forwarder for wrap/unwrap operations with Ed25519 signature verification"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "spl_token_forwarder"
+
+[features]
+default = []
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "protocol-adapter/idl-build"]
+
+[dependencies]
+anchor-lang = { workspace = true }
+# The adapter's state account type, so the emergency-stopped check reads the
+# lifecycle field through the adapter's own layout instead of byte offsets.
+protocol-adapter = { path = "../solana-pa-prototype", default-features = false, features = ["no-entrypoint"] }
+
+[dev-dependencies]
+hex-literal = "0.4"

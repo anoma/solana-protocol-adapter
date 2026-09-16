@@ -98,7 +98,7 @@ jobs:
 
       - name: Run tests
         working-directory: ./solana-pa-prototype
-        run: cargo test -p protocol-adapter -p block-time-forwarder
+        run: cargo test -p protocol-adapter -p block-time-forwarder -p spl-token-forwarder
 
   # Build the programs once; the per-mode test jobs below reuse the
   # artifacts instead of repeating the SBF build.

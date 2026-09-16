@@ -46,7 +46,7 @@ VALIDATOR_PID=""
 # under programs/ that isn't in this list would otherwise silently stop being
 # built on a forward-merge — fail loudly instead. This is the single copy:
 # dev.sh and ops.sh both route builds through the functions in this file.
-EXPECTED_PROGRAMS=(protocol-adapter block-time-forwarder test-forwarder mock-verifier)
+EXPECTED_PROGRAMS=(protocol-adapter block-time-forwarder spl-token-forwarder test-forwarder mock-verifier)
 
 assert_known_programs() {
   local dir pkg known ok
@@ -202,6 +202,7 @@ require_commands() {
 PROGRAM_KEYPAIRS=(
   target/deploy/protocol_adapter-keypair.json
   target/deploy/block_time_forwarder-keypair.json
+  target/deploy/spl_token_forwarder-keypair.json
   target/deploy/test_forwarder-keypair.json
   target/deploy/mock_verifier-keypair.json
 )
@@ -331,11 +332,16 @@ sync_program_ids() {
     "programs/block-time-forwarder/src/lib.rs" \
     "block_time_forwarder")"
 
-  # BTF ID also appears in fixture-gen and integration tests
+  # BTF ID also appears in the integration tests (fixture-gen reads the crate's ID)
   if [[ "$BTF_OLD" != "$BTF_ID" ]]; then
-    sed -i -E "s/decode_base58_32\(\"${BTF_OLD}\"\)/decode_base58_32(\"${BTF_ID}\")/" tools/fixture-gen/src/main.rs
     sed -i -E "s/blockTimeForwarderId = new PublicKey\(\"[^\"]+\"\)/blockTimeForwarderId = new PublicKey(\"${BTF_ID}\")/" tests/solana-pa-prototype.ts
   fi
+
+  # Nothing else carries the STF id: fixture-gen and the tests read the crate's ID.
+  sync_program_id "STF" \
+    "target/deploy/spl_token_forwarder-keypair.json" \
+    "programs/spl-token-forwarder/src/lib.rs" \
+    "spl_token_forwarder" >/dev/null
 
   TF_OLD="$(read_declare_id "programs/test-forwarder/src/lib.rs")"
   TF_ID="$(sync_program_id "TF" \
@@ -343,9 +349,8 @@ sync_program_ids() {
     "programs/test-forwarder/src/lib.rs" \
     "test_forwarder")"
 
-  # TF ID also appears in fixture-gen and integration tests
+  # TF ID also appears in the integration tests (fixture-gen reads the crate's ID)
   if [[ "$TF_OLD" != "$TF_ID" ]]; then
-    sed -i -E "s/decode_base58_32\(\"${TF_OLD}\"\)/decode_base58_32(\"${TF_ID}\")/" tools/fixture-gen/src/main.rs
     sed -i -E "s/testForwarderId = new PublicKey\(\"[^\"]+\"\)/testForwarderId = new PublicKey(\"${TF_ID}\")/" tests/solana-pa-prototype.ts
   fi
 
@@ -389,6 +394,7 @@ build_programs_dev() {
   # be scoped with -p rather than passed to the whole-workspace build.
   build_with_filtered_output anchor build -p protocol-adapter ${idl_flag} -- --features dev-teardown
   build_with_filtered_output anchor build -p block-time-forwarder ${idl_flag}
+  build_with_filtered_output anchor build -p spl-token-forwarder ${idl_flag}
   # Nothing consumes the test-only programs' IDLs — skip that extra
   # cargo +nightly pass unconditionally.
   build_with_filtered_output anchor build -p test-forwarder --no-idl
@@ -449,6 +455,9 @@ build_programs_release() {
   echo "    Building programs (production build)..."
   build_with_filtered_output anchor build -p protocol-adapter
   build_with_filtered_output anchor build -p block-time-forwarder --no-idl
+  # The forwarder's operator script resolves the program through the Anchor
+  # workspace, which needs its IDL and types.
+  build_with_filtered_output anchor build -p spl-token-forwarder
   build_with_filtered_output anchor build -p test-forwarder --no-idl
   build_with_filtered_output anchor build -p mock-verifier --no-idl
 
@@ -554,6 +563,7 @@ start_validator() {
 deploy_programs() {
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name protocol_adapter
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name block_time_forwarder
+  anchor deploy --provider.cluster "$CLUSTER_URL" --program-name spl_token_forwarder
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name test_forwarder
   anchor deploy --provider.cluster "$CLUSTER_URL" --program-name mock_verifier
 }
