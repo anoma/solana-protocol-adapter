@@ -347,7 +347,6 @@ sync_program_ids() {
   # STF ID also appears in fixture-gen and the forwarder test constants
   if [[ "$STF_OLD" != "$STF_ID" ]]; then
     sed -i -E "s/decode_base58_32\(\"${STF_OLD}\"\)/decode_base58_32(\"${STF_ID}\")/" tools/fixture-gen/src/main.rs
-    sed -i -E "s/SPL_TOKEN_FORWARDER_PROGRAM_ID = new PublicKey\(\"[^\"]+\"\)/SPL_TOKEN_FORWARDER_PROGRAM_ID = new PublicKey(\"${STF_ID}\")/" tests/utils/constants.ts
   fi
 
   TF_OLD="$(read_declare_id "programs/test-forwarder/src/lib.rs")"

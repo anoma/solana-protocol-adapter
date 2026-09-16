@@ -1,5 +1,26 @@
 import { PublicKey } from "@solana/web3.js";
-import { NULLIFIER_SEED, ROOT_MARKER_SEED } from "./constants";
+import {
+  CONFIG_SEED,
+  ESCROW_SEED,
+  NONCE_BITMAP_SEED,
+  NONCES_PER_WORD,
+  NULLIFIER_SEED,
+  PA_STATE_SEED,
+  ROOT_MARKER_SEED,
+} from "./constants";
+
+const BPF_LOADER_UPGRADEABLE = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
+
+// Protocol adapter PDAs
+
+export function derivePaStatePda(paProgramId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([PA_STATE_SEED], paProgramId);
+}
+
+/** The upgradeable loader's program-data account of a program. */
+export function deriveProgramDataPda(programId: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync([programId.toBuffer()], BPF_LOADER_UPGRADEABLE)[0];
+}
 
 export function deriveNullifierPda(
   programId: PublicKey,
@@ -37,4 +58,34 @@ export function deriveNullifierAccounts(
     const [pubkey] = deriveNullifierPda(programId, paState, nf);
     return { pubkey, isWritable: true, isSigner: false };
   });
+}
+
+// SPL token forwarder PDAs
+
+export function deriveConfigPda(forwarderProgramId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([CONFIG_SEED], forwarderProgramId);
+}
+
+export function deriveEscrowPda(
+  forwarderProgramId: PublicKey,
+  tokenMint: PublicKey
+): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync(
+    [ESCROW_SEED, tokenMint.toBuffer()],
+    forwarderProgramId
+  );
+}
+
+/** One bitmap account per (user, 256-nonce word), as the forwarder derives it. */
+export function deriveNonceBitmapPda(
+  forwarderProgramId: PublicKey,
+  user: PublicKey,
+  nonce: bigint
+): [PublicKey, number] {
+  const wordIndex = Buffer.alloc(8);
+  wordIndex.writeBigUInt64LE(nonce / NONCES_PER_WORD);
+  return PublicKey.findProgramAddressSync(
+    [NONCE_BITMAP_SEED, user.toBuffer(), wordIndex],
+    forwarderProgramId
+  );
 }

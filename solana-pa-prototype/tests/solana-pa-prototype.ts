@@ -6,13 +6,24 @@ import {
   Keypair,
   LAMPORTS_PER_SOL,
   ComputeBudgetProgram,
+  Ed25519Program,
   SYSVAR_CLOCK_PUBKEY,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
   Transaction,
 } from "@solana/web3.js";
+import {
+  approve,
+  createMint,
+  getAccount,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import { assert } from "chai";
 import { createHash } from "crypto";
 import path from "path";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
+import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 
 import {
   getRouterPda,
@@ -36,9 +47,23 @@ import {
   loadFixture,
   type Fixture,
   parseSelectorFromFixture,
+  createdCommitmentsOf,
   fundKeypair,
+  drainKeypairs,
+  paInitializeBuilder,
+  uploadTxData as uploadTxDataTo,
+  computeRootAfterAppend,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
+  deriveProgramDataPda,
   deriveRootMarkerPda,
+  EMERGENCY_COMMITTEE_LABEL,
+  createWrapMessageHash,
+  deriveConfigPda,
+  deriveEscrowPda,
+  deriveNonceBitmapPda,
+  isNonceUsed,
+  regenerateCommand,
+  seededKeypair,
 } from "./utils";
 
 // Keypairs funded during tests, drained back to the provider wallet in
@@ -65,13 +90,7 @@ const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 
 const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
 
-const BPF_LOADER_UPGRADEABLE = new PublicKey(
-  "BPFLoaderUpgradeab1e11111111111111111111111"
-);
-const [programData] = PublicKey.findProgramAddressSync(
-  [program.programId.toBuffer()],
-  BPF_LOADER_UPGRADEABLE
-);
+const programData = deriveProgramDataPda(program.programId);
 
 const fixture = loadFixture("batch_groth16.json");
 
@@ -101,67 +120,6 @@ function deriveRootPda(root: Buffer): PublicKey {
 // the instruction fails earlier.
 const DUMMY_ROOT_MARKER = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
 
-// Predict the produced-root marker PDA for a settlement whose resulting root
-// is only known after commitments are appended on-chain.
-//
-// Mirrors what a production submitter must do: fetch the current tree state
-// and replay the append locally over the transaction's created commitments
-// (merkle.rs `append_to_tree`, including the expand-after-fill growth step).
-// A wrong prediction cannot settle: the program's
-// `require_keys_eq!(expected_pda, provided)` rejects it with RootPdaMismatch,
-// so the on-chain check keeps this replica honest.
-const MAX_TREE_DEPTH = 32;
-
-function hashTwo(left: Buffer, right: Buffer): Buffer {
-  return createHash("sha256").update(left).update(right).digest();
-}
-
-// ZEROS[0] = PADDING_LEAF; ZEROS[i] = hash(ZEROS[i-1], ZEROS[i-1]) — the
-// zero-subtree hashes from merkle.rs, derived rather than copied.
-const ZEROS: Buffer[] = (() => {
-  const zeros: Buffer[] = [EMPTY_TREE_ROOT_INITIAL];
-  for (let i = 1; i < MAX_TREE_DEPTH; i++) {
-    zeros.push(hashTwo(zeros[i - 1], zeros[i - 1]));
-  }
-  return zeros;
-})();
-
-function computeRootAfterAppend(
-  state: { nextIndex: anchor.BN; currentDepth: number; frontier: number[][]; root: number[] },
-  leaves: Buffer[],
-): Buffer {
-  let nextIndex = BigInt(state.nextIndex.toString());
-  let depth = state.currentDepth;
-  const frontier: Buffer[] = state.frontier.map((f) => Buffer.from(f));
-  let root: Buffer = Buffer.from(state.root);
-
-  for (const leaf of leaves) {
-    assert.ok(nextIndex < 1n << BigInt(depth), "tree over capacity in root prediction");
-    let index = nextIndex;
-    nextIndex += 1n;
-
-    let current: Buffer = leaf;
-    for (let level = 0; level < depth; level++) {
-      if ((index & 1n) === 0n) {
-        frontier[level] = current;
-        current = hashTwo(current, ZEROS[level]);
-      } else {
-        current = hashTwo(frontier[level], current);
-      }
-      index >>= 1n;
-    }
-
-    if (nextIndex === 1n << BigInt(depth) && depth < MAX_TREE_DEPTH) {
-      frontier.push(current);
-      current = hashTwo(current, ZEROS[depth]);
-      depth += 1;
-    }
-
-    root = current;
-  }
-  return root;
-}
-
 async function predictRootMarkerPda(createdCommitments: Buffer[]): Promise<PublicKey> {
   const state = await program.account.paStateAccount.fetch(paState);
   const root = computeRootAfterAppend(state, createdCommitments);
@@ -172,24 +130,8 @@ function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; 
   return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
 }
 
-// The one set of initialize arguments the whole suite deploys with: the
-// verifier router, the fixture's selector, and the kind-table commitment
-// every fixture's aggregation instance carries. Callers add `.signers()`
-// when the payer is not the provider wallet.
 function buildInitialize(payer: PublicKey) {
-  return program.methods
-    .initialize(
-      VERIFIER_ROUTER_ID,
-      Array.from(PROOF_SELECTOR),
-      Array.from(EMPTY_KIND_TABLE_COMMITMENT)
-    )
-    .accountsPartial({
-      paState,
-      payer,
-      systemProgram: SystemProgram.programId,
-      program: program.programId,
-      programData,
-    });
+  return paInitializeBuilder(program, payer, PROOF_SELECTOR);
 }
 
 /**
@@ -241,22 +183,9 @@ async function uploadTxData(
   payload: Buffer,
   expiresSlotOverride?: anchor.BN
 ): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey }> {
-  const { uploadId, uploadIdLe, txData } = await initTxData(authority, payload.length, expiresSlotOverride);
-
-  const chunkSize = 700;
-  for (let offset = 0; offset < payload.length; offset += chunkSize) {
-    const chunk = payload.subarray(offset, Math.min(payload.length, offset + chunkSize));
-    await program.methods
-      .txdataWrite(uploadId, offset, chunk)
-      .accountsPartial({
-        txData,
-        authority: authority.publicKey,
-      })
-      .signers([authority])
-      .rpc();
-  }
-
-  return { uploadId, uploadIdLe, txData };
+  const upload = await uploadTxDataTo(program, paState, authority, payload, expiresSlotOverride);
+  openTxDataAccounts.push({ uploadId: upload.uploadId, txData: upload.txData, authority });
+  return upload;
 }
 
 function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
@@ -439,11 +368,7 @@ function requireCommitments(createdCommitments?: Buffer[]): Buffer[] {
 }
 
 function commitmentsOf(fx: Fixture): Buffer[] {
-  assert.ok(
-    fx.created_commitments_b64?.length,
-    "fixture is missing created_commitments_b64 — regenerate or refresh-fields it",
-  );
-  return fx.created_commitments_b64!.map((b) => Buffer.from(b, "base64"));
+  return createdCommitmentsOf(fx);
 }
 
 async function paStateExists(): Promise<boolean> {
@@ -3038,6 +2963,218 @@ describe("protocol-adapter (close_markers_batch requires stopped state)", () => 
 
 // MUST BE LAST: emergency_stop permanently pauses PAState. No further
 // settle operations can succeed after this block runs.
+// ── SPL token forwarder through the adapter ──────────────────────────────
+//
+// A wrap and an unwrap settled with fixtures whose external calls target the
+// SPL token forwarder. The fixtures' proofs bind the call inputs, so the
+// tests rebuild the fixture's seeded user, mint and recipient and supply the
+// accounts the call names. Placed after every tree-shape-dependent block
+// (the historical-root fixtures assume the tree state at that point of the
+// run) and before the final emergency stop.
+
+describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
+  const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
+  const [configPda] = deriveConfigPda(forwarderProgram.programId);
+
+  function requireForwarderFixture(filename: string, flags: string): Fixture {
+    try {
+      return loadFixture(filename);
+    } catch (e: any) {
+      throw new Error(`${filename} missing (${e.message}); generate with: ${regenerateCommand(filename, flags)}`);
+    }
+  }
+  const wrapFixture = requireForwarderFixture("spl_token_wrap.json", "--spl-token-wrap");
+  const unwrapFixture = requireForwarderFixture("spl_token_unwrap.json", "--spl-token-unwrap");
+  const wrap = wrapFixture.spl_token_wrap!;
+  const unwrap = unwrapFixture.spl_token_unwrap!;
+
+  // The fixture's seeded actors. The user is also the mint authority, so
+  // the unwrap test can fund the escrow without depending on the wrap.
+  const user = seededKeypair(wrap.user_seed_label);
+  const mintKeypair = seededKeypair(wrap.mint_seed_label);
+  const recipient = seededKeypair(unwrap.recipient_seed_label);
+  const mint = mintKeypair.publicKey;
+  const [escrowPda] = deriveEscrowPda(forwarderProgram.programId, mint);
+  const emergencyCommittee = seededKeypair(EMERGENCY_COMMITTEE_LABEL);
+
+  const wrapAmount = BigInt(wrap.amount);
+  const wrapNonce = BigInt(wrap.nonce);
+  const unwrapAmount = BigInt(unwrap.amount);
+
+  let userAta: PublicKey;
+  let escrowAta: PublicKey;
+
+  before(async () => {
+    assert.ok(
+      user.publicKey.equals(new PublicKey(Buffer.from(wrap.user_pubkey_b64, "base64"))),
+      "seeded user must match the fixture's user"
+    );
+    assert.equal(mint.toBase58(), wrap.token_mint_b58, "seeded mint must match the wrap fixture's mint");
+    assert.equal(mint.toBase58(), unwrap.token_mint_b58, "both fixtures must name the same mint");
+    assert.equal(recipient.publicKey.toBase58(), unwrap.recipient_b58, "seeded recipient must match the fixture");
+
+    // The suite's afterEach drains every funded keypair after each test, so
+    // each test below funds the actors it uses.
+    await airdrop(provider, user, 2);
+
+    // 01-spl-token-forwarder.ts initializes the config; a --grep run of this
+    // block alone initializes it here.
+    if (!(await provider.connection.getAccountInfo(configPda))) {
+      await forwarderProgram.methods
+        .initialize(
+          program.programId,
+          Array.from(Buffer.from(wrap.logic_ref_b64, "base64")),
+          emergencyCommittee.publicKey
+        )
+        .accounts({ authority: provider.wallet.publicKey })
+        .rpc();
+    }
+
+    await createMint(provider.connection, user, user.publicKey, null, 6, mintKeypair);
+    userAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, user.publicKey)).address;
+    await mintTo(provider.connection, user, mint, userAta, user, Number(wrapAmount) * 2);
+    escrowAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, escrowPda, true)).address;
+  });
+
+  /**
+   * Settle `fx` from a TxData upload with the forwarder's account segment
+   * after the nullifier markers. `preInstructions` are prepended so an
+   * ed25519 instruction lands at index 0, where the wrap input points.
+   */
+  async function settleForwarderFixture(
+    fx: Fixture,
+    forwarderAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+    preInstructions: (authority: Keypair) => anchor.web3.TransactionInstruction[]
+  ): Promise<string> {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority, 2);
+    const { uploadId, txData } = await uploadTxData(authority, Buffer.from(fx.tx_b64, "base64"));
+    const newRootMarker = await predictRootMarkerPda(commitmentsOf(fx));
+    return settleFromTxDataBuilder(
+      authority.publicKey,
+      uploadId,
+      txData,
+      newRootMarker,
+      [...deriveNullifierAccounts(fx.consumed_nullifiers_b64), ...forwarderAccounts]
+    )
+      .preInstructions(preInstructions(authority), true)
+      .signers([authority])
+      .rpc();
+  }
+
+  function forwarderSegmentHead() {
+    return [
+      { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
+      { pubkey: configPda, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
+      { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
+    ];
+  }
+
+  /** The ed25519 instruction proving the fixture's signature over base64(sha256(wrap message)). */
+  function wrapAuthorizationIx(fx: Fixture) {
+    const meta = fx.spl_token_wrap!;
+    const messageHash = createWrapMessageHash(
+      forwarderProgram.programId,
+      mint,
+      BigInt(meta.amount),
+      BigInt(meta.nonce),
+      BigInt(meta.deadline),
+      Buffer.from(meta.action_tree_root_b64, "base64")
+    );
+    return Ed25519Program.createInstructionWithPublicKey({
+      publicKey: user.publicKey.toBytes(),
+      message: Buffer.from(messageHash.toString("base64")),
+      signature: Buffer.from(meta.signature_b64, "base64"),
+    });
+  }
+
+  // Mirrors EmergencyMigratableForwarderBase.t.sol: test_setEmergencyCaller_reverts_if_the_pa_is_not_stopped
+  it("rejects set_emergency_caller while the adapter is running", async () => {
+    await airdrop(provider, emergencyCommittee, 1);
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.deepEqual(state.lifecycle, { running: {} }, "the adapter must be running here");
+
+    try {
+      await forwarderProgram.methods
+        .setEmergencyCaller(Keypair.generate().publicKey)
+        .accounts({ committee: emergencyCommittee.publicKey, paState })
+        .signers([emergencyCommittee])
+        .rpc();
+      assert.fail("expected set_emergency_caller to fail");
+    } catch (e: any) {
+      assert.include(e.toString(), "ProtocolAdapterNotStopped");
+    }
+  });
+
+  // Mirrors ERC20Forwarder.t.sol: test_wrap_pulls_funds_from_user
+  it("settles a wrap: escrow receives the tokens and the nonce is marked used", async () => {
+    await airdrop(provider, user, 1);
+    await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
+    const [nonceBitmapPda] = deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, wrapNonce);
+
+    const userBefore = (await getAccount(provider.connection, userAta)).amount;
+    const escrowBefore = (await getAccount(provider.connection, escrowAta)).amount;
+
+    await settleForwarderFixture(
+      wrapFixture,
+      [
+        ...forwarderSegmentHead(),
+        { pubkey: userAta, isWritable: true, isSigner: false },
+        { pubkey: escrowAta, isWritable: true, isSigner: false },
+        { pubkey: escrowPda, isWritable: false, isSigner: false },
+        { pubkey: nonceBitmapPda, isWritable: true, isSigner: false },
+        { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+        { pubkey: SystemProgram.programId, isWritable: false, isSigner: false },
+        { pubkey: provider.wallet.publicKey, isWritable: true, isSigner: false },
+        { pubkey: mint, isWritable: false, isSigner: false },
+      ],
+      () => [wrapAuthorizationIx(wrapFixture)]
+    );
+
+    const userAfter = (await getAccount(provider.connection, userAta)).amount;
+    const escrowAfter = (await getAccount(provider.connection, escrowAta)).amount;
+    assert.equal(userAfter, userBefore - wrapAmount, "user balance decreases by the wrap amount");
+    assert.equal(escrowAfter, escrowBefore + wrapAmount, "escrow holds the wrapped tokens");
+
+    const bitmap = await provider.connection.getAccountInfo(nonceBitmapPda);
+    assert.ok(bitmap, "the nonce bitmap account exists after the wrap");
+    assert.ok(bitmap!.owner.equals(forwarderProgram.programId), "the forwarder owns the nonce bitmap");
+    assert.ok(isNonceUsed(bitmap!.data, wrapNonce), "the wrap's nonce is marked used");
+  });
+
+  // Mirrors ERC20Forwarder.t.sol: test_unwrap_sends_funds_to_the_user
+  it("settles an unwrap: the recipient receives the tokens from escrow", async () => {
+    await airdrop(provider, user, 1);
+    await airdrop(provider, recipient, 1);
+    await mintTo(provider.connection, user, mint, escrowAta, user, Number(unwrapAmount));
+    const recipientAta = (
+      await getOrCreateAssociatedTokenAccount(provider.connection, recipient, mint, recipient.publicKey)
+    ).address;
+
+    const escrowBefore = (await getAccount(provider.connection, escrowAta)).amount;
+    const recipientBefore = (await getAccount(provider.connection, recipientAta)).amount;
+
+    await settleForwarderFixture(
+      unwrapFixture,
+      [
+        ...forwarderSegmentHead(),
+        { pubkey: escrowAta, isWritable: true, isSigner: false },
+        { pubkey: recipientAta, isWritable: true, isSigner: false },
+        { pubkey: escrowPda, isWritable: false, isSigner: false },
+        { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+        { pubkey: mint, isWritable: false, isSigner: false },
+      ],
+      () => []
+    );
+
+    const escrowAfter = (await getAccount(provider.connection, escrowAta)).amount;
+    const recipientAfter = (await getAccount(provider.connection, recipientAta)).amount;
+    assert.equal(escrowAfter, escrowBefore - unwrapAmount, "escrow balance decreases by the unwrap amount");
+    assert.equal(recipientAfter, recipientBefore + unwrapAmount, "recipient receives the unwrapped tokens");
+  });
+});
+
 describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
   it("emergency_stop pauses protocol", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
@@ -3233,34 +3370,7 @@ afterEach(async () => {
   openTxDataAccounts.length = 0;
 
   // 2. Drain any remaining SOL from funded keypairs back to provider wallet.
-  //    Uses sendRawTransaction directly — provider.sendAndConfirm fails because
-  //    Anchor's provider tries to co-sign with the wallet, which isn't needed here.
-  const MIN_DRAIN = 5000;
-  let recovered = 0;
-  let drained = 0;
-  for (const kp of fundedKeypairs) {
-    try {
-      const balance = await provider.connection.getBalance(kp.publicKey);
-      if (balance <= MIN_DRAIN) continue;
-      const drainAmount = balance - MIN_DRAIN;
-      const drainTx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: kp.publicKey,
-          toPubkey: provider.wallet.publicKey,
-          lamports: drainAmount,
-        })
-      );
-      drainTx.recentBlockhash = (await provider.connection.getLatestBlockhash()).blockhash;
-      drainTx.feePayer = kp.publicKey;
-      drainTx.sign(kp);
-      const sig = await provider.connection.sendRawTransaction(drainTx.serialize());
-      await provider.connection.confirmTransaction(sig);
-      recovered += drainAmount;
-      drained++;
-    } catch {
-      // Best-effort — tx may fail if keypair was already drained
-    }
-  }
+  const { recovered, drained } = await drainKeypairs(provider, fundedKeypairs);
   fundedKeypairs.length = 0;
 
   const providerBalanceAfter = await provider.connection.getBalance(provider.wallet.publicKey);
