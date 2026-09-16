@@ -78,6 +78,7 @@ if [[ "$PHASE" != "test" ]]; then
   # its runner has no cargo.)
   cargo clean \
     --package block-time-forwarder \
+    --package spl-token-forwarder \
     --package protocol-adapter \
     >/dev/null 2>&1 || true
 fi

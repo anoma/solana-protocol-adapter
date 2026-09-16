@@ -155,7 +155,7 @@ case "${1:-}" in
 
   coverage)
     echo "Building test binaries..."
-    BUILD_JSON=$(run_in_project "cargo test -p protocol-adapter -p block-time-forwarder --no-run --message-format=json 2>/dev/null")
+    BUILD_JSON=$(run_in_project "cargo test -p protocol-adapter -p block-time-forwarder -p spl-token-forwarder --no-run --message-format=json 2>/dev/null")
     BINS=$(echo "$BUILD_JSON" | jq -r 'select(.executable != null and .profile.test == true) | .executable')
 
     if [[ -z "$BINS" ]]; then
@@ -197,6 +197,8 @@ for fi in files:
     fname = fi.get("file", "")
     if "block-time-forwarder/" in fname:
         short = "btf/" + fname.split("block-time-forwarder/")[-1]
+    elif "spl-token-forwarder/" in fname:
+        short = "stf/" + fname.split("spl-token-forwarder/")[-1]
     elif "solana-pa-prototype/programs/solana-pa-prototype/" in fname:
         short = fname.split("solana-pa-prototype/programs/solana-pa-prototype/")[-1]
     else:
