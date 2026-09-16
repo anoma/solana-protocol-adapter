@@ -21,6 +21,7 @@ source "${SCRIPT_DIR}/validator-deploy.sh"
 declare -A PROGRAMS=(
   [pa]="protocol_adapter"
   [btf]="block_time_forwarder"
+  [stf]="spl_token_forwarder"
 )
 
 # Source file per target. Directory names are historical and deliberately do
@@ -29,6 +30,7 @@ declare -A PROGRAMS=(
 declare -A PROGRAM_LIBRS=(
   [pa]="programs/solana-pa-prototype/src/lib.rs"
   [btf]="programs/block-time-forwarder/src/lib.rs"
+  [stf]="programs/spl-token-forwarder/src/lib.rs"
 )
 
 usage() {
@@ -36,15 +38,23 @@ usage() {
 Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]
 
 Commands:
-  deploy [pa|btf|all]    First-time deploy (default target: all). Deploys the
-                         production build; initializes the PA if deployed.
-  upgrade [pa|btf|all]   Rebuild + deploy over existing programs
-  teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent. Closed
+  deploy [pa|btf|stf|all]
+                         First-time deploy (default target: all). Deploys the
+                         production build; initializes the PA and the SPL
+                         token forwarder config if deployed.
+  upgrade [pa|btf|stf|all]
+                         Rebuild + deploy over existing programs
+  teardown [pa|btf|stf|all]
+                         PERMANENT: close programs, reclaim rent. Closed
                          program IDs are burned forever.
   close-pdas             Close all PA marker PDAs, reclaim rent. Requires the
                          deployed PA to be a --dev-teardown build (the
                          instruction is absent from production builds).
   init                   Initialize PA state (idempotent)
+  forwarder <cmd>        SPL token forwarder operations: init, close-config,
+                         set-emergency-caller, emergency-withdraw,
+                         drain-escrow, teardown. Parameters are STF_*
+                         environment variables; see scripts/forwarder.ts.
   estop                  EMERGENCY STOP the PA — terminal, no resume.
                          Requires --yes.
   status                 Show deployment status + wallet balance
@@ -96,6 +106,13 @@ Initialization parameters (required by deploy/init when the PA is a target):
                        sha256 commitment (hex, 32 bytes) of the kind table
                        every settled aggregation instance must carry.
                        Empty table: ${EMPTY_KIND_TABLE_COMMITMENT}
+
+Forwarder initialization parameters (required by deploy/forwarder init when
+the SPL token forwarder is a target):
+  STF_LOGIC_REF        32-byte hex logic ref the forwarder serves
+  STF_EMERGENCY_COMMITTEE
+                       base58 pubkey of the emergency committee
+  STF_TOKEN_MINT       optional: base58 mint whose escrow ATA to create
 USAGE
   exit 1
 }
@@ -404,19 +421,19 @@ resolve_targets() {
     all)
       echo "${!PROGRAMS[*]}"
       ;;
-    pa|btf)
+    pa|btf|stf)
       echo "$target"
       ;;
     *)
       echo "❌ Unknown target: ${target}" >&2
-      echo "Valid targets: pa, btf, all" >&2
+      echo "Valid targets: pa, btf, stf, all" >&2
       exit 1
       ;;
   esac
 }
 
 # Estimate minimum SOL needed for deployment.
-# PA ~4.7 SOL (659K binary), BTF ~1.3 SOL (177K binary).
+# PA ~4.7 SOL (659K binary), BTF ~1.3 SOL (177K binary), STF ~2.4 SOL (337K binary).
 # Estimates include headroom for transaction fees.
 estimate_balance_needed() {
   local targets="$1"
@@ -425,6 +442,7 @@ estimate_balance_needed() {
     case "$t" in
       pa)  total=$(awk "BEGIN{print $total + 5}") ;;
       btf) total=$(awk "BEGIN{print $total + 2}") ;;
+      stf) total=$(awk "BEGIN{print $total + 3}") ;;
     esac
   done
   echo "$total"
@@ -443,6 +461,20 @@ init_pa() {
   run_ts scripts/init-pa.ts
 }
 
+require_forwarder_init_params() {
+  if [[ -z "${STF_LOGIC_REF:-}" || -z "${STF_EMERGENCY_COMMITTEE:-}" ]]; then
+    echo "❌ Missing STF_LOGIC_REF and/or STF_EMERGENCY_COMMITTEE." >&2
+    echo "   The forwarder config pins the logic ref it serves and the committee" >&2
+    echo "   that can act in an emergency; there is no safe default." >&2
+    exit 1
+  fi
+}
+
+init_forwarder() {
+  echo "Initializing SPL token forwarder (idempotent)..."
+  run_ts scripts/forwarder.ts init
+}
+
 # ---------- commands ----------
 
 cmd_deploy() {
@@ -454,6 +486,9 @@ cmd_deploy() {
 
   if [[ " $targets " == *" pa "* ]]; then
     require_init_params
+  fi
+  if [[ " $targets " == *" stf "* ]]; then
+    require_forwarder_init_params
   fi
 
   require_deploy_keypairs
@@ -467,6 +502,9 @@ cmd_deploy() {
 
   if [[ " $targets " == *" pa "* ]]; then
     init_pa
+  fi
+  if [[ " $targets " == *" stf "* ]]; then
+    init_forwarder
   fi
 
   echo ""
@@ -555,6 +593,27 @@ cmd_init() {
   fi
 
   init_pa
+}
+
+cmd_forwarder() {
+  require_cmd npx
+
+  local pid
+  pid="$(get_program_id "spl_token_forwarder")"
+  if ! is_deployed "$pid"; then
+    echo "❌ SPL token forwarder (${pid}) is not deployed on ${CLUSTER}"
+    echo "Run: ./scripts/dev.sh deploy stf --cluster ${CLUSTER}"
+    exit 1
+  fi
+  if [[ -z "$TARGET" ]]; then
+    echo "❌ forwarder needs a command: init, close-config, set-emergency-caller," >&2
+    echo "   emergency-withdraw, drain-escrow, teardown" >&2
+    exit 1
+  fi
+  if [[ "$TARGET" == "init" ]]; then
+    require_forwarder_init_params
+  fi
+  run_ts scripts/forwarder.ts "$TARGET"
 }
 
 cmd_estop() {
@@ -851,7 +910,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|teardown|close-pdas|init|estop|status|balance|idl-publish)
+  deploy|upgrade|teardown|close-pdas|init|forwarder|estop|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

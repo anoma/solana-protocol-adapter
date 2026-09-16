@@ -128,6 +128,49 @@ Concretely, migration means: deploy a fresh PA under a new program ID (new keypa
 
 The PAState account of a stopped deployment can never be re-initialized. This is deliberate: the account address derives from a fixed seed, so re-initializing would resurrect old nullifier-marker addresses and let previously spent notes spend again.
 
+## The SPL token forwarder
+
+The SPL token forwarder (`programs/spl-token-forwarder`) holds AnomaPay's wrapped SPL tokens in escrow and executes the wrap and unwrap calls the adapter forwards to it. It has one authority of its own, the **emergency committee**, recorded in its config PDA at initialization. All commands below go through `./scripts/dev.sh forwarder <command> --cluster <c>`; their parameters are `STF_*` environment variables (`scripts/forwarder.ts` lists them).
+
+### Deploy and initialize
+
+```sh
+export STF_LOGIC_REF=<32-byte hex verifying key of the AnomaPay resource logic>
+export STF_EMERGENCY_COMMITTEE=<base58 pubkey>
+export STF_TOKEN_MINT=<base58 mint>          # optional: also creates the mint's escrow ATA
+./scripts/dev.sh deploy stf --cluster devnet  # or: forwarder init, for an already deployed program
+```
+
+The config pins the adapter program id, the logic ref, and the committee. A wrap is only executed when the adapter forwards it for a resource carrying that logic ref. Escrow accounts are associated token accounts owned by a per-mint PDA; `forwarder init` with `STF_TOKEN_MINT` creates one, and the same command adds further mints later.
+
+### Nonce bitmaps
+
+A wrap's replay protection is a per-user, per-256-nonce-word bitmap account. The adapter forwards no signer to the forwarder, so the forwarder cannot create that account during a wrap; the submitter creates it with the permissionless `init_nonce_bitmap` instruction (any payer) in a transaction ahead of the settlement, and the wrap fails with `NonceBitmapMissing` when it is absent. A settlement carrying the wrap's ed25519 instruction is within a few bytes of Solana's transaction size limit, so the init does not fit in the same transaction.
+
+### Rotating the logic ref
+
+The logic ref changes whenever the resource circuit is rebuilt. The config cannot be edited: close it and initialize again.
+
+1. Wrapped funds stay in escrow under the old logic ref's rules and the new logic may not be able to unwrap them. Drain every mint's escrow first, as the committee: `STF_TOKEN_MINT=… STF_RECIPIENT=… ./scripts/dev.sh forwarder drain-escrow --cluster <c>`.
+2. `./scripts/dev.sh forwarder close-config --cluster <c>` (committee wallet). Nonce bitmaps and escrow PDAs are untouched; a user's used nonces stay used.
+3. `forwarder init` with the new `STF_LOGIC_REF` (and `STF_TOKEN_MINT` to recreate the escrow ATA).
+
+### Emergency committee
+
+Once the adapter is stopped (`estop`), the committee names an emergency caller, once, and that caller withdraws from escrow directly without going through the adapter:
+
+```sh
+STF_EMERGENCY_CALLER=<pubkey> ./scripts/dev.sh forwarder set-emergency-caller --cluster <c>   # committee wallet
+STF_TOKEN_MINT=<mint> STF_RECIPIENT=<owner> STF_AMOUNT=<raw units> \
+  ./scripts/dev.sh forwarder emergency-withdraw --cluster <c>                                # caller wallet
+```
+
+`set-emergency-caller` refuses while the adapter is running and cannot be repeated. The committee can also drain and close an escrow outright with `drain-escrow`, at any time.
+
+### Retiring the forwarder
+
+`STF_TOKEN_MINT=<mint> ./scripts/dev.sh forwarder teardown --cluster <c>` (committee wallet) closes every nonce bitmap, drains and closes that mint's escrow to the committee, and closes the config, reclaiming their rent. Run it once per mint that has an escrow, then close the program with `teardown stf`.
+
 ## Sunsetting
 
 Permanent retirement, in order. The order matters because `initialize` requires a live upgrade authority: once the authority is gone, that program ID can never host a PA again — which is the point, but only as the final step.
