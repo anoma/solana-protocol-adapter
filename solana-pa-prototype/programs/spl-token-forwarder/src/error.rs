@@ -105,6 +105,11 @@ pub enum ErrorCode {
     #[msg("Invalid nonce bitmap PDA - doesn't match derived address")]
     InvalidNonceBitmapPda,
 
+    #[msg(
+        "Nonce bitmap account does not exist - create it with init_nonce_bitmap before the wrap"
+    )]
+    NonceBitmapMissing,
+
     #[msg("Token transfer failed - ensure user has approved escrow PDA as delegate with sufficient amount")]
     TokenTransferFailed,
 

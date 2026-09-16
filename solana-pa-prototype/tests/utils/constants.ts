@@ -27,9 +27,9 @@ export const CONFIG_SEED = Buffer.from("config");
 export const ESCROW_SEED = Buffer.from("escrow");
 export const NONCE_BITMAP_SEED = Buffer.from("nonce_bitmap");
 export const NONCES_PER_WORD = 256n;
-// A nonce bitmap account is the raw 32-byte bitmap.
-export const NONCE_BITMAP_ACCOUNT_SIZE = 32;
-export const NONCE_BITMAP_DATA_OFFSET = 0;
+// A nonce bitmap account: Anchor discriminator, then the 32-byte word.
+export const NONCE_BITMAP_ACCOUNT_SIZE = 8 + 32;
+export const NONCE_BITMAP_DATA_OFFSET = 8;
 // forward_call operation codes (programs/spl-token-forwarder/src/lib.rs)
 export const OP_WRAP = 0;
 export const OP_UNWRAP = 1;
