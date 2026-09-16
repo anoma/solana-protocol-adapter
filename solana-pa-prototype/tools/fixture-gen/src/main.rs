@@ -627,7 +627,8 @@ fn assemble_transaction(actions: Vec<Action>, rcvs: &[Vec<u8>]) -> Result<Transa
     let tx = Transaction::create(actions, Delta::Witness(delta_witness));
     let balanced_tx = arm::transaction::generate_delta_proof(tx)
         .map_err(|e| anyhow!("generate delta proof: {e:?}"))?;
-    let kind_table_commitment = *kind_table_hash().ok_or_else(|| anyhow!("kind table not loaded"))?;
+    let kind_table_commitment =
+        *kind_table_hash().ok_or_else(|| anyhow!("kind table not loaded"))?;
     arm::transaction::verify(&balanced_tx, kind_table_commitment)
         .map_err(|e| anyhow!("verify tx: {e:?}"))?;
 
