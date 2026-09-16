@@ -50,6 +50,11 @@ gen "${MOCK_FLAG[@]}" --nonce-seed 5 --multi-external-call "$OUT_DIR/batch_groth
 gen "${MOCK_FLAG[@]}" --nonce-seed 6 --forwarder-fail "$OUT_DIR/batch_forwarder_fail.json"
 gen "${MOCK_FLAG[@]}" --nonce-seed 7 --forwarder-silent "$OUT_DIR/batch_forwarder_silent.json"
 gen "${MOCK_FLAG[@]}" --transfer-shape "$OUT_DIR/batch_groth16_transfer_shape.json"
+# SPL token forwarder: the wrap, the same wrap under a fresh nullifier (a
+# replay of its nonce), and the unwrap. Nonce bytes 20-22.
+gen "${MOCK_FLAG[@]}" --spl-token-wrap "$OUT_DIR/spl_token_wrap.json"
+gen "${MOCK_FLAG[@]}" --spl-token-wrap --nonce-seed 21 "$OUT_DIR/spl_token_wrap_replay.json"
+gen "${MOCK_FLAG[@]}" --spl-token-unwrap "$OUT_DIR/spl_token_unwrap.json"
 gen historical-root "$OUT_DIR/batch_groth16.json" \
   "$OUT_DIR/batch_groth16_historical_root_committer.json" \
   "$OUT_DIR/batch_groth16_historical_root.json" \
