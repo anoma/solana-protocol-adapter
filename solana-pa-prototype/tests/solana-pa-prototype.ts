@@ -3051,20 +3051,19 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   }
 
   /**
-   * Create the user's bitmap for the wrap nonce's word, paid by the provider
-   * wallet. Its own transaction: a settlement carrying the ed25519
-   * instruction and a wrap segment sits a few bytes under Solana's
-   * transaction size limit, so the init cannot ride along with it.
+   * The permissionless instruction that creates the user's bitmap for the
+   * wrap nonce's word, paid by the provider wallet (which co-signs every
+   * settlement here as its fee payer).
    */
-  async function initNonceBitmap() {
-    await forwarderProgram.methods
+  function initNonceBitmapIx() {
+    return forwarderProgram.methods
       .initNonceBitmap(user.publicKey, new anchor.BN((wrapNonce / NONCES_PER_WORD).toString()))
       .accountsPartial({
         payer: provider.wallet.publicKey,
         nonceBitmap: nonceBitmapPda,
         systemProgram: SystemProgram.programId,
       })
-      .rpc();
+      .instruction();
   }
 
   function wrapSegment() {
@@ -3123,16 +3122,19 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_wrap_pulls_funds_from_user. The
-  // first wrap on a word is preceded by init_nonce_bitmap.
+  // first wrap on a word carries init_nonce_bitmap in the same transaction,
+  // after the ed25519 instruction the wrap input points at (index 0).
   it("settles a wrap: escrow receives the tokens and the nonce is marked used", async () => {
     await airdrop(provider, user, 1);
     await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
-    await initNonceBitmap();
 
     const userBefore = (await getAccount(provider.connection, userAta)).amount;
     const escrowBefore = (await getAccount(provider.connection, escrowAta)).amount;
 
-    await settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]);
+    await settleForwarderFixture(wrapFixture, wrapSegment(), [
+      wrapAuthorizationIx(wrapFixture),
+      await initNonceBitmapIx(),
+    ]);
 
     const userAfter = (await getAccount(provider.connection, userAta)).amount;
     const escrowAfter = (await getAccount(provider.connection, escrowAta)).amount;

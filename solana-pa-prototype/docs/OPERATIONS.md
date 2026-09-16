@@ -145,7 +145,7 @@ The config pins the adapter program id, the logic ref, and the committee. A wrap
 
 ### Nonce bitmaps
 
-A wrap's replay protection is a per-user, per-256-nonce-word bitmap account. The adapter forwards no signer to the forwarder, so the forwarder cannot create that account during a wrap; the submitter creates it with the permissionless `init_nonce_bitmap` instruction (any payer) in a transaction ahead of the settlement, and the wrap fails with `NonceBitmapMissing` when it is absent. A settlement carrying the wrap's ed25519 instruction is within a few bytes of Solana's transaction size limit, so the init does not fit in the same transaction.
+A wrap's replay protection is a per-user, per-256-nonce-word bitmap account. The adapter forwards no signer to the forwarder, so the forwarder cannot create that account during a wrap; the submitter creates it with the permissionless `init_nonce_bitmap` instruction (any payer) when the word's bitmap does not exist, and the wrap fails with `NonceBitmapMissing` when it is absent. The init fits in the settlement transaction itself, after the ed25519 instruction the wrap input points at; the integration suite settles the first wrap that way.
 
 ### Rotating the logic ref
 
