@@ -3186,7 +3186,9 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
     // Both resources carry the AnomaPay transfer logic the forwarder config
     // pins: the wrap settled under the real verifying key.
+    await provider.connection.confirmTransaction(sig, "confirmed");
     const txResult = await provider.connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+    assert.ok(txResult, "the wrap settlement is fetchable once confirmed");
     const txEvents = parseCpiEvents(txResult!).filter((e) => e.name === "transactionExecutedEvent");
     assert.equal(txEvents.length, 1, "one transactionExecutedEvent");
     const logicRef = Array.from(Buffer.from(wrap.logic_ref_b64, "base64"));
