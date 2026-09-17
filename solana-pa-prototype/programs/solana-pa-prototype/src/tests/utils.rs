@@ -73,8 +73,8 @@ macro_rules! assert_anchor_err {
 }
 pub(crate) use assert_anchor_err;
 
-use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
-use crate::state::{PALifecycle, PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
+use crate::merkle::EMPTY_TREE_ROOT_INITIAL;
+use crate::state::{PALifecycle, PAStateAccount};
 use arm_core::aggregation_instance::{
     ActionAggregated, AggregationInstance, ConsumedResourceAggregated, CreatedResourceAggregated,
 };
@@ -190,24 +190,15 @@ pub fn create_test_pa_state() -> PAStateAccount {
 }
 
 pub fn create_test_pa_state_with(authority: Pubkey, stopped: bool) -> PAStateAccount {
-    PAStateAccount {
-        schema_version: PAStateAccount::SCHEMA_VERSION,
-        bump: 0,
+    let mut state = PAStateAccount::running(
+        0,
         authority,
-        pending_authority: None,
-        verifier_router: Pubkey::default(),
-        proof_selector: FAKE_SELECTOR,
-        kind_table_commitment: empty_kind_table_commitment().into(),
-        lifecycle: if stopped {
-            PALifecycle::Stopped
-        } else {
-            PALifecycle::Running
-        },
-        root: EMPTY_TREE_ROOT_INITIAL.into(),
-        next_index: 0,
-        current_depth: INITIAL_TREE_DEPTH as u8,
-        frontier: vec![ZEROS[0].into()],
-        min_expiry_slots: MIN_EXPIRY_SLOTS,
-        max_expiry_slots: MAX_EXPIRY_SLOTS,
+        Pubkey::default(),
+        FAKE_SELECTOR,
+        empty_kind_table_commitment().into(),
+    );
+    if stopped {
+        state.lifecycle = PALifecycle::Stopped;
     }
+    state
 }

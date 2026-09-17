@@ -92,14 +92,10 @@ mod tests;
 pub mod types;
 
 use arm_core::aggregation_instance::AggregationInstance;
-use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::transaction::{Delta, Transaction};
 pub use error::PAError;
 use groth16::prepare_proof_for_verification;
-use merkle::{
-    append_to_tree, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH,
-    MAX_TREE_DEPTH,
-};
+use merkle::{append_to_tree, required_depth_for_leaves, MAX_TREE_DEPTH};
 use state::*;
 
 #[program]
@@ -118,21 +114,13 @@ pub mod protocol_adapter {
         kind_table_commitment: [u8; 32],
     ) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
-        state.schema_version = PAStateAccount::SCHEMA_VERSION;
-        state.bump = ctx.bumps.pa_state;
-        state.authority = ctx.accounts.payer.key();
-        state.pending_authority = None;
-        state.verifier_router = verifier_router;
-        state.proof_selector = proof_selector;
-        state.kind_table_commitment = kind_table_commitment;
-        state.lifecycle = PALifecycle::Running;
-
-        state.current_depth = INITIAL_TREE_DEPTH as u8;
-        state.frontier = vec![PADDING_LEAF.into()];
-        state.root = EMPTY_TREE_ROOT_INITIAL.into();
-        state.next_index = 0;
-        state.min_expiry_slots = MIN_EXPIRY_SLOTS;
-        state.max_expiry_slots = MAX_EXPIRY_SLOTS;
+        state.set_inner(PAStateAccount::running(
+            ctx.bumps.pa_state,
+            ctx.accounts.payer.key(),
+            verifier_router,
+            proof_selector,
+            kind_table_commitment,
+        ));
 
         msg!("PAState initialized with empty commitment tree");
         Ok(())

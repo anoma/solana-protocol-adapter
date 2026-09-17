@@ -55,6 +55,7 @@ import {
   drainKeypairs,
   uploadTxData as uploadTxDataTo,
   predictRootMarkerPda as predictRootMarkerPdaOf,
+  predictRootAfterAppend,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
   deriveProgramDataPda,
   deriveRootMarkerPda,
@@ -2967,8 +2968,8 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   const wrap = wrapFixture.spl_token_wrap!;
   const unwrap = unwrapFixture.spl_token_unwrap!;
 
-  // The fixture's seeded actors. The user is also the mint authority, so
-  // the unwrap test can fund the escrow without depending on the wrap.
+  // The fixture's seeded actors. The user is the mint authority and mints
+  // its own supply.
   const user = seededKeypair(wrap.user_seed_label);
   const mintKeypair = seededKeypair(wrap.mint_seed_label);
   const recipient = seededKeypair(unwrap.recipient_seed_label);
@@ -2987,6 +2988,17 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   let recipientAta: PublicKey;
 
   before(async () => {
+    // The unwrap fixture spends the resource the wrap creates, proven against
+    // the root the tree has once the wrap lands on what the suite has settled
+    // by now. If the suite's settlement order changes, regenerate the SPL
+    // fixtures with the matching --tree-leaf list (scripts/regen-fixtures.sh).
+    const rootAfterWrap = await predictRootAfterAppend(program, paState, commitmentsOf(wrapFixture));
+    assert.equal(
+      rootAfterWrap.toString("base64"),
+      unwrapFixture.historical_roots_b64?.[0],
+      "the unwrap fixture was proven against a different tree than the suite builds before the wrap; regenerate the SPL fixtures with the suite's --tree-leaf order",
+    );
+
     await funder.fund(user, 5);
     await funder.fund(recipient, 1);
 
@@ -3004,7 +3016,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
     await createMint(provider.connection, user, user.publicKey, null, 6, mintKeypair);
     userAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, user.publicKey)).address;
-    await mintTo(provider.connection, user, mint, userAta, user, Number(wrapAmount) * 2);
+    await mintTo(provider.connection, user, mint, userAta, user, Number(wrapAmount));
     await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, escrowPda, true);
     recipientAta = (await getOrCreateAssociatedTokenAccount(provider.connection, recipient, mint, recipient.publicKey)).address;
     await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
@@ -3166,11 +3178,23 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("settles a wrap: escrow receives the tokens and the nonce is marked used", async () => {
     const [userBefore, escrowBefore] = await balances(userAta, escrowAta);
 
-    await settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]);
+    const sig = await settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]);
 
     const [userAfter, escrowAfter] = await balances(userAta, escrowAta);
     assert.equal(userAfter, userBefore - wrapAmount, "user balance decreases by the wrap amount");
     assert.equal(escrowAfter, escrowBefore + wrapAmount, "escrow holds the wrapped tokens");
+
+    // Both resources carry the AnomaPay transfer logic the forwarder config
+    // pins: the wrap settled under the real verifying key.
+    const txResult = await provider.connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+    const txEvents = parseCpiEvents(txResult!).filter((e) => e.name === "transactionExecutedEvent");
+    assert.equal(txEvents.length, 1, "one transactionExecutedEvent");
+    const logicRef = Array.from(Buffer.from(wrap.logic_ref_b64, "base64"));
+    assert.deepEqual(
+      txEvents[0].data.logicRefs.map((r: number[]) => Array.from(r)),
+      [logicRef, logicRef],
+      "the consumed and created resources carry the AnomaPay transfer logic",
+    );
 
     const bitmap = await forwarderProgram.account.nonceBitmap.fetch(nonceBitmapPda);
     const bit = Number(wrapNonce % 256n);
@@ -3187,7 +3211,6 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
   // The recipient account is chosen by the submitter, not by the proof.
   it("rejects an unwrap to a token account the recipient does not own", async () => {
-    await mintTo(provider.connection, user, mint, escrowAta, user, Number(unwrapAmount));
     await assertRejects(settleForwarderFixture(unwrapFixture, unwrapSegment(userAta), []), /WrongTokenAccountOwner/);
   });
 
