@@ -227,15 +227,16 @@ use block_time_forwarder::{RESULT_GT, RESULT_LT};
 use ed25519_dalek::{Signer, SigningKey};
 use solana_pa::external_calls::decode_external_call;
 use solana_pa::external_calls::encode_external_call;
+use solana_pa::state::PAStateAccount;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
-use spl_token_forwarder::state::{UnwrapInput, WrapInput, WrapMessage};
+use spl_token_forwarder::state::{UnwrapInput, WrapInput};
 use spl_token_forwarder::{OP_UNWRAP, OP_WRAP, RESULT_SUCCESS as SPL_RESULT_SUCCESS};
 use test_forwarder::{MODE_FAIL, MODE_SILENT};
 use transfer_library::{TransferLogic, TOKEN_TRANSFER_ELF, TOKEN_TRANSFER_ID};
 use transfer_witness::call_type::{UNWRAP_SEGMENT_NUM_ACCOUNTS, WRAP_SEGMENT_NUM_ACCOUNTS};
 use transfer_witness::{
     calculate_label_ref, calculate_persistent_value_ref, calculate_value_ref_from_solana_account,
-    ValueInfo, AUTH_SIGNATURE_DOMAIN,
+    TokenTransferWitness, ValueInfo, AUTH_SIGNATURE_DOMAIN,
 };
 
 /// Everything the SPL forwarder wrap test needs to replay the fixture's
@@ -262,10 +263,6 @@ struct SplTokenUnwrapMetadata {
     amount: u64,
     recipient_seed_label: &'static str,
     logic_ref_b64: String,
-    /// Leaf index of the wrapped resource this unwrap consumes: the number of
-    /// commitments the suite settles before the wrap. The suite checks the
-    /// adapter's `next_index` against it before settling the wrap.
-    consumed_leaf_index: u64,
 }
 
 /// Fixture fields that are not derived from the transaction: what kind of
@@ -342,10 +339,6 @@ struct GenerateArgs {
     out_path: PathBuf,
     prover_choice: Option<ProverChoice>,
     mock: bool,
-    /// The fixtures settled before an AnomaPay unwrap, in suite order, the
-    /// wrap last: their created commitments are the tree the unwrap's
-    /// Merkle path is built over.
-    tree_leaves: Vec<PathBuf>,
 }
 
 /// What kind of transaction the default `Generate` command builds.
@@ -359,13 +352,16 @@ enum GenerateShape {
     /// external calls — the captured mainnet transfer's shape (OOM
     /// regression); see `generate_transfer_shape_transaction`.
     TransferShape,
-    /// An AnomaPay SPL token wrap or unwrap proven with the real transfer
-    /// logic; see `generate_anomapay_wrap_transaction` and
-    /// `generate_anomapay_unwrap_transaction`.
-    AnomaPay(AnomaPayCall),
+    /// An AnomaPay SPL token wrap proven with the real transfer logic; see
+    /// `generate_anomapay_wrap_transaction`.
+    AnomaPayWrap,
+    /// An AnomaPay SPL token unwrap spending the wrap's resource through a
+    /// Merkle path over the fixtures settled before it (`tree_leaves`, in
+    /// suite order, the wrap last); see `generate_anomapay_unwrap_transaction`.
+    AnomaPayUnwrap { tree_leaves: Vec<PathBuf> },
 }
 
-/// Which SPL token forwarder call an AnomaPay fixture makes.
+/// Which SPL token forwarder call `--spl-token-wrap`/`--spl-token-unwrap` ask for.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AnomaPayCall {
     Wrap,
@@ -577,8 +573,7 @@ fn seeded_keypair(label: &str) -> SigningKey {
 }
 
 fn label_hash(label: &str) -> [u8; 32] {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(label).into()
+    arm::utils::hash_bytes(label.as_bytes()).into()
 }
 
 /// A secp256k1 scalar from a label: the first eight bytes of its hash, which
@@ -588,24 +583,35 @@ fn scalar_from_label(label: &str) -> Scalar {
     Scalar::from(u64::from_le_bytes(hash[..8].try_into().unwrap()))
 }
 
-/// The wrapped resource's owner: authorization (secp256k1 ECDSA) and
-/// encryption keys.
-fn owner_keys() -> (
-    AuthoritySigningKey,
-    AuthorityVerifyingKey,
-    SecretKey,
-    AffinePoint,
-) {
-    let auth_sk = AuthoritySigningKey::from_bytes(&label_hash(OWNER_AUTH_SEED_LABEL))
-        .expect("a sha256 output is a valid secp256k1 scalar");
-    let auth_pk = AuthorityVerifyingKey::from_signing_key(&auth_sk);
-    let encryption_sk = SecretKey::new(scalar_from_label(OWNER_ENCRYPTION_SEED_LABEL));
-    let encryption_pk = generate_public_key(encryption_sk.inner());
-    (auth_sk, auth_pk, encryption_sk, encryption_pk)
+/// The wrapped resource's owner: the authorization (secp256k1 ECDSA) and
+/// encryption keys its value reference commits to, and its nullifier key.
+struct OwnerKeys {
+    auth_sk: AuthoritySigningKey,
+    auth_pk: AuthorityVerifyingKey,
+    encryption_pk: AffinePoint,
+    nf_key: NullifierKey,
 }
 
-fn owner_nf_key() -> NullifierKey {
-    NullifierKey::from_bytes(label_hash(OWNER_NF_KEY_SEED_LABEL))
+impl OwnerKeys {
+    fn seeded() -> Self {
+        let auth_sk = AuthoritySigningKey::from_bytes(&label_hash(OWNER_AUTH_SEED_LABEL))
+            .expect("a sha256 output is a valid secp256k1 scalar");
+        let auth_pk = AuthorityVerifyingKey::from_signing_key(&auth_sk);
+        let encryption_sk = SecretKey::new(scalar_from_label(OWNER_ENCRYPTION_SEED_LABEL));
+        OwnerKeys {
+            auth_sk,
+            auth_pk,
+            encryption_pk: generate_public_key(encryption_sk.inner()),
+            nf_key: NullifierKey::from_bytes(label_hash(OWNER_NF_KEY_SEED_LABEL)),
+        }
+    }
+
+    fn value_ref(&self) -> Digest {
+        calculate_persistent_value_ref(&ValueInfo {
+            auth_pk: self.auth_pk,
+            encryption_pk: self.encryption_pk,
+        })
+    }
 }
 
 fn discovery_pk() -> AffinePoint {
@@ -616,23 +622,29 @@ fn discovery_pk() -> AffinePoint {
 /// share: `sha256(forwarder ‖ mint)`.
 struct AnomaPayActors {
     forwarder: [u8; 32],
+    user: SigningKey,
     mint: [u8; 32],
-    user: [u8; 32],
     recipient: [u8; 32],
     label_ref: Digest,
 }
 
-fn anomapay_actors() -> AnomaPayActors {
-    let forwarder = spl_token_forwarder::ID.to_bytes();
-    let mint = seeded_keypair(MINT_SEED_LABEL).verifying_key().to_bytes();
-    AnomaPayActors {
-        forwarder,
-        mint,
-        user: seeded_keypair(USER_SEED_LABEL).verifying_key().to_bytes(),
-        recipient: seeded_keypair(RECIPIENT_SEED_LABEL)
-            .verifying_key()
-            .to_bytes(),
-        label_ref: calculate_label_ref(&forwarder, &mint),
+impl AnomaPayActors {
+    fn seeded() -> Self {
+        let forwarder = spl_token_forwarder::ID.to_bytes();
+        let mint = seeded_keypair(MINT_SEED_LABEL).verifying_key().to_bytes();
+        AnomaPayActors {
+            forwarder,
+            user: seeded_keypair(USER_SEED_LABEL),
+            mint,
+            recipient: seeded_keypair(RECIPIENT_SEED_LABEL)
+                .verifying_key()
+                .to_bytes(),
+            label_ref: calculate_label_ref(&forwarder, &mint),
+        }
+    }
+
+    fn user_pubkey(&self) -> [u8; 32] {
+        self.user.verifying_key().to_bytes()
     }
 }
 
@@ -640,43 +652,50 @@ fn token_transfer_logic_ref_b64() -> String {
     BASE64.encode(TOKEN_TRANSFER_ID.as_bytes())
 }
 
-/// The ephemeral resource a wrap consumes, under the transfer logic and the
-/// forwarder's label, plus its nullifier under the default nullifier key.
-fn wrap_ephemeral_resource(nonce_byte: u8) -> Result<(Resource, NullifierKey, Digest)> {
-    let nf_key = NullifierKey::default();
-    let mut resource = Resource {
-        logic_ref: *TOKEN_TRANSFER_ID,
-        label_ref: anomapay_actors().label_ref,
-        quantity: ANOMAPAY_AMOUNT as u128,
-        is_ephemeral: true,
-        nk_commitment: nf_key.commit(),
-        ..Default::default()
-    };
-    resource.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
-    let nf = resource
-        .nullifier(&nf_key)
-        .map_err(|e| anyhow!("compute wrap nullifier: {e:?}"))?;
-    Ok((resource, nf_key, nf))
+/// The resources of a wrap: the ephemeral resource it consumes (under the
+/// transfer logic and the forwarder's label, nullified by the default key)
+/// and the persistent resource it creates for the owner, whose nonce derives
+/// from the consumed nullifier as the compliance circuit requires.
+struct WrapResources {
+    consumed: Resource,
+    nf_key: NullifierKey,
+    consumed_nf: Digest,
+    created: Resource,
 }
 
-/// The persistent resource the wrap creates for the owner: its value
-/// reference commits to the owner's keys, its nonce derives from the wrap's
-/// nullifier as the compliance circuit requires.
-fn wrapped_resource(wrap_nf: Digest) -> Result<Resource> {
-    let (_, auth_pk, _, encryption_pk) = owner_keys();
-    Ok(Resource {
+fn wrap_resources(
+    nonce_byte: u8,
+    actors: &AnomaPayActors,
+    owner: &OwnerKeys,
+) -> Result<WrapResources> {
+    let nf_key = NullifierKey::default();
+    let consumed = ephemeral_resource(
+        *TOKEN_TRANSFER_ID,
+        actors.label_ref,
+        Digest::default(),
+        ANOMAPAY_AMOUNT as u128,
+        nonce_from_byte(nonce_byte),
+        &nf_key,
+    );
+    let consumed_nf = consumed
+        .nullifier(&nf_key)
+        .map_err(|e| anyhow!("compute wrap nullifier: {e:?}"))?;
+    let created = Resource {
         logic_ref: *TOKEN_TRANSFER_ID,
-        label_ref: anomapay_actors().label_ref,
-        value_ref: calculate_persistent_value_ref(&ValueInfo {
-            auth_pk,
-            encryption_pk,
-        }),
+        label_ref: actors.label_ref,
+        value_ref: owner.value_ref(),
         quantity: ANOMAPAY_AMOUNT as u128,
         is_ephemeral: false,
-        nonce: Resource::derive_nonce_from_nullifiers(0, &[wrap_nf])
+        nonce: Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
             .map_err(|e| anyhow!("derive wrapped resource nonce: {e:?}"))?,
-        nk_commitment: owner_nf_key().commit(),
+        nk_commitment: owner.nf_key.commit(),
         rand_seed: label_hash(WRAPPED_RAND_SEED_LABEL),
+    };
+    Ok(WrapResources {
+        consumed,
+        nf_key,
+        consumed_nf,
+        created,
     })
 }
 
@@ -722,14 +741,22 @@ async fn prove_anomapay_action(
     .map_err(|e| anyhow!("build AnomaPay action: {e:?}"))
 }
 
-/// The one forwarder call the action's resource at `index` committed.
-fn anomapay_forwarder_call(action: &Action, index: usize) -> Result<SolanaExternalCall> {
-    let payload = &action.logic_verifier_inputs[index]
-        .app_data
-        .external_payload;
+/// The forwarder operand an ephemeral witness commits: its one external
+/// payload blob must decode to a call on the forwarder with the segment
+/// size and op code the forwarder expects. Checked before proving, on the
+/// host-side witness, since the guest commits exactly this payload.
+fn forwarder_operand(
+    witness: &TokenTransferWitness,
+    action_tree_root: &Digest,
+    num_accounts: u8,
+    op: u8,
+) -> Result<Vec<u8>> {
+    let payload = witness
+        .ephemeral_resource_check(action_tree_root.as_bytes())
+        .map_err(|e| anyhow!("the transfer logic rejects the witness: {e:?}"))?;
     if payload.len() != 1 {
         bail!(
-            "resource {index} committed {} external calls, expected one",
+            "the witness commits {} external calls, expected one",
             payload.len()
         );
     }
@@ -741,77 +768,67 @@ fn anomapay_forwarder_call(action: &Action, index: usize) -> Result<SolanaExtern
     if call.expected_output != vec![SPL_RESULT_SUCCESS] {
         bail!("the circuit's forwarder call expects an output the forwarder never returns");
     }
-    Ok(call)
-}
-
-/// The forwarder must parse the circuit's wrap input and recompute the
-/// message the user signed from it; check both before proving further.
-fn check_wrap_call(action: &Action, message: &WrapMessage) -> Result<()> {
-    let call = anomapay_forwarder_call(action, 0)?;
-    if call.num_accounts != WRAP_SEGMENT_NUM_ACCOUNTS {
+    if call.num_accounts != num_accounts {
         bail!(
-            "wrap call commits {} accounts, the forwarder's segment has {}",
-            call.num_accounts,
-            WRAP_SEGMENT_NUM_ACCOUNTS
+            "the call commits {} accounts, the forwarder's segment has {num_accounts}",
+            call.num_accounts
         );
     }
-    let (op, operand) = call
-        .instruction_data
-        .split_first()
-        .ok_or_else(|| anyhow!("empty wrap instruction data"))?;
-    if *op != OP_WRAP {
-        bail!("wrap call carries op {op}, expected OP_WRAP");
+    match call.instruction_data.split_first() {
+        Some((first, operand)) if *first == op => Ok(operand.to_vec()),
+        Some((first, _)) => bail!("the call carries op {first}, expected {op}"),
+        None => bail!("empty forwarder instruction data"),
     }
-    let input = WrapInput::try_from_bytes(operand)
-        .map_err(|e| anyhow!("the forwarder rejects the circuit's wrap input: {e:?}"))?;
-    if input.to_message(&spl_token_forwarder::ID).to_bytes() != message.to_bytes() {
-        bail!("the forwarder recomputes a wrap message other than the one the user signs");
-    }
-    Ok(())
 }
 
-fn check_unwrap_call(action: &Action) -> Result<()> {
-    let call = anomapay_forwarder_call(action, 1)?;
-    if call.num_accounts != UNWRAP_SEGMENT_NUM_ACCOUNTS {
-        bail!(
-            "unwrap call commits {} accounts, the forwarder's segment has {}",
-            call.num_accounts,
-            UNWRAP_SEGMENT_NUM_ACCOUNTS
-        );
-    }
-    let (op, operand) = call
-        .instruction_data
-        .split_first()
-        .ok_or_else(|| anyhow!("empty unwrap instruction data"))?;
-    if *op != OP_UNWRAP {
-        bail!("unwrap call carries op {op}, expected OP_UNWRAP");
-    }
-    let input = UnwrapInput::try_from_bytes(operand)
-        .map_err(|e| anyhow!("the forwarder rejects the circuit's unwrap input: {e:?}"))?;
-    let actors = anomapay_actors();
-    if input.token_mint.to_bytes() != actors.mint
-        || input.amount != ANOMAPAY_AMOUNT
-        || input.recipient.to_bytes() != actors.recipient
-    {
-        bail!("the circuit's unwrap input names other terms than the fixture's");
-    }
-    Ok(())
+/// The wrap input the forwarder parses from the witness's call.
+fn wrap_input_of(witness: &TokenTransferWitness, action_tree_root: &Digest) -> Result<WrapInput> {
+    let operand = forwarder_operand(
+        witness,
+        action_tree_root,
+        WRAP_SEGMENT_NUM_ACCOUNTS,
+        OP_WRAP,
+    )?;
+    WrapInput::try_from_bytes(&operand)
+        .map_err(|e| anyhow!("the forwarder rejects the circuit's wrap input: {e:?}"))
+}
+
+/// The unwrap input the forwarder parses from the witness's call.
+fn unwrap_input_of(
+    witness: &TokenTransferWitness,
+    action_tree_root: &Digest,
+) -> Result<UnwrapInput> {
+    let operand = forwarder_operand(
+        witness,
+        action_tree_root,
+        UNWRAP_SEGMENT_NUM_ACCOUNTS,
+        OP_UNWRAP,
+    )?;
+    UnwrapInput::try_from_bytes(&operand)
+        .map_err(|e| anyhow!("the forwarder rejects the circuit's unwrap input: {e:?}"))
 }
 
 /// The AnomaPay wrap the fixture settles: the seeded user wraps 100 tokens
 /// of the seeded mint, consuming an ephemeral resource whose transfer logic
 /// commits the forwarder call, and creating the owner's shielded resource
-/// whose logic emits the encrypted payloads. The user authorizes the wrap by
-/// signing base64(sha256(WrapMessage)), which the forwarder recomputes from
-/// the proof-bound input.
+/// whose logic emits the encrypted payloads. The user signs the message the
+/// forwarder recomputes from the proof-bound input: base64 of its sha256.
 async fn generate_anomapay_wrap_transaction(
     prover: &Prover,
     nonce_seed: Option<u8>,
 ) -> Result<(Transaction, FixtureLabels)> {
-    let actors = anomapay_actors();
-    let (consumed, nf_key, consumed_nf) =
-        wrap_ephemeral_resource(nonce_seed.unwrap_or(ANOMAPAY_WRAP_NONCE_BYTE))?;
-    let created = wrapped_resource(consumed_nf)?;
+    let actors = AnomaPayActors::seeded();
+    let owner = OwnerKeys::seeded();
+    let WrapResources {
+        consumed,
+        nf_key,
+        consumed_nf,
+        created,
+    } = wrap_resources(
+        nonce_seed.unwrap_or(ANOMAPAY_WRAP_NONCE_BYTE),
+        &actors,
+        &owner,
+    )?;
     let action_tree_root = single_action_tree_root(consumed_nf, created.commitment())?;
 
     let consumed_logic = TransferLogic::mint_resource_logic_with_wrap_auth(
@@ -820,51 +837,36 @@ async fn generate_anomapay_wrap_transaction(
         nf_key.clone(),
         actors.forwarder,
         actors.mint,
-        actors.user,
+        actors.user_pubkey(),
         ANOMAPAY_WRAP_NONCE,
         ANOMAPAY_WRAP_DEADLINE,
         ANOMAPAY_ED25519_IX_INDEX,
     );
-    let (_, auth_pk, _, encryption_pk) = owner_keys();
+    let input = wrap_input_of(&consumed_logic.witness, &action_tree_root)?;
     let created_logic = TransferLogic::create_persistent_resource_logic(
         created,
         action_tree_root,
         &discovery_pk(),
-        auth_pk,
-        encryption_pk,
+        owner.auth_pk,
+        owner.encryption_pk,
         actors.forwarder,
         actors.mint,
     );
     let compliance_witness =
         single_action_compliance_witness(consumed, MerklePath::empty(), nf_key, created);
-
     let action =
         prove_anomapay_action(prover, &compliance_witness, consumed_logic, created_logic).await?;
-    let message = WrapMessage {
-        forwarder_id: actors.forwarder,
-        token_mint: actors.mint,
-        amount: ANOMAPAY_AMOUNT,
-        nonce: ANOMAPAY_WRAP_NONCE,
-        deadline: ANOMAPAY_WRAP_DEADLINE,
-        action_tree_root: action_tree_root
-            .as_bytes()
-            .try_into()
-            .map_err(|_| anyhow!("action tree root is not 32 bytes"))?,
-    };
-    check_wrap_call(&action, &message)?;
     let tx = assemble_transaction(vec![action], std::slice::from_ref(&compliance_witness.rcv))?;
 
-    let signed_message = message.signed_message();
-    let signature = seeded_keypair(USER_SEED_LABEL)
-        .sign(&signed_message)
-        .to_bytes();
+    let signed_message = input.to_message(&spl_token_forwarder::ID).signed_message();
+    let signature = actors.user.sign(&signed_message).to_bytes();
     let labels = FixtureLabels {
         forwarder_type: Some("spl_token_wrap"),
         spl_token_wrap: Some(SplTokenWrapMetadata {
             user_seed_label: USER_SEED_LABEL,
             mint_seed_label: MINT_SEED_LABEL,
-            amount: ANOMAPAY_AMOUNT,
-            nonce: ANOMAPAY_WRAP_NONCE,
+            amount: input.amount,
+            nonce: input.nonce,
             signed_message_b64: BASE64.encode(signed_message),
             signature_b64: BASE64.encode(signature),
             logic_ref_b64: token_transfer_logic_ref_b64(),
@@ -875,153 +877,133 @@ async fn generate_anomapay_wrap_transaction(
 }
 
 /// The created commitments of the fixtures at `paths`, in order: the leaves
-/// the suite's settlements append before the unwrap.
+/// the suite's settlements append.
 fn tree_leaves_of(paths: &[PathBuf]) -> Result<Vec<Digest>> {
     let mut leaves = Vec::new();
     for path in paths {
-        let raw =
-            fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-        let fixture: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
-        let commitments = fixture
-            .get("created_commitments_b64")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow!("{} has no created_commitments_b64", path.display()))?;
+        let (_, tx) = load_fixture_tx(path)?;
+        let commitments = created_commitments(&tx)?;
         if commitments.is_empty() {
             bail!(
                 "{} settles no commitment, it is not a tree leaf",
                 path.display()
             );
         }
-        for c in commitments {
-            let bytes = BASE64
-                .decode(
-                    c.as_str()
-                        .ok_or_else(|| anyhow!("commitment is not a string"))?,
-                )
-                .with_context(|| format!("decode a commitment of {}", path.display()))?;
-            let bytes: [u8; 32] = bytes
-                .try_into()
-                .map_err(|_| anyhow!("a commitment of {} is not 32 bytes", path.display()))?;
-            leaves.push(Digest::from_bytes(bytes));
-        }
+        leaves.extend(commitments);
     }
     Ok(leaves)
 }
 
-/// The adapter's commitment tree after appending `leaves` in order, level by
-/// level: `required_depth_for_leaves(n)` levels (a full level grows the tree
-/// at once, see `merkle::append_to_tree`), empty slots padded with the zero
-/// subtrees. `levels[0]` are the leaves, the last level the root.
-fn pa_tree_levels(leaves: &[Digest]) -> Vec<Vec<Digest>> {
+/// The adapter's commitment tree after appending `leaves` in order, replayed
+/// through the program's own `append_to_tree` on a fresh state, so the root
+/// carries the on-chain growth rule rather than a second implementation.
+fn pa_tree_root(leaves: &[Digest]) -> Result<Digest> {
+    let mut state =
+        PAStateAccount::running(0, Pubkey::default(), Pubkey::default(), [0; 4], [0; 32]);
+    for leaf in leaves {
+        solana_pa::merkle::append_to_tree(&mut state, *leaf)
+            .map_err(|e| anyhow!("replay append_to_tree: {e:?}"))?;
+    }
+    Ok(Digest::from_bytes(state.root))
+}
+
+/// The Merkle path of leaf `index` in the adapter's tree over `leaves`: the
+/// sibling at each of `required_depth_for_leaves(n)` levels, empty slots
+/// padded with the zero subtrees.
+fn pa_merkle_path(leaves: &[Digest], index: usize) -> MerklePath {
     let depth = solana_pa::merkle::required_depth_for_leaves(leaves.len() as u64);
-    let mut levels = vec![leaves.to_vec()];
+    let mut nodes = leaves.to_vec();
+    let mut position = index;
+    let mut path = Vec::with_capacity(depth);
     for level in 0..depth {
         let zero = solana_pa::merkle::ZEROS[level];
-        let nodes = &levels[level];
-        let parents: Vec<Digest> = nodes
+        path.push((
+            nodes.get(position ^ 1).copied().unwrap_or(zero),
+            position & 1 == 1,
+        ));
+        nodes = nodes
             .chunks(2)
             .map(|pair| {
                 let right = pair.get(1).copied().unwrap_or(zero);
                 solana_pa::merkle::hash_two(&pair[0], &right)
             })
             .collect();
-        levels.push(parents);
-    }
-    levels
-}
-
-fn pa_tree_root(leaves: &[Digest]) -> Digest {
-    let levels = pa_tree_levels(leaves);
-    levels[levels.len() - 1][0]
-}
-
-/// The Merkle path of leaf `index` in the adapter's tree over `leaves`.
-fn pa_merkle_path(leaves: &[Digest], index: usize) -> MerklePath {
-    let levels = pa_tree_levels(leaves);
-    let depth = levels.len() - 1;
-    let mut position = index;
-    let mut path = Vec::with_capacity(depth);
-    for (level, nodes) in levels.iter().enumerate().take(depth) {
-        let sibling = nodes
-            .get(position ^ 1)
-            .copied()
-            .unwrap_or(solana_pa::merkle::ZEROS[level]);
-        path.push((sibling, position & 1 == 1));
         position >>= 1;
     }
     MerklePath::from_path(&path)
 }
 
-/// The AnomaPay unwrap the fixture settles: the owner spends the wrapped
-/// resource (consumed through a real Merkle path against the tree the suite
-/// has built by then) into an ephemeral resource whose transfer logic
-/// commits the unwrap call releasing the 100 tokens to the seeded recipient.
-async fn generate_anomapay_unwrap_transaction(
-    prover: &Prover,
-    tree_leaves: &[PathBuf],
-) -> Result<(Transaction, FixtureLabels)> {
-    if tree_leaves.is_empty() {
-        bail!(
-            "--spl-token-unwrap needs the fixtures the suite settles before it, in order, \
-             as --tree-leaf arguments, the wrap fixture last"
-        );
-    }
-    let actors = anomapay_actors();
-    let leaves = tree_leaves_of(tree_leaves)?;
-    let (_, _, wrap_nf) = wrap_ephemeral_resource(ANOMAPAY_WRAP_NONCE_BYTE)?;
-    let consumed = wrapped_resource(wrap_nf)?;
-    let consumed_cm = consumed.commitment();
-    let index = leaves.len() - 1;
-    if leaves[index] != consumed_cm {
-        bail!(
-            "the last --tree-leaf fixture must be the wrap that created the resource this \
-             unwrap consumes: its last commitment is {}, the wrapped resource's is {}",
-            hex::encode(leaves[index].as_bytes()),
-            hex::encode(consumed_cm.as_bytes())
-        );
-    }
-    let path = pa_merkle_path(&leaves, index);
-    let expected_root = pa_tree_root(&leaves);
-    let path_root = path.root(&consumed_cm);
+/// The Merkle path of leaf `index` and the root it reconstructs, checked
+/// against the adapter's own replay of the tree: a path that disagrees with
+/// the program's growth rule fails here, not at settlement.
+fn checked_pa_merkle_path(leaves: &[Digest], index: usize) -> Result<(MerklePath, Digest)> {
+    let path = pa_merkle_path(leaves, index);
+    let expected_root = pa_tree_root(leaves)?;
+    let path_root = path.root(&leaves[index]);
     if path_root != expected_root {
         bail!(
-            "the Merkle path does not reconstruct the adapter's root: path {} vs tree {}",
+            "the Merkle path of leaf {index} does not reconstruct the adapter's root: \
+             path {} vs append_to_tree {}",
             hex::encode(path_root.as_bytes()),
             hex::encode(expected_root.as_bytes())
         );
     }
+    Ok((path, expected_root))
+}
+
+/// The AnomaPay unwrap the fixture settles: the owner spends the wrapped
+/// resource, the last of `leaves` (the tree the suite has built by then),
+/// into an ephemeral resource whose transfer logic commits the unwrap call
+/// releasing the 100 tokens to the seeded recipient.
+async fn generate_anomapay_unwrap_transaction(
+    prover: &Prover,
+    leaves: &[Digest],
+) -> Result<(Transaction, FixtureLabels)> {
+    let actors = AnomaPayActors::seeded();
+    let owner = OwnerKeys::seeded();
+    let consumed = wrap_resources(ANOMAPAY_WRAP_NONCE_BYTE, &actors, &owner)?.created;
+    let consumed_cm = consumed.commitment();
+    let index = leaves
+        .len()
+        .checked_sub(1)
+        .ok_or_else(|| anyhow!("the unwrap needs the leaves settled before it, the wrap last"))?;
+    if leaves[index] != consumed_cm {
+        bail!(
+            "the last leaf must be the wrap's created commitment {}, found {}",
+            hex::encode(consumed_cm.as_bytes()),
+            hex::encode(leaves[index].as_bytes())
+        );
+    }
+    let (path, root) = checked_pa_merkle_path(leaves, index)?;
     eprintln!(
         "verified: the wrapped resource is leaf {index} of {}; root {}",
         leaves.len(),
-        hex::encode(expected_root.as_bytes())
+        hex::encode(root.as_bytes())
     );
 
-    let nf_key = owner_nf_key();
     let consumed_nf = consumed
-        .nullifier(&nf_key)
+        .nullifier(&owner.nf_key)
         .map_err(|e| anyhow!("compute the wrapped resource's nullifier: {e:?}"))?;
-    let mut created = Resource {
-        logic_ref: *TOKEN_TRANSFER_ID,
-        label_ref: actors.label_ref,
-        value_ref: calculate_value_ref_from_solana_account(&actors.recipient),
-        quantity: ANOMAPAY_AMOUNT as u128,
-        is_ephemeral: true,
-        nk_commitment: NullifierKey::default().commit(),
-        ..Default::default()
-    };
-    created.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
-        .map_err(|e| anyhow!("derive unwrap resource nonce: {e:?}"))?;
+    let created = ephemeral_resource(
+        *TOKEN_TRANSFER_ID,
+        actors.label_ref,
+        calculate_value_ref_from_solana_account(&actors.recipient),
+        ANOMAPAY_AMOUNT as u128,
+        Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
+            .map_err(|e| anyhow!("derive unwrap resource nonce: {e:?}"))?,
+        &NullifierKey::default(),
+    );
     let action_tree_root = single_action_tree_root(consumed_nf, created.commitment())?;
 
-    let (auth_sk, auth_pk, _, encryption_pk) = owner_keys();
-    let auth_sig = auth_sk.sign(AUTH_SIGNATURE_DOMAIN, action_tree_root.as_bytes());
+    let auth_sig = owner
+        .auth_sk
+        .sign(AUTH_SIGNATURE_DOMAIN, action_tree_root.as_bytes());
     let consumed_logic = TransferLogic::consume_persistent_resource_logic(
         consumed,
         action_tree_root,
-        nf_key.clone(),
-        auth_pk,
-        encryption_pk,
+        owner.nf_key.clone(),
+        owner.auth_pk,
+        owner.encryption_pk,
         auth_sig,
     );
     let created_logic = TransferLogic::burn_resource_logic(
@@ -1031,21 +1013,20 @@ async fn generate_anomapay_unwrap_transaction(
         actors.mint,
         actors.recipient,
     );
-    let compliance_witness = single_action_compliance_witness(consumed, path, nf_key, created);
-
+    let input = unwrap_input_of(&created_logic.witness, &action_tree_root)?;
+    let compliance_witness =
+        single_action_compliance_witness(consumed, path, owner.nf_key.clone(), created);
     let action =
         prove_anomapay_action(prover, &compliance_witness, consumed_logic, created_logic).await?;
-    check_unwrap_call(&action)?;
     let tx = assemble_transaction(vec![action], std::slice::from_ref(&compliance_witness.rcv))?;
 
     let labels = FixtureLabels {
         forwarder_type: Some("spl_token_unwrap"),
         spl_token_unwrap: Some(SplTokenUnwrapMetadata {
             mint_seed_label: MINT_SEED_LABEL,
-            amount: ANOMAPAY_AMOUNT,
+            amount: input.amount,
             recipient_seed_label: RECIPIENT_SEED_LABEL,
             logic_ref_b64: token_transfer_logic_ref_b64(),
-            consumed_leaf_index: index as u64,
         }),
         ..Default::default()
     };
@@ -1060,21 +1041,47 @@ fn single_action_tree_root(consumed_nf: Digest, created_cm: Digest) -> Result<Di
         .map_err(|e| anyhow!("compute action tree root: {e:?}"))
 }
 
-/// A deterministic ephemeral resource with the given nonce byte, plus its
-/// nullifier under the default nullifier key.
-fn deterministic_ephemeral_resource(nonce_byte: u8) -> Result<(Resource, NullifierKey, Digest)> {
-    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
-    let nf_key = NullifierKey::default();
-    let nf_key_cm = nf_key.commit();
+/// A nonce whose first half is `byte`: distinct per fixture, so their
+/// nullifiers never collide in one suite.
+fn nonce_from_byte(byte: u8) -> [u8; 32] {
+    let mut nonce = [0u8; 32];
+    nonce[..16].fill(byte);
+    nonce
+}
 
-    let mut consumed_resource = Resource {
-        logic_ref: passthrough_vk,
-        nk_commitment: nf_key_cm,
-        quantity: 1,
+/// An ephemeral resource under `nf_key`.
+fn ephemeral_resource(
+    logic_ref: Digest,
+    label_ref: Digest,
+    value_ref: Digest,
+    quantity: u128,
+    nonce: [u8; 32],
+    nf_key: &NullifierKey,
+) -> Resource {
+    Resource {
+        logic_ref,
+        label_ref,
+        value_ref,
+        quantity,
         is_ephemeral: true,
+        nonce,
+        nk_commitment: nf_key.commit(),
         ..Default::default()
-    };
-    consumed_resource.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
+    }
+}
+
+/// A deterministic passthrough-logic ephemeral resource with the given nonce
+/// byte, plus its nullifier under the default nullifier key.
+fn deterministic_ephemeral_resource(nonce_byte: u8) -> Result<(Resource, NullifierKey, Digest)> {
+    let nf_key = NullifierKey::default();
+    let consumed_resource = ephemeral_resource(
+        Digest::new(PASSTHROUGH_LOGIC_GUEST_ID),
+        Digest::default(),
+        Digest::default(),
+        1,
+        nonce_from_byte(nonce_byte),
+        &nf_key,
+    );
     let consumed_nf = consumed_resource
         .nullifier(&nf_key)
         .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
@@ -1343,7 +1350,7 @@ async fn generate_test_transaction_with_external_payload(
     forwarder_mode: ForwarderMode,
     nonce_seed: Option<u8>,
     multi_external_call: bool,
-) -> Result<(Transaction, FixtureLabels)> {
+) -> Result<Transaction> {
     // Stable nonce so the fixture is deterministic. Each fixture variant uses
     // a different nonce so the variants have different nullifiers; otherwise
     // running several fixtures in one test suite hits DuplicateNullifier.
@@ -1372,7 +1379,6 @@ async fn generate_test_transaction_with_external_payload(
     // Bind the external payload into the consumed resource's app_data via
     // the passthrough logic circuit, which commits whatever it is given.
     let mut consumed_app_data = AppData::default();
-    let labels = FixtureLabels::default();
     let external_blob = match &forwarder_mode {
         ForwarderMode::BlockTimeForwarder { output_mismatch } => {
             block_time_forwarder_external_payload_blob(*output_mismatch)?
@@ -1387,8 +1393,7 @@ async fn generate_test_transaction_with_external_payload(
             .push(block_time_forwarder_external_payload_blob(false)?);
     }
 
-    let tx = prove_single_action_transaction(prover, compliance_witness, consumed_app_data).await?;
-    Ok((tx, labels))
+    prove_single_action_transaction(prover, compliance_witness, consumed_app_data).await
 }
 
 fn generate_error_variant_fixtures(
@@ -1486,13 +1491,22 @@ fn consumed_nullifiers_b64(tx: &Transaction) -> Result<Vec<String>> {
         .collect())
 }
 
-fn created_commitments_b64(tx: &Transaction) -> Result<Vec<String>> {
+/// The created commitments of an aggregated transaction in instance order:
+/// the leaves its settlement appends.
+fn created_commitments(tx: &Transaction) -> Result<Vec<Digest>> {
     Ok(require_aggregation(tx)?
         .instance
         .actions
         .iter()
         .flat_map(|action| &action.created_publics)
-        .map(|c| BASE64.encode(c.resource_commitment.as_bytes()))
+        .map(|c| c.resource_commitment)
+        .collect())
+}
+
+fn created_commitments_b64(tx: &Transaction) -> Result<Vec<String>> {
+    Ok(created_commitments(tx)?
+        .iter()
+        .map(|c| BASE64.encode(c.as_bytes()))
         .collect())
 }
 
@@ -1710,25 +1724,19 @@ const HISTORICAL_ROOT_NONCE_BYTE: u8 = 8;
 /// see `HISTORICAL_ROOT_NONCE_BYTE` for the full reservation map).
 const TRANSFER_SHAPE_NONCE_BYTE: u8 = 9;
 
-/// Read an existing single-action, single-created-resource fixture and
-/// return the digest of its created resource's commitment — the leaf that
-/// settlement inserted into the on-chain commitment tree at index 0. Used to
-/// reconstruct, off-chain, the exact tree state the historical-root
-/// committer transaction lands in as leaf index 1.
+/// The one commitment an existing fixture settles: the leaf the suite
+/// inserts at index 0 when that fixture is `batch_groth16.json`.
 fn read_sole_created_commitment(path: &Path) -> Result<Digest> {
-    let (_, tx) = load_fixture_tx(path)?;
-
-    let instance = &require_aggregation(&tx)?.instance;
-    if instance.actions.len() != 1 || instance.actions[0].created_publics.len() != 1 {
+    let leaves = tree_leaves_of(std::slice::from_ref(&path.to_path_buf()))?;
+    if leaves.len() != 1 {
         bail!(
-            "{} must have exactly one action with one created resource to serve as \
-             the known single-leaf tree base for historical-root fixture generation \
-             (found {} action(s))",
+            "{} must settle exactly one commitment to serve as the known single-leaf tree \
+             base for historical-root fixture generation (found {})",
             path.display(),
-            instance.actions.len()
+            leaves.len()
         );
     }
-    Ok(instance.actions[0].created_publics[0].resource_commitment)
+    Ok(leaves[0])
 }
 
 /// Build the compliance witness for the historical-root *committer*
@@ -1863,35 +1871,10 @@ async fn generate_historical_root_fixtures(
     )
     .context("write committer fixture")?;
 
-    // Independently reconstruct the root the on-chain program will produce
-    // once batch_groth16.json (leaf 0) and this committer (leaf 1) have both
-    // settled, using the PA's own on-chain constants/hash directly -- not
-    // ARM's hash -- so the two implementations are cross-checked rather than
-    // assumed equivalent.
+    // The committer settles right after batch_groth16 (leaf 0), as leaf 1.
     let committed_cm = committed_resource.commitment();
-    let expected_root = solana_pa::merkle::hash_two(
-        &solana_pa::merkle::hash_two(&batch_groth16_leaf, &committed_cm),
-        &solana_pa::merkle::ZEROS[1],
-    );
-
-    let merkle_path = MerklePath::from_path(&[
-        (batch_groth16_leaf, true),
-        (solana_pa::merkle::ZEROS[1], false),
-    ]);
-    let path_root = merkle_path.root(&committed_cm);
-    if path_root != expected_root {
-        bail!(
-            "historical-root merkle path does not reconstruct the on-chain root: \
-             ARM MerklePath::root()={} vs PA on-chain hash_two()={} -- the two hash \
-             implementations must match before any proof is generated",
-            hex::encode(path_root.as_bytes()),
-            hex::encode(expected_root.as_bytes())
-        );
-    }
-    eprintln!(
-        "verified: MerklePath::root() matches the PA's own hash_two computation ({})",
-        hex::encode(expected_root.as_bytes())
-    );
+    let (merkle_path, expected_root) =
+        checked_pa_merkle_path(&[batch_groth16_leaf, committed_cm], 1)?;
 
     eprintln!("phase: generate historical-root consumer transaction");
     let consume_start = Instant::now();
@@ -2479,11 +2462,19 @@ fn parse_args() -> Result<Command> {
     if !tree_leaves.is_empty() && anomapay != Some(AnomaPayCall::Unwrap) {
         return Err(anyhow!("--tree-leaf only applies to --spl-token-unwrap"));
     }
-    if anomapay == Some(AnomaPayCall::Unwrap) && nonce_seed.is_some() {
-        return Err(anyhow!(
-            "--spl-token-unwrap derives its nonces from the wrapped resource; \
-             --nonce-seed does not apply"
-        ));
+    if anomapay == Some(AnomaPayCall::Unwrap) {
+        if nonce_seed.is_some() {
+            return Err(anyhow!(
+                "--spl-token-unwrap derives its nonces from the wrapped resource; \
+                 --nonce-seed does not apply"
+            ));
+        }
+        if tree_leaves.is_empty() {
+            return Err(anyhow!(
+                "--spl-token-unwrap needs the fixtures the suite settles before it, in order, \
+                 as --tree-leaf arguments, the wrap fixture last"
+            ));
+        }
     }
 
     let shape = if transfer_shape {
@@ -2502,7 +2493,10 @@ fn parse_args() -> Result<Command> {
                  --spl-token-wrap/--spl-token-unwrap"
             ));
         }
-        GenerateShape::AnomaPay(call)
+        match call {
+            AnomaPayCall::Wrap => GenerateShape::AnomaPayWrap,
+            AnomaPayCall::Unwrap => GenerateShape::AnomaPayUnwrap { tree_leaves },
+        }
     } else {
         GenerateShape::SingleAction {
             forwarder_mode: forwarder_mode.unwrap_or(ForwarderMode::BlockTimeForwarder {
@@ -2520,7 +2514,6 @@ fn parse_args() -> Result<Command> {
         out_path,
         prover_choice,
         mock,
-        tree_leaves,
     }))
 }
 
@@ -2578,7 +2571,6 @@ async fn main() -> Result<()> {
         out_path,
         prover_choice,
         mock,
-        tree_leaves,
     } = match parse_args()? {
         Command::StripCalls { input, output } => return strip_calls_from_fixture(&input, &output),
         Command::Dump { input } => return dump_fixture(&input),
@@ -2652,10 +2644,10 @@ async fn main() -> Result<()> {
         GenerateShape::TransferShape => eprintln!(
             "mode: transfer-shape ({TRANSFER_SHAPE_ACTIONS} actions, event-emitted payloads, no external calls)"
         ),
-        GenerateShape::AnomaPay(AnomaPayCall::Wrap) => {
+        GenerateShape::AnomaPayWrap => {
             eprintln!("mode: AnomaPay wrap (transfer logic {})", *TOKEN_TRANSFER_ID)
         }
-        GenerateShape::AnomaPay(AnomaPayCall::Unwrap) => eprintln!(
+        GenerateShape::AnomaPayUnwrap { tree_leaves } => eprintln!(
             "mode: AnomaPay unwrap (transfer logic {}, {} tree-leaf fixtures)",
             *TOKEN_TRANSFER_ID,
             tree_leaves.len()
@@ -2675,24 +2667,26 @@ async fn main() -> Result<()> {
         GenerateShape::SingleAction {
             forwarder_mode,
             multi_external_call,
-        } => {
+        } => (
             generate_test_transaction_with_external_payload(
                 &prover,
                 forwarder_mode,
                 nonce_seed,
                 multi_external_call,
             )
-            .await?
-        }
+            .await?,
+            FixtureLabels::default(),
+        ),
         GenerateShape::TransferShape => (
             generate_transfer_shape_transaction(&prover, nonce_seed).await?,
             FixtureLabels::default(),
         ),
-        GenerateShape::AnomaPay(AnomaPayCall::Wrap) => {
+        GenerateShape::AnomaPayWrap => {
             generate_anomapay_wrap_transaction(&prover, nonce_seed).await?
         }
-        GenerateShape::AnomaPay(AnomaPayCall::Unwrap) => {
-            generate_anomapay_unwrap_transaction(&prover, &tree_leaves).await?
+        GenerateShape::AnomaPayUnwrap { tree_leaves } => {
+            let leaves = tree_leaves_of(&tree_leaves)?;
+            generate_anomapay_unwrap_transaction(&prover, &leaves).await?
         }
     };
     eprintln!(
@@ -2824,96 +2818,60 @@ mod tests {
             .collect()
     }
 
-    /// Every leaf's path reconstructs the tree's root, for trees below and
-    /// above the growth points, and the two-leaf root is the one the
-    /// historical-root fixtures assume (`hash(hash(l0, l1), ZEROS[1])`).
+    /// Every leaf's path reconstructs the root the adapter's own
+    /// `append_to_tree` produces, for trees below and above the growth points.
     #[test]
     fn pa_merkle_path_reconstructs_the_adapter_root_for_every_leaf() {
         for n in 1..=12 {
             let leaves = synthetic_leaves(n);
-            let root = pa_tree_root(&leaves);
-            for (i, leaf) in leaves.iter().enumerate() {
-                assert_eq!(
-                    pa_merkle_path(&leaves, i).root(leaf),
-                    root,
-                    "leaf {i} of {n}"
-                );
+            for i in 0..n {
+                checked_pa_merkle_path(&leaves, i)
+                    .unwrap_or_else(|e| panic!("leaf {i} of {n}: {e}"));
             }
         }
-        let two = synthetic_leaves(2);
-        assert_eq!(
-            pa_tree_root(&two),
-            solana_pa::merkle::hash_two(
-                &solana_pa::merkle::hash_two(&two[0], &two[1]),
-                &solana_pa::merkle::ZEROS[1]
-            )
-        );
     }
 
-    /// The wrap's created resource is the one the unwrap recomputes, and the
-    /// wrap's forwarder call parses as the forwarder's input (checked while
-    /// generating). Dev-mode proving through the real transfer logic.
+    /// The wrap creates the resource the unwrap recomputes, both proven
+    /// under the transfer logic. Dev-mode proving through the real guest.
     #[tokio::test(flavor = "multi_thread")]
     async fn anomapay_wrap_creates_the_resource_the_unwrap_consumes() {
         init_test_kind_table();
-        let (tx, labels) = generate_anomapay_wrap_transaction(&Prover::Local, None)
+        let (tx, _) = generate_anomapay_wrap_transaction(&Prover::Local, None)
             .await
             .unwrap();
-        let (_, _, wrap_nf) = wrap_ephemeral_resource(ANOMAPAY_WRAP_NONCE_BYTE).unwrap();
-        let expected_cm = wrapped_resource(wrap_nf).unwrap().commitment();
+        let wrapped = wrap_resources(
+            ANOMAPAY_WRAP_NONCE_BYTE,
+            &AnomaPayActors::seeded(),
+            &OwnerKeys::seeded(),
+        )
+        .unwrap()
+        .created;
         let action = &tx.actions.as_ref().unwrap()[0];
-        let created_tag = action.logic_verifier_inputs[1].tag;
-        assert_eq!(
-            created_tag, expected_cm,
-            "the wrap creates the wrapped resource"
-        );
+        assert_eq!(action.logic_verifier_inputs[1].tag, wrapped.commitment());
         for input in &action.logic_verifier_inputs {
             assert_eq!(input.verifying_key, *TOKEN_TRANSFER_ID);
         }
-        let wrap = labels.spl_token_wrap.unwrap();
-        assert_eq!(wrap.logic_ref_b64, token_transfer_logic_ref_b64());
-        assert_eq!(wrap.amount, ANOMAPAY_AMOUNT);
     }
 
-    /// An unwrap over a synthetic tree consumes the wrapped resource at the
-    /// last leaf and commits the tree's root as its historical root.
+    /// An unwrap over a synthetic tree spends the wrapped resource at the
+    /// last leaf.
     #[tokio::test(flavor = "multi_thread")]
     async fn anomapay_unwrap_consumes_the_wrap_leaf() {
         init_test_kind_table();
-        let (_, _, wrap_nf) = wrap_ephemeral_resource(ANOMAPAY_WRAP_NONCE_BYTE).unwrap();
-        let wrapped_cm = wrapped_resource(wrap_nf).unwrap().commitment();
+        let owner = OwnerKeys::seeded();
+        let wrapped = wrap_resources(ANOMAPAY_WRAP_NONCE_BYTE, &AnomaPayActors::seeded(), &owner)
+            .unwrap()
+            .created;
         let mut leaves = synthetic_leaves(9);
-        leaves.push(wrapped_cm);
+        leaves.push(wrapped.commitment());
 
-        // Two fixture files standing in for the suite's settlements.
-        let dir = env::temp_dir().join(format!("fixture-gen-unwrap-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let write_leaves = |name: &str, leaves: &[Digest]| -> PathBuf {
-            let path = dir.join(name);
-            let commitments: Vec<String> =
-                leaves.iter().map(|l| BASE64.encode(l.as_bytes())).collect();
-            fs::write(
-                &path,
-                serde_json::json!({ "created_commitments_b64": commitments }).to_string(),
-            )
-            .unwrap();
-            path
-        };
-        let prior = write_leaves("prior.json", &leaves[..9]);
-        let wrap = write_leaves("wrap.json", &leaves[9..]);
-
-        let (tx, labels) = generate_anomapay_unwrap_transaction(&Prover::Local, &[prior, wrap])
+        let (tx, _) = generate_anomapay_unwrap_transaction(&Prover::Local, &leaves)
             .await
             .unwrap();
-        fs::remove_dir_all(&dir).unwrap();
-
-        let unwrap = labels.spl_token_unwrap.unwrap();
-        assert_eq!(unwrap.consumed_leaf_index, 9);
         let action = &tx.actions.as_ref().unwrap()[0];
-        let wrapped = wrapped_resource(wrap_nf).unwrap();
         assert_eq!(
             action.logic_verifier_inputs[0].tag,
-            wrapped.nullifier(&owner_nf_key()).unwrap(),
+            wrapped.nullifier(&owner.nf_key).unwrap(),
             "the unwrap consumes the wrapped resource"
         );
         assert_eq!(

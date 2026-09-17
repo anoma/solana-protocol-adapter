@@ -66,15 +66,18 @@ gen historical-root "$OUT_DIR/batch_groth16.json" \
 # (tests/solana-pa-prototype.ts).
 gen "${MOCK_FLAG[@]}" --spl-token-wrap "$OUT_DIR/spl_token_wrap.json"
 gen "${MOCK_FLAG[@]}" --spl-token-wrap --nonce-seed 21 "$OUT_DIR/spl_token_wrap_replay.json"
+SETTLED_BEFORE_UNWRAP=(
+  batch_groth16.json
+  batch_groth16_historical_root_committer.json
+  batch_groth16_transfer_shape.json
+  batch_groth16_v2.json
+  batch_groth16_v3.json
+  batch_groth16_multi_call.json
+  batch_groth16_historical_root.json
+  spl_token_wrap.json
+)
 gen "${MOCK_FLAG[@]}" --spl-token-unwrap \
-  --tree-leaf "$OUT_DIR/batch_groth16.json" \
-  --tree-leaf "$OUT_DIR/batch_groth16_historical_root_committer.json" \
-  --tree-leaf "$OUT_DIR/batch_groth16_transfer_shape.json" \
-  --tree-leaf "$OUT_DIR/batch_groth16_v2.json" \
-  --tree-leaf "$OUT_DIR/batch_groth16_v3.json" \
-  --tree-leaf "$OUT_DIR/batch_groth16_multi_call.json" \
-  --tree-leaf "$OUT_DIR/batch_groth16_historical_root.json" \
-  --tree-leaf "$OUT_DIR/spl_token_wrap.json" \
+  "${SETTLED_BEFORE_UNWRAP[@]/#/--tree-leaf=$OUT_DIR/}" \
   "$OUT_DIR/spl_token_unwrap.json"
 
 echo "✅ Regenerated the $MODE fixture set in $OUT_DIR"

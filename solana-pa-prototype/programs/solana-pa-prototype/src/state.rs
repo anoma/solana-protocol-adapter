@@ -1,8 +1,9 @@
 //! On-chain account definitions.
 //! Named "state" to avoid conflict with Anchor's internal "accounts" module.
 
-use crate::merkle::MAX_TREE_DEPTH;
+use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, MAX_TREE_DEPTH};
 use anchor_lang::prelude::*;
+use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
 
 /// PA lifecycle: Running → Stopped (one-way, irreversible).
@@ -216,3 +217,32 @@ pub const DELETION_CRITERION_NEVER: u32 = 1;
 
 const _: () = assert!(MIN_EXPIRY_SLOTS > 0);
 const _: () = assert!(MIN_EXPIRY_SLOTS < MAX_EXPIRY_SLOTS);
+
+impl PAStateAccount {
+    /// A running adapter with an empty commitment tree: the state
+    /// `initialize` writes.
+    pub fn running(
+        bump: u8,
+        authority: Pubkey,
+        verifier_router: Pubkey,
+        proof_selector: [u8; 4],
+        kind_table_commitment: [u8; 32],
+    ) -> Self {
+        Self {
+            schema_version: Self::SCHEMA_VERSION,
+            bump,
+            authority,
+            verifier_router,
+            proof_selector,
+            kind_table_commitment,
+            pending_authority: None,
+            lifecycle: PALifecycle::Running,
+            root: EMPTY_TREE_ROOT_INITIAL.into(),
+            next_index: 0,
+            current_depth: INITIAL_TREE_DEPTH as u8,
+            frontier: vec![PADDING_LEAF.into()],
+            min_expiry_slots: MIN_EXPIRY_SLOTS,
+            max_expiry_slots: MAX_EXPIRY_SLOTS,
+        }
+    }
+}

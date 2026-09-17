@@ -2195,7 +2195,6 @@ dependencies = [
  "risc0-zkvm",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "spl-token-forwarder",
  "test-forwarder",
  "tokio",
