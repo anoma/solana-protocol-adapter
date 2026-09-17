@@ -83,3 +83,8 @@ export function deriveNonceBitmapPda(
     forwarderProgramId
   );
 }
+
+/** The adapter's event authority PDA, the signer of its `#[event_cpi]` self-invocations. Seed: `["__event_authority"]`. */
+export function deriveEventAuthorityPda(paProgramId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], paProgramId);
+}

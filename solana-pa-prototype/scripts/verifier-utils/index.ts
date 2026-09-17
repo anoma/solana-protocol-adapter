@@ -50,3 +50,12 @@ export function getVerifierEntryPda(
     routerProgramId
   );
 }
+
+/**
+ * The verifier program a router `VerifierEntry` account points at: Anchor
+ * discriminator ‖ selector [u8; 4] ‖ verifier Pubkey ‖ estopped bool (the
+ * layout `regen-mock-verifier-entry.ts` encodes).
+ */
+export function verifierOfEntry(data: Buffer): PublicKey {
+  return new PublicKey(data.subarray(12, 44));
+}

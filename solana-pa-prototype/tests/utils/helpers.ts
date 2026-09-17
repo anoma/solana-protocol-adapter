@@ -2,6 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import {
   AccountMeta,
+  Connection,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
@@ -294,4 +295,19 @@ export async function closeAllNonceBitmaps(
       .rpc();
   }
   return bitmaps.length;
+}
+
+/** Resolve once the confirmed slot is past `targetSlot`; fail after `timeoutMs`. */
+export async function waitForSlotPast(
+  connection: Connection,
+  targetSlot: number,
+  timeoutMs: number = 30000
+): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const slot = await connection.getSlot("confirmed");
+    if (slot > targetSlot) return;
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  throw new Error(`Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`);
 }
