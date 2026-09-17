@@ -85,10 +85,8 @@ fn test_wrap_input_parsing() {
     data[80..88].copy_from_slice(&1700000000i64.to_le_bytes());
     // action_tree_root
     data[88..120].copy_from_slice(&[3u8; 32]);
-    // signature
-    data[120..184].copy_from_slice(&[4u8; 64]);
     // ed25519_ix_index
-    data[184] = 0;
+    data[120] = 0;
 
     let input = WrapInput::try_from_bytes(&data).unwrap();
     assert_eq!(input.token_mint.to_bytes(), [1u8; 32]);
@@ -97,7 +95,6 @@ fn test_wrap_input_parsing() {
     assert_eq!(input.nonce, 42);
     assert_eq!(input.deadline, 1700000000);
     assert_eq!(input.action_tree_root, [3u8; 32]);
-    assert_eq!(input.signature, [4u8; 64]);
     assert_eq!(input.ed25519_ix_index, 0);
 }
 
@@ -110,7 +107,6 @@ fn wrap_input_round_trips_through_to_bytes() {
         nonce: 7,
         deadline: 4_102_444_800,
         action_tree_root: [0xab; 32],
-        signature: [0xcd; 64],
         ed25519_ix_index: 3,
     };
     let bytes = input.to_bytes();
@@ -122,7 +118,6 @@ fn wrap_input_round_trips_through_to_bytes() {
     assert_eq!(parsed.nonce, input.nonce);
     assert_eq!(parsed.deadline, input.deadline);
     assert_eq!(parsed.action_tree_root, input.action_tree_root);
-    assert_eq!(parsed.signature, input.signature);
     assert_eq!(parsed.ed25519_ix_index, input.ed25519_ix_index);
 }
 
