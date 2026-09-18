@@ -6629,8 +6629,9 @@ dependencies = [
 [[package]]
 name = "transfer_library"
 version = "2.0.0"
-source = "git+https://github.com/anoma/anomapay-solana-resource?rev=483a132f0b66cc3a2eb5475d56797309118ec5b2#483a132f0b66cc3a2eb5475d56797309118ec5b2"
+source = "git+https://github.com/anoma/anomapay-solana-resource?rev=751782387650e98d379a76029136a722d0a9c512#751782387650e98d379a76029136a722d0a9c512"
 dependencies = [
+ "anoma-pa-solana-client",
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
  "hex",
@@ -6642,7 +6643,7 @@ dependencies = [
 [[package]]
 name = "transfer_witness"
 version = "2.0.0"
-source = "git+https://github.com/anoma/anomapay-solana-resource?rev=483a132f0b66cc3a2eb5475d56797309118ec5b2#483a132f0b66cc3a2eb5475d56797309118ec5b2"
+source = "git+https://github.com/anoma/anomapay-solana-resource?rev=751782387650e98d379a76029136a722d0a9c512#751782387650e98d379a76029136a722d0a9c512"
 dependencies = [
  "anoma-pa-solana-client",
  "anoma-rm-risc0",

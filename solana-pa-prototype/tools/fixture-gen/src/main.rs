@@ -232,12 +232,10 @@ use solana_pa::types::{OutputMode, SolanaExternalCall};
 use spl_token_forwarder::state::{UnwrapInput, WrapInput};
 use spl_token_forwarder::{OP_UNWRAP, OP_WRAP, RESULT_SUCCESS as SPL_RESULT_SUCCESS};
 use test_forwarder::{MODE_FAIL, MODE_SILENT};
-use transfer_library::{TransferLogic, TOKEN_TRANSFER_ELF, TOKEN_TRANSFER_ID};
+use transfer_library::action::{self, ComplianceParams, Owner, TransferAction, Wrap, WrapAuth};
+use transfer_library::{TOKEN_TRANSFER_ELF, TOKEN_TRANSFER_ID};
 use transfer_witness::call_type::{UNWRAP_SEGMENT_NUM_ACCOUNTS, WRAP_SEGMENT_NUM_ACCOUNTS};
-use transfer_witness::{
-    calculate_label_ref, calculate_persistent_value_ref, calculate_value_ref_from_solana_account,
-    TokenTransferWitness, ValueInfo, AUTH_SIGNATURE_DOMAIN,
-};
+use transfer_witness::{LabelInfo, TokenTransferWitness, AUTH_SIGNATURE_DOMAIN};
 
 /// Everything the SPL forwarder wrap test needs to replay the fixture's
 /// external call: the seeded user and mint keypairs, the wrap terms, and the
@@ -583,34 +581,26 @@ fn scalar_from_label(label: &str) -> Scalar {
     Scalar::from(u64::from_le_bytes(hash[..8].try_into().unwrap()))
 }
 
-/// The wrapped resource's owner: the authorization (secp256k1 ECDSA) and
-/// encryption keys its value reference commits to, and its nullifier key.
-struct OwnerKeys {
+/// The wrapped resource's owner: the keys the resource commits to, and the
+/// authorization signing key behind them.
+struct SeededOwner {
     auth_sk: AuthoritySigningKey,
-    auth_pk: AuthorityVerifyingKey,
-    encryption_pk: AffinePoint,
-    nf_key: NullifierKey,
+    keys: Owner,
 }
 
-impl OwnerKeys {
+impl SeededOwner {
     fn seeded() -> Self {
         let auth_sk = AuthoritySigningKey::from_bytes(&label_hash(OWNER_AUTH_SEED_LABEL))
             .expect("a sha256 output is a valid secp256k1 scalar");
-        let auth_pk = AuthorityVerifyingKey::from_signing_key(&auth_sk);
         let encryption_sk = SecretKey::new(scalar_from_label(OWNER_ENCRYPTION_SEED_LABEL));
-        OwnerKeys {
+        SeededOwner {
+            keys: Owner {
+                auth_pk: AuthorityVerifyingKey::from_signing_key(&auth_sk),
+                encryption_pk: generate_public_key(encryption_sk.inner()),
+                nf_key: NullifierKey::from_bytes(label_hash(OWNER_NF_KEY_SEED_LABEL)),
+            },
             auth_sk,
-            auth_pk,
-            encryption_pk: generate_public_key(encryption_sk.inner()),
-            nf_key: NullifierKey::from_bytes(label_hash(OWNER_NF_KEY_SEED_LABEL)),
         }
-    }
-
-    fn value_ref(&self) -> Digest {
-        calculate_persistent_value_ref(&ValueInfo {
-            auth_pk: self.auth_pk,
-            encryption_pk: self.encryption_pk,
-        })
     }
 }
 
@@ -619,27 +609,24 @@ fn discovery_pk() -> AffinePoint {
 }
 
 /// The Solana parties of the AnomaPay fixtures and the resource label they
-/// share: `sha256(forwarder ‖ mint)`.
+/// share: the forwarder and the mint.
 struct AnomaPayActors {
-    forwarder: [u8; 32],
     user: SigningKey,
-    mint: [u8; 32],
     recipient: [u8; 32],
-    label_ref: Digest,
+    label: LabelInfo,
 }
 
 impl AnomaPayActors {
     fn seeded() -> Self {
-        let forwarder = spl_token_forwarder::ID.to_bytes();
-        let mint = seeded_keypair(MINT_SEED_LABEL).verifying_key().to_bytes();
         AnomaPayActors {
-            forwarder,
             user: seeded_keypair(USER_SEED_LABEL),
-            mint,
             recipient: seeded_keypair(RECIPIENT_SEED_LABEL)
                 .verifying_key()
                 .to_bytes(),
-            label_ref: calculate_label_ref(&forwarder, &mint),
+            label: LabelInfo {
+                forwarder_program_id: spl_token_forwarder::ID.to_bytes(),
+                spl_token_mint: seeded_keypair(MINT_SEED_LABEL).verifying_key().to_bytes(),
+            },
         }
     }
 
@@ -652,69 +639,43 @@ fn token_transfer_logic_ref_b64() -> String {
     BASE64.encode(TOKEN_TRANSFER_ID.as_bytes())
 }
 
-/// The resources of a wrap: the ephemeral resource it consumes (under the
-/// transfer logic and the forwarder's label, nullified by the default key)
-/// and the persistent resource it creates for the owner, whose nonce derives
-/// from the consumed nullifier as the compliance circuit requires.
-struct WrapResources {
-    consumed: Resource,
-    nf_key: NullifierKey,
-    consumed_nf: Digest,
-    created: Resource,
+/// The compliance facts of every AnomaPay fixture: a fixed `rcv`, so the
+/// fixtures are deterministic, and the committed kind table the PA pins.
+fn anomapay_compliance_params() -> ComplianceParams {
+    ComplianceParams {
+        rcv: Scalar::ONE.to_bytes().to_vec(),
+        kind_table: kind_table().to_vec(),
+    }
 }
 
-fn wrap_resources(
-    nonce_byte: u8,
-    actors: &AnomaPayActors,
-    owner: &OwnerKeys,
-) -> Result<WrapResources> {
-    let nf_key = NullifierKey::default();
-    let consumed = ephemeral_resource(
-        *TOKEN_TRANSFER_ID,
-        actors.label_ref,
-        Digest::default(),
-        ANOMAPAY_AMOUNT as u128,
+/// The seeded wrap of 100 tokens whose consumed resource carries
+/// `nonce_byte`, and the parties behind it.
+fn seeded_wrap(nonce_byte: u8) -> Result<(AnomaPayActors, SeededOwner, Wrap)> {
+    let actors = AnomaPayActors::seeded();
+    let owner = SeededOwner::seeded();
+    let wrap = action::wrap(
+        actors.label.clone(),
+        ANOMAPAY_AMOUNT,
         nonce_from_byte(nonce_byte),
-        &nf_key,
-    );
-    let consumed_nf = consumed
-        .nullifier(&nf_key)
-        .map_err(|e| anyhow!("compute wrap nullifier: {e:?}"))?;
-    let created = Resource {
-        logic_ref: *TOKEN_TRANSFER_ID,
-        label_ref: actors.label_ref,
-        value_ref: owner.value_ref(),
-        quantity: ANOMAPAY_AMOUNT as u128,
-        is_ephemeral: false,
-        nonce: Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
-            .map_err(|e| anyhow!("derive wrapped resource nonce: {e:?}"))?,
-        nk_commitment: owner.nf_key.commit(),
-        rand_seed: label_hash(WRAPPED_RAND_SEED_LABEL),
-    };
-    Ok(WrapResources {
-        consumed,
-        nf_key,
-        consumed_nf,
-        created,
-    })
+        &owner.keys,
+        label_hash(WRAPPED_RAND_SEED_LABEL),
+    )
+    .map_err(|e| anyhow!("build the wrap's resources: {e:?}"))?;
+    Ok((actors, owner, wrap))
 }
 
-/// Prove one AnomaPay action: the compliance proof plus the two transfer
-/// logic proofs, in canonical tag order (consumed, then created).
-async fn prove_anomapay_action(
-    prover: &Prover,
-    compliance_witness: &ComplianceWitness,
-    consumed: TransferLogic,
-    created: TransferLogic,
-) -> Result<Action> {
-    let compliance_unit = prove_compliance(prover, compliance_witness)
+/// Prove one AnomaPay action through the selected prover: the compliance
+/// proof plus the two transfer logic proofs, in canonical tag order
+/// (consumed, then created).
+async fn prove_anomapay_action(prover: &Prover, action: TransferAction) -> Result<Action> {
+    let compliance_unit = prove_compliance(prover, &action.compliance_witness)
         .await
         .context("prove compliance")?;
     let (consumed_proof, consumed_journal) = prove_logic(
         prover,
         TOKEN_TRANSFER_ELF,
         &TOKEN_TRANSFER_ID,
-        consumed.witness,
+        action.consumed_logic.witness,
     )
     .await
     .context("prove the consumed resource's transfer logic")?;
@@ -722,7 +683,7 @@ async fn prove_anomapay_action(
         prover,
         TOKEN_TRANSFER_ELF,
         &TOKEN_TRANSFER_ID,
-        created.witness,
+        action.created_logic.witness,
     )
     .await
     .context("prove the created resource's transfer logic")?;
@@ -812,54 +773,38 @@ fn unwrap_input_of(
 /// of the seeded mint, consuming an ephemeral resource whose transfer logic
 /// commits the forwarder call, and creating the owner's shielded resource
 /// whose logic emits the encrypted payloads. The user signs the message the
-/// forwarder recomputes from the proof-bound input: base64 of its sha256.
+/// forwarder recomputes from the proof-bound input.
 async fn generate_anomapay_wrap_transaction(
     prover: &Prover,
     nonce_seed: Option<u8>,
 ) -> Result<(Transaction, FixtureLabels)> {
-    let actors = AnomaPayActors::seeded();
-    let owner = OwnerKeys::seeded();
-    let WrapResources {
-        consumed,
-        nf_key,
-        consumed_nf,
-        created,
-    } = wrap_resources(
-        nonce_seed.unwrap_or(ANOMAPAY_WRAP_NONCE_BYTE),
-        &actors,
-        &owner,
-    )?;
-    let action_tree_root = single_action_tree_root(consumed_nf, created.commitment())?;
-
-    let consumed_logic = TransferLogic::mint_resource_logic_with_wrap_auth(
-        consumed,
-        action_tree_root,
-        nf_key.clone(),
-        actors.forwarder,
-        actors.mint,
-        actors.user_pubkey(),
-        ANOMAPAY_WRAP_NONCE,
-        ANOMAPAY_WRAP_DEADLINE,
-        ANOMAPAY_ED25519_IX_INDEX,
-    );
-    let input = wrap_input_of(&consumed_logic.witness, &action_tree_root)?;
-    let created_logic = TransferLogic::create_persistent_resource_logic(
-        created,
-        action_tree_root,
+    let (actors, owner, wrap) = seeded_wrap(nonce_seed.unwrap_or(ANOMAPAY_WRAP_NONCE_BYTE))?;
+    let auth = WrapAuth {
+        user: actors.user_pubkey(),
+        nonce: ANOMAPAY_WRAP_NONCE,
+        deadline: ANOMAPAY_WRAP_DEADLINE,
+        ed25519_ix_index: ANOMAPAY_ED25519_IX_INDEX,
+    };
+    let action = wrap.action(
+        &auth,
+        &owner.keys,
         &discovery_pk(),
-        owner.auth_pk,
-        owner.encryption_pk,
-        actors.forwarder,
-        actors.mint,
+        anomapay_compliance_params(),
     );
-    let compliance_witness =
-        single_action_compliance_witness(consumed, MerklePath::empty(), nf_key, created);
-    let action =
-        prove_anomapay_action(prover, &compliance_witness, consumed_logic, created_logic).await?;
-    let tx = assemble_transaction(vec![action], std::slice::from_ref(&compliance_witness.rcv))?;
 
-    let signed_message = input.to_message(&spl_token_forwarder::ID).signed_message();
-    let signature = actors.user.sign(&signed_message).to_bytes();
+    // The forwarder parses the call the circuit commits, and recomputes the
+    // message the user signed from it: both must agree with the resource.
+    let input = wrap_input_of(&action.consumed_logic.witness, &action.action_tree_root)?;
+    let signed_message = wrap.signed_message(&auth);
+    if input.to_message(&spl_token_forwarder::ID).signed_message() != signed_message.as_bytes() {
+        bail!("the forwarder recomputes a different signed message than the resource produced");
+    }
+    let signature = actors.user.sign(signed_message.as_bytes()).to_bytes();
+
+    let rcv = action.compliance_witness.rcv.clone();
+    let action = prove_anomapay_action(prover, action).await?;
+    let tx = assemble_transaction(vec![action], std::slice::from_ref(&rcv))?;
+
     let labels = FixtureLabels {
         forwarder_type: Some("spl_token_wrap"),
         spl_token_wrap: Some(SplTokenWrapMetadata {
@@ -959,10 +904,8 @@ async fn generate_anomapay_unwrap_transaction(
     prover: &Prover,
     leaves: &[Digest],
 ) -> Result<(Transaction, FixtureLabels)> {
-    let actors = AnomaPayActors::seeded();
-    let owner = OwnerKeys::seeded();
-    let consumed = wrap_resources(ANOMAPAY_WRAP_NONCE_BYTE, &actors, &owner)?.created;
-    let consumed_cm = consumed.commitment();
+    let (actors, owner, wrap) = seeded_wrap(ANOMAPAY_WRAP_NONCE_BYTE)?;
+    let consumed_cm = wrap.created.commitment();
     let index = leaves
         .len()
         .checked_sub(1)
@@ -981,44 +924,22 @@ async fn generate_anomapay_unwrap_transaction(
         hex::encode(root.as_bytes())
     );
 
-    let consumed_nf = consumed
-        .nullifier(&owner.nf_key)
-        .map_err(|e| anyhow!("compute the wrapped resource's nullifier: {e:?}"))?;
-    let created = ephemeral_resource(
-        *TOKEN_TRANSFER_ID,
-        actors.label_ref,
-        calculate_value_ref_from_solana_account(&actors.recipient),
-        ANOMAPAY_AMOUNT as u128,
-        Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
-            .map_err(|e| anyhow!("derive unwrap resource nonce: {e:?}"))?,
-        &NullifierKey::default(),
-    );
-    let action_tree_root = single_action_tree_root(consumed_nf, created.commitment())?;
-
+    let unwrap = action::unwrap(
+        actors.label.clone(),
+        wrap.created,
+        &owner.keys.nf_key,
+        actors.recipient,
+    )
+    .map_err(|e| anyhow!("build the unwrap's resources: {e:?}"))?;
     let auth_sig = owner
         .auth_sk
-        .sign(AUTH_SIGNATURE_DOMAIN, action_tree_root.as_bytes());
-    let consumed_logic = TransferLogic::consume_persistent_resource_logic(
-        consumed,
-        action_tree_root,
-        owner.nf_key.clone(),
-        owner.auth_pk,
-        owner.encryption_pk,
-        auth_sig,
-    );
-    let created_logic = TransferLogic::burn_resource_logic(
-        created,
-        action_tree_root,
-        actors.forwarder,
-        actors.mint,
-        actors.recipient,
-    );
-    let input = unwrap_input_of(&created_logic.witness, &action_tree_root)?;
-    let compliance_witness =
-        single_action_compliance_witness(consumed, path, owner.nf_key.clone(), created);
-    let action =
-        prove_anomapay_action(prover, &compliance_witness, consumed_logic, created_logic).await?;
-    let tx = assemble_transaction(vec![action], std::slice::from_ref(&compliance_witness.rcv))?;
+        .sign(AUTH_SIGNATURE_DOMAIN, unwrap.action_tree_root.as_bytes());
+    let action = unwrap.action(&owner.keys, auth_sig, path, anomapay_compliance_params());
+    let input = unwrap_input_of(&action.created_logic.witness, &action.action_tree_root)?;
+
+    let rcv = action.compliance_witness.rcv.clone();
+    let action = prove_anomapay_action(prover, action).await?;
+    let tx = assemble_transaction(vec![action], std::slice::from_ref(&rcv))?;
 
     let labels = FixtureLabels {
         forwarder_type: Some("spl_token_unwrap"),
@@ -2839,13 +2760,7 @@ mod tests {
         let (tx, _) = generate_anomapay_wrap_transaction(&Prover::Local, None)
             .await
             .unwrap();
-        let wrapped = wrap_resources(
-            ANOMAPAY_WRAP_NONCE_BYTE,
-            &AnomaPayActors::seeded(),
-            &OwnerKeys::seeded(),
-        )
-        .unwrap()
-        .created;
+        let wrapped = seeded_wrap(ANOMAPAY_WRAP_NONCE_BYTE).unwrap().2.created;
         let action = &tx.actions.as_ref().unwrap()[0];
         assert_eq!(action.logic_verifier_inputs[1].tag, wrapped.commitment());
         for input in &action.logic_verifier_inputs {
@@ -2858,10 +2773,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn anomapay_unwrap_consumes_the_wrap_leaf() {
         init_test_kind_table();
-        let owner = OwnerKeys::seeded();
-        let wrapped = wrap_resources(ANOMAPAY_WRAP_NONCE_BYTE, &AnomaPayActors::seeded(), &owner)
-            .unwrap()
-            .created;
+        let (_, owner, wrap) = seeded_wrap(ANOMAPAY_WRAP_NONCE_BYTE).unwrap();
+        let wrapped = wrap.created;
         let mut leaves = synthetic_leaves(9);
         leaves.push(wrapped.commitment());
 
@@ -2871,7 +2784,7 @@ mod tests {
         let action = &tx.actions.as_ref().unwrap()[0];
         assert_eq!(
             action.logic_verifier_inputs[0].tag,
-            wrapped.nullifier(&owner.nf_key).unwrap(),
+            wrapped.nullifier(&owner.keys.nf_key).unwrap(),
             "the unwrap consumes the wrapped resource"
         );
         assert_eq!(
