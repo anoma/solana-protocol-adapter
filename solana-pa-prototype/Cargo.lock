@@ -209,6 +209,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "anoma-pa-solana-client"
+version = "0.4.0"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=28385256014b313b1627a25f95ad64f7b604989d#28385256014b313b1627a25f95ad64f7b604989d"
+dependencies = [
+ "base64 0.22.1",
+ "bincode",
+ "hkdf",
+ "hmac",
+ "serde",
+ "sha2 0.10.9",
+]
+
+[[package]]
 name = "anoma-rm-core"
 version = "2.0.0-rc.5"
 source = "git+https://github.com/anoma/arm-risc0?branch=main#5085021fffd2ce25e161010c8e2d67ff62b5a7de"
@@ -1116,6 +1129,15 @@ name = "hex-literal"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
+
+[[package]]
+name = "hkdf"
+version = "0.12.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
+dependencies = [
+ "hmac",
+]
 
 [[package]]
 name = "hmac"
@@ -2787,6 +2809,7 @@ name = "spl-token-forwarder"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "anoma-pa-solana-client",
  "hex-literal",
  "protocol-adapter",
 ]

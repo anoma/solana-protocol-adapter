@@ -23,4 +23,6 @@ anchor-lang = { workspace = true }
 protocol-adapter = { path = "../solana-pa-prototype", default-features = false, features = ["no-entrypoint"] }
 
 [dev-dependencies]
+# The off-chain encoder of this program's inputs; the parser tests read what it writes.
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "28385256014b313b1627a25f95ad64f7b604989d", default-features = false }
 hex-literal = "0.4"
