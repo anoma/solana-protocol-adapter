@@ -98,6 +98,59 @@ fn test_wrap_input_parsing() {
     assert_eq!(input.ed25519_ix_index, 0);
 }
 
+/// The client library encodes the wrap input this program parses, and the
+/// message it recomputes from that input is the one the client tells the
+/// wallet to sign.
+#[test]
+fn wrap_input_parses_the_client_encoding_and_recomputes_its_signed_message() {
+    let (mint, user, root) = ([1u8; 32], [2u8; 32], [3u8; 32]);
+    let encoded = anoma_pa_solana_client::encode_wrap_forwarder_input(
+        &mint,
+        1000,
+        &user,
+        42,
+        1_700_000_000,
+        &root,
+        3,
+    );
+    let (op, operand) = encoded.split_first().unwrap();
+    assert_eq!(*op, crate::OP_WRAP);
+    let input = WrapInput::try_from_bytes(operand).unwrap();
+    assert_eq!(input.token_mint.to_bytes(), mint);
+    assert_eq!(input.amount, 1000);
+    assert_eq!(input.user.to_bytes(), user);
+    assert_eq!(input.nonce, 42);
+    assert_eq!(input.deadline, 1_700_000_000);
+    assert_eq!(input.action_tree_root, root);
+    assert_eq!(input.ed25519_ix_index, 3);
+
+    let client_message = anoma_pa_solana_client::WrapMessage {
+        forwarder_id: crate::ID.to_bytes(),
+        token_mint: mint,
+        amount: 1000,
+        nonce: 42,
+        deadline: 1_700_000_000,
+        action_tree_root: root,
+    };
+    assert_eq!(
+        input.to_message(&crate::ID).signed_message(),
+        client_message.base64_digest().as_bytes()
+    );
+}
+
+/// The client library encodes the unwrap input this program parses.
+#[test]
+fn unwrap_input_parses_the_client_encoding() {
+    let (mint, recipient) = ([4u8; 32], [5u8; 32]);
+    let encoded = anoma_pa_solana_client::encode_unwrap_forwarder_input(&mint, 77, &recipient);
+    let (op, operand) = encoded.split_first().unwrap();
+    assert_eq!(*op, crate::OP_UNWRAP);
+    let input = UnwrapInput::try_from_bytes(operand).unwrap();
+    assert_eq!(input.token_mint.to_bytes(), mint);
+    assert_eq!(input.amount, 77);
+    assert_eq!(input.recipient.to_bytes(), recipient);
+}
+
 #[test]
 fn wrap_input_round_trips_through_to_bytes() {
     let input = WrapInput {
