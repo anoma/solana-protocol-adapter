@@ -1,4 +1,5 @@
 use anchor_lang::prelude::{AnchorDeserialize as BorshDeserialize, AnchorSerialize, Pubkey};
+use anoma_pa_solana_client::merkle::merkle_path;
 use anyhow::{anyhow, bail, Context, Result};
 use arm::action::Action;
 use arm::action_tree::ActionTree;
@@ -225,17 +226,13 @@ async fn aggregate_tx(prover: &Prover, tx: Transaction) -> Result<Transaction> {
 
 use block_time_forwarder::{RESULT_GT, RESULT_LT};
 use ed25519_dalek::{Signer, SigningKey};
-use solana_pa::external_calls::decode_external_call;
 use solana_pa::external_calls::encode_external_call;
 use solana_pa::state::PAStateAccount;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
-use spl_token_forwarder::state::{UnwrapInput, WrapInput};
-use spl_token_forwarder::{OP_UNWRAP, OP_WRAP, RESULT_SUCCESS as SPL_RESULT_SUCCESS};
 use test_forwarder::{MODE_FAIL, MODE_SILENT};
 use transfer_library::action::{self, ComplianceParams, Owner, TransferAction, Wrap, WrapAuth};
 use transfer_library::{TOKEN_TRANSFER_ELF, TOKEN_TRANSFER_ID};
-use transfer_witness::call_type::{UNWRAP_SEGMENT_NUM_ACCOUNTS, WRAP_SEGMENT_NUM_ACCOUNTS};
-use transfer_witness::{LabelInfo, TokenTransferWitness, AUTH_SIGNATURE_DOMAIN};
+use transfer_witness::{LabelInfo, AUTH_SIGNATURE_DOMAIN};
 
 /// Everything the SPL forwarder wrap test needs to replay the fixture's
 /// external call: the seeded user and mint keypairs, the wrap terms, and the
@@ -354,9 +351,9 @@ enum GenerateShape {
     /// `generate_anomapay_wrap_transaction`.
     AnomaPayWrap,
     /// An AnomaPay SPL token unwrap spending the wrap's resource through a
-    /// Merkle path over the fixtures settled before it (`tree_leaves`, in
-    /// suite order, the wrap last); see `generate_anomapay_unwrap_transaction`.
-    AnomaPayUnwrap { tree_leaves: Vec<PathBuf> },
+    /// Merkle path over the fixtures settled before it, read from the output
+    /// directory (`SETTLED_BEFORE_UNWRAP`); see `generate_anomapay_unwrap_transaction`.
+    AnomaPayUnwrap,
 }
 
 /// Which SPL token forwarder call `--spl-token-wrap`/`--spl-token-unwrap` ask for.
@@ -702,78 +699,12 @@ async fn prove_anomapay_action(prover: &Prover, action: TransferAction) -> Resul
     .map_err(|e| anyhow!("build AnomaPay action: {e:?}"))
 }
 
-/// The forwarder operand an ephemeral witness commits: its one external
-/// payload blob must decode to a call on the forwarder with the segment
-/// size and op code the forwarder expects. Checked before proving, on the
-/// host-side witness, since the guest commits exactly this payload.
-fn forwarder_operand(
-    witness: &TokenTransferWitness,
-    action_tree_root: &Digest,
-    num_accounts: u8,
-    op: u8,
-) -> Result<Vec<u8>> {
-    let payload = witness
-        .ephemeral_resource_check(action_tree_root.as_bytes())
-        .map_err(|e| anyhow!("the transfer logic rejects the witness: {e:?}"))?;
-    if payload.len() != 1 {
-        bail!(
-            "the witness commits {} external calls, expected one",
-            payload.len()
-        );
-    }
-    let call = decode_external_call(&payload[0])
-        .map_err(|e| anyhow!("decode the circuit's forwarder call: {e:?}"))?;
-    if call.program_id != spl_token_forwarder::ID.to_bytes() {
-        bail!("the circuit's forwarder call targets another program");
-    }
-    if call.expected_output != vec![SPL_RESULT_SUCCESS] {
-        bail!("the circuit's forwarder call expects an output the forwarder never returns");
-    }
-    if call.num_accounts != num_accounts {
-        bail!(
-            "the call commits {} accounts, the forwarder's segment has {num_accounts}",
-            call.num_accounts
-        );
-    }
-    match call.instruction_data.split_first() {
-        Some((first, operand)) if *first == op => Ok(operand.to_vec()),
-        Some((first, _)) => bail!("the call carries op {first}, expected {op}"),
-        None => bail!("empty forwarder instruction data"),
-    }
-}
-
-/// The wrap input the forwarder parses from the witness's call.
-fn wrap_input_of(witness: &TokenTransferWitness, action_tree_root: &Digest) -> Result<WrapInput> {
-    let operand = forwarder_operand(
-        witness,
-        action_tree_root,
-        WRAP_SEGMENT_NUM_ACCOUNTS,
-        OP_WRAP,
-    )?;
-    WrapInput::try_from_bytes(&operand)
-        .map_err(|e| anyhow!("the forwarder rejects the circuit's wrap input: {e:?}"))
-}
-
-/// The unwrap input the forwarder parses from the witness's call.
-fn unwrap_input_of(
-    witness: &TokenTransferWitness,
-    action_tree_root: &Digest,
-) -> Result<UnwrapInput> {
-    let operand = forwarder_operand(
-        witness,
-        action_tree_root,
-        UNWRAP_SEGMENT_NUM_ACCOUNTS,
-        OP_UNWRAP,
-    )?;
-    UnwrapInput::try_from_bytes(&operand)
-        .map_err(|e| anyhow!("the forwarder rejects the circuit's unwrap input: {e:?}"))
-}
-
 /// The AnomaPay wrap the fixture settles: the seeded user wraps 100 tokens
 /// of the seeded mint, consuming an ephemeral resource whose transfer logic
 /// commits the forwarder call, and creating the owner's shielded resource
 /// whose logic emits the encrypted payloads. The user signs the message the
-/// forwarder recomputes from the proof-bound input.
+/// resource derives from the proof-bound input, which the forwarder
+/// recomputes at settlement.
 async fn generate_anomapay_wrap_transaction(
     prover: &Prover,
     nonce_seed: Option<u8>,
@@ -791,14 +722,7 @@ async fn generate_anomapay_wrap_transaction(
         &discovery_pk(),
         anomapay_compliance_params(),
     );
-
-    // The forwarder parses the call the circuit commits, and recomputes the
-    // message the user signed from it: both must agree with the resource.
-    let input = wrap_input_of(&action.consumed_logic.witness, &action.action_tree_root)?;
     let signed_message = wrap.signed_message(&auth);
-    if input.to_message(&spl_token_forwarder::ID).signed_message() != signed_message.as_bytes() {
-        bail!("the forwarder recomputes a different signed message than the resource produced");
-    }
     let signature = actors.user.sign(signed_message.as_bytes()).to_bytes();
 
     let rcv = action.compliance_witness.rcv.clone();
@@ -810,8 +734,8 @@ async fn generate_anomapay_wrap_transaction(
         spl_token_wrap: Some(SplTokenWrapMetadata {
             user_seed_label: USER_SEED_LABEL,
             mint_seed_label: MINT_SEED_LABEL,
-            amount: input.amount,
-            nonce: input.nonce,
+            amount: ANOMAPAY_AMOUNT,
+            nonce: ANOMAPAY_WRAP_NONCE,
             signed_message_b64: BASE64.encode(signed_message),
             signature_b64: BASE64.encode(signature),
             logic_ref_b64: token_transfer_logic_ref_b64(),
@@ -820,6 +744,20 @@ async fn generate_anomapay_wrap_transaction(
     };
     Ok((tx, labels))
 }
+
+/// The fixtures the suite settles before the AnomaPay unwrap, in settlement
+/// order, the wrap last: the tree the unwrap's Merkle path is built over.
+/// Keep equal to the suite's order (tests/solana-pa-prototype.ts).
+const SETTLED_BEFORE_UNWRAP: [&str; 8] = [
+    "batch_groth16.json",
+    "batch_groth16_historical_root_committer.json",
+    "batch_groth16_transfer_shape.json",
+    "batch_groth16_v2.json",
+    "batch_groth16_v3.json",
+    "batch_groth16_multi_call.json",
+    "batch_groth16_historical_root.json",
+    "spl_token_wrap.json",
+];
 
 /// The created commitments of the fixtures at `paths`, in order: the leaves
 /// the suite's settlements append.
@@ -852,35 +790,24 @@ fn pa_tree_root(leaves: &[Digest]) -> Result<Digest> {
     Ok(Digest::from_bytes(state.root))
 }
 
-/// The Merkle path of leaf `index` in the adapter's tree over `leaves`: the
-/// sibling at each of `required_depth_for_leaves(n)` levels, empty slots
-/// padded with the zero subtrees.
+/// The Merkle path of leaf `index` in the adapter's tree over `leaves`, as
+/// the client library derives it for integrators.
 fn pa_merkle_path(leaves: &[Digest], index: usize) -> MerklePath {
-    let depth = solana_pa::merkle::required_depth_for_leaves(leaves.len() as u64);
-    let mut nodes = leaves.to_vec();
-    let mut position = index;
-    let mut path = Vec::with_capacity(depth);
-    for level in 0..depth {
-        let zero = solana_pa::merkle::ZEROS[level];
-        path.push((
-            nodes.get(position ^ 1).copied().unwrap_or(zero),
-            position & 1 == 1,
-        ));
-        nodes = nodes
-            .chunks(2)
-            .map(|pair| {
-                let right = pair.get(1).copied().unwrap_or(zero);
-                solana_pa::merkle::hash_two(&pair[0], &right)
-            })
-            .collect();
-        position >>= 1;
-    }
+    let leaves: Vec<[u8; 32]> = leaves.iter().map(digest_bytes).collect();
+    let path: Vec<(Digest, bool)> = merkle_path(&leaves, index)
+        .into_iter()
+        .map(|(sibling, leaf_is_on_right)| (Digest::from_bytes(sibling), leaf_is_on_right))
+        .collect();
     MerklePath::from_path(&path)
 }
 
+fn digest_bytes(digest: &Digest) -> [u8; 32] {
+    digest.as_bytes().try_into().expect("a digest is 32 bytes")
+}
+
 /// The Merkle path of leaf `index` and the root it reconstructs, checked
-/// against the adapter's own replay of the tree: a path that disagrees with
-/// the program's growth rule fails here, not at settlement.
+/// against the adapter's own replay of the tree: a client path that
+/// disagrees with the program's growth rule fails here, not at settlement.
 fn checked_pa_merkle_path(leaves: &[Digest], index: usize) -> Result<(MerklePath, Digest)> {
     let path = pa_merkle_path(leaves, index);
     let expected_root = pa_tree_root(leaves)?;
@@ -935,7 +862,6 @@ async fn generate_anomapay_unwrap_transaction(
         .auth_sk
         .sign(AUTH_SIGNATURE_DOMAIN, unwrap.action_tree_root.as_bytes());
     let action = unwrap.action(&owner.keys, auth_sig, path, anomapay_compliance_params());
-    let input = unwrap_input_of(&action.created_logic.witness, &action.action_tree_root)?;
 
     let rcv = action.compliance_witness.rcv.clone();
     let action = prove_anomapay_action(prover, action).await?;
@@ -945,7 +871,7 @@ async fn generate_anomapay_unwrap_transaction(
         forwarder_type: Some("spl_token_unwrap"),
         spl_token_unwrap: Some(SplTokenUnwrapMetadata {
             mint_seed_label: MINT_SEED_LABEL,
-            amount: input.amount,
+            amount: ANOMAPAY_AMOUNT,
             recipient_seed_label: RECIPIENT_SEED_LABEL,
             logic_ref_b64: token_transfer_logic_ref_b64(),
         }),
@@ -2097,7 +2023,7 @@ fn dump_fixture(input: &Path) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen mockify <IN> <OUT>           Convert an existing fixture into its mock twin\n  fixture-gen refresh-fields <FIXTURE>     Re-derive fixture fields from tx_b64 in place (no proving)\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --spl-token-wrap         AnomaPay wrap proven with the transfer logic: the user's\n                           ed25519-authorized escrow deposit creates the owner's resource\n  --spl-token-unwrap       AnomaPay unwrap: the owner spends the wrapped resource, releasing\n                           the escrow to the recipient; needs --tree-leaf\n  --tree-leaf FIXTURE      (unwrap) a fixture the suite settles before the unwrap, in\n                           settlement order, the wrap last; repeat per fixture\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --transfer-shape         Three single-unit actions with event-emitted payload blobs\n                           and no external calls (the captured mainnet transfer's shape);\n                           excludes the forwarder flags. Nonce bytes seed..seed+2 (default 9)\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof/zero_action/witness_delta variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent,\n    --spl-token-wrap, --spl-token-unwrap.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - mockify replaces only the aggregation seal of an existing fixture; use it for\n    imported fixtures whose proving inputs are not in this repo.\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen mockify <IN> <OUT>           Convert an existing fixture into its mock twin\n  fixture-gen refresh-fields <FIXTURE>     Re-derive fixture fields from tx_b64 in place (no proving)\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --spl-token-wrap         AnomaPay wrap proven with the transfer logic: the user's\n                           ed25519-authorized escrow deposit creates the owner's resource\n  --spl-token-unwrap       AnomaPay unwrap: the owner spends the wrapped resource, releasing\n                           the escrow to the recipient; reads the fixtures the suite settles\n                           before it from the output directory\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --transfer-shape         Three single-unit actions with event-emitted payload blobs\n                           and no external calls (the captured mainnet transfer's shape);\n                           excludes the forwarder flags. Nonce bytes seed..seed+2 (default 9)\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof/zero_action/witness_delta variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent,\n    --spl-token-wrap, --spl-token-unwrap.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - mockify replaces only the aggregation seal of an existing fixture; use it for\n    imported fixtures whose proving inputs are not in this repo.\n"
     );
 }
 
@@ -2269,7 +2195,6 @@ fn parse_args() -> Result<Command> {
     let mut prover_choice: Option<ProverChoice> = None;
     let mut mock = false;
     let mut anomapay: Option<AnomaPayCall> = None;
-    let mut tree_leaves: Vec<PathBuf> = Vec::new();
 
     while let Some(arg) = args.next() {
         // Handle positional arguments before splitting on '='.
@@ -2317,13 +2242,6 @@ fn parse_args() -> Result<Command> {
                     "--spl-token-unwrap" => anomapay = Some(AnomaPayCall::Unwrap),
                     _ => unreachable!(),
                 }
-            }
-            "--tree-leaf" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--tree-leaf requires a fixture path"))?;
-                tree_leaves.push(PathBuf::from(value));
             }
             "--nonce-seed" => {
                 let value = eq_value
@@ -2380,22 +2298,11 @@ fn parse_args() -> Result<Command> {
     let out_path = out_path
         .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
 
-    if !tree_leaves.is_empty() && anomapay != Some(AnomaPayCall::Unwrap) {
-        return Err(anyhow!("--tree-leaf only applies to --spl-token-unwrap"));
-    }
-    if anomapay == Some(AnomaPayCall::Unwrap) {
-        if nonce_seed.is_some() {
-            return Err(anyhow!(
-                "--spl-token-unwrap derives its nonces from the wrapped resource; \
-                 --nonce-seed does not apply"
-            ));
-        }
-        if tree_leaves.is_empty() {
-            return Err(anyhow!(
-                "--spl-token-unwrap needs the fixtures the suite settles before it, in order, \
-                 as --tree-leaf arguments, the wrap fixture last"
-            ));
-        }
+    if anomapay == Some(AnomaPayCall::Unwrap) && nonce_seed.is_some() {
+        return Err(anyhow!(
+            "--spl-token-unwrap derives its nonces from the wrapped resource; \
+             --nonce-seed does not apply"
+        ));
     }
 
     let shape = if transfer_shape {
@@ -2416,7 +2323,7 @@ fn parse_args() -> Result<Command> {
         }
         match call {
             AnomaPayCall::Wrap => GenerateShape::AnomaPayWrap,
-            AnomaPayCall::Unwrap => GenerateShape::AnomaPayUnwrap { tree_leaves },
+            AnomaPayCall::Unwrap => GenerateShape::AnomaPayUnwrap,
         }
     } else {
         GenerateShape::SingleAction {
@@ -2568,11 +2475,9 @@ async fn main() -> Result<()> {
         GenerateShape::AnomaPayWrap => {
             eprintln!("mode: AnomaPay wrap (transfer logic {})", *TOKEN_TRANSFER_ID)
         }
-        GenerateShape::AnomaPayUnwrap { tree_leaves } => eprintln!(
-            "mode: AnomaPay unwrap (transfer logic {}, {} tree-leaf fixtures)",
-            *TOKEN_TRANSFER_ID,
-            tree_leaves.len()
-        ),
+        GenerateShape::AnomaPayUnwrap => {
+            eprintln!("mode: AnomaPay unwrap (transfer logic {})", *TOKEN_TRANSFER_ID)
+        }
     }
     if let Some(seed) = nonce_seed {
         eprintln!("mode: nonce-seed override ({seed})");
@@ -2605,8 +2510,15 @@ async fn main() -> Result<()> {
         GenerateShape::AnomaPayWrap => {
             generate_anomapay_wrap_transaction(&prover, nonce_seed).await?
         }
-        GenerateShape::AnomaPayUnwrap { tree_leaves } => {
-            let leaves = tree_leaves_of(&tree_leaves)?;
+        GenerateShape::AnomaPayUnwrap => {
+            let fixture_dir = out_path
+                .parent()
+                .ok_or_else(|| anyhow!("the unwrap's output path has no directory"))?;
+            let settled: Vec<PathBuf> = SETTLED_BEFORE_UNWRAP
+                .iter()
+                .map(|name| fixture_dir.join(name))
+                .collect();
+            let leaves = tree_leaves_of(&settled)?;
             generate_anomapay_unwrap_transaction(&prover, &leaves).await?
         }
     };
