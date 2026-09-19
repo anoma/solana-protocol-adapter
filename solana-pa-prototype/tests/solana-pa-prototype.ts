@@ -345,6 +345,17 @@ function parseCpiEvents(tx: anchor.web3.VersionedTransactionResponse) {
   return events;
 }
 
+/** The settlement's CPI events, once the transaction is confirmed. */
+async function cpiEventsOf(sig: string) {
+  await provider.connection.confirmTransaction(sig, "confirmed");
+  const tx = await provider.connection.getTransaction(sig, {
+    commitment: "confirmed",
+    maxSupportedTransactionVersion: 0,
+  });
+  assert.ok(tx, `transaction ${sig} is fetchable once confirmed`);
+  return { tx: tx!, events: parseCpiEvents(tx!) };
+}
+
 function settleFromTxDataBuilder(
   authority: PublicKey,
   uploadId: anchor.BN,
@@ -2306,15 +2317,9 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
       "three created commitments should be appended",
     );
 
-    await provider.connection.confirmTransaction(sig, "confirmed");
-    const txResult = await provider.connection.getTransaction(sig, {
-      commitment: "confirmed",
-      maxSupportedTransactionVersion: 0,
-    });
-    assert.ok(txResult, "settlement transaction should be fetchable");
-    const events = parseCpiEvents(txResult!);
+    const { tx: txResult, events } = await cpiEventsOf(sig);
     const innerCount =
-      txResult!.meta?.innerInstructions?.reduce((n, g) => n + g.instructions.length, 0) ?? 0;
+      txResult.meta?.innerInstructions?.reduce((n, g) => n + g.instructions.length, 0) ?? 0;
     console.log(
       `transfer-shape settlement: ${txResult!.meta?.computeUnitsConsumed} CU, ` +
         `${events.length} CPI events, ${innerCount} inner instructions of the ` +
@@ -2469,15 +2474,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
       "'settles v2 fixture' test must have failed"
     );
 
-    await provider.connection.confirmTransaction(v2TxSig, "confirmed");
-
-    const txResult = await provider.connection.getTransaction(v2TxSig, {
-      commitment: "confirmed",
-      maxSupportedTransactionVersion: 0,
-    });
-    assert.ok(txResult, "v2 transaction should be fetchable");
-
-    const events = parseCpiEvents(txResult!);
+    const { events } = await cpiEventsOf(v2TxSig);
 
     const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
     assert.isAtLeast(actionEvents.length, 1, "Should emit actionExecutedEvent");
@@ -2990,13 +2987,14 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   before(async () => {
     // The unwrap fixture spends the resource the wrap creates, proven against
     // the root the tree has once the wrap lands on what the suite has settled
-    // by now. If the suite's settlement order changes, regenerate the SPL
-    // fixtures with the matching --tree-leaf list (scripts/regen-fixtures.sh).
+    // by now. If the suite's settlement order changes, update
+    // SETTLED_BEFORE_UNWRAP in fixture-gen and regenerate the SPL fixtures
+    // (scripts/regen-fixtures.sh).
     const rootAfterWrap = await predictRootAfterAppend(program, paState, commitmentsOf(wrapFixture));
     assert.equal(
       rootAfterWrap.toString("base64"),
       unwrapFixture.historical_roots_b64?.[0],
-      "the unwrap fixture was proven against a different tree than the suite builds before the wrap; regenerate the SPL fixtures with the suite's --tree-leaf order",
+      "the unwrap fixture was proven against a different tree than the suite builds before the wrap; update SETTLED_BEFORE_UNWRAP in fixture-gen to the suite's order and regenerate the SPL fixtures",
     );
 
     await funder.fund(user, 5);
@@ -3186,10 +3184,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
     // Both resources carry the AnomaPay transfer logic the forwarder config
     // pins: the wrap settled under the real verifying key.
-    await provider.connection.confirmTransaction(sig, "confirmed");
-    const txResult = await provider.connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-    assert.ok(txResult, "the wrap settlement is fetchable once confirmed");
-    const txEvents = parseCpiEvents(txResult!).filter((e) => e.name === "transactionExecutedEvent");
+    const txEvents = (await cpiEventsOf(sig)).events.filter((e) => e.name === "transactionExecutedEvent");
     assert.equal(txEvents.length, 1, "one transactionExecutedEvent");
     const logicRef = Array.from(Buffer.from(wrap.logic_ref_b64, "base64"));
     assert.deepEqual(
