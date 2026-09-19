@@ -24,5 +24,5 @@ protocol-adapter = { path = "../solana-pa-prototype", default-features = false, 
 
 [dev-dependencies]
 # The off-chain encoder of this program's inputs; the parser tests read what it writes.
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "28385256014b313b1627a25f95ad64f7b604989d", default-features = false }
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "5b2df9475d08f61566a96b68fecb92088276d398", default-features = false }
 hex-literal = "0.4"

@@ -6,13 +6,13 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 # Merkle paths over the adapter's tree, as integrators derive them.
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "28385256014b313b1627a25f95ad64f7b604989d", default-features = false }
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "5b2df9475d08f61566a96b68fecb92088276d398", default-features = false }
 bs58 = "0.5"
 arm = { package = "anoma-rm-risc0", git = "https://github.com/anoma/arm-risc0", branch = "main", default-features = false, features = ["aggregation", "prove"] }
 arm-gadgets = { package = "anoma-rm-risc0-gadgets", git = "https://github.com/anoma/arm-risc0", branch = "main" }
 # The AnomaPay transfer resource: its logic proves the SPL forwarder fixtures.
-transfer_library = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "7c5af8e94ee13813ab413dade0b46e8a823a6aee" }
-transfer_witness = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "7c5af8e94ee13813ab413dade0b46e8a823a6aee" }
+transfer_library = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "f6b7e2711a2dd036354c0a9344843f0cbdecd24d" }
+transfer_witness = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "f6b7e2711a2dd036354c0a9344843f0cbdecd24d" }
 verifier_router = { git = "https://github.com/risc0/risc0-solana.git", tag = "v3.0.0" }
 # Proof type for constructing mock seals (verifier_router uses but doesn't re-export)
 groth_16_verifier = { git = "https://github.com/risc0/risc0-solana.git", tag = "v3.0.0" }

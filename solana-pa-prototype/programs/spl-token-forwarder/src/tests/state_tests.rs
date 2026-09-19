@@ -138,6 +138,16 @@ fn wrap_input_parses_the_client_encoding_and_recomputes_its_signed_message() {
     );
 }
 
+/// The return byte the resource's external call expects is the one this
+/// program returns.
+#[test]
+fn result_success_is_the_client_constant() {
+    assert_eq!(
+        crate::RESULT_SUCCESS,
+        anoma_pa_solana_client::FORWARDER_RESULT_SUCCESS
+    );
+}
+
 /// The client library encodes the unwrap input this program parses.
 #[test]
 fn unwrap_input_parses_the_client_encoding() {

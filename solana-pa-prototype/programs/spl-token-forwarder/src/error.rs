@@ -9,7 +9,7 @@ pub enum ErrorCode {
     #[msg("Invalid input data")]
     InvalidInput,
 
-    #[msg("Invalid wrap input length - expected 121 bytes")]
+    #[msg("Invalid wrap input length")]
     InvalidWrapInputLength,
 
     #[msg("Invalid unwrap input length - expected 72 bytes")]
