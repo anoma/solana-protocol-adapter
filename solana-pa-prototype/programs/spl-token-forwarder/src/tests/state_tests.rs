@@ -85,10 +85,8 @@ fn test_wrap_input_parsing() {
     data[80..88].copy_from_slice(&1700000000i64.to_le_bytes());
     // action_tree_root
     data[88..120].copy_from_slice(&[3u8; 32]);
-    // signature
-    data[120..184].copy_from_slice(&[4u8; 64]);
     // ed25519_ix_index
-    data[184] = 0;
+    data[120] = 0;
 
     let input = WrapInput::try_from_bytes(&data).unwrap();
     assert_eq!(input.token_mint.to_bytes(), [1u8; 32]);
@@ -97,8 +95,70 @@ fn test_wrap_input_parsing() {
     assert_eq!(input.nonce, 42);
     assert_eq!(input.deadline, 1700000000);
     assert_eq!(input.action_tree_root, [3u8; 32]);
-    assert_eq!(input.signature, [4u8; 64]);
     assert_eq!(input.ed25519_ix_index, 0);
+}
+
+/// The client library encodes the wrap input this program parses, and the
+/// message it recomputes from that input is the one the client tells the
+/// wallet to sign.
+#[test]
+fn wrap_input_parses_the_client_encoding_and_recomputes_its_signed_message() {
+    let (mint, user, root) = ([1u8; 32], [2u8; 32], [3u8; 32]);
+    let encoded = anoma_pa_solana_client::encode_wrap_forwarder_input(
+        &mint,
+        1000,
+        &user,
+        42,
+        1_700_000_000,
+        &root,
+        3,
+    );
+    let (op, operand) = encoded.split_first().unwrap();
+    assert_eq!(*op, crate::OP_WRAP);
+    let input = WrapInput::try_from_bytes(operand).unwrap();
+    assert_eq!(input.token_mint.to_bytes(), mint);
+    assert_eq!(input.amount, 1000);
+    assert_eq!(input.user.to_bytes(), user);
+    assert_eq!(input.nonce, 42);
+    assert_eq!(input.deadline, 1_700_000_000);
+    assert_eq!(input.action_tree_root, root);
+    assert_eq!(input.ed25519_ix_index, 3);
+
+    let client_message = anoma_pa_solana_client::WrapMessage {
+        forwarder_id: crate::ID.to_bytes(),
+        token_mint: mint,
+        amount: 1000,
+        nonce: 42,
+        deadline: 1_700_000_000,
+        action_tree_root: root,
+    };
+    assert_eq!(
+        input.to_message(&crate::ID).signed_message(),
+        client_message.base64_digest().as_bytes()
+    );
+}
+
+/// The return byte the resource's external call expects is the one this
+/// program returns.
+#[test]
+fn result_success_is_the_client_constant() {
+    assert_eq!(
+        crate::RESULT_SUCCESS,
+        anoma_pa_solana_client::FORWARDER_RESULT_SUCCESS
+    );
+}
+
+/// The client library encodes the unwrap input this program parses.
+#[test]
+fn unwrap_input_parses_the_client_encoding() {
+    let (mint, recipient) = ([4u8; 32], [5u8; 32]);
+    let encoded = anoma_pa_solana_client::encode_unwrap_forwarder_input(&mint, 77, &recipient);
+    let (op, operand) = encoded.split_first().unwrap();
+    assert_eq!(*op, crate::OP_UNWRAP);
+    let input = UnwrapInput::try_from_bytes(operand).unwrap();
+    assert_eq!(input.token_mint.to_bytes(), mint);
+    assert_eq!(input.amount, 77);
+    assert_eq!(input.recipient.to_bytes(), recipient);
 }
 
 #[test]
@@ -110,7 +170,6 @@ fn wrap_input_round_trips_through_to_bytes() {
         nonce: 7,
         deadline: 4_102_444_800,
         action_tree_root: [0xab; 32],
-        signature: [0xcd; 64],
         ed25519_ix_index: 3,
     };
     let bytes = input.to_bytes();
@@ -122,7 +181,6 @@ fn wrap_input_round_trips_through_to_bytes() {
     assert_eq!(parsed.nonce, input.nonce);
     assert_eq!(parsed.deadline, input.deadline);
     assert_eq!(parsed.action_tree_root, input.action_tree_root);
-    assert_eq!(parsed.signature, input.signature);
     assert_eq!(parsed.ed25519_ix_index, input.ed25519_ix_index);
 }
 

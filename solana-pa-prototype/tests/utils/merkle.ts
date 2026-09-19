@@ -77,7 +77,16 @@ export async function predictRootMarkerPda(
   paState: PublicKey,
   createdCommitments: Buffer[]
 ): Promise<PublicKey> {
-  const state = await program.account.paStateAccount.fetch(paState);
-  const root = computeRootAfterAppend(state, createdCommitments);
+  const root = await predictRootAfterAppend(program, paState, createdCommitments);
   return deriveRootMarkerPda(paState, root, program.programId);
+}
+
+/** The root the adapter will hold after appending `createdCommitments` to its current tree. */
+export async function predictRootAfterAppend(
+  program: Program<ProtocolAdapter>,
+  paState: PublicKey,
+  createdCommitments: Buffer[]
+): Promise<Buffer> {
+  const state = await program.account.paStateAccount.fetch(paState);
+  return computeRootAfterAppend(state, createdCommitments);
 }
