@@ -61,10 +61,23 @@ gen historical-root "$OUT_DIR/batch_groth16.json" \
 # The AnomaPay fixtures are proven with the real transfer logic: the wrap,
 # the same wrap under a fresh nullifier (a replay of its nonce), and the
 # unwrap. The unwrap consumes the resource the wrap creates, through a
-# Merkle path over the commitments the suite settles before it; fixture-gen
-# reads those fixtures from $OUT_DIR, so they must all exist by now.
+# Merkle path over the commitments the suite settles before it, in
+# settlement order: keep this list equal to the suite's order
+# (tests/solana-pa-prototype.ts).
 gen "${MOCK_FLAG[@]}" --spl-token-wrap "$OUT_DIR/spl_token_wrap.json"
 gen "${MOCK_FLAG[@]}" --spl-token-wrap --nonce-seed 21 "$OUT_DIR/spl_token_wrap_replay.json"
-gen "${MOCK_FLAG[@]}" --spl-token-unwrap "$OUT_DIR/spl_token_unwrap.json"
+SETTLED_BEFORE_UNWRAP=(
+  batch_groth16.json
+  batch_groth16_historical_root_committer.json
+  batch_groth16_transfer_shape.json
+  batch_groth16_v2.json
+  batch_groth16_v3.json
+  batch_groth16_multi_call.json
+  batch_groth16_historical_root.json
+  spl_token_wrap.json
+)
+gen "${MOCK_FLAG[@]}" --spl-token-unwrap \
+  "${SETTLED_BEFORE_UNWRAP[@]/#/--settled=$OUT_DIR/}" \
+  "$OUT_DIR/spl_token_unwrap.json"
 
 echo "✅ Regenerated the $MODE fixture set in $OUT_DIR"

@@ -2987,14 +2987,13 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   before(async () => {
     // The unwrap fixture spends the resource the wrap creates, proven against
     // the root the tree has once the wrap lands on what the suite has settled
-    // by now. If the suite's settlement order changes, update
-    // SETTLED_BEFORE_UNWRAP in fixture-gen and regenerate the SPL fixtures
-    // (scripts/regen-fixtures.sh).
+    // by now. If the suite's settlement order changes, update the settled
+    // list in scripts/regen-fixtures.sh and regenerate the SPL fixtures.
     const rootAfterWrap = await predictRootAfterAppend(program, paState, commitmentsOf(wrapFixture));
     assert.equal(
       rootAfterWrap.toString("base64"),
       unwrapFixture.historical_roots_b64?.[0],
-      "the unwrap fixture was proven against a different tree than the suite builds before the wrap; update SETTLED_BEFORE_UNWRAP in fixture-gen to the suite's order and regenerate the SPL fixtures",
+      "the unwrap fixture was proven against a different tree than the suite builds before the wrap; update the settled list in scripts/regen-fixtures.sh to the suite's order and regenerate the SPL fixtures",
     );
 
     await funder.fund(user, 5);
