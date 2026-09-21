@@ -20,11 +20,14 @@ import {
   assertRejects,
   deriveConfigPda,
   derivePaStatePda,
+  deriveProgramDataPda,
   encodeUnwrapInput,
   initializeForwarder,
   makeFunder,
+  randomRef,
   requireFixture,
   seededKeypair,
+  setLogicRef,
 } from "./utils";
 
 describe("01-spl-token-forwarder (config and direct-call guards)", () => {
@@ -76,6 +79,67 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
       assert.deepEqual(config.logicRef, logicRef);
       assert.ok(config.emergencyCommittee.equals(emergencyCommittee.publicKey));
       assert.ok(config.emergencyCaller.equals(PublicKey.default));
+    });
+  });
+
+  describe("set_logic_ref", () => {
+    // Mirrors the EVM forwarder's rotation on the upgradeable base
+    // (ERC20ForwarderV2.reinitialize): the owner who authorizes upgrades
+    // writes the new logic ref into the existing storage, and custody and
+    // nonces are untouched. That owner is the upgrade authority the loader
+    // records for this program.
+    const rotate = (ref: number[], programData?: PublicKey) =>
+      setLogicRef(forwarderProgram, provider.wallet.publicKey, ref, programData).rpc();
+
+    it("rejects a zero logic ref", () => assertRejects(rotate(Array(32).fill(0)), /ZeroAddressNotAllowed/));
+
+    it("rejects a signer that is not the program's upgrade authority", async () => {
+      const impostor = Keypair.generate();
+      await funder.fund(impostor, 1);
+      await assertRejects(
+        setLogicRef(forwarderProgram, impostor.publicKey, randomRef()).signers([impostor]).rpc(),
+        /caused by account: program_data\. Error Code: UnauthorizedCaller/
+      );
+      assert.deepEqual((await forwarderProgram.account.config.fetch(configPda)).logicRef, logicRef, "the config is untouched");
+    });
+
+    // The upgrade-authority check reads whatever ProgramData is passed; the
+    // program constraint pins it to this program's own. Another program with
+    // the same upgrade authority is the cheapest forgery.
+    it("rejects the upgrade authority of another program's ProgramData", () =>
+      assertRejects(
+        rotate(randomRef(), deriveProgramDataPda(paProgram.programId)),
+        /caused by account: program\. Error Code: UnauthorizedCaller/
+      ));
+
+    it("rotates the logic ref in place and leaves the rest of the config untouched", async () => {
+      const before = await forwarderProgram.account.config.fetch(configPda);
+      const rotated = randomRef();
+
+      const sig = await rotate(rotated);
+      try {
+        const after = await forwarderProgram.account.config.fetch(configPda);
+        assert.deepEqual(after.logicRef, rotated, "the new logic ref is stored");
+        assert.ok(after.protocolAdapter.equals(before.protocolAdapter), "the adapter is untouched");
+        assert.ok(after.emergencyCommittee.equals(before.emergencyCommittee), "the committee is untouched");
+        assert.ok(after.emergencyCaller.equals(before.emergencyCaller), "the emergency caller is untouched");
+
+        await provider.connection.confirmTransaction(sig, "confirmed");
+        const tx = await provider.connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+        assert.ok(tx, `transaction ${sig} is fetchable once confirmed`);
+        const parser = new anchor.EventParser(forwarderProgram.programId, forwarderProgram.coder);
+        const events = [...parser.parseLogs(tx!.meta!.logMessages!)];
+        const set = events.find((e) => e.name === "logicRefSet");
+        assert.ok(set, `a LogicRefSet event is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`);
+        assert.deepEqual(Array.from(set!.data.previous), before.logicRef, "the event carries the previous ref");
+        assert.deepEqual(Array.from(set!.data.logicRef), rotated, "the event carries the new ref");
+        assert.ok(set!.data.setBy.equals(provider.wallet.publicKey), "the event names the authority");
+      } finally {
+        // The adapter suite's wrap and unwrap were proven under the fixture's
+        // ref: rotate back so the config authorizes them again.
+        await rotate(logicRef);
+      }
+      assert.deepEqual((await forwarderProgram.account.config.fetch(configPda)).logicRef, logicRef);
     });
   });
 

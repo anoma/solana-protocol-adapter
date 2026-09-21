@@ -144,7 +144,7 @@ The PAState account of a stopped deployment can never be re-initialized. This is
 
 ## The SPL token forwarder
 
-The SPL token forwarder (`programs/spl-token-forwarder`) holds AnomaPay's wrapped SPL tokens in escrow and executes the wrap and unwrap calls the adapter forwards to it. It has one authority of its own, the **emergency committee**, recorded in its config PDA at initialization. All commands below go through `./scripts/dev.sh forwarder <command> --cluster <c>`; their parameters are `STF_*` environment variables (`scripts/forwarder.ts` lists them).
+The SPL token forwarder (`programs/spl-token-forwarder`) holds AnomaPay's wrapped SPL tokens in escrow and executes the wrap and unwrap calls the adapter forwards to it. It has two authorities: the program's **upgrade authority**, which upgrades the program and rotates the logic ref, and the **emergency committee**, recorded in its config PDA at initialization, which names the emergency caller and closes accounts. All commands below go through `./scripts/dev.sh forwarder <command> --cluster <c>`; their parameters are `STF_*` environment variables (`scripts/forwarder.ts` lists them).
 
 ### Deploy and initialize
 
@@ -163,11 +163,13 @@ A wrap's replay protection is a per-user, per-256-nonce-word bitmap account. The
 
 ### Rotating the logic ref
 
-The logic ref changes whenever the resource circuit is rebuilt. The config cannot be edited: close it and initialize again.
+The logic ref changes whenever the resource circuit is rebuilt. The upgrade authority rotates it in place, as the EVM forwarder's owner does through its upgrade path:
 
-1. Wrapped funds stay in escrow under the old logic ref's rules and the new logic may not be able to unwrap them. Drain every mint's escrow first, as the committee: `STF_TOKEN_MINT=… STF_RECIPIENT=… ./scripts/dev.sh forwarder drain-escrow --cluster <c>`.
-2. `./scripts/dev.sh forwarder close-config --cluster <c>` (committee wallet). Nonce bitmaps and escrow PDAs are untouched; a user's used nonces stay used.
-3. `forwarder init` with the new `STF_LOGIC_REF` (and `STF_TOKEN_MINT` to recreate the escrow ATA).
+```sh
+STF_LOGIC_REF=<new 32-byte hex verifying key> ./scripts/dev.sh forwarder set-logic-ref --cluster <c>   # upgrade-authority wallet
+```
+
+Escrow, nonce bitmaps and the committee are untouched; the config emits `LogicRefSet` with the previous and the new ref. Resources wrapped under the previous ref stay in escrow: the new logic cannot unwrap them, and moving them is the migration path (anoma/dos-pm#77), not a rotation concern. The emergency path below is for a stopped adapter only.
 
 ### Emergency committee
 

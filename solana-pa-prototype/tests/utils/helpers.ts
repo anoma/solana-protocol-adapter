@@ -21,6 +21,7 @@ import { createHash } from "crypto";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { TX_DATA_SEED } from "./constants";
+import { deriveProgramDataPda } from "./pda";
 
 /**
  * Fund a keypair from the provider wallet, topping up to the requested amount.
@@ -220,6 +221,23 @@ export function initializeForwarder(
     .initialize(adapterProgramId, logicRef, committee)
     .accounts({ authority });
 }
+
+/**
+ * Rotate the forwarder config's logic ref in place. `authority` must be the
+ * program's upgrade authority; `programData` is the forwarder's own
+ * ProgramData unless a test substitutes another program's.
+ */
+export function setLogicRef(
+  forwarder: Program<SplTokenForwarder>,
+  authority: PublicKey,
+  logicRef: number[],
+  programData: PublicKey = deriveProgramDataPda(forwarder.programId)
+) {
+  return forwarder.methods.setLogicRef(logicRef).accounts({ authority, programData });
+}
+
+/** Any 32 bytes that are not a real logic ref. */
+export const randomRef = (): number[] => Array.from(Keypair.generate().publicKey.toBytes());
 
 /**
  * The accounts of an escrow release, in the order the program reads them:

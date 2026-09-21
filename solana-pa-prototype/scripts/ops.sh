@@ -51,8 +51,8 @@ Commands:
                          deployed PA to be a --dev-teardown build (the
                          instruction is absent from production builds).
   init                   Initialize PA state (idempotent)
-  forwarder <cmd>        SPL token forwarder operations: init, close-config,
-                         set-emergency-caller, emergency-withdraw,
+  forwarder <cmd>        SPL token forwarder operations: init, set-logic-ref,
+                         close-config, set-emergency-caller, emergency-withdraw,
                          drain-escrow, teardown. Parameters are STF_*
                          environment variables; see scripts/forwarder.ts.
   lookup-table           Create the deployment's settlement lookup table, or

@@ -8,8 +8,10 @@
  *   init                  (deployer)  Initialize the config and, with
  *                                     STF_TOKEN_MINT, the mint's escrow ATA.
  *                                     Idempotent.
- *   close-config          (committee) Close only the config PDA — the reset
- *                                     path for rotating the logic ref.
+ *   set-logic-ref         (upgrade    Rotate the config's logic ref to
+ *                          authority) STF_LOGIC_REF in place; escrow, nonce
+ *                                     bitmaps and the committee are untouched.
+ *   close-config          (committee) Close only the config PDA (retirement).
  *   set-emergency-caller  (committee) Name STF_EMERGENCY_CALLER, once, while
  *                                     the adapter is stopped.
  *   emergency-withdraw    (caller)    Move STF_AMOUNT of STF_TOKEN_MINT from
@@ -26,7 +28,7 @@
  *
  * Environment (read per command):
  *   STF_LOGIC_REF           32-byte hex: the resource logic the config
- *                           authorizes (init)
+ *                           authorizes (init, set-logic-ref)
  *   STF_EMERGENCY_COMMITTEE base58 pubkey (init)
  *   STF_TOKEN_MINT          base58 mint (init optional; emergency-withdraw,
  *                           drain-escrow, teardown required)
@@ -47,6 +49,7 @@ import {
   emergencyWithdraw,
   escrowAccounts,
   initializeForwarder,
+  setLogicRef,
 } from "../tests/utils/helpers";
 import { deriveConfigPda, derivePaStatePda } from "../tests/utils/pda";
 import { fail, requireEnv, requireHexBytes, requirePubkey } from "./cli-utils";
@@ -123,6 +126,14 @@ async function closeConfig() {
   console.log(`✅ Config ${configPda.toBase58()} closed`);
 }
 
+async function setLogicRef() {
+  const logicRef = requireHexBytes("STF_LOGIC_REF", 32, "the 32-byte hex logic ref (verifying key) the config should authorize from now on");
+  const existing = await requireConfig();
+  const previous = Buffer.from(existing.logicRef).toString("hex");
+  await setLogicRef(forwarder, wallet.publicKey, logicRef).rpc();
+  console.log(`✅ Logic ref rotated: ${previous} -> ${Buffer.from(logicRef).toString("hex")}`);
+}
+
 async function setEmergencyCaller() {
   const caller = requirePubkey("STF_EMERGENCY_CALLER", "the key that will be allowed to withdraw from escrow");
   await requireConfig();
@@ -173,6 +184,7 @@ async function teardown() {
 
 const COMMANDS: Record<string, () => Promise<void>> = {
   init,
+  "set-logic-ref": setLogicRef,
   "close-config": closeConfig,
   "set-emergency-caller": setEmergencyCaller,
   "emergency-withdraw": withdraw,
