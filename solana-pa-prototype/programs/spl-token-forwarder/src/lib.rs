@@ -44,6 +44,14 @@ pub struct Unwrapped {
     pub amount: u64,
 }
 
+/// The config's logic ref was rotated in place by the upgrade authority.
+#[event]
+pub struct LogicRefSet {
+    pub previous: [u8; 32],
+    pub logic_ref: [u8; 32],
+    pub set_by: Pubkey,
+}
+
 /// Mirrors EVM: `event EmergencyCallerSet(address caller);`
 #[event]
 pub struct EmergencyCallerSet {
@@ -103,6 +111,26 @@ pub mod spl_token_forwarder {
         config.emergency_committee = emergency_committee;
         config.emergency_caller = Pubkey::default();
         config.bump = ctx.bumps.config;
+        Ok(())
+    }
+
+    /// Rotate the logic ref in place. Mirrors the EVM forwarder's rotation on
+    /// the upgradeable base (`ERC20ForwarderV2.reinitialize`): the owner who
+    /// authorizes upgrades writes the new ref into the existing storage, and
+    /// escrow, nonce bitmaps and the committee are untouched. That owner is
+    /// the upgrade authority the loader records for this program. Resources
+    /// under the previous ref stay wrapped until a migration path moves them.
+    pub fn set_logic_ref(ctx: Context<SetLogicRef>, new_logic_ref: [u8; 32]) -> Result<()> {
+        require!(new_logic_ref != [0u8; 32], ErrorCode::ZeroAddressNotAllowed);
+        let config = &mut ctx.accounts.config;
+        let previous = config.logic_ref;
+        config.logic_ref = new_logic_ref;
+
+        emit!(LogicRefSet {
+            previous,
+            logic_ref: new_logic_ref,
+            set_by: ctx.accounts.authority.key(),
+        });
         Ok(())
     }
 
@@ -535,6 +563,23 @@ pub struct Initialize<'info> {
     pub config: Account<'info, Config>,
 
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct SetLogicRef<'info> {
+    pub authority: Signer<'info>,
+
+    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump)]
+    pub config: Account<'info, Config>,
+
+    /// The program account proves `program_data` is this program's own
+    /// ProgramData address rather than any account shaped like one.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ ErrorCode::UnauthorizedCaller)]
+    pub program: Program<'info, crate::program::SplTokenForwarder>,
+
+    /// The loader records the upgrade authority here; it is the forwarder's owner.
+    #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::UnauthorizedCaller)]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 #[derive(Accounts)]

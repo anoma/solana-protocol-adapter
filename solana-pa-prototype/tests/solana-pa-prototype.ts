@@ -47,6 +47,7 @@ import {
   ADDRESS_MISMATCH_PATTERN,
   readJson,
   loadFixture,
+  randomRef,
   requireFixture,
   type Fixture,
   parseSelectorFromFixture,
@@ -71,6 +72,7 @@ import {
   makeFunder,
   nonceWordIndex,
   seededKeypair,
+  setLogicRef,
   sendV0,
   settlementLookupKeys,
   waitForSlotPast,
@@ -3159,6 +3161,23 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("rejects a wrap whose nonce bitmap does not exist", async () => {
     assert.isNull(await provider.connection.getAccountInfo(nonceBitmapPda), "no bitmap yet for this word");
     await assertRejects(settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]), /NonceBitmapMissing/);
+  });
+
+  // Mirrors ForwarderBase.t.sol: test_forwardCall_reverts_if_the_logic_ref_is_wrong,
+  // after a rotation. Once the upgrade authority rotates the config to
+  // another ref, a wrap proven under the previous one is rejected before
+  // any of its input is read; rotating back re-authorizes it.
+  it("rejects a wrap proven under a logic ref the config no longer authorizes", async () => {
+    const rotate = (ref: number[]) => setLogicRef(forwarderProgram, provider.wallet.publicKey, ref).rpc();
+    const fixtureRef = Array.from(Buffer.from(wrap.logic_ref_b64, "base64"));
+
+    await rotate(randomRef());
+    try {
+      await assertRejects(settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]), /UnauthorizedLogicRef/);
+    } finally {
+      await rotate(fixtureRef);
+    }
+    assert.deepEqual((await forwarderProgram.account.config.fetch(configPda)).logicRef, fixtureRef, "the fixture's ref is authorized again");
   });
 
   // The destination account is chosen by the submitter, not by the proof.
