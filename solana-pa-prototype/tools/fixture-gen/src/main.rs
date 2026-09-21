@@ -15,7 +15,7 @@ use arm::logic_instance::{AppData, LogicInstance};
 use arm::logic_proof::LogicVerifier;
 use arm::merkle_path::MerklePath;
 use arm::nullifier_key::NullifierKey;
-use arm::proving_system::{encode_seal, ProofType as LocalProofType};
+use arm::proving_system::{encode_seal, JournalEncoding, ProofType as LocalProofType};
 use arm::resource::{ConsumedResourceWitness, Resource};
 use arm::transaction::{Aggregation, Delta, Transaction};
 use arm::Digest;
@@ -182,8 +182,12 @@ where
 /// Aggregate a transaction's base proofs into a single Groth16 proof locally.
 async fn local_aggregate_proof(mut tx: Transaction) -> Result<Transaction> {
     tokio::task::spawn_blocking(move || {
-        arm::transaction::aggregate(&mut tx, LocalProofType::Groth16)
-            .map_err(|e| anyhow!("local aggregate proof: {e:?}"))?;
+        arm::transaction::aggregate(
+            &mut tx,
+            LocalProofType::Groth16,
+            JournalEncoding::Risc0Serde,
+        )
+        .map_err(|e| anyhow!("local aggregate proof: {e:?}"))?;
         Ok(tx)
     })
     .await
@@ -992,8 +996,12 @@ fn assemble_transaction(actions: Vec<Action>, rcvs: &[Vec<u8>]) -> Result<Transa
         .map_err(|e| anyhow!("generate delta proof: {e:?}"))?;
     let kind_table_commitment =
         *kind_table_hash().ok_or_else(|| anyhow!("kind table not loaded"))?;
-    arm::transaction::verify(&balanced_tx, kind_table_commitment)
-        .map_err(|e| anyhow!("verify tx: {e:?}"))?;
+    arm::transaction::verify(
+        &balanced_tx,
+        kind_table_commitment,
+        JournalEncoding::Risc0Serde,
+    )
+    .map_err(|e| anyhow!("verify tx: {e:?}"))?;
 
     Ok(balanced_tx)
 }
@@ -1397,7 +1405,7 @@ fn import_backend_result_fixture(
     let mut tx: Transaction = serde_json::from_slice(&raw)
         .with_context(|| format!("decode backend Transaction JSON {}", input.display()))?;
 
-    arm::transaction::verify_aggregation(&tx)
+    arm::transaction::verify_aggregation(&tx, JournalEncoding::Risc0Serde)
         .map_err(|e| anyhow!("verify imported backend aggregation proof: {e:?}"))?;
 
     let roots = historical_roots(&tx).context("extract imported historical roots")?;
@@ -1639,7 +1647,7 @@ async fn generate_historical_root_fixtures(
         "phase done: aggregate committer ({})",
         fmt_duration(agg_start.elapsed())
     );
-    arm::transaction::verify_aggregation(&committer_tx)
+    arm::transaction::verify_aggregation(&committer_tx, JournalEncoding::Risc0Serde)
         .map_err(|e| anyhow!("verify committer aggregated proof: {e:?}"))?;
 
     finalize_and_write_fixture(
@@ -1680,7 +1688,7 @@ async fn generate_historical_root_fixtures(
         "phase done: aggregate consumer ({})",
         fmt_duration(agg_start.elapsed())
     );
-    arm::transaction::verify_aggregation(&consumer_tx)
+    arm::transaction::verify_aggregation(&consumer_tx, JournalEncoding::Risc0Serde)
         .map_err(|e| anyhow!("verify consumer aggregated proof: {e:?}"))?;
 
     // The whole point of this fixture: the consumed root must be a genuine,
@@ -2493,7 +2501,7 @@ async fn main() -> Result<()> {
     );
 
     timed_phase("verify_aggregation", || {
-        arm::transaction::verify_aggregation(&tx)
+        arm::transaction::verify_aggregation(&tx, JournalEncoding::Risc0Serde)
             .map_err(|e| anyhow!("verify aggregated proof: {e:?}"))
     })?;
 
@@ -2741,7 +2749,12 @@ mod tests {
     #[test]
     fn valid_tx_passes_delta_verification() {
         let tx = build_valid_tx_with_delta_proof(100);
-        arm::transaction::verify(&tx, *kind_table_hash().unwrap()).unwrap();
+        arm::transaction::verify(
+            &tx,
+            *kind_table_hash().unwrap(),
+            JournalEncoding::Risc0Serde,
+        )
+        .unwrap();
     }
 
     /// Swapping the nullifier and commitment tags in the delta message
@@ -2749,7 +2762,12 @@ mod tests {
     #[test]
     fn swapped_tags_invalidate_delta_proof() {
         let tx = build_valid_tx_with_delta_proof(101);
-        arm::transaction::verify(&tx, *kind_table_hash().unwrap()).unwrap();
+        arm::transaction::verify(
+            &tx,
+            *kind_table_hash().unwrap(),
+            JournalEncoding::Risc0Serde,
+        )
+        .unwrap();
 
         // Swap nullifier and commitment in the compliance instance. This
         // changes the action tree root and therefore the delta message,
@@ -2764,7 +2782,11 @@ mod tests {
         })
         .unwrap();
 
-        let result = arm::transaction::verify(&swapped, *kind_table_hash().unwrap());
+        let result = arm::transaction::verify(
+            &swapped,
+            *kind_table_hash().unwrap(),
+            JournalEncoding::Risc0Serde,
+        );
         assert!(result.is_err(), "swapped nf/cm must invalidate delta proof");
     }
 
@@ -2772,7 +2794,12 @@ mod tests {
     #[test]
     fn mutated_delta_x_invalidates_proof() {
         let mut tx = build_valid_tx_with_delta_proof(102);
-        arm::transaction::verify(&tx, *kind_table_hash().unwrap()).unwrap();
+        arm::transaction::verify(
+            &tx,
+            *kind_table_hash().unwrap(),
+            JournalEncoding::Risc0Serde,
+        )
+        .unwrap();
 
         // Flip a word in delta_x
         let actions = tx.actions.as_mut().unwrap();
@@ -2781,7 +2808,11 @@ mod tests {
         })
         .unwrap();
 
-        let result = arm::transaction::verify(&tx, *kind_table_hash().unwrap());
+        let result = arm::transaction::verify(
+            &tx,
+            *kind_table_hash().unwrap(),
+            JournalEncoding::Risc0Serde,
+        );
         assert!(
             result.is_err(),
             "mutated delta_x must invalidate delta proof"
@@ -2792,7 +2823,12 @@ mod tests {
     #[test]
     fn mutated_nullifier_invalidates_delta_proof() {
         let mut tx = build_valid_tx_with_delta_proof(103);
-        arm::transaction::verify(&tx, *kind_table_hash().unwrap()).unwrap();
+        arm::transaction::verify(
+            &tx,
+            *kind_table_hash().unwrap(),
+            JournalEncoding::Risc0Serde,
+        )
+        .unwrap();
 
         // Corrupt the nullifier
         let actions = tx.actions.as_mut().unwrap();
@@ -2801,7 +2837,11 @@ mod tests {
         })
         .unwrap();
 
-        let result = arm::transaction::verify(&tx, *kind_table_hash().unwrap());
+        let result = arm::transaction::verify(
+            &tx,
+            *kind_table_hash().unwrap(),
+            JournalEncoding::Risc0Serde,
+        );
         assert!(
             result.is_err(),
             "mutated nullifier must invalidate delta proof"

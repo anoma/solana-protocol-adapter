@@ -7,4 +7,4 @@ edition = "2021"
 
 [dependencies]
 risc0-zkvm = { version = "3.0.3", features = ["std", "unstable"], default-features = false }
-arm = { git = "https://github.com/anoma/arm-risc0", branch = "main", package = "anoma-rm-risc0", default-features = false }
+arm = { package = "anoma-rm-risc0", version = "=2.0.0-rc.6", default-features = false }

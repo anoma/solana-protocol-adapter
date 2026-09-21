@@ -223,8 +223,9 @@ dependencies = [
 
 [[package]]
 name = "anoma-rm-core"
-version = "2.0.0-rc.5"
-source = "git+https://github.com/anoma/arm-risc0?branch=main#5085021fffd2ce25e161010c8e2d67ff62b5a7de"
+version = "2.0.0-rc.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4efb9c303e7b2a719ea02ae7eca7a324c9ee346010cb4b4dabf426f6201495a4"
 dependencies = [
  "bincode",
  "borsh 1.6.0",
@@ -237,8 +238,9 @@ dependencies = [
 
 [[package]]
 name = "anoma-rm-solana"
-version = "2.0.0-rc.5"
-source = "git+https://github.com/anoma/arm-risc0?branch=main#5085021fffd2ce25e161010c8e2d67ff62b5a7de"
+version = "2.0.0-rc.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d708cd323e46a6db7ec9cd721e5277c85d9f568d3a63025d29c13b65e247109"
 dependencies = [
  "anoma-rm-core",
  "solana-program",
