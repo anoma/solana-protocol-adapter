@@ -298,11 +298,34 @@ print_explorer_link() {
   fi
 }
 
+# An upgrade writes the new binary over the existing program-data account,
+# which must be at least as large. `solana program deploy` extends it by the
+# exact shortfall, but the upgradeable loader rejects ExtendProgram below
+# 10240 bytes ("ExtendProgram requires a minimum of 10240 additional bytes or
+# to extend to maximum size"), so a small growth fails the deploy. Extend by
+# the shortfall, raised to that minimum, before deploying.
+extend_program_data_if_needed() {
+  local name="$1"
+  local program_id="$2"
+  is_deployed "$program_id" || return 0
+  local current_len new_len shortfall
+  current_len="$(solana program show "$program_id" --url "$RPC_URL" | awk '/^Data Length:/ {print $3}')"
+  [[ "$current_len" =~ ^[0-9]+$ ]] || { echo "❌ Could not read the data length of ${program_id}" >&2; exit 1; }
+  new_len="$(stat -c %s "target/deploy/${name}.so")"
+  (( new_len > current_len )) || return 0
+  shortfall=$(( new_len - current_len ))
+  local min_extend=10240
+  (( shortfall < min_extend )) && shortfall=$min_extend
+  echo "Extending ${name} program data by ${shortfall} bytes (${current_len} on chain, ${new_len} needed)..."
+  solana program extend "$program_id" "$shortfall" --keypair "$WALLET" --url "$RPC_URL"
+}
+
 deploy_one() {
   local name="$1"
   local program_id
   program_id="$(get_program_id "$name")"
 
+  extend_program_data_if_needed "$name" "$program_id"
   echo "Deploying ${name} (${program_id})..."
   if ! solana program deploy \
     "target/deploy/${name}.so" \

@@ -15,7 +15,7 @@
 use crate::error::PAError;
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::invoke_signed;
-use anchor_lang::solana_program::system_program;
+use anchor_lang::system_program;
 use solana_system_interface::instruction as system_instruction;
 
 /// Create the marker account, adopting a System-owned empty placeholder if one is
