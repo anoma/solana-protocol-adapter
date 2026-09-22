@@ -111,6 +111,16 @@ The command derives the key set from the deployed programs and the PAState's pin
 
 Record the address in the cluster's deployment record and ship it as `SETTLE_LOOKUP_TABLE` in anoma-pa-solana-client. A program-id rotation is a new deployment and gets a new table.
 
+## The kind table
+
+The PA stores the sha256 commitment of the kind table every settled aggregation instance must carry, and rejects a transaction proven against any other table. `initialize` installs the first commitment; the authority replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
+
+```sh
+PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # authority wallet
+```
+
+The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the previous and the new value. From that slot on, transactions proven against the previous table are rejected (`KindTableCommitmentMismatch`), so provers must load the new table before it is installed. Today every deployment stores the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`); the generated Solana tables and their commitments come from anoma/risc0-kind-tables once its Solana branch exists (anoma/dos-pm#61).
+
 ## Emergency stop
 
 The stop exists for one scenario: the deployment can no longer be trusted — typically a suspected vulnerability — and settlement must halt now.

@@ -387,6 +387,29 @@ pub mod protocol_adapter {
         Ok(())
     }
 
+    /// Replace the kind-table commitment every settled aggregation instance
+    /// must carry. Mirrors pa-evm's `setKindTableCommitment`: authority only,
+    /// zero rejected, the change emitted. A table changes whenever a token or
+    /// a circuit version is listed, and transactions proven against the
+    /// previous table are rejected from this point on.
+    pub fn set_kind_table_commitment(
+        ctx: Context<SetKindTableCommitment>,
+        new_kind_table_commitment: [u8; 32],
+    ) -> Result<()> {
+        require!(
+            new_kind_table_commitment != [0u8; 32],
+            PAError::ZeroKindTableCommitment
+        );
+        let state = &mut ctx.accounts.pa_state;
+        let previous = state.kind_table_commitment;
+        state.kind_table_commitment = new_kind_table_commitment;
+        emit_cpi!(KindTableCommitmentUpdatedEvent {
+            previous,
+            kind_table_commitment: new_kind_table_commitment,
+        });
+        Ok(())
+    }
+
     /// Propose a new authority. The transfer is not effective until the
     /// proposed authority calls `accept_authority`.
     pub fn propose_authority(ctx: Context<ProposeAuthority>, new_authority: Pubkey) -> Result<()> {
@@ -817,6 +840,22 @@ pub struct EmergencyStop<'info> {
     pub authority: Signer<'info>,
 }
 
+#[event_cpi]
+#[derive(Accounts)]
+pub struct SetKindTableCommitment<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == PAStateAccount::SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    pub authority: Signer<'info>,
+}
+
 #[derive(Accounts)]
 pub struct ProposeAuthority<'info> {
     #[account(
@@ -1121,6 +1160,13 @@ pub struct ApplicationPayloadEvent {
 }
 
 /// Matches EVM PA's ActionExecuted event.
+/// Mirrors pa-evm: `event KindTableCommitmentUpdated(bytes32 kindTableCommitment);`
+#[event]
+pub struct KindTableCommitmentUpdatedEvent {
+    pub previous: [u8; 32],
+    pub kind_table_commitment: [u8; 32],
+}
+
 #[event]
 pub struct ActionExecutedEvent {
     pub action_tree_root: [u8; 32],
