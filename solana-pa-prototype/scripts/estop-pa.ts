@@ -1,8 +1,8 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { PA_STATE_SEED } from "../tests/utils/constants";
+import { emergencyStop } from "../tests/utils/helpers";
+import { derivePaStatePda } from "../tests/utils/pda";
 
 function isStopped(lifecycle: object): boolean {
   return "stopped" in lifecycle;
@@ -14,10 +14,7 @@ async function main() {
 
   const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 
-  const [paState] = PublicKey.findProgramAddressSync(
-    [PA_STATE_SEED],
-    program.programId
-  );
+  const [paState] = derivePaStatePda(program.programId);
 
   let account;
   try {
@@ -46,13 +43,7 @@ async function main() {
   console.log(`  Program: ${program.programId.toBase58()}`);
   console.log(`  PAState PDA: ${paState.toBase58()}`);
 
-  const signature = await program.methods
-    .emergencyStop()
-    .accountsPartial({
-      paState,
-      authority: provider.wallet.publicKey,
-    })
-    .rpc();
+  const signature = await emergencyStop(program, provider.wallet.publicKey).rpc();
 
   // Verify the on-chain result rather than assuming the transaction did
   // what we expect.

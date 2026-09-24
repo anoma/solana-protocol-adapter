@@ -20,6 +20,7 @@ import {
   emergencyWithdraw,
   makeFunder,
   seededKeypair,
+  setEmergencyCaller,
 } from "./utils";
 
 describe("zz-forwarder-emergency (adapter stopped)", () => {
@@ -71,10 +72,8 @@ describe("zz-forwarder-emergency (adapter stopped)", () => {
       .signers([caller])
       .rpc();
 
-  const setEmergencyCaller = (caller: PublicKey) =>
-    forwarderProgram.methods
-      .setEmergencyCaller(caller)
-      .accounts({ committee: emergencyCommittee.publicKey, paState })
+  const setEmergencyCallerAsCommittee = (caller: PublicKey) =>
+    setEmergencyCaller(forwarderProgram, emergencyCommittee.publicKey, paState, caller)
       .signers([emergencyCommittee])
       .rpc();
 
@@ -86,19 +85,19 @@ describe("zz-forwarder-emergency (adapter stopped)", () => {
   });
 
   // Mirrors: test_setEmergencyCaller_reverts_if_the_new_emergency_caller_is_the_zero_address
-  it("rejects a zero emergency caller", () => assertRejects(setEmergencyCaller(PublicKey.default), /ZeroAddressNotAllowed/));
+  it("rejects a zero emergency caller", () => assertRejects(setEmergencyCallerAsCommittee(PublicKey.default), /ZeroAddressNotAllowed/));
 
   // Mirrors: test_setEmergencyCaller_sets_the_emergency_caller and
   // test_emergencyCaller_returns_the_emergency_caller_after_it_has_been_set
   it("lets the committee set the emergency caller once the adapter is stopped", async () => {
-    await setEmergencyCaller(emergencyCaller.publicKey);
+    await setEmergencyCallerAsCommittee(emergencyCaller.publicKey);
     const config = await forwarderProgram.account.config.fetch(configPda);
     assert.ok(config.emergencyCaller.equals(emergencyCaller.publicKey));
   });
 
   // Mirrors: test_setEmergencyCaller_reverts_if_the_emergency_caller_has_already_been_set
   it("rejects setting the emergency caller twice", () =>
-    assertRejects(setEmergencyCaller(Keypair.generate().publicKey), /EmergencyCallerAlreadySet/));
+    assertRejects(setEmergencyCallerAsCommittee(Keypair.generate().publicKey), /EmergencyCallerAlreadySet/));
 
   // Mirrors: test_forwardEmergencyCall_reverts_if_the_pa_is_stopped_but_the_caller_is_not_the_emergency_caller
   it("rejects forward_emergency_call from anyone but the emergency caller", async () => {

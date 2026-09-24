@@ -21,7 +21,7 @@ import { createHash } from "crypto";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { TX_DATA_SEED } from "./constants";
-import { deriveProgramDataPda } from "./pda";
+import { deriveConfigPda, derivePaStatePda, deriveProgramDataPda } from "./pda";
 
 /**
  * Fund a keypair from the provider wallet, topping up to the requested amount.
@@ -209,6 +209,38 @@ export async function createFundedEscrow(
   return { mint, escrowPda, escrowAta };
 }
 
+// Adapter governance. Each builder is the one form of its instruction the
+// suite and the operator scripts both send; callers add signers and send.
+
+/** The adapter's `initialize`, paid by `payer`, pinning the verifier and the kind table. */
+export function initializeAdapter(
+  program: Program<ProtocolAdapter>,
+  payer: PublicKey,
+  verifierRouter: PublicKey,
+  proofSelector: number[],
+  kindTableCommitment: number[]
+) {
+  return program.methods.initialize(verifierRouter, proofSelector, kindTableCommitment).accountsPartial({
+    paState: derivePaStatePda(program.programId)[0],
+    payer,
+    systemProgram: SystemProgram.programId,
+    program: program.programId,
+    programData: deriveProgramDataPda(program.programId),
+  });
+}
+
+/** `emergency_stop` by `authority`. */
+export function emergencyStop(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  return program.methods.emergencyStop().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/** `set_kind_table_commitment` by `authority`. */
+export function setKindTableCommitment(program: Program<ProtocolAdapter>, authority: PublicKey, commitment: number[]) {
+  return program.methods
+    .setKindTableCommitment(commitment)
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
 /** The forwarder's `initialize`; callers add signers and send. */
 export function initializeForwarder(
   forwarder: Program<SplTokenForwarder>,
@@ -287,6 +319,23 @@ export function closeEscrow(
     tokenMint: accounts.mint,
     tokenProgram: TOKEN_PROGRAM_ID,
   });
+}
+
+/** `set_emergency_caller` by the committee; only while the adapter at `paState` is stopped. */
+export function setEmergencyCaller(
+  forwarder: Program<SplTokenForwarder>,
+  committee: PublicKey,
+  paState: PublicKey,
+  caller: PublicKey
+) {
+  return forwarder.methods.setEmergencyCaller(caller).accounts({ committee, paState });
+}
+
+/** `close_config` by the committee `authority`. */
+export function closeConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey) {
+  return forwarder.methods
+    .closeConfig()
+    .accountsPartial({ authority, config: deriveConfigPda(forwarder.programId)[0] });
 }
 
 /**

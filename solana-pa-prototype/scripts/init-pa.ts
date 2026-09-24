@@ -1,8 +1,8 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { derivePaStatePda, deriveProgramDataPda } from "../tests/utils/pda";
+import { initializeAdapter } from "../tests/utils/helpers";
+import { derivePaStatePda } from "../tests/utils/pda";
 import { requireHexBytes, requirePubkey } from "./cli-utils";
 
 async function main() {
@@ -37,15 +37,11 @@ async function main() {
   );
 
   const [paState] = derivePaStatePda(program.programId);
-  const programData = deriveProgramDataPda(program.programId);
 
-  // Idempotent: skip if PAState already exists
-  try {
-    await program.account.paStateAccount.fetch(paState);
+  // Idempotent: skip if PAState already exists.
+  if (await program.account.paStateAccount.fetchNullable(paState)) {
     console.log("PAState already initialized, skipping.");
     return;
-  } catch {
-    // Not initialized yet — proceed
   }
 
   console.log("Initializing PA...");
@@ -56,16 +52,7 @@ async function main() {
     `  Kind table commitment: ${Buffer.from(kindTableCommitment).toString("hex")}`
   );
 
-  await program.methods
-    .initialize(verifierRouter, proofSelector, kindTableCommitment)
-    .accountsPartial({
-      paState,
-      payer: provider.wallet.publicKey,
-      systemProgram: anchor.web3.SystemProgram.programId,
-      program: program.programId,
-      programData,
-    })
-    .rpc();
+  await initializeAdapter(program, provider.wallet.publicKey, verifierRouter, proofSelector, kindTableCommitment).rpc();
 
   console.log("✅ PA initialized");
 }

@@ -28,6 +28,7 @@ import {
   requireFixture,
   seededKeypair,
   setLogicRef,
+  setEmergencyCaller,
 } from "./utils";
 
 describe("01-spl-token-forwarder (config and direct-call guards)", () => {
@@ -162,9 +163,7 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
       const impostor = Keypair.generate();
       await funder.fund(impostor, 1);
       await assertRejects(
-        forwarderProgram.methods
-          .setEmergencyCaller(Keypair.generate().publicKey)
-          .accounts({ committee: impostor.publicKey, paState })
+        setEmergencyCaller(forwarderProgram, impostor.publicKey, paState, Keypair.generate().publicKey)
           .signers([impostor])
           .rpc(),
         /UnauthorizedCaller/
