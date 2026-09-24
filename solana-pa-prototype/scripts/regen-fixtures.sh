@@ -80,4 +80,11 @@ gen "${MOCK_FLAG[@]}" --spl-token-unwrap \
   "${SETTLED_BEFORE_UNWRAP[@]/#/--settled=$OUT_DIR/}" \
   "$OUT_DIR/spl_token_unwrap.json"
 
+# A second wrap (forwarder nonce 2) proven against the solana-devnet kind
+# table from anoma/risc0-kind-tables (data/generated/staging), which the
+# suite installs with set_kind_table_commitment after the unwrap.
+gen "${MOCK_FLAG[@]}" --spl-token-wrap --nonce-seed 22 --wrap-nonce 2 \
+  --kind-table tools/fixture-gen/kind_table_solana_devnet.json \
+  "$OUT_DIR/spl_token_wrap_devnet_kind_table.json"
+
 echo "✅ Regenerated the $MODE fixture set in $OUT_DIR"

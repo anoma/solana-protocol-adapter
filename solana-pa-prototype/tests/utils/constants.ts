@@ -9,10 +9,20 @@ export const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
 );
 
 // Commitment of the empty kind table (sha256 of zero bytes). Every fixture
-// commits to the empty table (fixture-gen's committed kind_table.json), so
-// the test deployment pins the same commitment at initialize.
+// but one commits to the empty table (fixture-gen's committed
+// kind_table.json), so the test deployment pins the same commitment at
+// initialize.
 export const EMPTY_KIND_TABLE_COMMITMENT = Buffer.from(
   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "hex"
+);
+
+// The commitment anoma/risc0-kind-tables publishes for solana-devnet
+// (data/generated/staging/commitments.json): the table fixture-gen's
+// kind_table_solana_devnet.json holds, which spl_token_wrap_devnet_kind_table
+// is proven against.
+export const SOLANA_DEVNET_KIND_TABLE_COMMITMENT = Buffer.from(
+  "f7205e227c4bbb3cf3c4a5228b806ec9aab3bb1926063543dff98169df4b68a5",
   "hex"
 );
 
