@@ -129,11 +129,10 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
         assert.ok(tx, `transaction ${sig} is fetchable once confirmed`);
         const parser = new anchor.EventParser(forwarderProgram.programId, forwarderProgram.coder);
         const events = [...parser.parseLogs(tx!.meta!.logMessages!)];
-        const set = events.find((e) => e.name === "logicRefSet");
-        assert.ok(set, `a LogicRefSet event is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`);
-        assert.deepEqual(Array.from(set!.data.previous), before.logicRef, "the event carries the previous ref");
-        assert.deepEqual(Array.from(set!.data.logicRef), rotated, "the event carries the new ref");
-        assert.ok(set!.data.setBy.equals(provider.wallet.publicKey), "the event names the authority");
+        // pa-evm's rotation (ERC20ForwarderV2.reinitialize behind upgradeToAndCall)
+        // emits only the proxy's Upgraded and Initialized events, nothing naming
+        // the logic ref; the config account is where the new ref is read.
+        assert.deepEqual(events.map((e) => e.name), [], "the rotation emits no forwarder event");
       } finally {
         // The adapter suite's wrap and unwrap were proven under the fixture's
         // ref: rotate back so the config authorizes them again.
