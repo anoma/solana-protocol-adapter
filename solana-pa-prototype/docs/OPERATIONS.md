@@ -179,7 +179,7 @@ The logic ref changes whenever the resource circuit is rebuilt. The upgrade auth
 STF_LOGIC_REF=<new 32-byte hex verifying key> ./scripts/dev.sh forwarder set-logic-ref --cluster <c>   # upgrade-authority wallet
 ```
 
-Escrow, nonce bitmaps and the committee are untouched; the config emits `LogicRefSet` with the previous and the new ref. Resources wrapped under the previous ref stay in escrow: the new logic cannot unwrap them, and moving them is the migration path (anoma/dos-pm#77), not a rotation concern. The emergency path below is for a stopped adapter only.
+Escrow, nonce bitmaps and the committee are untouched. As on EVM, where the rotation emits only the proxy's `Upgraded` and `Initialized`, the instruction emits no event of its own; read the new ref from the config account. Resources wrapped under the previous ref leave through the new one once the adapter's kind table lists the previous version as an alias of the new one (anoma/risc0-kind-tables ADR-0008, rule R2): a transaction converts each into a resource under the new ref, which then unwraps. Until that table's commitment is installed (`set-kind-table`), they stay in escrow and can neither unwrap nor convert. The emergency path below is for a stopped adapter only.
 
 ### Emergency committee
 

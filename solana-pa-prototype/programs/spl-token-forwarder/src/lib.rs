@@ -44,14 +44,6 @@ pub struct Unwrapped {
     pub amount: u64,
 }
 
-/// The config's logic ref was rotated in place by the upgrade authority.
-#[event]
-pub struct LogicRefSet {
-    pub previous: [u8; 32],
-    pub logic_ref: [u8; 32],
-    pub set_by: Pubkey,
-}
-
 /// Mirrors EVM: `event EmergencyCallerSet(address caller);`
 #[event]
 pub struct EmergencyCallerSet {
@@ -118,19 +110,15 @@ pub mod spl_token_forwarder {
     /// the upgradeable base (`ERC20ForwarderV2.reinitialize`): the owner who
     /// authorizes upgrades writes the new ref into the existing storage, and
     /// escrow, nonce bitmaps and the committee are untouched. That owner is
-    /// the upgrade authority the loader records for this program. Resources
-    /// under the previous ref stay wrapped until a migration path moves them.
+    /// the upgrade authority the loader records for this program. Like the
+    /// EVM rotation, which emits only the proxy's `Upgraded` and
+    /// `Initialized`, it emits no event of its own; the config holds the ref.
+    /// Resources under the previous ref leave through the new one once the
+    /// kind table lists the previous version as its alias: a transaction
+    /// converts them, and the new resource unwraps.
     pub fn set_logic_ref(ctx: Context<SetLogicRef>, new_logic_ref: [u8; 32]) -> Result<()> {
         require!(new_logic_ref != [0u8; 32], ErrorCode::ZeroAddressNotAllowed);
-        let config = &mut ctx.accounts.config;
-        let previous = config.logic_ref;
-        config.logic_ref = new_logic_ref;
-
-        emit!(LogicRefSet {
-            previous,
-            logic_ref: new_logic_ref,
-            set_by: ctx.accounts.authority.key(),
-        });
+        ctx.accounts.config.logic_ref = new_logic_ref;
         Ok(())
     }
 
