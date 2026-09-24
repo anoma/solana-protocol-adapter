@@ -126,7 +126,7 @@ async function closeConfig() {
   console.log(`✅ Config ${configPda.toBase58()} closed`);
 }
 
-async function setLogicRef() {
+async function rotateLogicRef() {
   const logicRef = requireHexBytes("STF_LOGIC_REF", 32, "the 32-byte hex logic ref (verifying key) the config should authorize from now on");
   const existing = await requireConfig();
   const previous = Buffer.from(existing.logicRef).toString("hex");
@@ -184,7 +184,7 @@ async function teardown() {
 
 const COMMANDS: Record<string, () => Promise<void>> = {
   init,
-  "set-logic-ref": setLogicRef,
+  "set-logic-ref": rotateLogicRef,
   "close-config": closeConfig,
   "set-emergency-caller": setEmergencyCaller,
   "emergency-withdraw": withdraw,
