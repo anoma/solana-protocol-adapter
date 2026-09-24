@@ -20,10 +20,6 @@
  */
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import {
-  PublicKey,
-  LAMPORTS_PER_SOL,
-} from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { closeAllMarkers } from "../tests/utils/devTeardown";
 import { derivePaStatePda } from "../tests/utils/pda";
@@ -56,15 +52,8 @@ async function main() {
     process.exit(1);
   }
 
-  const markerRent = await connection.getMinimumBalanceForRentExemption(0);
   const closed = await closeAllMarkers(program, wallet.publicKey);
-  console.log(`\nClosed ${closed} marker accounts (~${((closed * markerRent) / LAMPORTS_PER_SOL).toFixed(6)} SOL)`);
-
-  console.log(
-    "\nPAState left open by design — closing it would permit a re-init bypass."
-  );
-
-  console.log("✅ Markers closed");
+  console.log(`✅ Closed ${closed} markers; PAState left open by design (closing it would permit a re-init bypass)`);
 }
 
 main().catch((err) => {

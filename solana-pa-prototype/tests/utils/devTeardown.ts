@@ -10,31 +10,21 @@ import { PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { derivePaStatePda } from "./pda";
 
-// A zero-argument entry of program.methods, typed loosely on purpose: naming
-// a dev-teardown method in a type annotation would make this module fail to
-// compile against production types, preempting the actionable error below.
-type MethodBuilder = () => ReturnType<Program<ProtocolAdapter>["methods"][keyof Program<ProtocolAdapter>["methods"]]>;
-
 /**
- * The builder of a feature-gated instruction, or an actionable error when
- * the program was built without its feature. The lookup goes through
- * program.methods, the camelCased surface Anchor's client exposes.
+ * `close_markers_batch` by `authority` over `markers`; only on a stopped
+ * adapter. The method is looked up untyped: naming it in a type would make
+ * this module fail to compile against production types, preempting the
+ * actionable error thrown when the program was built without the feature.
  */
-function requireInstruction(program: Program<ProtocolAdapter>, instructionName: string): MethodBuilder {
-  const camel = instructionName.replace(/_([a-z])/g, (_, c) => c.toUpperCase());
-  const method = (program.methods as Record<string, unknown>)[camel];
+export function closeMarkersBatch(program: Program<ProtocolAdapter>, authority: PublicKey, markers: PublicKey[]) {
+  const method = (program.methods as Record<string, unknown>).closeMarkersBatch;
   if (typeof method !== "function") {
     throw new Error(
-      `Instruction '${instructionName}' is not present in the program's IDL (target/idl/protocol_adapter.json): ` +
-        `the program was built without the 'dev-teardown' feature, or the instruction does not exist on this branch.`
+      "Instruction 'close_markers_batch' is not present in the program's IDL (target/idl/protocol_adapter.json): " +
+        "the program was built without the 'dev-teardown' feature."
     );
   }
-  return method as MethodBuilder;
-}
-
-/** `close_markers_batch` by `authority` over `markers`; only on a stopped adapter. */
-export function closeMarkersBatch(program: Program<ProtocolAdapter>, authority: PublicKey, markers: PublicKey[]) {
-  return requireInstruction(program, "close_markers_batch")()
+  return (method as () => ReturnType<Program<ProtocolAdapter>["methods"][keyof Program<ProtocolAdapter>["methods"]]>)()
     .accounts({ paState: derivePaStatePda(program.programId)[0], authority })
     .remainingAccounts(markers.map((pubkey) => ({ pubkey, isWritable: true, isSigner: false })));
 }
