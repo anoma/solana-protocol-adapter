@@ -51,6 +51,8 @@ Commands:
                          deployed PA to be a --dev-teardown build (the
                          instruction is absent from production builds).
   init                   Initialize PA state (idempotent)
+  set-kind-table         Replace the PA's kind-table commitment with
+                         PA_KIND_TABLE_COMMITMENT (authority wallet).
   forwarder <cmd>        SPL token forwarder operations: init, set-logic-ref,
                          close-config, set-emergency-caller, emergency-withdraw,
                          drain-escrow, teardown. Parameters are STF_*
@@ -622,6 +624,19 @@ cmd_init() {
   init_pa
 }
 
+cmd_set_kind_table() {
+  require_cmd npx
+
+  local pid
+  pid="$(get_program_id "protocol_adapter")"
+  if ! is_deployed "$pid"; then
+    echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
+    echo "Run: ./scripts/dev.sh deploy pa --cluster ${CLUSTER}"
+    exit 1
+  fi
+  run_ts scripts/set-kind-table.ts
+}
+
 cmd_forwarder() {
   require_cmd npx
 
@@ -942,7 +957,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|teardown|close-pdas|init|forwarder|lookup-table|estop|status|balance|idl-publish)
+  deploy|upgrade|teardown|close-pdas|init|set-kind-table|forwarder|lookup-table|estop|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

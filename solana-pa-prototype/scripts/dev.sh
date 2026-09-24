@@ -90,7 +90,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh test $(printf '%q ' "$@")"
     ;;
 
-  deploy|upgrade|teardown|close-pdas|init|forwarder|lookup-table|estop|status|balance|sync-ids|idl-publish|verify-build)
+  deploy|upgrade|teardown|close-pdas|init|set-kind-table|forwarder|lookup-table|estop|status|balance|sync-ids|idl-publish|verify-build)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -267,6 +267,7 @@ PYEOF
     echo "  close-pdas             Close all PA marker PDAs (needs a dev-teardown build)"
     echo "  init                   Initialize PA state (idempotent; needs PA_VERIFIER_ROUTER"
     echo "                         and PA_PROOF_SELECTOR)"
+    echo "  set-kind-table         Replace the PA's kind-table commitment (PA_KIND_TABLE_COMMITMENT)"
     echo "  lookup-table           Create/extend the deployment's settlement lookup table"
     echo "  estop                  EMERGENCY STOP the PA (terminal; requires --yes)"
     echo "  sync-ids               Sync declare_id!/Anchor.toml/test refs to the committed keypairs"

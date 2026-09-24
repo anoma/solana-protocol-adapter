@@ -75,6 +75,8 @@ pub enum PAError {
     ComplianceKeyMismatch,
     #[msg("Aggregation instance kind-table commitment does not match the configured table")]
     KindTableCommitmentMismatch,
+    #[msg("Zero kind-table commitment not allowed")]
+    ZeroKindTableCommitment,
     #[msg("Duplicate nullifier within the aggregation instance")]
     NullifierDuplication,
 

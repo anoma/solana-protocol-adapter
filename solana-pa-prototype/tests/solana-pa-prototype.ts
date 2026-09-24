@@ -39,6 +39,7 @@ import {
   TX_DATA_SEED,
   EMPTY_TREE_ROOT_INITIAL,
   EMPTY_KIND_TABLE_COMMITMENT,
+  SOLANA_DEVNET_KIND_TABLE_COMMITMENT,
   MIN_EXPIRY_SLOTS,
   MAX_EXPIRY_SLOTS,
   SEVEN_DAYS_SLOTS,
@@ -976,6 +977,79 @@ describe("protocol-adapter (Settle error paths)", () => {
     } catch (e: any) {
       assertPAError(e, "UnregisteredForwarder");
     }
+  });
+});
+
+/** Replaces the adapter's kind-table commitment, signed by `signer` (the PA authority, the wallet, by default). */
+const setKindTableCommitment = (commitment: number[], signer?: Keypair) => {
+  const builder = program.methods
+    .setKindTableCommitment(commitment)
+    .accountsPartial({ paState, authority: (signer ?? provider.wallet).publicKey });
+  return (signer ? builder.signers([signer]) : builder).rpc();
+};
+
+describe("protocol-adapter (kind table commitment)", () => {
+  // Mirrors pa-evm ProtocolAdapter.setKindTableCommitment: owner-only, zero
+  // rejected, KindTableCommitmentUpdated emitted. The stored commitment is
+  // what every settled aggregation instance must carry, so a change rejects
+  // transactions proven against the previous table until it is changed back.
+  const empty = Array.from(EMPTY_KIND_TABLE_COMMITMENT);
+
+  // A fresh upload of the already-settled primary fixture. Under another
+  // commitment it fails at the commitment check, which precedes every other
+  // check on the instance; under the right one it reaches nullifier creation
+  // and fails there, which is what tells the two rejections apart.
+  const resettlePrimaryFixture = async () => {
+    const authority = Keypair.generate();
+    await airdrop(provider, authority, 2);
+    const { uploadId, txData } = await uploadTxData(authority, Buffer.from(fixture.tx_b64, "base64"));
+    return program.methods
+      .settleFromTxdata(uploadId)
+      .accountsPartial({
+        paState,
+        txData,
+        authority: authority.publicKey,
+        systemProgram: SystemProgram.programId,
+        newRootMarker: DUMMY_ROOT_MARKER,
+        verifierRouterProgram: VERIFIER_ROUTER_ID,
+        router: routerPda,
+        verifierEntry: verifierEntryPda,
+        verifierProgram: VERIFIER_PROGRAM_ID,
+      })
+      .remainingAccounts(buildSettleRemainingAccounts(deriveNullifierAccounts(fixture.consumed_nullifiers_b64)))
+      .preInstructions([
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+      ])
+      .signers([authority])
+      .rpc();
+  };
+
+  it("rejects set_kind_table_commitment from a non-authority signer", async () => {
+    const stranger = Keypair.generate();
+    await airdrop(provider, stranger, 1);
+    await assertRejects(setKindTableCommitment(randomRef(), stranger), AUTHORITY_MISMATCH_PATTERN);
+    assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the commitment is untouched");
+  });
+
+  it("rejects a zero commitment", () => assertRejects(setKindTableCommitment(Array(32).fill(0)), /ZeroKindTableCommitment/));
+
+  it("stores a new commitment, emits KindTableCommitmentUpdated, and rejects transactions proven against the previous table until it is restored", async () => {
+    const rotated = randomRef();
+    const sig = await setKindTableCommitment(rotated);
+    try {
+      assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, rotated, "the new commitment is stored");
+      const { events } = await cpiEventsOf(sig);
+      const updated = events.find((e) => e.name === "kindTableCommitmentUpdatedEvent");
+      assert.ok(updated, `a KindTableCommitmentUpdatedEvent is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`);
+      // pa-evm: `event KindTableCommitmentUpdated(bytes32 kindTableCommitment)`.
+      assert.deepEqual(updated!.data, { kindTableCommitment: rotated }, "the event carries exactly pa-evm's field, the new commitment");
+      await assertRejects(resettlePrimaryFixture(), /KindTableCommitmentMismatch/);
+    } finally {
+      await setKindTableCommitment(empty);
+    }
+    assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the empty table's commitment is restored");
+    await assertRejects(resettlePrimaryFixture(), /DuplicateNullifier/);
   });
 });
 
@@ -2797,6 +2871,10 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
             .rpc(),
       },
       {
+        name: "set_kind_table_commitment",
+        run: () => setKindTableCommitment(randomRef()),
+      },
+      {
         name: "cancel_authority_transfer",
         run: () =>
           program.methods
@@ -2964,6 +3042,12 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // nullifier: a replay of the nonce the adapter cannot catch.
   const wrapReplayFixture = requireFixture("spl_token_wrap_replay.json", "--spl-token-wrap --nonce-seed 21");
   const unwrapFixture = requireFixture("spl_token_unwrap.json", "--spl-token-unwrap");
+  // A second wrap (forwarder nonce 2) proven against the solana-devnet kind
+  // table, which lists this mint's transfer kind under the forwarder's label.
+  const devnetTableWrapFixture = requireFixture(
+    "spl_token_wrap_devnet_kind_table.json",
+    "--spl-token-wrap --nonce-seed 22 --wrap-nonce 2 --kind-table tools/fixture-gen/kind_table_solana_devnet.json",
+  );
   const wrap = wrapFixture.spl_token_wrap!;
   const unwrap = unwrapFixture.spl_token_unwrap!;
 
@@ -3238,6 +3322,39 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const [escrowAfter, recipientAfter] = await balances(escrowAta, recipientAta);
     assert.equal(escrowAfter, escrowBefore - unwrapAmount, "escrow balance decreases by the unwrap amount");
     assert.equal(recipientAfter, recipientBefore + unwrapAmount, "recipient receives the unwrapped tokens");
+  });
+
+  // The kind table anoma/risc0-kind-tables generates for solana-devnet is
+  // installable: a wrap proven against it is rejected under the empty
+  // table's commitment and settles once the authority installs the
+  // commitment risc0-kind-tables publishes for devnet. Settled after the
+  // unwrap, so the unwrap fixture's tree is unchanged.
+  it("settles a wrap proven against the solana-devnet kind table once the authority installs its commitment", async () => {
+    const devnetWrap = devnetTableWrapFixture.spl_token_wrap!;
+    const amount = BigInt(devnetWrap.amount);
+    assert.deepEqual(
+      deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, BigInt(devnetWrap.nonce))[0],
+      nonceBitmapPda,
+      "the nonce shares the main wrap's bitmap word, which the main wrap created",
+    );
+    await mintTo(provider.connection, user, mint, userAta, user, Number(amount));
+    await approve(provider.connection, user, userAta, escrowPda, user, Number(amount));
+    const settleDevnetWrap = () => settleForwarderFixture(devnetTableWrapFixture, wrapSegment(), [wrapAuthorizationIx(devnetTableWrapFixture)]);
+
+    await assertRejects(settleDevnetWrap(), /KindTableCommitmentMismatch/);
+
+    const empty = Array.from(EMPTY_KIND_TABLE_COMMITMENT);
+    await setKindTableCommitment(Array.from(SOLANA_DEVNET_KIND_TABLE_COMMITMENT));
+    try {
+      const [userBefore, escrowBefore] = await balances(userAta, escrowAta);
+      await settleDevnetWrap();
+      const [userAfter, escrowAfter] = await balances(userAta, escrowAta);
+      assert.equal(userAfter, userBefore - amount, "user balance decreases by the wrap amount");
+      assert.equal(escrowAfter, escrowBefore + amount, "escrow holds the wrapped tokens");
+    } finally {
+      await setKindTableCommitment(empty);
+    }
+    assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the empty table's commitment is restored");
   });
 
   after(() => funder.drainAll());
