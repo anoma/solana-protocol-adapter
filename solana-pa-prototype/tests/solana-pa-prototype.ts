@@ -77,6 +77,12 @@ import {
   sendV0,
   settlementLookupKeys,
   waitForSlotPast,
+  closeAllMarkers,
+  closeMarkersBatch,
+  emergencyStop,
+  initializeAdapter,
+  setEmergencyCaller,
+  setKindTableCommitment,
 } from "./utils";
 
 // Keypairs funded during tests, drained back to the provider wallet in
@@ -168,21 +174,8 @@ function deriveNullifierAccounts(nullifierB64s: string[]): { pubkey: PublicKey; 
 // verifier router, the fixture's selector, and the kind-table commitment
 // every fixture's aggregation instance carries. Callers add `.signers()`
 // when the payer is not the provider wallet.
-function buildInitialize(payer: PublicKey) {
-  return program.methods
-    .initialize(
-      VERIFIER_ROUTER_ID,
-      Array.from(PROOF_SELECTOR),
-      Array.from(EMPTY_KIND_TABLE_COMMITMENT)
-    )
-    .accountsPartial({
-      paState,
-      payer,
-      systemProgram: SystemProgram.programId,
-      program: program.programId,
-      programData,
-    });
-}
+const buildInitialize = (payer: PublicKey) =>
+  initializeAdapter(program, payer, VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR), Array.from(EMPTY_KIND_TABLE_COMMITMENT));
 
 /**
  * Assert that `fixtureName` has not already been settled on this validator.
@@ -980,14 +973,6 @@ describe("protocol-adapter (Settle error paths)", () => {
   });
 });
 
-/** Replaces the adapter's kind-table commitment, signed by `signer` (the PA authority, the wallet, by default). */
-const setKindTableCommitment = (commitment: number[], signer?: Keypair) => {
-  const builder = program.methods
-    .setKindTableCommitment(commitment)
-    .accountsPartial({ paState, authority: (signer ?? provider.wallet).publicKey });
-  return (signer ? builder.signers([signer]) : builder).rpc();
-};
-
 describe("protocol-adapter (kind table commitment)", () => {
   // Mirrors pa-evm ProtocolAdapter.setKindTableCommitment: owner-only, zero
   // rejected, KindTableCommitmentUpdated emitted. The stored commitment is
@@ -1028,15 +1013,15 @@ describe("protocol-adapter (kind table commitment)", () => {
   it("rejects set_kind_table_commitment from a non-authority signer", async () => {
     const stranger = Keypair.generate();
     await airdrop(provider, stranger, 1);
-    await assertRejects(setKindTableCommitment(randomRef(), stranger), AUTHORITY_MISMATCH_PATTERN);
+    await assertRejects(setKindTableCommitment(program, stranger.publicKey, randomRef()).signers([stranger]).rpc(), AUTHORITY_MISMATCH_PATTERN);
     assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the commitment is untouched");
   });
 
-  it("rejects a zero commitment", () => assertRejects(setKindTableCommitment(Array(32).fill(0)), /ZeroKindTableCommitment/));
+  it("rejects a zero commitment", () => assertRejects(setKindTableCommitment(program, provider.wallet.publicKey, Array(32).fill(0)).rpc(), /ZeroKindTableCommitment/));
 
   it("stores a new commitment, emits KindTableCommitmentUpdated, and rejects transactions proven against the previous table until it is restored", async () => {
     const rotated = randomRef();
-    const sig = await setKindTableCommitment(rotated);
+    const sig = await setKindTableCommitment(program, provider.wallet.publicKey, rotated).rpc();
     try {
       assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, rotated, "the new commitment is stored");
       const { events } = await cpiEventsOf(sig);
@@ -1046,7 +1031,7 @@ describe("protocol-adapter (kind table commitment)", () => {
       assert.deepEqual(updated!.data, { kindTableCommitment: rotated }, "the event carries exactly pa-evm's field, the new commitment");
       await assertRejects(resettlePrimaryFixture(), /KindTableCommitmentMismatch/);
     } finally {
-      await setKindTableCommitment(empty);
+      await setKindTableCommitment(program, provider.wallet.publicKey, empty).rpc();
     }
     assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the empty table's commitment is restored");
     await assertRejects(resettlePrimaryFixture(), /DuplicateNullifier/);
@@ -1072,12 +1057,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
     await airdrop(provider, nonAuthority, 1);
 
     try {
-      await program.methods
-        .emergencyStop()
-        .accountsPartial({
-          paState,
-          authority: nonAuthority.publicKey,
-        })
+      await emergencyStop(program, nonAuthority.publicKey)
         .signers([nonAuthority])
         .rpc();
       assert.fail("expected emergency_stop to fail for non-authority");
@@ -1207,12 +1187,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     try {
-      await program.methods
-        .emergencyStop()
-        .accountsPartial({
-          paState,
-          authority: provider.wallet.publicKey,
-        })
+      await emergencyStop(program, provider.wallet.publicKey)
         .rpc();
       assert.fail("expected emergency_stop to fail for old authority");
     } catch (e: any) {
@@ -2872,7 +2847,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       },
       {
         name: "set_kind_table_commitment",
-        run: () => setKindTableCommitment(randomRef()),
+        run: () => setKindTableCommitment(program, provider.wallet.publicKey, randomRef()).rpc(),
       },
       {
         name: "cancel_authority_transfer",
@@ -2960,18 +2935,13 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       {
         name: "close_markers_batch",
         run: () =>
-          program.methods
-            .closeMarkersBatch()
-            .accountsPartial({ paState, authority: provider.wallet.publicKey })
-            .remainingAccounts([])
+          closeMarkersBatch(program, provider.wallet.publicKey, [])
             .rpc(),
       },
       {
         name: "emergency_stop",
         run: () =>
-          program.methods
-            .emergencyStop()
-            .accountsPartial({ paState, authority: provider.wallet.publicKey })
+          emergencyStop(program, provider.wallet.publicKey)
             .rpc(),
       },
     ];
@@ -3005,15 +2975,7 @@ describe("protocol-adapter (close_markers_batch requires stopped state)", () => 
     assert.ok(markers.length > 0, "Should have markers to close");
 
     try {
-      await program.methods
-        .closeMarkersBatch()
-        .accountsPartial({
-          paState,
-          authority: provider.wallet.publicKey,
-        })
-        .remainingAccounts(markers.map(({ pubkey }) => ({
-          pubkey, isWritable: true, isSigner: false,
-        })))
+      await closeMarkersBatch(program, provider.wallet.publicKey, markers.map(({ pubkey }) => pubkey))
         .rpc();
       assert.fail("close_markers_batch should fail when PA is not stopped");
     } catch (e: any) {
@@ -3187,9 +3149,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.deepEqual(state.lifecycle, { running: {} }, "the adapter must be running here");
     await assertRejects(
-      forwarderProgram.methods
-        .setEmergencyCaller(Keypair.generate().publicKey)
-        .accounts({ committee: emergencyCommittee.publicKey, paState })
+      setEmergencyCaller(forwarderProgram, emergencyCommittee.publicKey, paState, Keypair.generate().publicKey)
         .signers([emergencyCommittee])
         .rpc(),
       /ProtocolAdapterNotStopped/
@@ -3344,7 +3304,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     await assertRejects(settleDevnetWrap(), /KindTableCommitmentMismatch/);
 
     const empty = Array.from(EMPTY_KIND_TABLE_COMMITMENT);
-    await setKindTableCommitment(Array.from(SOLANA_DEVNET_KIND_TABLE_COMMITMENT));
+    await setKindTableCommitment(program, provider.wallet.publicKey, Array.from(SOLANA_DEVNET_KIND_TABLE_COMMITMENT)).rpc();
     try {
       const [userBefore, escrowBefore] = await balances(userAta, escrowAta);
       await settleDevnetWrap();
@@ -3352,7 +3312,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       assert.equal(userAfter, userBefore - amount, "user balance decreases by the wrap amount");
       assert.equal(escrowAfter, escrowBefore + amount, "escrow holds the wrapped tokens");
     } finally {
-      await setKindTableCommitment(empty);
+      await setKindTableCommitment(program, provider.wallet.publicKey, empty).rpc();
     }
     assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the empty table's commitment is restored");
   });
@@ -3367,12 +3327,7 @@ describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     assert.equal(JSON.stringify(stateBefore.lifecycle), JSON.stringify({ running: {} }), "Should be Running before emergency_stop");
 
-    await program.methods
-      .emergencyStop()
-      .accountsPartial({
-        paState,
-        authority: provider.wallet.publicKey,
-      })
+    await emergencyStop(program, provider.wallet.publicKey)
       .rpc();
 
     const stateAfter = await program.account.paStateAccount.fetch(paState);
@@ -3381,12 +3336,7 @@ describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
 
   it("rejects emergency_stop when already paused", async () => {
     try {
-      await program.methods
-        .emergencyStop()
-        .accountsPartial({
-          paState,
-          authority: provider.wallet.publicKey,
-        })
+      await emergencyStop(program, provider.wallet.publicKey)
         .rpc();
       assert.fail("expected emergency_stop to fail when already paused");
     } catch (e: any) {
@@ -3462,34 +3412,13 @@ describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
 
 describe("protocol-adapter (Close instructions)", () => {
   it("close_markers_batch closes marker PDAs and refunds rent", async () => {
-    // Find all 0-byte marker accounts owned by the PA program
-    const allAccounts = await provider.connection.getProgramAccounts(program.programId, {
+    const markersBefore = (await provider.connection.getProgramAccounts(program.programId, {
       filters: [{ dataSize: 0 }],
-    });
-
-    if (allAccounts.length === 0) {
-      console.log("    No markers to close (no settlements ran)");
-      return;
-    }
-
-    const markersBefore = allAccounts.length;
+    })).length;
+    assert.isAbove(markersBefore, 0, "the suite's settlements leave markers to close");
     const balanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
 
-    // Close in one batch (test suite creates few markers)
-    const remainingAccounts = allAccounts.map(({ pubkey }) => ({
-      pubkey,
-      isWritable: true,
-      isSigner: false,
-    }));
-
-    await program.methods
-      .closeMarkersBatch()
-      .accountsPartial({
-        paState,
-        authority: provider.wallet.publicKey,
-      })
-      .remainingAccounts(remainingAccounts)
-      .rpc();
+    assert.equal(await closeAllMarkers(program, provider.wallet.publicKey), markersBefore, "every marker is closed");
 
     // Verify markers are gone
     const markersAfter = await provider.connection.getProgramAccounts(program.programId, {
@@ -3507,14 +3436,7 @@ describe("protocol-adapter (Close instructions)", () => {
     await airdrop(provider, fakeAuthority, 1);
 
     try {
-      await program.methods
-        .closeMarkersBatch()
-        .accountsPartial({
-          paState,
-          authority: fakeAuthority.publicKey,
-        })
-        .signers([fakeAuthority])
-        .rpc();
+      await closeMarkersBatch(program, fakeAuthority.publicKey, []).signers([fakeAuthority]).rpc();
       assert.fail("Expected unauthorized close to fail");
     } catch (e: any) {
       assert.match(e.toString(), AUTHORITY_MISMATCH_PATTERN);

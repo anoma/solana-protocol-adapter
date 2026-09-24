@@ -53,6 +53,13 @@ fi
 
 check_required_fixture "$PA_TEST_MODE"
 
+# Type-check every script and test against the generated program types. The
+# suite's --type-check covers only the files it loads, and the operator
+# scripts are run by nothing else, so a script that no longer compiles would
+# only surface when an operator runs it on a live cluster.
+echo "==> Type-checking scripts and tests"
+yarn run tsc --noEmit -p ./tsconfig.json
+
 trap 'stop_validator' EXIT
 
 echo "==> (2/3) Starting validator"

@@ -45,14 +45,16 @@ import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
   closeAllNonceBitmaps,
+  closeConfig,
   closeEscrow,
   emergencyWithdraw,
   escrowAccounts,
   initializeForwarder,
+  setEmergencyCaller,
   setLogicRef,
 } from "../tests/utils/helpers";
 import { deriveConfigPda, derivePaStatePda } from "../tests/utils/pda";
-import { fail, requireEnv, requireHexBytes, requirePubkey } from "./cli-utils";
+import { fail, requireHexBytes, requirePubkey, requireRawAmount } from "./cli-utils";
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
@@ -108,25 +110,21 @@ async function init() {
     console.log("✅ Config initialized");
   }
 
-  const mintRaw = process.env.STF_TOKEN_MINT;
-  if (mintRaw) {
-    const mint = new PublicKey(mintRaw);
+  if (process.env.STF_TOKEN_MINT) {
+    const mint = requireMint();
     const { escrowPda } = escrowAccounts(forwarder.programId, mint);
     const escrowAta = await getOrCreateAssociatedTokenAccount(connection, wallet.payer, mint, escrowPda, true);
     console.log(`✅ Escrow for ${mint.toBase58()}: PDA ${escrowPda.toBase58()}, ATA ${escrowAta.address.toBase58()}`);
   }
 }
 
-async function closeConfig() {
+async function closeConfigCommand() {
   await requireConfig();
-  await forwarder.methods
-    .closeConfig()
-    .accountsPartial({ authority: wallet.publicKey, config: configPda })
-    .rpc();
+  await closeConfig(forwarder, wallet.publicKey).rpc();
   console.log(`✅ Config ${configPda.toBase58()} closed`);
 }
 
-async function setLogicRef() {
+async function setLogicRefCommand() {
   const logicRef = requireHexBytes("STF_LOGIC_REF", 32, "the 32-byte hex logic ref (verifying key) the config should authorize from now on");
   const existing = await requireConfig();
   const previous = Buffer.from(existing.logicRef).toString("hex");
@@ -134,22 +132,17 @@ async function setLogicRef() {
   console.log(`✅ Logic ref rotated: ${previous} -> ${Buffer.from(logicRef).toString("hex")}`);
 }
 
-async function setEmergencyCaller() {
+async function setEmergencyCallerCommand() {
   const caller = requirePubkey("STF_EMERGENCY_CALLER", "the key that will be allowed to withdraw from escrow");
   await requireConfig();
-  await forwarder.methods
-    .setEmergencyCaller(caller)
-    .accounts({ committee: wallet.publicKey, paState })
-    .rpc();
+  await setEmergencyCaller(forwarder, wallet.publicKey, paState, caller).rpc();
   console.log(`✅ Emergency caller set to ${caller.toBase58()}`);
 }
 
 async function withdraw() {
   const mint = requireMint();
   const recipient = requireRecipient();
-  const rawAmount = requireEnv("STF_AMOUNT", "the amount to withdraw, in the token's raw units");
-  if (!/^\d+$/.test(rawAmount)) fail(`STF_AMOUNT must be a non-negative integer, got "${rawAmount}"`);
-  const amount = BigInt(rawAmount);
+  const amount = requireRawAmount("STF_AMOUNT", "the amount to withdraw, in the token's raw units");
   await requireConfig();
   const { escrowPda, escrowAta } = escrowAccounts(forwarder.programId, mint);
   const recipientAta = await recipientAtaFor(mint, recipient);
@@ -179,14 +172,14 @@ async function teardown() {
     console.log(`Escrow ATA ${escrowAta.toBase58()} does not exist; skipping`);
   }
 
-  await closeConfig();
+  await closeConfigCommand();
 }
 
 const COMMANDS: Record<string, () => Promise<void>> = {
   init,
-  "set-logic-ref": setLogicRef,
-  "close-config": closeConfig,
-  "set-emergency-caller": setEmergencyCaller,
+  "set-logic-ref": setLogicRefCommand,
+  "close-config": closeConfigCommand,
+  "set-emergency-caller": setEmergencyCallerCommand,
   "emergency-withdraw": withdraw,
   "drain-escrow": drainEscrow,
   teardown,

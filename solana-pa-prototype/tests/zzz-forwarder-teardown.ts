@@ -18,6 +18,7 @@ import {
   escrowAccounts,
   makeFunder,
   seededKeypair,
+  closeConfig,
 } from "./utils";
 
 describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
@@ -53,11 +54,7 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
     closeEscrow(forwarderProgram, configPda, authority.publicKey, accounts).signers([authority]).rpc();
 
   const closeConfigAs = (authority: Keypair) =>
-    forwarderProgram.methods
-      .closeConfig()
-      .accountsPartial({ authority: authority.publicKey, config: configPda })
-      .signers([authority])
-      .rpc();
+    closeConfig(forwarderProgram, authority.publicKey).signers([authority]).rpc();
 
   it("close_escrow rejects a non-committee authority", () => assertRejects(closeEscrowAs(impostor), /UnauthorizedCaller/));
 

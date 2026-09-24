@@ -1,7 +1,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { derivePaStatePda } from "../tests/utils/pda";
+import { setKindTableCommitment } from "../tests/utils/helpers";
 import { requireHexBytes } from "./cli-utils";
 
 async function main() {
@@ -17,12 +17,7 @@ async function main() {
       "   Transactions proven against the previous table are rejected once this is installed."
   );
 
-  const [paState] = derivePaStatePda(program.programId);
-
-  await program.methods
-    .setKindTableCommitment(kindTableCommitment)
-    .accountsPartial({ paState, authority: provider.wallet.publicKey })
-    .rpc();
+  await setKindTableCommitment(program, provider.wallet.publicKey, kindTableCommitment).rpc();
 
   console.log(`✅ Kind table commitment: ${Buffer.from(kindTableCommitment).toString("hex")}`);
 }
