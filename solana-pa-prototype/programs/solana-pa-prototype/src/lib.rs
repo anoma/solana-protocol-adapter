@@ -400,11 +400,8 @@ pub mod protocol_adapter {
             new_kind_table_commitment != [0u8; 32],
             PAError::ZeroKindTableCommitment
         );
-        let state = &mut ctx.accounts.pa_state;
-        let previous = state.kind_table_commitment;
-        state.kind_table_commitment = new_kind_table_commitment;
+        ctx.accounts.pa_state.kind_table_commitment = new_kind_table_commitment;
         emit_cpi!(KindTableCommitmentUpdatedEvent {
-            previous,
             kind_table_commitment: new_kind_table_commitment,
         });
         Ok(())
@@ -1163,7 +1160,6 @@ pub struct ApplicationPayloadEvent {
 /// Mirrors pa-evm: `event KindTableCommitmentUpdated(bytes32 kindTableCommitment);`
 #[event]
 pub struct KindTableCommitmentUpdatedEvent {
-    pub previous: [u8; 32],
     pub kind_table_commitment: [u8; 32],
 }
 

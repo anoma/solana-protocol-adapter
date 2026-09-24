@@ -119,7 +119,7 @@ The PA stores the sha256 commitment of the kind table every settled aggregation 
 PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # authority wallet
 ```
 
-The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the previous and the new value. From that slot on, transactions proven against the previous table are rejected (`KindTableCommitmentMismatch`), so provers must load the new table before it is installed. Today every deployment stores the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`); the generated Solana tables and their commitments come from anoma/risc0-kind-tables once its Solana branch exists (anoma/dos-pm#61).
+The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the new value, as pa-evm's `KindTableCommitmentUpdated` does. From that slot on, transactions proven against the previous table are rejected (`KindTableCommitmentMismatch`), so provers must load the new table before it is installed. Today every deployment stores the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`); the generated Solana tables and their commitments come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
 
 ## Emergency stop
 

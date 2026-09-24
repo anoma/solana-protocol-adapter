@@ -1042,7 +1042,8 @@ describe("protocol-adapter (kind table commitment)", () => {
       const { events } = await cpiEventsOf(sig);
       const updated = events.find((e) => e.name === "kindTableCommitmentUpdatedEvent");
       assert.ok(updated, `a KindTableCommitmentUpdatedEvent is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`);
-      assert.deepEqual(Array.from(updated!.data.previous), empty, "the event carries the previous commitment");
+      // pa-evm: `event KindTableCommitmentUpdated(bytes32 kindTableCommitment)`.
+      assert.deepEqual(Object.keys(updated!.data), ["kindTableCommitment"], "the event carries only the new commitment, as pa-evm's does");
       assert.deepEqual(Array.from(updated!.data.kindTableCommitment), rotated, "the event carries the new commitment");
       await assertRejects(resettlePrimaryFixture(), /KindTableCommitmentMismatch/);
     } finally {
@@ -2869,6 +2870,10 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
             .acceptAuthority()
             .accountsPartial({ paState, newAuthority: provider.wallet.publicKey })
             .rpc(),
+      },
+      {
+        name: "set_kind_table_commitment",
+        run: () => setKindTableCommitment(randomRef()),
       },
       {
         name: "cancel_authority_transfer",
