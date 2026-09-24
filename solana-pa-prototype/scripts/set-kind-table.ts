@@ -18,15 +18,13 @@ async function main() {
   );
 
   const [paState] = derivePaStatePda(program.programId);
-  const state = await program.account.paStateAccount.fetch(paState);
-  const previous = Buffer.from(state.kindTableCommitment).toString("hex");
 
   await program.methods
     .setKindTableCommitment(kindTableCommitment)
     .accountsPartial({ paState, authority: provider.wallet.publicKey })
     .rpc();
 
-  console.log(`✅ Kind table commitment: ${previous} -> ${Buffer.from(kindTableCommitment).toString("hex")}`);
+  console.log(`✅ Kind table commitment: ${Buffer.from(kindTableCommitment).toString("hex")}`);
 }
 
 main().catch((err) => {

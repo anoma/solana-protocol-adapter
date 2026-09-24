@@ -627,11 +627,6 @@ cmd_init() {
 cmd_set_kind_table() {
   require_cmd npx
 
-  if [[ -z "${PA_KIND_TABLE_COMMITMENT:-}" ]]; then
-    echo "❌ Missing PA_KIND_TABLE_COMMITMENT (sha256 of the kind table, hex, 32 bytes)." >&2
-    exit 1
-  fi
-
   local pid
   pid="$(get_program_id "protocol_adapter")"
   if ! is_deployed "$pid"; then

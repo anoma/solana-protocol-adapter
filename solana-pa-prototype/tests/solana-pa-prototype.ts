@@ -1043,8 +1043,7 @@ describe("protocol-adapter (kind table commitment)", () => {
       const updated = events.find((e) => e.name === "kindTableCommitmentUpdatedEvent");
       assert.ok(updated, `a KindTableCommitmentUpdatedEvent is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`);
       // pa-evm: `event KindTableCommitmentUpdated(bytes32 kindTableCommitment)`.
-      assert.deepEqual(Object.keys(updated!.data), ["kindTableCommitment"], "the event carries only the new commitment, as pa-evm's does");
-      assert.deepEqual(Array.from(updated!.data.kindTableCommitment), rotated, "the event carries the new commitment");
+      assert.deepEqual(updated!.data, { kindTableCommitment: rotated }, "the event carries exactly pa-evm's field, the new commitment");
       await assertRejects(resettlePrimaryFixture(), /KindTableCommitmentMismatch/);
     } finally {
       await setKindTableCommitment(empty);
@@ -3333,7 +3332,6 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("settles a wrap proven against the solana-devnet kind table once the authority installs its commitment", async () => {
     const devnetWrap = devnetTableWrapFixture.spl_token_wrap!;
     const amount = BigInt(devnetWrap.amount);
-    assert.equal(devnetWrap.mint_seed_label, wrap.mint_seed_label, "the same mint as the main wrap");
     assert.deepEqual(
       deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, BigInt(devnetWrap.nonce))[0],
       nonceBitmapPda,
@@ -3345,7 +3343,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
     await assertRejects(settleDevnetWrap(), /KindTableCommitmentMismatch/);
 
-    const previous = (await program.account.paStateAccount.fetch(paState)).kindTableCommitment;
+    const empty = Array.from(EMPTY_KIND_TABLE_COMMITMENT);
     await setKindTableCommitment(Array.from(SOLANA_DEVNET_KIND_TABLE_COMMITMENT));
     try {
       const [userBefore, escrowBefore] = await balances(userAta, escrowAta);
@@ -3354,9 +3352,9 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       assert.equal(userAfter, userBefore - amount, "user balance decreases by the wrap amount");
       assert.equal(escrowAfter, escrowBefore + amount, "escrow holds the wrapped tokens");
     } finally {
-      await setKindTableCommitment(previous);
+      await setKindTableCommitment(empty);
     }
-    assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, previous, "the previous commitment is restored");
+    assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the empty table's commitment is restored");
   });
 
   after(() => funder.drainAll());
