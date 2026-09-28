@@ -5,13 +5,14 @@
 //! - Unwrap: Release tokens from escrow to recipient
 //!
 //! Security properties (mirroring EVM):
-//! - Only Protocol Adapter can call forward_call
+//! - Only the Protocol Adapter's own instruction can call forward_call (directly, not through another program)
 //! - Only handles specific logic_ref (resource type)
 //! - User authorization via Ed25519 signature over action_tree_root
 
 #![allow(deprecated)] // Anchor program macro currently expands to AccountInfo::realloc.
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{get_stack_height, TRANSACTION_LEVEL_STACK_HEIGHT};
 use anchor_lang::solana_program::program::{invoke_signed, set_return_data};
 use anchor_lang::solana_program::sysvar::instructions as ix_sysvar;
 
@@ -147,10 +148,16 @@ pub mod spl_token_forwarder {
     ) -> Result<()> {
         let config = &ctx.accounts.config;
 
-        // The instructions sysvar holds only top-level instructions, so
-        // during a CPI the current instruction is the caller's. A direct
-        // call sees this program's own id and is rejected. This is the
-        // unforgeable analogue of EVM's msg.sender == _PROTOCOL_ADAPTER.
+        // The instructions sysvar holds only top-level instructions, so it
+        // names the program of the transaction-level instruction this call
+        // descends from. That program is the immediate caller only when this
+        // call runs one level below it; deeper, another program invoked us.
+        // Together the two checks are the analogue of EVM's
+        // msg.sender == _PROTOCOL_ADAPTER.
+        require!(
+            get_stack_height() == TRANSACTION_LEVEL_STACK_HEIGHT + 1,
+            ErrorCode::UnauthorizedCaller
+        );
         let ix_sysvar_info = &ctx.accounts.ix_sysvar;
         let current_ix_index = ix_sysvar::load_current_index_checked(ix_sysvar_info)
             .map_err(|_| ErrorCode::UnauthorizedCaller)?;

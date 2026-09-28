@@ -3010,6 +3010,8 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     "spl_token_wrap_devnet_kind_table.json",
     "--spl-token-wrap --nonce-seed 22 --wrap-nonce 2 --kind-table tools/fixture-gen/kind_table_solana_devnet.json",
   );
+  // A program the adapter invokes, relaying an unwrap to this forwarder.
+  const relayFixture = requireFixture("batch_forwarder_relay.json", "--nonce-seed 23 --forwarder-relay");
   const wrap = wrapFixture.spl_token_wrap!;
   const unwrap = unwrapFixture.spl_token_unwrap!;
 
@@ -3120,6 +3122,12 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   const unwrapSegment = (destination = recipientAta): AccountMeta[] => [
     ...segmentHead,
     ...escrowTransferAccounts(escrowAta, destination, escrowPda),
+  ];
+
+  const relaySegment = (): AccountMeta[] => [
+    { pubkey: testForwarderId, isWritable: false, isSigner: false },
+    ...segmentHead,
+    ...escrowTransferAccounts(escrowAta, recipientAta, escrowPda),
   ];
 
   /** The ed25519 instruction carrying the fixture's signature over its signed message. */
@@ -3334,6 +3342,17 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       await setKindTableCommitment(program, provider.wallet.publicKey, empty).rpc();
     }
     assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the empty table's commitment is restored");
+  });
+
+  // The adapter invokes another program during a settlement, and that program
+  // calls this forwarder. Only the adapter itself may call it.
+  it("rejects a forward_call relayed by a program the adapter invokes", async () => {
+    const before = await balances(escrowAta, recipientAta);
+    assert.isTrue(before[0] > 0n, "the escrow holds tokens the relay names");
+
+    await assertRejects(settleForwarderFixture(relayFixture, relaySegment(), []), /UnauthorizedCaller/);
+
+    assert.deepEqual(await balances(escrowAta, recipientAta), before, "no tokens move");
   });
 
   after(() => funder.drainAll());
