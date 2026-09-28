@@ -72,6 +72,7 @@ const SPL_CLOSE_ACCOUNT_OPCODE: u8 = 9;
 const SPL_TOKEN_PROGRAM_ID: Pubkey =
     anchor_lang::solana_program::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 /// SPL token account layout: mint(32), owner(32), amount(8), ...
+const TOKEN_ACCOUNT_MINT_OFFSET: usize = 0;
 const TOKEN_ACCOUNT_OWNER_OFFSET: usize = 32;
 const TOKEN_ACCOUNT_AMOUNT_OFFSET: usize = 64;
 
@@ -202,7 +203,8 @@ pub mod spl_token_forwarder {
             return Err(ErrorCode::InsufficientRemainingAccounts.into());
         };
 
-        require_token_account_owner(recipient_ata, &withdraw.recipient)?;
+        require_token_account(escrow_ata, &withdraw.token_mint, escrow_pda.key)?;
+        require_token_account(recipient_ata, &withdraw.token_mint, &withdraw.recipient)?;
         transfer_signed_by_escrow(
             ctx.program_id,
             &withdraw.token_mint,
@@ -260,6 +262,11 @@ pub mod spl_token_forwarder {
         ];
         let signer_seeds = &[escrow_seeds];
 
+        require_token_account(
+            &ctx.accounts.escrow_ata,
+            &token_mint_key,
+            ctx.accounts.escrow_pda.key,
+        )?;
         let balance = token_account_amount(&ctx.accounts.escrow_ata)?;
         if balance > 0 {
             transfer_signed_by_escrow(
@@ -320,18 +327,37 @@ fn token_account_amount(token_account: &AccountInfo) -> Result<u64> {
     Ok(u64::from_le_bytes(amount.try_into().unwrap()))
 }
 
-/// The destination of a forwarded transfer is chosen by the submitter, not
-/// by the proof; it must belong to the party the proof-bound input names.
-fn require_token_account_owner(token_account: &AccountInfo, owner: &Pubkey) -> Result<()> {
+/// Token accounts of a forwarded transfer are chosen by the submitter, not
+/// by the proof, and SPL Transfer checks only that source and destination
+/// share a mint. Each must hold the mint the input names and belong to the
+/// party the transfer names: the escrow on its side, the user or the
+/// recipient on the other.
+fn require_token_account(token_account: &AccountInfo, mint: &Pubkey, owner: &Pubkey) -> Result<()> {
     let data = token_account.try_borrow_data()?;
-    let actual = data
-        .get(TOKEN_ACCOUNT_OWNER_OFFSET..TOKEN_ACCOUNT_OWNER_OFFSET + 32)
-        .ok_or(ErrorCode::InvalidTokenAccountData)?;
-    if actual != owner.as_ref() {
+    let field = |offset: usize| -> Result<Pubkey> {
+        let bytes: [u8; 32] = data
+            .get(offset..offset + 32)
+            .ok_or(ErrorCode::InvalidTokenAccountData)?
+            .try_into()
+            .unwrap();
+        Ok(Pubkey::new_from_array(bytes))
+    };
+    let actual_mint = field(TOKEN_ACCOUNT_MINT_OFFSET)?;
+    if actual_mint != *mint {
+        msg!(
+            "Token account {} holds mint {}, expected {}",
+            token_account.key(),
+            actual_mint,
+            mint
+        );
+        return Err(ErrorCode::WrongTokenAccountMint.into());
+    }
+    let actual_owner = field(TOKEN_ACCOUNT_OWNER_OFFSET)?;
+    if actual_owner != *owner {
         msg!(
             "Token account {} is owned by {}, expected {}",
             token_account.key(),
-            Pubkey::new_from_array(actual.try_into().unwrap()),
+            actual_owner,
             owner
         );
         return Err(ErrorCode::WrongTokenAccountOwner.into());
@@ -339,9 +365,10 @@ fn require_token_account_owner(token_account: &AccountInfo, owner: &Pubkey) -> R
     Ok(())
 }
 
-/// Both emergency instructions require the adapter to be stopped. Mirrors
-/// EVM's _checkEmergencyStopped(): the state account's address derives from
-/// the configured adapter, and the lifecycle is read through the adapter's type.
+/// Every committee and emergency-caller instruction requires the adapter to
+/// be stopped. Mirrors EVM's _checkEmergencyStopped(): the state account's
+/// address derives from the configured adapter, and the lifecycle is read
+/// through the adapter's type.
 fn require_stopped_adapter(config: &Config, pa_state: &AccountInfo) -> Result<()> {
     require!(
         pa_state.key() == derive_pa_state_pda(&config.protocol_adapter).0,
@@ -484,12 +511,11 @@ fn execute_wrap<'info>(
         return Err(ErrorCode::NonceAlreadyUsed.into());
     }
 
-    // The proof binds the mint (through the escrow PDA) but neither token
-    // account. The source must belong to the user whose signature authorizes
-    // the wrap, as Permit2 transfers from the signing owner; the destination
-    // must be one the escrow authority owns.
-    require_token_account_owner(user_ata, &wrap.user)?;
-    require_token_account_owner(escrow_ata, escrow_pda.key)?;
+    // Both accounts are bound to the input's mint: the source to the signing
+    // user, as Permit2 transfers from the signing owner; the destination to
+    // the escrow.
+    require_token_account(user_ata, &wrap.token_mint, &wrap.user)?;
+    require_token_account(escrow_ata, &wrap.token_mint, escrow_pda.key)?;
 
     ed25519::verify_ed25519_instruction(
         &ctx.accounts.ix_sysvar,
@@ -532,7 +558,8 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         return Err(ErrorCode::InsufficientRemainingAccounts.into());
     };
 
-    require_token_account_owner(recipient_ata, &unwrap.recipient)?;
+    require_token_account(escrow_ata, &unwrap.token_mint, escrow_pda.key)?;
+    require_token_account(recipient_ata, &unwrap.token_mint, &unwrap.recipient)?;
     transfer_signed_by_escrow(
         ctx.program_id,
         &unwrap.token_mint,

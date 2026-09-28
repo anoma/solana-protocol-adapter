@@ -24,8 +24,11 @@ pub enum ErrorCode {
     #[msg("Invalid token program - expected SPL Token program ID")]
     InvalidTokenProgram,
 
-    #[msg("Token account owner mismatch - the destination is not the escrow's or the recipient's")]
+    #[msg("Token account owner mismatch - the account does not belong to the party the transfer names")]
     WrongTokenAccountOwner,
+
+    #[msg("Token account mint mismatch - the account does not hold the mint the transfer names")]
+    WrongTokenAccountMint,
 
     #[msg("Unknown operation code")]
     UnknownOperation,

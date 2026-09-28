@@ -6,7 +6,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
-import { createAccount, getAccount } from "@solana/spl-token";
+import { approve, createAccount, getAccount, mintTo } from "@solana/spl-token";
 import { assert } from "chai";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
@@ -121,6 +121,28 @@ describe("zz-forwarder-emergency (adapter stopped)", () => {
         .rpc(),
       /WrongTokenAccountOwner/
     );
+  });
+
+  // The escrow PDA signs the withdrawal; it pays only from an account the escrow owns.
+  it("rejects a withdrawal whose source the escrow does not own", async () => {
+    const other = Keypair.generate();
+    await funder.fund(other, 1);
+    const otherAta = await createAccount(provider.connection, other, mint, other.publicKey);
+    await mintTo(provider.connection, authority, mint, otherAta, authority, 1000);
+    await approve(provider.connection, other, otherAta, escrowPda, other, 1000);
+    await assertRejects(
+      emergencyWithdraw(
+        forwarderProgram,
+        paState,
+        emergencyCaller.publicKey,
+        { mint, amount: 1000n, recipient: recipient.publicKey },
+        { escrowAta: otherAta, recipientAta, escrowPda }
+      )
+        .signers([emergencyCaller])
+        .rpc(),
+      /WrongTokenAccountOwner/
+    );
+    assert.equal((await getAccount(provider.connection, otherAta)).amount, 1000n, "no tokens move");
   });
 
   // Mirrors: test_forwardEmergencyCall_forwards_calls_if_the_pa_is_stopped_and_the_caller_is_the_emergency_caller

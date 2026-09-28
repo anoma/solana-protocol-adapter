@@ -3122,9 +3122,9 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
   ];
 
-  const unwrapSegment = (destination = recipientAta): AccountMeta[] => [
+  const unwrapSegment = (destination = recipientAta, source = escrowAta): AccountMeta[] => [
     ...segmentHead,
-    ...escrowTransferAccounts(escrowAta, destination, escrowPda),
+    ...escrowTransferAccounts(source, destination, escrowPda),
   ];
 
   const relaySegment = (): AccountMeta[] => [
@@ -3262,6 +3262,25 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     assert.deepEqual(await balances(otherAta, escrowAta), before, "no tokens move");
   });
 
+  // Every transfer names its mint only through the input; SPL Transfer checks
+  // only that source and destination share a mint. A wrap of this mint must
+  // not move tokens of another one.
+  it("rejects a wrap that moves tokens of another mint", async () => {
+    const otherMint = await createMint(provider.connection, user, user.publicKey, null, 6);
+    const userOtherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, otherMint, user.publicKey)).address;
+    await mintTo(provider.connection, user, otherMint, userOtherAta, user, Number(wrapAmount));
+    await approve(provider.connection, user, userOtherAta, escrowPda, user, Number(wrapAmount));
+    const escrowOwnedOtherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, otherMint, escrowPda, true)).address;
+    const before = await balances(userOtherAta, escrowOwnedOtherAta, escrowAta);
+
+    await assertRejects(
+      settleForwarderFixture(wrapFixture, wrapSegment(escrowOwnedOtherAta, userOtherAta), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]),
+      /WrongTokenAccountMint/
+    );
+
+    assert.deepEqual(await balances(userOtherAta, escrowOwnedOtherAta, escrowAta), before, "no tokens move");
+  });
+
   // Mirrors ERC20Forwarder.t.sol: test_wrap_pulls_funds_from_user. The
   // first wrap on a word carries init_nonce_bitmap in the same transaction,
   // after the ed25519 instruction the wrap input points at (index 0).
@@ -3301,6 +3320,21 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // The recipient account is chosen by the submitter, not by the proof.
   it("rejects an unwrap to a token account the recipient does not own", async () => {
     await assertRejects(settleForwarderFixture(unwrapFixture, unwrapSegment(userAta), []), /WrongTokenAccountOwner/);
+  });
+
+  // The escrow PDA signs the release; as a delegate it could move any account
+  // that approved it. An unwrap pays only from an account the escrow owns.
+  it("rejects an unwrap whose source the escrow does not own", async () => {
+    const other = Keypair.generate();
+    await funder.fund(other, 1);
+    const otherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, other, mint, other.publicKey)).address;
+    await mintTo(provider.connection, user, mint, otherAta, user, Number(unwrapAmount));
+    await approve(provider.connection, other, otherAta, escrowPda, other, Number(unwrapAmount));
+    const before = await balances(otherAta, recipientAta);
+
+    await assertRejects(settleForwarderFixture(unwrapFixture, unwrapSegment(recipientAta, otherAta), []), /WrongTokenAccountOwner/);
+
+    assert.deepEqual(await balances(otherAta, recipientAta), before, "no tokens move");
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_unwrap_sends_funds_to_the_user
@@ -3372,11 +3406,13 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     assert.deepEqual(await balances(escrowAta, recipientAta), before, "no tokens move");
   });
 
-  it("rejects close_nonce_bitmaps_batch while the adapter is running", () =>
-    assertRejects(
+  it("rejects close_nonce_bitmaps_batch while the adapter is running", async () => {
+    assert.isNotEmpty(await forwarderProgram.account.nonceBitmap.all(), "the wraps above created nonce bitmaps");
+    await assertRejects(
       closeAllNonceBitmaps(forwarderProgram, configPda, emergencyCommittee.publicKey, paState, [emergencyCommittee]),
       /ProtocolAdapterNotStopped/
-    ));
+    );
+  });
 
   it("rejects close_config while the adapter is running", () =>
     assertRejects(
