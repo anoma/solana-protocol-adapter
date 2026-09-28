@@ -688,7 +688,7 @@ pub struct CloseEscrow<'info> {
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,
 
-    /// CHECK: Ownership verified by the SPL Token program during the transfer and close CPIs.
+    /// CHECK: The handler requires it to hold the mint and belong to the escrow PDA (require_token_account).
     #[account(mut)]
     pub escrow_ata: AccountInfo<'info>,
 
