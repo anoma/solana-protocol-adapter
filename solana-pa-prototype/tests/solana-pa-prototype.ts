@@ -79,6 +79,9 @@ import {
   waitForSlotPast,
   closeAllMarkers,
   closeMarkersBatch,
+  closeAllNonceBitmaps,
+  closeConfig,
+  closeEscrow,
   emergencyStop,
   initializeAdapter,
   setEmergencyCaller,
@@ -3354,6 +3357,32 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
     assert.deepEqual(await balances(escrowAta, recipientAta), before, "no tokens move");
   });
+
+  // Mirrors EmergencyMigratableForwarderBase: the committee acts only once
+  // the adapter is stopped. Teardown while running would drain the escrow,
+  // forget used nonces or disable the forwarder under live resources.
+  it("rejects close_escrow while the adapter is running", async () => {
+    const before = await balances(escrowAta, recipientAta);
+    await assertRejects(
+      closeEscrow(forwarderProgram, configPda, emergencyCommittee.publicKey, paState, { mint, escrowPda, escrowAta, recipientAta })
+        .signers([emergencyCommittee])
+        .rpc(),
+      /ProtocolAdapterNotStopped/
+    );
+    assert.deepEqual(await balances(escrowAta, recipientAta), before, "no tokens move");
+  });
+
+  it("rejects close_nonce_bitmaps_batch while the adapter is running", () =>
+    assertRejects(
+      closeAllNonceBitmaps(forwarderProgram, configPda, emergencyCommittee.publicKey, paState, [emergencyCommittee]),
+      /ProtocolAdapterNotStopped/
+    ));
+
+  it("rejects close_config while the adapter is running", () =>
+    assertRejects(
+      closeConfig(forwarderProgram, emergencyCommittee.publicKey, paState).signers([emergencyCommittee]).rpc(),
+      /ProtocolAdapterNotStopped/
+    ));
 
   after(() => funder.drainAll());
 });

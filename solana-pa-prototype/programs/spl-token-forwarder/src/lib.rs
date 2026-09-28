@@ -248,8 +248,10 @@ pub mod spl_token_forwarder {
     }
 
     /// Drain a mint's escrow to the recipient and close the escrow token
-    /// account; its rent goes to the committee.
+    /// account; its rent goes to the committee. Requires the adapter to be
+    /// stopped.
     pub fn close_escrow(ctx: Context<CloseEscrow>) -> Result<()> {
+        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         let token_mint_key = ctx.accounts.token_mint.key();
         let escrow_seeds: &[&[u8]] = &[
             ESCROW_SEED,
@@ -289,15 +291,18 @@ pub mod spl_token_forwarder {
     }
 
     /// Close the config PDA; its rent goes to the committee. Call last.
-    pub fn close_config(_ctx: Context<CloseConfig>) -> Result<()> {
+    /// Requires the adapter to be stopped.
+    pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {
+        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         Ok(())
     }
 
     /// Close the nonce bitmaps passed as remaining accounts; their rent goes
-    /// to the committee.
+    /// to the committee. Requires the adapter to be stopped.
     pub fn close_nonce_bitmaps_batch<'info>(
         ctx: Context<'_, '_, 'info, 'info, CloseNonceBitmaps<'info>>,
     ) -> Result<()> {
+        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         for bitmap in ctx.remaining_accounts {
             Account::<NonceBitmap>::try_from(bitmap)
                 .map_err(|_| ErrorCode::InvalidNonceBitmapPda)?
@@ -674,6 +679,9 @@ pub struct CloseEscrow<'info> {
     /// CHECK: Verified by address constraint.
     #[account(address = SPL_TOKEN_PROGRAM_ID)]
     pub token_program: AccountInfo<'info>,
+
+    /// CHECK: Checked by require_stopped_adapter in the handler.
+    pub pa_state: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
@@ -690,6 +698,9 @@ pub struct CloseConfig<'info> {
         close = authority
     )]
     pub config: Account<'info, Config>,
+
+    /// CHECK: Checked by require_stopped_adapter in the handler.
+    pub pa_state: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
@@ -703,4 +714,7 @@ pub struct CloseNonceBitmaps<'info> {
 
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,
+
+    /// CHECK: Checked by require_stopped_adapter in the handler.
+    pub pa_state: AccountInfo<'info>,
 }
