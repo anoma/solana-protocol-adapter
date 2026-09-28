@@ -49,6 +49,7 @@ gen "${MOCK_FLAG[@]}" --nonce-seed 4 "$OUT_DIR/batch_groth16_v3.json"
 gen "${MOCK_FLAG[@]}" --nonce-seed 5 --multi-external-call "$OUT_DIR/batch_groth16_multi_call.json"
 gen "${MOCK_FLAG[@]}" --nonce-seed 6 --forwarder-fail "$OUT_DIR/batch_forwarder_fail.json"
 gen "${MOCK_FLAG[@]}" --nonce-seed 7 --forwarder-silent "$OUT_DIR/batch_forwarder_silent.json"
+gen "${MOCK_FLAG[@]}" --nonce-seed 23 --forwarder-relay "$OUT_DIR/batch_forwarder_relay.json"
 gen "${MOCK_FLAG[@]}" --transfer-shape "$OUT_DIR/batch_groth16_transfer_shape.json"
 
 # The historical-root pair: the committer lands at leaf 1, right after
