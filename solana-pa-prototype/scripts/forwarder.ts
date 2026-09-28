@@ -12,15 +12,18 @@
  *                          authority) STF_LOGIC_REF in place; escrow, nonce
  *                                     bitmaps and the committee are untouched.
  *   close-config          (committee) Close only the config PDA (retirement).
+ *                                     Requires the adapter to be stopped.
  *   set-emergency-caller  (committee) Name STF_EMERGENCY_CALLER, once, while
  *                                     the adapter is stopped.
  *   emergency-withdraw    (caller)    Move STF_AMOUNT of STF_TOKEN_MINT from
  *                                     escrow to STF_RECIPIENT.
  *   drain-escrow          (committee) Drain STF_TOKEN_MINT's escrow to
  *                                     STF_RECIPIENT and close the escrow ATA.
+ *                                     Requires the adapter to be stopped.
  *   teardown              (committee) Close every nonce bitmap, drain and
  *                                     close STF_TOKEN_MINT's escrow to the
- *                                     committee, close the config.
+ *                                     committee, close the config. Requires
+ *                                     the adapter to be stopped.
  *
  * The program enforces who may do what and when; a refused command fails
  * with the program's error (UnauthorizedCaller, ProtocolAdapterNotStopped,
@@ -83,7 +86,7 @@ async function closeEscrowFor(mint: PublicKey, recipientOwner: PublicKey) {
   const balance = await connection.getTokenAccountBalance(escrowAta).catch(() => null);
   if (!balance) fail(`escrow ATA ${escrowAta.toBase58()} does not exist; nothing to drain`);
   const recipientAta = await recipientAtaFor(mint, recipientOwner);
-  await closeEscrow(forwarder, configPda, wallet.publicKey, { mint, escrowPda, escrowAta, recipientAta }).rpc();
+  await closeEscrow(forwarder, configPda, wallet.publicKey, paState, { mint, escrowPda, escrowAta, recipientAta }).rpc();
   console.log(`✅ Drained ${balance!.value.uiAmountString} of ${mint.toBase58()} to ${recipientAta.toBase58()} and closed the escrow ATA`);
 }
 
@@ -120,7 +123,7 @@ async function init() {
 
 async function closeConfigCommand() {
   await requireConfig();
-  await closeConfig(forwarder, wallet.publicKey).rpc();
+  await closeConfig(forwarder, wallet.publicKey, paState).rpc();
   console.log(`✅ Config ${configPda.toBase58()} closed`);
 }
 
@@ -162,7 +165,7 @@ async function teardown() {
   const mint = requireMint();
   await requireConfig();
 
-  const closed = await closeAllNonceBitmaps(forwarder, configPda, wallet.publicKey, []);
+  const closed = await closeAllNonceBitmaps(forwarder, configPda, wallet.publicKey, paState, []);
   console.log(`Closed ${closed} nonce bitmap(s)`);
 
   const { escrowAta } = escrowAccounts(forwarder.programId, mint);

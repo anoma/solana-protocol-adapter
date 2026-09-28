@@ -5,13 +5,14 @@
 //! - Unwrap: Release tokens from escrow to recipient
 //!
 //! Security properties (mirroring EVM):
-//! - Only Protocol Adapter can call forward_call
+//! - Only the Protocol Adapter's own instruction can call forward_call (directly, not through another program)
 //! - Only handles specific logic_ref (resource type)
 //! - User authorization via Ed25519 signature over action_tree_root
 
 #![allow(deprecated)] // Anchor program macro currently expands to AccountInfo::realloc.
 
 use anchor_lang::prelude::*;
+use anchor_lang::solana_program::instruction::{get_stack_height, TRANSACTION_LEVEL_STACK_HEIGHT};
 use anchor_lang::solana_program::program::{invoke_signed, set_return_data};
 use anchor_lang::solana_program::sysvar::instructions as ix_sysvar;
 
@@ -71,6 +72,7 @@ const SPL_CLOSE_ACCOUNT_OPCODE: u8 = 9;
 const SPL_TOKEN_PROGRAM_ID: Pubkey =
     anchor_lang::solana_program::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 /// SPL token account layout: mint(32), owner(32), amount(8), ...
+const TOKEN_ACCOUNT_MINT_OFFSET: usize = 0;
 const TOKEN_ACCOUNT_OWNER_OFFSET: usize = 32;
 const TOKEN_ACCOUNT_AMOUNT_OFFSET: usize = 64;
 
@@ -147,10 +149,16 @@ pub mod spl_token_forwarder {
     ) -> Result<()> {
         let config = &ctx.accounts.config;
 
-        // The instructions sysvar holds only top-level instructions, so
-        // during a CPI the current instruction is the caller's. A direct
-        // call sees this program's own id and is rejected. This is the
-        // unforgeable analogue of EVM's msg.sender == _PROTOCOL_ADAPTER.
+        // The instructions sysvar holds only top-level instructions, so it
+        // names the program of the transaction-level instruction this call
+        // descends from. That program is the immediate caller only when this
+        // call runs one level below it; deeper, another program invoked us.
+        // Together the two checks are the analogue of EVM's
+        // msg.sender == _PROTOCOL_ADAPTER.
+        require!(
+            get_stack_height() == TRANSACTION_LEVEL_STACK_HEIGHT + 1,
+            ErrorCode::UnauthorizedCaller
+        );
         let ix_sysvar_info = &ctx.accounts.ix_sysvar;
         let current_ix_index = ix_sysvar::load_current_index_checked(ix_sysvar_info)
             .map_err(|_| ErrorCode::UnauthorizedCaller)?;
@@ -195,7 +203,8 @@ pub mod spl_token_forwarder {
             return Err(ErrorCode::InsufficientRemainingAccounts.into());
         };
 
-        require_token_account_owner(recipient_ata, &withdraw.recipient)?;
+        require_token_account(escrow_ata, &withdraw.token_mint, escrow_pda.key)?;
+        require_token_account(recipient_ata, &withdraw.token_mint, &withdraw.recipient)?;
         transfer_signed_by_escrow(
             ctx.program_id,
             &withdraw.token_mint,
@@ -241,8 +250,10 @@ pub mod spl_token_forwarder {
     }
 
     /// Drain a mint's escrow to the recipient and close the escrow token
-    /// account; its rent goes to the committee.
+    /// account; its rent goes to the committee. Requires the adapter to be
+    /// stopped.
     pub fn close_escrow(ctx: Context<CloseEscrow>) -> Result<()> {
+        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         let token_mint_key = ctx.accounts.token_mint.key();
         let escrow_seeds: &[&[u8]] = &[
             ESCROW_SEED,
@@ -251,6 +262,11 @@ pub mod spl_token_forwarder {
         ];
         let signer_seeds = &[escrow_seeds];
 
+        require_token_account(
+            &ctx.accounts.escrow_ata,
+            &token_mint_key,
+            ctx.accounts.escrow_pda.key,
+        )?;
         let balance = token_account_amount(&ctx.accounts.escrow_ata)?;
         if balance > 0 {
             transfer_signed_by_escrow(
@@ -282,15 +298,18 @@ pub mod spl_token_forwarder {
     }
 
     /// Close the config PDA; its rent goes to the committee. Call last.
-    pub fn close_config(_ctx: Context<CloseConfig>) -> Result<()> {
+    /// Requires the adapter to be stopped.
+    pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {
+        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         Ok(())
     }
 
     /// Close the nonce bitmaps passed as remaining accounts; their rent goes
-    /// to the committee.
+    /// to the committee. Requires the adapter to be stopped.
     pub fn close_nonce_bitmaps_batch<'info>(
         ctx: Context<'_, '_, 'info, 'info, CloseNonceBitmaps<'info>>,
     ) -> Result<()> {
+        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         for bitmap in ctx.remaining_accounts {
             Account::<NonceBitmap>::try_from(bitmap)
                 .map_err(|_| ErrorCode::InvalidNonceBitmapPda)?
@@ -308,18 +327,37 @@ fn token_account_amount(token_account: &AccountInfo) -> Result<u64> {
     Ok(u64::from_le_bytes(amount.try_into().unwrap()))
 }
 
-/// The destination of a forwarded transfer is chosen by the submitter, not
-/// by the proof; it must belong to the party the proof-bound input names.
-fn require_token_account_owner(token_account: &AccountInfo, owner: &Pubkey) -> Result<()> {
+/// Token accounts of a forwarded transfer are chosen by the submitter, not
+/// by the proof, and SPL Transfer checks only that source and destination
+/// share a mint. Each must hold the mint the input names and belong to the
+/// party the transfer names: the escrow on its side, the user or the
+/// recipient on the other.
+fn require_token_account(token_account: &AccountInfo, mint: &Pubkey, owner: &Pubkey) -> Result<()> {
     let data = token_account.try_borrow_data()?;
-    let actual = data
-        .get(TOKEN_ACCOUNT_OWNER_OFFSET..TOKEN_ACCOUNT_OWNER_OFFSET + 32)
-        .ok_or(ErrorCode::InvalidTokenAccountData)?;
-    if actual != owner.as_ref() {
+    let field = |offset: usize| -> Result<Pubkey> {
+        let bytes: [u8; 32] = data
+            .get(offset..offset + 32)
+            .ok_or(ErrorCode::InvalidTokenAccountData)?
+            .try_into()
+            .unwrap();
+        Ok(Pubkey::new_from_array(bytes))
+    };
+    let actual_mint = field(TOKEN_ACCOUNT_MINT_OFFSET)?;
+    if actual_mint != *mint {
+        msg!(
+            "Token account {} holds mint {}, expected {}",
+            token_account.key(),
+            actual_mint,
+            mint
+        );
+        return Err(ErrorCode::WrongTokenAccountMint.into());
+    }
+    let actual_owner = field(TOKEN_ACCOUNT_OWNER_OFFSET)?;
+    if actual_owner != *owner {
         msg!(
             "Token account {} is owned by {}, expected {}",
             token_account.key(),
-            Pubkey::new_from_array(actual.try_into().unwrap()),
+            actual_owner,
             owner
         );
         return Err(ErrorCode::WrongTokenAccountOwner.into());
@@ -327,9 +365,10 @@ fn require_token_account_owner(token_account: &AccountInfo, owner: &Pubkey) -> R
     Ok(())
 }
 
-/// Both emergency instructions require the adapter to be stopped. Mirrors
-/// EVM's _checkEmergencyStopped(): the state account's address derives from
-/// the configured adapter, and the lifecycle is read through the adapter's type.
+/// Every committee and emergency-caller instruction requires the adapter to
+/// be stopped. Mirrors EVM's _checkEmergencyStopped(): the state account's
+/// address derives from the configured adapter, and the lifecycle is read
+/// through the adapter's type.
 fn require_stopped_adapter(config: &Config, pa_state: &AccountInfo) -> Result<()> {
     require!(
         pa_state.key() == derive_pa_state_pda(&config.protocol_adapter).0,
@@ -472,9 +511,11 @@ fn execute_wrap<'info>(
         return Err(ErrorCode::NonceAlreadyUsed.into());
     }
 
-    // The proof binds the mint (through the escrow PDA) but not the
-    // destination account; it must be one the escrow authority owns.
-    require_token_account_owner(escrow_ata, escrow_pda.key)?;
+    // Both accounts are bound to the input's mint: the source to the signing
+    // user, as Permit2 transfers from the signing owner; the destination to
+    // the escrow.
+    require_token_account(user_ata, &wrap.token_mint, &wrap.user)?;
+    require_token_account(escrow_ata, &wrap.token_mint, escrow_pda.key)?;
 
     ed25519::verify_ed25519_instruction(
         &ctx.accounts.ix_sysvar,
@@ -517,7 +558,8 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         return Err(ErrorCode::InsufficientRemainingAccounts.into());
     };
 
-    require_token_account_owner(recipient_ata, &unwrap.recipient)?;
+    require_token_account(escrow_ata, &unwrap.token_mint, escrow_pda.key)?;
+    require_token_account(recipient_ata, &unwrap.token_mint, &unwrap.recipient)?;
     transfer_signed_by_escrow(
         ctx.program_id,
         &unwrap.token_mint,
@@ -646,7 +688,7 @@ pub struct CloseEscrow<'info> {
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,
 
-    /// CHECK: Ownership verified by the SPL Token program during the transfer and close CPIs.
+    /// CHECK: The handler requires it to hold the mint and belong to the escrow PDA (require_token_account).
     #[account(mut)]
     pub escrow_ata: AccountInfo<'info>,
 
@@ -664,6 +706,9 @@ pub struct CloseEscrow<'info> {
     /// CHECK: Verified by address constraint.
     #[account(address = SPL_TOKEN_PROGRAM_ID)]
     pub token_program: AccountInfo<'info>,
+
+    /// CHECK: Checked by require_stopped_adapter in the handler.
+    pub pa_state: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
@@ -680,6 +725,9 @@ pub struct CloseConfig<'info> {
         close = authority
     )]
     pub config: Account<'info, Config>,
+
+    /// CHECK: Checked by require_stopped_adapter in the handler.
+    pub pa_state: AccountInfo<'info>,
 }
 
 #[derive(Accounts)]
@@ -693,4 +741,7 @@ pub struct CloseNonceBitmaps<'info> {
 
     #[account(seeds = [CONFIG_SEED], bump = config.bump)]
     pub config: Account<'info, Config>,
+
+    /// CHECK: Checked by require_stopped_adapter in the handler.
+    pub pa_state: AccountInfo<'info>,
 }

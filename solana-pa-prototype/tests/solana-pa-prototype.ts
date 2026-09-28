@@ -62,6 +62,7 @@ import {
   deriveProgramDataPda,
   deriveRootMarkerPda,
   EMERGENCY_COMMITTEE_LABEL,
+  approvedTokenAccount,
   assertRejects,
   compileV0,
   deriveConfigPda,
@@ -79,6 +80,9 @@ import {
   waitForSlotPast,
   closeAllMarkers,
   closeMarkersBatch,
+  closeAllNonceBitmaps,
+  closeConfig,
+  closeEscrow,
   emergencyStop,
   initializeAdapter,
   setEmergencyCaller,
@@ -3010,6 +3014,8 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     "spl_token_wrap_devnet_kind_table.json",
     "--spl-token-wrap --nonce-seed 22 --wrap-nonce 2 --kind-table tools/fixture-gen/kind_table_solana_devnet.json",
   );
+  // A program the adapter invokes, relaying an unwrap to this forwarder.
+  const relayFixture = requireFixture("batch_forwarder_relay.json", "--nonce-seed 23 --forwarder-relay");
   const wrap = wrapFixture.spl_token_wrap!;
   const unwrap = unwrapFixture.spl_token_unwrap!;
 
@@ -3108,18 +3114,24 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
   ];
 
-  const wrapSegment = (destination = escrowAta): AccountMeta[] => [
+  const wrapSegment = (destination = escrowAta, source = userAta): AccountMeta[] => [
     ...segmentHead,
-    { pubkey: userAta, isWritable: true, isSigner: false },
+    { pubkey: source, isWritable: true, isSigner: false },
     { pubkey: destination, isWritable: true, isSigner: false },
     { pubkey: escrowPda, isWritable: false, isSigner: false },
     { pubkey: nonceBitmapPda, isWritable: true, isSigner: false },
     { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
   ];
 
-  const unwrapSegment = (destination = recipientAta): AccountMeta[] => [
+  const unwrapSegment = (destination = recipientAta, source = escrowAta): AccountMeta[] => [
     ...segmentHead,
-    ...escrowTransferAccounts(escrowAta, destination, escrowPda),
+    ...escrowTransferAccounts(source, destination, escrowPda),
+  ];
+
+  const relaySegment = (): AccountMeta[] => [
+    { pubkey: testForwarderId, isWritable: false, isSigner: false },
+    ...segmentHead,
+    ...escrowTransferAccounts(escrowAta, recipientAta, escrowPda),
   ];
 
   /** The ed25519 instruction carrying the fixture's signature over its signed message. */
@@ -3232,6 +3244,40 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     );
   });
 
+  // The source account is chosen by the submitter, not by the proof. An
+  // account whose owner approved the escrow as delegate must not fund a
+  // wrap someone else signed: the wrap debits only the signing user.
+  it("rejects a wrap whose source the signing user does not own", async () => {
+    const otherAta = await approvedTokenAccount(provider.connection, funder, mint, user, escrowPda, Number(wrapAmount));
+    const before = await balances(otherAta, escrowAta);
+
+    await assertRejects(
+      settleForwarderFixture(wrapFixture, wrapSegment(escrowAta, otherAta), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]),
+      /WrongTokenAccountOwner/
+    );
+
+    assert.deepEqual(await balances(otherAta, escrowAta), before, "no tokens move");
+  });
+
+  // Every transfer names its mint only through the input; SPL Transfer checks
+  // only that source and destination share a mint. A wrap of this mint must
+  // not move tokens of another one.
+  it("rejects a wrap that moves tokens of another mint", async () => {
+    const otherMint = await createMint(provider.connection, user, user.publicKey, null, 6);
+    const userOtherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, otherMint, user.publicKey)).address;
+    await mintTo(provider.connection, user, otherMint, userOtherAta, user, Number(wrapAmount));
+    await approve(provider.connection, user, userOtherAta, escrowPda, user, Number(wrapAmount));
+    const escrowOwnedOtherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, otherMint, escrowPda, true)).address;
+    const before = await balances(userOtherAta, escrowOwnedOtherAta, escrowAta);
+
+    await assertRejects(
+      settleForwarderFixture(wrapFixture, wrapSegment(escrowOwnedOtherAta, userOtherAta), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]),
+      /WrongTokenAccountMint/
+    );
+
+    assert.deepEqual(await balances(userOtherAta, escrowOwnedOtherAta, escrowAta), before, "no tokens move");
+  });
+
   // Mirrors ERC20Forwarder.t.sol: test_wrap_pulls_funds_from_user. The
   // first wrap on a word carries init_nonce_bitmap in the same transaction,
   // after the ed25519 instruction the wrap input points at (index 0).
@@ -3271,6 +3317,17 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // The recipient account is chosen by the submitter, not by the proof.
   it("rejects an unwrap to a token account the recipient does not own", async () => {
     await assertRejects(settleForwarderFixture(unwrapFixture, unwrapSegment(userAta), []), /WrongTokenAccountOwner/);
+  });
+
+  // The escrow PDA signs the release; as a delegate it could move any account
+  // that approved it. An unwrap pays only from an account the escrow owns.
+  it("rejects an unwrap whose source the escrow does not own", async () => {
+    const otherAta = await approvedTokenAccount(provider.connection, funder, mint, user, escrowPda, Number(unwrapAmount));
+    const before = await balances(otherAta, recipientAta);
+
+    await assertRejects(settleForwarderFixture(unwrapFixture, unwrapSegment(recipientAta, otherAta), []), /WrongTokenAccountOwner/);
+
+    assert.deepEqual(await balances(otherAta, recipientAta), before, "no tokens move");
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_unwrap_sends_funds_to_the_user
@@ -3316,6 +3373,45 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     }
     assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the empty table's commitment is restored");
   });
+
+  // The adapter invokes another program during a settlement, and that program
+  // calls this forwarder. Only the adapter itself may call it.
+  it("rejects a forward_call relayed by a program the adapter invokes", async () => {
+    const before = await balances(escrowAta, recipientAta);
+    assert.isTrue(before[0] > 0n, "the escrow holds tokens the relay names");
+
+    await assertRejects(settleForwarderFixture(relayFixture, relaySegment(), []), /UnauthorizedCaller/);
+
+    assert.deepEqual(await balances(escrowAta, recipientAta), before, "no tokens move");
+  });
+
+  // Mirrors EmergencyMigratableForwarderBase: the committee acts only once
+  // the adapter is stopped. Teardown while running would drain the escrow,
+  // forget used nonces or disable the forwarder under live resources.
+  it("rejects close_escrow while the adapter is running", async () => {
+    const before = await balances(escrowAta, recipientAta);
+    await assertRejects(
+      closeEscrow(forwarderProgram, configPda, emergencyCommittee.publicKey, paState, { mint, escrowPda, escrowAta, recipientAta })
+        .signers([emergencyCommittee])
+        .rpc(),
+      /ProtocolAdapterNotStopped/
+    );
+    assert.deepEqual(await balances(escrowAta, recipientAta), before, "no tokens move");
+  });
+
+  it("rejects close_nonce_bitmaps_batch while the adapter is running", async () => {
+    assert.isNotEmpty(await forwarderProgram.account.nonceBitmap.all(), "the wraps above created nonce bitmaps");
+    await assertRejects(
+      closeAllNonceBitmaps(forwarderProgram, configPda, emergencyCommittee.publicKey, paState, [emergencyCommittee]),
+      /ProtocolAdapterNotStopped/
+    );
+  });
+
+  it("rejects close_config while the adapter is running", () =>
+    assertRejects(
+      closeConfig(forwarderProgram, emergencyCommittee.publicKey, paState).signers([emergencyCommittee]).rpc(),
+      /ProtocolAdapterNotStopped/
+    ));
 
   after(() => funder.drainAll());
 });

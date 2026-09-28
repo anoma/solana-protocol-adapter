@@ -233,7 +233,7 @@ use ed25519_dalek::{Signer, SigningKey};
 use solana_pa::external_calls::encode_external_call;
 use solana_pa::state::PAStateAccount;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
-use test_forwarder::{MODE_FAIL, MODE_SILENT};
+use test_forwarder::{MODE_FAIL, MODE_RELAY, MODE_SILENT, RELAY_OK};
 use transfer_library::action::{self, ComplianceParams, Owner, TransferAction, Wrap, WrapAuth};
 use transfer_library::{TOKEN_TRANSFER_ELF, TOKEN_TRANSFER_ID};
 use transfer_witness::{LabelInfo, ValueInfo, WrapAuthInfo, AUTH_SIGNATURE_DOMAIN};
@@ -375,6 +375,7 @@ enum ForwarderMode {
     BlockTimeForwarder { output_mismatch: bool },
     TestForwarderFail,
     TestForwarderSilent,
+    TestForwarderRelay,
 }
 
 /// The aggregation carried by a transaction, or a clear error if it has none.
@@ -533,6 +534,34 @@ fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
         expected_output: vec![0x2a],
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
+    }))
+}
+
+/// Amount the relay fixture's unwrap names; the suite runs it once the escrow holds tokens.
+const RELAY_UNWRAP_AMOUNT: u64 = 1;
+
+/// A test-forwarder call relaying an unwrap to the SPL token forwarder under
+/// the transfer logic ref its config authorizes: the seeded mint, to the
+/// seeded recipient. Segment: test-forwarder, SPL forwarder program, config,
+/// instructions sysvar, escrow ATA, recipient ATA, escrow PDA, token program.
+fn test_forwarder_relay_payload_blob() -> Result<ExpirableBlob> {
+    let seeded_pubkey =
+        |label| Pubkey::new_from_array(seeded_keypair(label).verifying_key().to_bytes());
+    let unwrap = spl_token_forwarder::UnwrapInput {
+        token_mint: seeded_pubkey(MINT_SEED_LABEL),
+        amount: RELAY_UNWRAP_AMOUNT,
+        recipient: seeded_pubkey(RECIPIENT_SEED_LABEL),
+    };
+    let mut instruction_data = vec![MODE_RELAY];
+    instruction_data.extend_from_slice(TOKEN_TRANSFER_ID.as_bytes());
+    instruction_data.push(spl_token_forwarder::OP_UNWRAP);
+    instruction_data.extend_from_slice(&unwrap.to_bytes());
+    Ok(encode_external_call(&SolanaExternalCall {
+        program_id: test_forwarder::ID.to_bytes(),
+        instruction_data,
+        expected_output: vec![RELAY_OK],
+        output_mode: OutputMode::ReturnData,
+        num_accounts: 8,
     }))
 }
 
@@ -1177,6 +1206,7 @@ async fn generate_test_transaction_with_external_payload(
         }
         ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob()?,
         ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
+        ForwarderMode::TestForwarderRelay => test_forwarder_relay_payload_blob()?,
     };
     consumed_app_data.external_payload.push(external_blob);
     if multi_external_call && matches!(forwarder_mode, ForwarderMode::BlockTimeForwarder { .. }) {
@@ -1507,10 +1537,10 @@ fn finalize_and_write_fixture(
 /// Nonce byte reserved for the historical-root committer/consumer pair.
 /// Existing fixtures use 0 (default), 2 (output-mismatch), 3-7
 /// (`--nonce-seed`, see v2/v3/multi-call/forwarder-fail/forwarder-silent),
-/// 9-11 (transfer shape), and 20-22 (AnomaPay wrap, its replay, and the
+/// 9-11 (transfer shape), 20-22 (AnomaPay wrap, its replay, and the
 /// wrap proven against the solana-devnet kind table; the unwrap's
-/// nullifiers derive from the wrapped resource), so 8 avoids a
-/// `DuplicateNullifier` collision.
+/// nullifiers derive from the wrapped resource), and 23 (forwarder-relay),
+/// so 8 avoids a `DuplicateNullifier` collision.
 const HISTORICAL_ROOT_NONCE_BYTE: u8 = 8;
 
 /// Base nonce byte for the transfer-shape fixture's three actions (9-11;
@@ -1969,7 +1999,7 @@ fn dump_fixture(input: &Path) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen mockify <IN> <OUT>           Convert an existing fixture into its mock twin\n  fixture-gen refresh-fields <FIXTURE>     Re-derive fixture fields from tx_b64 in place (no proving)\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --spl-token-wrap         AnomaPay wrap proven with the transfer logic: the user's\n                           ed25519-authorized escrow deposit creates the owner's resource\n  --spl-token-unwrap       AnomaPay unwrap: the owner spends the wrapped resource, releasing\n                           the escrow to the recipient; needs --settled\n  --wrap-nonce N           (wrap) the forwarder nonce the user signs (default 1)\n  --kind-table PATH        Prove against this kind table instead of the committed\n                           empty one (kind_table.json); the PA must store its commitment\n  --settled FIXTURE        (unwrap) a fixture the suite settles before the unwrap, in\n                           settlement order, the wrap last; repeat per fixture\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --transfer-shape         Three single-unit actions with event-emitted payload blobs\n                           and no external calls (the captured mainnet transfer's shape);\n                           excludes the forwarder flags. Nonce bytes seed..seed+2 (default 9)\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof/zero_action/witness_delta variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent,\n    --spl-token-wrap, --spl-token-unwrap.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - mockify replaces only the aggregation seal of an existing fixture; use it for\n    imported fixtures whose proving inputs are not in this repo.\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen mockify <IN> <OUT>           Convert an existing fixture into its mock twin\n  fixture-gen refresh-fields <FIXTURE>     Re-derive fixture fields from tx_b64 in place (no proving)\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-relay        Test-forwarder relaying an unwrap to the SPL forwarder\n                           (the forwarder must reject a caller other than the adapter)\n  --spl-token-wrap         AnomaPay wrap proven with the transfer logic: the user's\n                           ed25519-authorized escrow deposit creates the owner's resource\n  --spl-token-unwrap       AnomaPay unwrap: the owner spends the wrapped resource, releasing\n                           the escrow to the recipient; needs --settled\n  --wrap-nonce N           (wrap) the forwarder nonce the user signs (default 1)\n  --kind-table PATH        Prove against this kind table instead of the committed\n                           empty one (kind_table.json); the PA must store its commitment\n  --settled FIXTURE        (unwrap) a fixture the suite settles before the unwrap, in\n                           settlement order, the wrap last; repeat per fixture\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --transfer-shape         Three single-unit actions with event-emitted payload blobs\n                           and no external calls (the captured mainnet transfer's shape);\n                           excludes the forwarder flags. Nonce bytes seed..seed+2 (default 9)\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof/zero_action/witness_delta variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent,\n    --forwarder-relay, --spl-token-wrap, --spl-token-unwrap.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - mockify replaces only the aggregation seal of an existing fixture; use it for\n    imported fixtures whose proving inputs are not in this repo.\n"
     );
 }
 
@@ -2170,11 +2200,11 @@ fn parse_args() -> Result<Command> {
                 debug_assumptions = true;
             }
             "--output-mismatch" | "--forwarder-fail" | "--forwarder-silent"
-            | "--spl-token-wrap" | "--spl-token-unwrap" => {
+            | "--forwarder-relay" | "--spl-token-wrap" | "--spl-token-unwrap" => {
                 if forwarder_mode.is_some() || anomapay.is_some() {
                     return Err(anyhow!(
                         "at most one of --output-mismatch, --forwarder-fail, --forwarder-silent, \
-                         --spl-token-wrap, --spl-token-unwrap may be set"
+                         --forwarder-relay, --spl-token-wrap, --spl-token-unwrap may be set"
                     ));
                 }
                 match flag {
@@ -2187,6 +2217,7 @@ fn parse_args() -> Result<Command> {
                     "--forwarder-silent" => {
                         forwarder_mode = Some(ForwarderMode::TestForwarderSilent)
                     }
+                    "--forwarder-relay" => forwarder_mode = Some(ForwarderMode::TestForwarderRelay),
                     "--spl-token-wrap" => {
                         anomapay = Some(GenerateShape::AnomaPayWrap {
                             nonce: ANOMAPAY_WRAP_NONCE,

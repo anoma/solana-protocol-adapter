@@ -10,6 +10,7 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import {
+  approve,
   createMint,
   getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
@@ -94,6 +95,27 @@ export function makeFunder(provider: anchor.AnchorProvider) {
       funded.length = 0;
     },
   };
+}
+
+/**
+ * A fresh party's token account of `mint`, holding `amount` minted by
+ * `mintAuthority` and approving `delegate` for all of it: an account a
+ * submitter could name in a transfer although its owner signed nothing.
+ */
+export async function approvedTokenAccount(
+  connection: Connection,
+  funder: ReturnType<typeof makeFunder>,
+  mint: PublicKey,
+  mintAuthority: Keypair,
+  delegate: PublicKey,
+  amount: number | bigint
+): Promise<PublicKey> {
+  const owner = Keypair.generate();
+  await funder.fund(owner, 1);
+  const ata = (await getOrCreateAssociatedTokenAccount(connection, owner, mint, owner.publicKey)).address;
+  await mintTo(connection, mintAuthority, mint, ata, mintAuthority, amount);
+  await approve(connection, owner, ata, delegate, owner, amount);
+  return ata;
 }
 
 /** A keypair every test file can rebuild from the same label. */
@@ -303,11 +325,15 @@ export function emergencyWithdraw(
     .remainingAccounts(escrowTransferAccounts(accounts.escrowAta, accounts.recipientAta, accounts.escrowPda));
 }
 
-/** `close_escrow` by `authority`, draining the escrow to `recipientAta`; callers add signers and send. */
+/**
+ * `close_escrow` by `authority`, draining the escrow to `recipientAta`;
+ * requires the adapter at `paState` to be stopped. Callers add signers and send.
+ */
 export function closeEscrow(
   forwarder: Program<SplTokenForwarder>,
   configPda: PublicKey,
   authority: PublicKey,
+  paState: PublicKey,
   accounts: { mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey }
 ) {
   return forwarder.methods.closeEscrow().accountsPartial({
@@ -318,6 +344,7 @@ export function closeEscrow(
     recipientAta: accounts.recipientAta,
     tokenMint: accounts.mint,
     tokenProgram: TOKEN_PROGRAM_ID,
+    paState,
   });
 }
 
@@ -331,22 +358,24 @@ export function setEmergencyCaller(
   return forwarder.methods.setEmergencyCaller(caller).accounts({ committee, paState });
 }
 
-/** `close_config` by the committee `authority`. */
-export function closeConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey) {
+/** `close_config` by the committee `authority`; requires the adapter at `paState` to be stopped. */
+export function closeConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey, paState: PublicKey) {
   return forwarder.methods
     .closeConfig()
-    .accountsPartial({ authority, config: deriveConfigPda(forwarder.programId)[0] });
+    .accountsPartial({ authority, config: deriveConfigPda(forwarder.programId)[0], paState });
 }
 
 /**
  * Close every nonce bitmap the forwarder owns, in batches, as the committee
- * `authority` (signing with `signers`, or the provider wallet when empty).
+ * `authority` (signing with `signers`, or the provider wallet when empty);
+ * requires the adapter at `paState` to be stopped.
  * Returns how many were closed.
  */
 export async function closeAllNonceBitmaps(
   forwarder: Program<SplTokenForwarder>,
   configPda: PublicKey,
   authority: PublicKey,
+  paState: PublicKey,
   signers: Keypair[]
 ): Promise<number> {
   const bitmaps = await forwarder.account.nonceBitmap.all();
@@ -354,7 +383,7 @@ export async function closeAllNonceBitmaps(
   for (let i = 0; i < bitmaps.length; i += BATCH_SIZE) {
     await forwarder.methods
       .closeNonceBitmapsBatch()
-      .accountsPartial({ authority, config: configPda })
+      .accountsPartial({ authority, config: configPda, paState })
       .remainingAccounts(
         bitmaps.slice(i, i + BATCH_SIZE).map(({ publicKey }) => ({ pubkey: publicKey, isWritable: true, isSigner: false }))
       )

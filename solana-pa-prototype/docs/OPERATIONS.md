@@ -191,11 +191,11 @@ STF_TOKEN_MINT=<mint> STF_RECIPIENT=<owner> STF_AMOUNT=<raw units> \
   ./scripts/dev.sh forwarder emergency-withdraw --cluster <c>                                # caller wallet
 ```
 
-`set-emergency-caller` refuses while the adapter is running and cannot be repeated. The committee can also drain and close an escrow outright with `drain-escrow`, at any time.
+`set-emergency-caller` refuses while the adapter is running and cannot be repeated. The committee can also drain and close an escrow outright with `drain-escrow`, but like every committee teardown command it refuses while the adapter is running.
 
 ### Retiring the forwarder
 
-`STF_TOKEN_MINT=<mint> ./scripts/dev.sh forwarder teardown --cluster <c>` (committee wallet) closes every nonce bitmap, drains and closes that mint's escrow to the committee, and closes the config, reclaiming their rent. Run it once per mint that has an escrow, then close the program with `teardown stf`.
+Once the adapter is stopped, `STF_TOKEN_MINT=<mint> ./scripts/dev.sh forwarder teardown --cluster <c>` (committee wallet) closes every nonce bitmap, drains and closes that mint's escrow to the committee, and closes the config, reclaiming their rent. Run it once per mint that has an escrow, then close the program with `teardown stf`.
 
 ## Sunsetting
 
