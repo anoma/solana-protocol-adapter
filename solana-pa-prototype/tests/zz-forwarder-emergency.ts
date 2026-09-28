@@ -6,13 +6,14 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
-import { approve, createAccount, getAccount, mintTo } from "@solana/spl-token";
+import { createAccount, getAccount } from "@solana/spl-token";
 import { assert } from "chai";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
   EMERGENCY_CALLER_LABEL,
   EMERGENCY_COMMITTEE_LABEL,
+  approvedTokenAccount,
   assertRejects,
   createFundedEscrow,
   deriveConfigPda,
@@ -125,11 +126,7 @@ describe("zz-forwarder-emergency (adapter stopped)", () => {
 
   // The escrow PDA signs the withdrawal; it pays only from an account the escrow owns.
   it("rejects a withdrawal whose source the escrow does not own", async () => {
-    const other = Keypair.generate();
-    await funder.fund(other, 1);
-    const otherAta = await createAccount(provider.connection, other, mint, other.publicKey);
-    await mintTo(provider.connection, authority, mint, otherAta, authority, 1000);
-    await approve(provider.connection, other, otherAta, escrowPda, other, 1000);
+    const otherAta = await approvedTokenAccount(provider.connection, funder, mint, authority, escrowPda, 1000);
     await assertRejects(
       emergencyWithdraw(
         forwarderProgram,

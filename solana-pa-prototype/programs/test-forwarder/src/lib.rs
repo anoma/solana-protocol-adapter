@@ -61,12 +61,10 @@ fn relay<'info>(accounts: &[AccountInfo<'info>], payload: &[u8]) -> Result<()> {
         program_id: *target.key,
         accounts: forwarded
             .iter()
-            .map(|a| {
-                if a.is_writable {
-                    AccountMeta::new(*a.key, false)
-                } else {
-                    AccountMeta::new_readonly(*a.key, false)
-                }
+            .map(|a| AccountMeta {
+                pubkey: *a.key,
+                is_signer: false,
+                is_writable: a.is_writable,
             })
             .collect(),
         data: crate::instruction::ForwardCall {

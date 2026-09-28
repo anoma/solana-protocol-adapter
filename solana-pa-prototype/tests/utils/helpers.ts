@@ -10,6 +10,7 @@ import {
   Transaction,
 } from "@solana/web3.js";
 import {
+  approve,
   createMint,
   getAssociatedTokenAddressSync,
   getOrCreateAssociatedTokenAccount,
@@ -94,6 +95,27 @@ export function makeFunder(provider: anchor.AnchorProvider) {
       funded.length = 0;
     },
   };
+}
+
+/**
+ * A fresh party's token account of `mint`, holding `amount` minted by
+ * `mintAuthority` and approving `delegate` for all of it: an account a
+ * submitter could name in a transfer although its owner signed nothing.
+ */
+export async function approvedTokenAccount(
+  connection: Connection,
+  funder: ReturnType<typeof makeFunder>,
+  mint: PublicKey,
+  mintAuthority: Keypair,
+  delegate: PublicKey,
+  amount: number | bigint
+): Promise<PublicKey> {
+  const owner = Keypair.generate();
+  await funder.fund(owner, 1);
+  const ata = (await getOrCreateAssociatedTokenAccount(connection, owner, mint, owner.publicKey)).address;
+  await mintTo(connection, mintAuthority, mint, ata, mintAuthority, amount);
+  await approve(connection, owner, ata, delegate, owner, amount);
+  return ata;
 }
 
 /** A keypair every test file can rebuild from the same label. */

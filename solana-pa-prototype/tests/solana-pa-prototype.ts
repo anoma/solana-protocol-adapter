@@ -62,6 +62,7 @@ import {
   deriveProgramDataPda,
   deriveRootMarkerPda,
   EMERGENCY_COMMITTEE_LABEL,
+  approvedTokenAccount,
   assertRejects,
   compileV0,
   deriveConfigPda,
@@ -3247,11 +3248,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // account whose owner approved the escrow as delegate must not fund a
   // wrap someone else signed: the wrap debits only the signing user.
   it("rejects a wrap whose source the signing user does not own", async () => {
-    const other = Keypair.generate();
-    await funder.fund(other, 1);
-    const otherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, other, mint, other.publicKey)).address;
-    await mintTo(provider.connection, user, mint, otherAta, user, Number(wrapAmount));
-    await approve(provider.connection, other, otherAta, escrowPda, other, Number(wrapAmount));
+    const otherAta = await approvedTokenAccount(provider.connection, funder, mint, user, escrowPda, Number(wrapAmount));
     const before = await balances(otherAta, escrowAta);
 
     await assertRejects(
@@ -3325,11 +3322,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // The escrow PDA signs the release; as a delegate it could move any account
   // that approved it. An unwrap pays only from an account the escrow owns.
   it("rejects an unwrap whose source the escrow does not own", async () => {
-    const other = Keypair.generate();
-    await funder.fund(other, 1);
-    const otherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, other, mint, other.publicKey)).address;
-    await mintTo(provider.connection, user, mint, otherAta, user, Number(unwrapAmount));
-    await approve(provider.connection, other, otherAta, escrowPda, other, Number(unwrapAmount));
+    const otherAta = await approvedTokenAccount(provider.connection, funder, mint, user, escrowPda, Number(unwrapAmount));
     const before = await balances(otherAta, recipientAta);
 
     await assertRejects(settleForwarderFixture(unwrapFixture, unwrapSegment(recipientAta, otherAta), []), /WrongTokenAccountOwner/);
