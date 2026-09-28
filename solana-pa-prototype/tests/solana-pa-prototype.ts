@@ -3108,9 +3108,9 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
   ];
 
-  const wrapSegment = (destination = escrowAta): AccountMeta[] => [
+  const wrapSegment = (destination = escrowAta, source = userAta): AccountMeta[] => [
     ...segmentHead,
-    { pubkey: userAta, isWritable: true, isSigner: false },
+    { pubkey: source, isWritable: true, isSigner: false },
     { pubkey: destination, isWritable: true, isSigner: false },
     { pubkey: escrowPda, isWritable: false, isSigner: false },
     { pubkey: nonceBitmapPda, isWritable: true, isSigner: false },
@@ -3230,6 +3230,25 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       settleForwarderFixture(wrapFixture, wrapSegment(recipientAta), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]),
       /WrongTokenAccountOwner/
     );
+  });
+
+  // The source account is chosen by the submitter, not by the proof. An
+  // account whose owner approved the escrow as delegate must not fund a
+  // wrap someone else signed: the wrap debits only the signing user.
+  it("rejects a wrap whose source the signing user does not own", async () => {
+    const other = Keypair.generate();
+    await funder.fund(other, 1);
+    const otherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, other, mint, other.publicKey)).address;
+    await mintTo(provider.connection, user, mint, otherAta, user, Number(wrapAmount));
+    await approve(provider.connection, other, otherAta, escrowPda, other, Number(wrapAmount));
+    const before = await balances(otherAta, escrowAta);
+
+    await assertRejects(
+      settleForwarderFixture(wrapFixture, wrapSegment(escrowAta, otherAta), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]),
+      /WrongTokenAccountOwner/
+    );
+
+    assert.deepEqual(await balances(otherAta, escrowAta), before, "no tokens move");
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_wrap_pulls_funds_from_user. The

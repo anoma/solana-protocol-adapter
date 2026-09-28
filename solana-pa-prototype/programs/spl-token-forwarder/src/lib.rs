@@ -472,8 +472,11 @@ fn execute_wrap<'info>(
         return Err(ErrorCode::NonceAlreadyUsed.into());
     }
 
-    // The proof binds the mint (through the escrow PDA) but not the
-    // destination account; it must be one the escrow authority owns.
+    // The proof binds the mint (through the escrow PDA) but neither token
+    // account. The source must belong to the user whose signature authorizes
+    // the wrap, as Permit2 transfers from the signing owner; the destination
+    // must be one the escrow authority owns.
+    require_token_account_owner(user_ata, &wrap.user)?;
     require_token_account_owner(escrow_ata, escrow_pda.key)?;
 
     ed25519::verify_ed25519_instruction(
