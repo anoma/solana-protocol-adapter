@@ -20,7 +20,6 @@ pub struct Config {
     pub emergency_committee: Pubkey,
     /// Emergency caller set by committee (zero = not set)
     pub emergency_caller: Pubkey,
-    pub bump: u8,
 }
 
 /// Whether the Protocol Adapter is emergency stopped, read from its state
@@ -39,6 +38,12 @@ pub fn derive_pa_state_pda(pa_program_id: &Pubkey) -> (Pubkey, u8) {
 }
 
 pub const CONFIG_SEED: &[u8] = b"config";
+/// The config's address, derived at compile time: `initialize` creates the
+/// config only at this canonical PDA, so checking an account against it
+/// costs no PDA derivation.
+pub const CONFIG_PDA: Pubkey = Pubkey::new_from_array(
+    anchor_lang::derive_program_address(&[CONFIG_SEED], &crate::ID_CONST.to_bytes()).0,
+);
 /// Escrow authority PDA, one per token mint.
 pub const ESCROW_SEED: &[u8] = b"escrow";
 /// Nonce bitmap PDA, one per user per 256-nonce word.
@@ -54,11 +59,30 @@ pub const NONCES_PER_WORD: u64 = 256;
 #[derive(InitSpace, Default)]
 pub struct NonceBitmap {
     pub bits: [u8; 32],
+    /// The canonical bump of the bitmap's address, stored by `init_nonce_bitmap`.
+    pub bump: u8,
 }
 
 impl NonceBitmap {
-    /// Account size: Anchor discriminator plus the word.
+    /// Account size: Anchor discriminator, the word, and the bump.
     pub const ACCOUNT_SIZE: usize = 8 + Self::INIT_SPACE;
+
+    /// Whether `key` is the address of `user`'s word `word_index` under the
+    /// stored bump. `init_nonce_bitmap` creates bitmaps only at the canonical
+    /// address and stores its bump, so this recognizes exactly that bitmap
+    /// without searching for the bump.
+    pub fn is_at(&self, key: &Pubkey, program_id: &Pubkey, user: &Pubkey, word_index: u64) -> bool {
+        Pubkey::create_program_address(
+            &[
+                NONCE_BITMAP_SEED,
+                user.as_ref(),
+                &word_index.to_le_bytes(),
+                &[self.bump],
+            ],
+            program_id,
+        )
+        .is_ok_and(|address| address == *key)
+    }
 
     pub fn is_used(&self, bit_position: u8) -> bool {
         let byte_index = (bit_position / 8) as usize;
@@ -76,15 +100,6 @@ impl NonceBitmap {
 /// The escrow authority for a token mint: the PDA that owns the escrow token account.
 pub fn derive_escrow_pda(program_id: &Pubkey, token_mint: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[ESCROW_SEED, token_mint.as_ref()], program_id)
-}
-
-pub fn derive_nonce_bitmap_pda(
-    program_id: &Pubkey,
-    user: &Pubkey,
-    word_index: u64,
-) -> (Pubkey, u8) {
-    let word_bytes = word_index.to_le_bytes();
-    Pubkey::find_program_address(&[NONCE_BITMAP_SEED, user.as_ref(), &word_bytes], program_id)
 }
 
 /// The bitmap word a nonce lives in and its bit within that word.

@@ -102,7 +102,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   const wrapAmount = BigInt(wrap.amount);
   const wrapNonce = BigInt(wrap.nonce);
   const unwrapAmount = BigInt(unwrap.amount);
-  const [nonceBitmapPda] = deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, wrapNonce);
+  const [nonceBitmapPda, nonceBitmapBump] = deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, wrapNonce);
   assert.equal(wrapReplayFixture.spl_token_wrap!.nonce, wrap.nonce, "the replay fixture reuses the wrap nonce");
   assert.equal(wrap.mint_seed_label, unwrap.mint_seed_label, "both fixtures must name the same mint");
 
@@ -388,6 +388,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const bitmap = await forwarderProgram.account.nonceBitmap.fetch(nonceBitmapPda);
     const bit = Number(wrapNonce % NONCES_PER_WORD);
     assert.ok(bitmap.bits[bit >> 3] & (1 << (bit & 7)), "the wrap's nonce is marked used");
+    assert.equal(bitmap.bump, nonceBitmapBump, "init_nonce_bitmap stores the canonical bump");
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_wrap_reverts_if_the_signature_was_already_used

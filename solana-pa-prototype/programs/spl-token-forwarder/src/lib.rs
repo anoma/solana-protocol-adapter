@@ -103,7 +103,6 @@ pub mod spl_token_forwarder {
         config.logic_ref = logic_ref;
         config.emergency_committee = emergency_committee;
         config.emergency_caller = Pubkey::default();
-        config.bump = ctx.bumps.config;
         Ok(())
     }
 
@@ -130,10 +129,11 @@ pub mod spl_token_forwarder {
     /// wrap itself; a submitter sends this instruction ahead of settlement
     /// when the word's bitmap is missing.
     pub fn init_nonce_bitmap(
-        _ctx: Context<InitNonceBitmap>,
+        ctx: Context<InitNonceBitmap>,
         _user: Pubkey,
         _word_index: u64,
     ) -> Result<()> {
+        ctx.accounts.nonce_bitmap.bump = ctx.bumps.nonce_bitmap;
         Ok(())
     }
 
@@ -486,11 +486,6 @@ fn execute_wrap<'info>(ctx: &Context<'info, ForwardCall<'info>>, input: &[u8]) -
 
     // Reject replays before the signature check, which costs more.
     let (word_index, bit_position) = nonce_to_word_and_bit(wrap.nonce);
-    let (expected_bitmap_pda, _) = derive_nonce_bitmap_pda(ctx.program_id, &wrap.user, word_index);
-    require!(
-        nonce_bitmap_pda.key() == expected_bitmap_pda,
-        ErrorCode::InvalidNonceBitmapPda
-    );
     // The bitmap must already exist (init_nonce_bitmap); the adapter's CPI
     // carries no signer that could pay for creating it here.
     let mut nonce_bitmap = Account::<NonceBitmap>::try_from(nonce_bitmap_pda).map_err(|_| {
@@ -502,6 +497,10 @@ fn execute_wrap<'info>(ctx: &Context<'info, ForwardCall<'info>>, input: &[u8]) -
         );
         ErrorCode::NonceBitmapMissing
     })?;
+    require!(
+        nonce_bitmap.is_at(nonce_bitmap_pda.key, ctx.program_id, &wrap.user, word_index),
+        ErrorCode::InvalidNonceBitmapPda
+    );
     if nonce_bitmap.is_used(bit_position) {
         msg!("Nonce {} already used for user {}", wrap.nonce, wrap.user);
         return Err(ErrorCode::NonceAlreadyUsed.into());
@@ -595,7 +594,7 @@ pub struct Initialize<'info> {
 pub struct SetLogicRef<'info> {
     pub authority: Signer<'info>,
 
-    #[account(mut, seeds = [CONFIG_SEED], bump = config.bump)]
+    #[account(mut, address = CONFIG_PDA)]
     pub config: Account<'info, Config>,
 
     /// The program account proves `program_data` is this program's own
@@ -631,7 +630,7 @@ pub struct InitNonceBitmap<'info> {
 /// as remaining accounts.
 #[derive(Accounts)]
 pub struct ForwardCall<'info> {
-    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    #[account(address = CONFIG_PDA)]
     pub config: Account<'info, Config>,
 
     /// CHECK: Validated via address constraint
@@ -645,8 +644,7 @@ pub struct ForwardEmergencyCall<'info> {
     pub caller: Signer<'info>,
 
     #[account(
-        seeds = [CONFIG_SEED],
-        bump = config.bump,
+        address = CONFIG_PDA,
         constraint = config.emergency_caller != Pubkey::default() @ ErrorCode::EmergencyCallerNotSet,
         constraint = config.emergency_caller == caller.key() @ ErrorCode::UnauthorizedCaller,
     )]
@@ -662,8 +660,7 @@ pub struct SetEmergencyCaller<'info> {
 
     #[account(
         mut,
-        seeds = [CONFIG_SEED],
-        bump = config.bump,
+        address = CONFIG_PDA,
         constraint = config.emergency_committee == committee.key() @ ErrorCode::UnauthorizedCaller
     )]
     pub config: Account<'info, Config>,
@@ -681,7 +678,7 @@ pub struct CloseEscrow<'info> {
     )]
     pub authority: Signer<'info>,
 
-    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    #[account(address = CONFIG_PDA)]
     pub config: Account<'info, Config>,
 
     /// CHECK: The handler requires it to hold the mint and belong to the escrow PDA (require_token_account).
@@ -715,8 +712,7 @@ pub struct CloseConfig<'info> {
 
     #[account(
         mut,
-        seeds = [CONFIG_SEED],
-        bump = config.bump,
+        address = CONFIG_PDA,
         constraint = config.emergency_committee == authority.key() @ ErrorCode::UnauthorizedCaller,
         close = authority
     )]
@@ -735,7 +731,7 @@ pub struct CloseNonceBitmaps<'info> {
     )]
     pub authority: Signer<'info>,
 
-    #[account(seeds = [CONFIG_SEED], bump = config.bump)]
+    #[account(address = CONFIG_PDA)]
     pub config: Account<'info, Config>,
 
     /// CHECK: Checked by require_stopped_adapter in the handler.
