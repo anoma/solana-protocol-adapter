@@ -15,9 +15,15 @@ no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
 
 [dependencies]
 anchor-lang = { workspace = true }
 # RISC Zero's own receipt-claim digest: the claim the Groth16 verifier's
 # public inputs commit to.
 risc0-zkvm = { version = "3.0.3", default-features = false }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

@@ -31,7 +31,7 @@ pub mod test_forwarder {
 
     /// Matches the PA's `forward_call` discriminator.
     pub fn forward_call<'info>(
-        ctx: Context<'_, '_, 'info, 'info, ForwardCallAccounts>,
+        ctx: Context<'info, ForwardCallAccounts>,
         _logic_ref: [u8; 32],
         input: Vec<u8>,
     ) -> Result<()> {

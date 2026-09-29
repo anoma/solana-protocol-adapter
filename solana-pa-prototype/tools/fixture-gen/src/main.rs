@@ -1,4 +1,4 @@
-use anchor_lang::prelude::{AnchorDeserialize as BorshDeserialize, AnchorSerialize, Pubkey};
+use anchor_lang::prelude::{borsh, AnchorDeserialize as BorshDeserialize, Pubkey};
 use anoma_pa_solana_client::merkle::merkle_path;
 use anyhow::{anyhow, bail, Context, Result};
 use arm::action::Action;
@@ -412,7 +412,7 @@ fn mock_seal_bytes(claim: risc0_zkvm::sha::Digest) -> Result<Vec<u8>> {
             pi_c,
         },
     };
-    seal.try_to_vec().context("serialize mock Seal")
+    borsh::to_vec(&seal).context("serialize mock Seal")
 }
 
 /// Encode a dev-mode (Fake) aggregation receipt as a mock router seal,
@@ -1244,7 +1244,7 @@ fn generate_error_variant_fixtures(
         let mut seal = Seal::try_from_slice(&aggregation.proof)
             .context("decode Seal from aggregation proof bytes")?;
         seal.proof.pi_c[0] ^= 0xff;
-        aggregation.proof = seal.try_to_vec().context("serialize corrupted Seal")?;
+        aggregation.proof = borsh::to_vec(&seal).context("serialize corrupted Seal")?;
         write_variant("corrupt_seal.json", &corrupt_seal)?;
     }
 

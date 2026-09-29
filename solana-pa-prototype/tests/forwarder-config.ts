@@ -5,7 +5,7 @@
  * caller, so those behaviours are tested through settlement
  * (spl-token-wrap-unwrap.ts); the emergency flow is forwarder-emergency.ts.
  */
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { Keypair, PublicKey, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
 import {

@@ -122,7 +122,9 @@ case "${1:-}" in
     ;;
 
   verifier-idls)
-    run_in_project "./scripts/verifier-idls.sh"
+    # Runs in the flake's verifier-idls shell (Anchor 0.31 CLI + nightly),
+    # not the default shell; see flake.nix.
+    nix --extra-experimental-features 'nix-command flakes' develop "${REPO_DIR}#verifier-idls" --command bash --noprofile --norc -c "cd '$(resolve_project_workdir)' && ./scripts/verifier-idls.sh"
     ;;
 
   lock-sync)
@@ -154,7 +156,7 @@ case "${1:-}" in
     ;;
 
   clippy)
-    run_in_project "cargo clippy --workspace --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
+    run_in_project "cargo clippy --workspace --all-targets -- -D warnings && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings"
     ;;
 
   coverage)

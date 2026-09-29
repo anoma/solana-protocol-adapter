@@ -1,4 +1,4 @@
-use anchor_lang::prelude::{AnchorSerialize, Pubkey};
+use anchor_lang::prelude::Pubkey;
 
 /// Declare an `AccountInfo` with owned backing storage via name-shadowing.
 ///
@@ -18,7 +18,6 @@ macro_rules! make_account_info {
             &mut $name.1,
             $owner,
             $executable,
-            0,
         );
     };
 }
@@ -40,7 +39,6 @@ macro_rules! make_account_info_with_data {
             &mut $name.1,
             $owner,
             $executable,
-            0,
         );
     };
 }
@@ -172,7 +170,7 @@ pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
         proof,
     };
 
-    seal.try_to_vec().unwrap()
+    borsh::to_vec(&seal).unwrap()
 }
 
 /// Variable-depth tree starting at depth 1 (capacity = 2 leaves).

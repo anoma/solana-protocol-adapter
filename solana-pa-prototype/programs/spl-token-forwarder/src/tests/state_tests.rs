@@ -5,7 +5,7 @@ use crate::state::{
     WrapMessage, NONCES_PER_WORD, SIGNED_MESSAGE_LEN,
 };
 use anchor_lang::prelude::Pubkey;
-use anchor_lang::{AccountSerialize, AnchorSerialize};
+use anchor_lang::AccountSerialize;
 use protocol_adapter::state::{PALifecycle, PAStateAccount};
 
 /// The field-by-field hash is sha256 of the message's 120-byte Borsh encoding.
@@ -19,12 +19,9 @@ fn wrap_message_hash_is_sha256_of_its_borsh_encoding() {
         deadline: -1_700_000_000,
         action_tree_root: [2u8; 32],
     };
-    let encoded = msg.try_to_vec().unwrap();
+    let encoded = anchor_lang::prelude::borsh::to_vec(&msg).unwrap();
     assert_eq!(encoded.len(), WrapMessage::SIZE);
-    assert_eq!(
-        msg.hash(),
-        anchor_lang::solana_program::hash::hash(&encoded).to_bytes()
-    );
+    assert_eq!(msg.hash(), solana_sha256_hasher::hash(&encoded).to_bytes());
 }
 
 #[test]

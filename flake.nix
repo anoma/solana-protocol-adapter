@@ -24,25 +24,40 @@
           };
           lib = pkgs.lib;
 
-          # Rust 1.93.0: pinned to match CI exactly. Anchor 0.31.1 builds
-          # fine on 1.85+ after its proc-macro2 fix.
+          # Rust 1.93.0: pinned to match CI exactly; Anchor 1.2.0 needs 1.89+.
           rustToolchain = pkgs.rust-bin.stable."1.93.0".default;
 
-          # Nightly toolchain needed only for Anchor IDL generation
-          # (anchor build calls `cargo +nightly` internally).
-          rustNightly = pkgs.rust-bin.nightly.latest.minimal.override {
-            extensions = [ "rust-src" ];
+          rustPlatform = pkgs.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
           };
 
-          # Wrapper so `cargo +nightly` dispatches to the Nix-provided
-          # nightly toolchain instead of relying on rustup.
-          cargoWrapper = pkgs.writeShellScriptBin "cargo" ''
-            if [ "''${1:-}" = "+nightly" ]; then
-              shift
-              exec env PATH="${rustNightly}/bin:$PATH" RUSTC="${rustNightly}/bin/rustc" "${rustNightly}/bin/cargo" "$@"
-            fi
-            exec "${rustToolchain}/bin/cargo" "$@"
-          '';
+          # nixos-25.05 ships anchor 0.31.1, and its rustc is below Anchor
+          # 1.2.0's MSRV, so the CLI is built here with the pinned toolchain.
+          anchorCli = rustPlatform.buildRustPackage (finalAttrs: {
+            pname = "anchor";
+            version = "1.2.0";
+
+            src = pkgs.fetchFromGitHub {
+              owner = "otter-sec";
+              repo = "anchor";
+              tag = "v${finalAttrs.version}";
+              hash = "sha256-lbNAMEqRYkyRojs8r9pDZI36DTBzHuyP7LSvHd5cZi8=";
+              fetchSubmodules = true;
+            };
+
+            cargoHash = "sha256-8AX5G2j9KMjq6vaby4/RGXXSDHNwJsYiEYHJsoeDJaM=";
+
+            cargoBuildFlags = [ "-p" "anchor-cli" ];
+            cargoTestFlags = [ "-p" "anchor-cli" ];
+
+            meta = {
+              description = "Solana Sealevel Framework";
+              homepage = "https://github.com/otter-sec/anchor";
+              license = lib.licenses.asl20;
+              mainProgram = "anchor";
+            };
+          });
 
           solanaRelease = {
             "x86_64-linux" = {
@@ -181,12 +196,38 @@ EOF
         {
           packages.default = solanaToolchain;
 
+          # scripts/verifier-idls.sh builds the RISC Zero verifier IDLs from
+          # risc0-solana v3.0.0, an Anchor 0.31 workspace. Anchor 0.31's IDL
+          # build resolves that source's type aliases only under
+          # `cargo +nightly`, so it runs with nixos-25.05's anchor 0.31.1 and a
+          # nightly toolchain, apart from the default shell's Anchor 1.2.0.
+          devShells.verifier-idls =
+            let
+              rustNightly = pkgs.rust-bin.nightly.latest.minimal;
+              # `cargo +nightly` dispatches to the Nix-provided nightly
+              # toolchain instead of relying on rustup.
+              cargoWrapper = pkgs.writeShellScriptBin "cargo" ''
+                if [ "''${1:-}" = "+nightly" ]; then
+                  shift
+                  exec env PATH="${rustNightly}/bin:$PATH" RUSTC="${rustNightly}/bin/rustc" "${rustNightly}/bin/cargo" "$@"
+                fi
+                exec "${rustToolchain}/bin/cargo" "$@"
+              '';
+            in
+            pkgs.mkShell {
+              packages = [
+                cargoWrapper
+                rustToolchain
+                pkgs.anchor
+                pkgs.git
+              ];
+            };
+
           devShells.default = pkgs.mkShell {
             packages = [
               solanaToolchain
-              cargoWrapper
               rustToolchain
-              pkgs.anchor
+              anchorCli
               pkgs.cargo-risczero
               pkgs.nodejs_20
               pkgs.yarn
@@ -286,7 +327,10 @@ EOF
                 solana-keygen new --no-bip39-passphrase -o "$HOME/.config/solana/id.json"
               fi
 
-              solana config set --url localhost >/dev/null 2>&1 || true
+              if ! solana config set --url localhost >/dev/null; then
+                echo "ERROR: 'solana config set --url localhost' failed; see the message above." >&2
+                exit 1
+              fi
             '';
           };
         });

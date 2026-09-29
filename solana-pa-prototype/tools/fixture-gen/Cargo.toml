@@ -13,7 +13,7 @@ arm-gadgets = { package = "anoma-rm-risc0-gadgets", version = "=2.0.0-rc.6" }
 transfer_library = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "963d6cb574aa9bdecd167861acc20a3300712808" }
 transfer_witness = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "963d6cb574aa9bdecd167861acc20a3300712808" }
 base64 = "0.22"
-anchor-lang = "0.31.1"
+anchor-lang = "1.2.0"
 bincode = "1.3.3"
 hex = "0.4"
 k256 = "=0.13.3"

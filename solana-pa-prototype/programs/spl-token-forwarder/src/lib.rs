@@ -14,7 +14,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{get_stack_height, TRANSACTION_LEVEL_STACK_HEIGHT};
 use anchor_lang::solana_program::program::{invoke_signed, set_return_data};
-use anchor_lang::solana_program::sysvar::instructions as ix_sysvar;
+use solana_instructions_sysvar as ix_sysvar;
 
 pub mod ed25519;
 mod error;
@@ -69,8 +69,7 @@ pub const RESULT_SUCCESS: u8 = 1;
 
 const SPL_TRANSFER_OPCODE: u8 = 3;
 const SPL_CLOSE_ACCOUNT_OPCODE: u8 = 9;
-const SPL_TOKEN_PROGRAM_ID: Pubkey =
-    anchor_lang::solana_program::pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+const SPL_TOKEN_PROGRAM_ID: Pubkey = pubkey!("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 /// SPL token account layout: mint(32), owner(32), amount(8), ...
 const TOKEN_ACCOUNT_MINT_OFFSET: usize = 0;
 const TOKEN_ACCOUNT_OWNER_OFFSET: usize = 32;
@@ -143,7 +142,7 @@ pub mod spl_token_forwarder {
     /// Like EVM's ForwarderBase.forwardCall(), this does not check the
     /// adapter's stopped state: the adapter does not call forwarders once stopped.
     pub fn forward_call<'info>(
-        ctx: Context<'_, '_, 'info, 'info, ForwardCall<'info>>,
+        ctx: Context<'info, ForwardCall<'info>>,
         logic_ref: [u8; 32],
         input: Vec<u8>,
     ) -> Result<()> {
@@ -307,7 +306,7 @@ pub mod spl_token_forwarder {
     /// Close the nonce bitmaps passed as remaining accounts; their rent goes
     /// to the committee. Requires the adapter to be stopped.
     pub fn close_nonce_bitmaps_batch<'info>(
-        ctx: Context<'_, '_, 'info, 'info, CloseNonceBitmaps<'info>>,
+        ctx: Context<'info, CloseNonceBitmaps<'info>>,
     ) -> Result<()> {
         require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         for bitmap in ctx.remaining_accounts {
@@ -461,10 +460,7 @@ fn transfer_signed_by_escrow<'info>(
     Ok(())
 }
 
-fn execute_wrap<'info>(
-    ctx: &Context<'_, '_, 'info, 'info, ForwardCall<'info>>,
-    input: &[u8],
-) -> Result<()> {
+fn execute_wrap<'info>(ctx: &Context<'info, ForwardCall<'info>>, input: &[u8]) -> Result<()> {
     let wrap = WrapInput::try_from_bytes(input)?;
 
     // Permit2 / EIP-2612 semantics: allowed at the deadline, rejected after.
@@ -639,8 +635,8 @@ pub struct ForwardCall<'info> {
     pub config: Account<'info, Config>,
 
     /// CHECK: Validated via address constraint
-    #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
-    pub ix_sysvar: AccountInfo<'info>,
+    #[account(address = solana_instructions_sysvar::ID)]
+    pub ix_sysvar: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]

@@ -5,8 +5,8 @@
  * describe. Only spec files import this module: it resolves the workspace
  * programs when loaded, which the operator scripts importing ./index cannot.
  */
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
+import { Program } from "@anchor-lang/core";
 import {
   AddressLookupTableAccount,
   ComputeBudgetProgram,

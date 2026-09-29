@@ -41,7 +41,7 @@ pub fn claim_digest(image_id: &[u8; 32], journal_digest: &[u8; 32]) -> [u8; 32] 
 pub struct VerifyProof<'info> {
     /// CHECK: Only included to satisfy Anchor CPI requirements
     #[account(address = system_program::ID)]
-    pub system_program: AccountInfo<'info>,
+    pub system_program: UncheckedAccount<'info>,
 }
 
 #[program]

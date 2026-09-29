@@ -114,7 +114,7 @@ pub mod protocol_adapter {
     /// pa-evm's initializer, it starts on the empty kind table and announces
     /// it; `set_kind_table_commitment` installs any other table.
     pub fn initialize<'info>(
-        ctx: Context<'_, '_, '_, 'info, Initialize<'info>>,
+        ctx: Context<'info, Initialize<'info>>,
         verifier_router: Pubkey,
         proof_selector: [u8; 4],
     ) -> Result<()> {
@@ -127,7 +127,6 @@ pub mod protocol_adapter {
 
         events::EventCpi {
             authority: ctx.accounts.event_authority.to_account_info(),
-            bump: ctx.bumps.event_authority,
         }
         .emit(&KindTableCommitmentUpdatedEvent {
             kind_table_commitment: PAStateAccount::EMPTY_KIND_TABLE_COMMITMENT,
@@ -139,7 +138,7 @@ pub mod protocol_adapter {
 
     /// Settle a transaction: verify proofs, update commitment tree, mark nullifiers.
     pub fn settle<'info>(
-        ctx: Context<'_, '_, '_, 'info, Settle<'info>>,
+        ctx: Context<'info, Settle<'info>>,
         transaction_data: Vec<u8>,
     ) -> Result<()> {
         require!(
@@ -155,7 +154,6 @@ pub mod protocol_adapter {
 
         let events = events::EventCpi {
             authority: ctx.accounts.event_authority.to_account_info(),
-            bump: ctx.bumps.event_authority,
         };
 
         execute_settlement(
@@ -167,7 +165,7 @@ pub mod protocol_adapter {
             &ctx.accounts.system_program.to_account_info(),
             &ctx.accounts.new_root_marker.to_account_info(),
             VerifierAccounts {
-                router_program: ctx.accounts.verifier_router_program.to_account_info(),
+                router_program: ctx.accounts.verifier_router_program.key(),
                 router: ctx.accounts.router.to_account_info(),
                 verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
                 verifier_program: ctx.accounts.verifier_program.to_account_info(),
@@ -317,7 +315,7 @@ pub mod protocol_adapter {
 
     /// Execute settlement from a TxData account.
     pub fn settle_from_txdata<'info>(
-        ctx: Context<'_, '_, '_, 'info, SettleFromTxData<'info>>,
+        ctx: Context<'info, SettleFromTxData<'info>>,
         _upload_id: u64,
     ) -> Result<()> {
         require!(
@@ -338,7 +336,6 @@ pub mod protocol_adapter {
 
         let events = events::EventCpi {
             authority: ctx.accounts.event_authority.to_account_info(),
-            bump: ctx.bumps.event_authority,
         };
 
         execute_settlement(
@@ -350,7 +347,7 @@ pub mod protocol_adapter {
             &ctx.accounts.system_program.to_account_info(),
             &ctx.accounts.new_root_marker.to_account_info(),
             VerifierAccounts {
-                router_program: ctx.accounts.verifier_router_program.to_account_info(),
+                router_program: ctx.accounts.verifier_router_program.key(),
                 router: ctx.accounts.router.to_account_info(),
                 verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
                 verifier_program: ctx.accounts.verifier_program.to_account_info(),
@@ -471,9 +468,7 @@ pub mod protocol_adapter {
     /// the point during development and must be impossible in production, so this
     /// instruction is absent unless `dev-teardown` is enabled.
     #[cfg(feature = "dev-teardown")]
-    pub fn close_markers_batch<'info>(
-        ctx: Context<'_, '_, '_, 'info, CloseMarkersBatch<'info>>,
-    ) -> Result<()> {
+    pub fn close_markers_batch<'info>(ctx: Context<'info, CloseMarkersBatch<'info>>) -> Result<()> {
         require!(
             ctx.accounts.pa_state.lifecycle == PALifecycle::Stopped,
             PAError::NotStopped
@@ -513,7 +508,7 @@ fn marker_lamports(rent: &Rent) -> u64 {
 
 /// Accounts needed for the verifier_router CPI.
 struct VerifierAccounts<'info> {
-    router_program: AccountInfo<'info>,
+    router_program: Pubkey,
     router: AccountInfo<'info>,
     verifier_entry: AccountInfo<'info>,
     verifier_program: AccountInfo<'info>,
@@ -560,7 +555,7 @@ fn maybe_grow_account<'info>(
         let lamports_needed = new_minimum_balance - current_balance;
         anchor_lang::system_program::transfer(
             CpiContext::new(
-                system_program.clone(),
+                system_program.key(),
                 anchor_lang::system_program::Transfer {
                     from: payer.clone(),
                     to: pa_state_info.clone(),
@@ -681,7 +676,7 @@ fn execute_settlement<'info>(
             verifier_program: verifier.verifier_program.clone(),
             system_program: system_program.clone(),
         };
-        let cpi_ctx = CpiContext::new(verifier.router_program.clone(), cpi_accounts);
+        let cpi_ctx = CpiContext::new(verifier.router_program, cpi_accounts);
         verifier_router::cpi::verify(
             cpi_ctx,
             prepared.seal,

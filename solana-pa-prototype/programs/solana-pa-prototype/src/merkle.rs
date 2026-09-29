@@ -3,8 +3,8 @@
 //! The hash function and padding leaf must match arm-risc0's implementation exactly.
 
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::hash::hashv;
 use arm_core::Digest;
+use solana_sha256_hasher::hashv;
 
 use crate::error::PAError;
 use crate::state::PAStateAccount;
