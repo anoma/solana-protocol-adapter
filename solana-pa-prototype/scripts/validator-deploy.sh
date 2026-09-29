@@ -351,7 +351,7 @@ sync_program_ids() {
 
   # BTF ID also appears in the integration tests (fixture-gen reads the crate's ID)
   if [[ "$BTF_OLD" != "$BTF_ID" ]]; then
-    sed -i -E "s/blockTimeForwarderId = new PublicKey\(\"[^\"]+\"\)/blockTimeForwarderId = new PublicKey(\"${BTF_ID}\")/" tests/solana-pa-prototype.ts
+    sed -i -E "s/blockTimeForwarderId = new PublicKey\(\"[^\"]+\"\)/blockTimeForwarderId = new PublicKey(\"${BTF_ID}\")/" tests/utils/adapterSuite.ts
   fi
 
   # Nothing else carries the STF id: fixture-gen and the tests read the crate's ID.
@@ -368,7 +368,7 @@ sync_program_ids() {
 
   # TF ID also appears in the integration tests (fixture-gen reads the crate's ID)
   if [[ "$TF_OLD" != "$TF_ID" ]]; then
-    sed -i -E "s/testForwarderId = new PublicKey\(\"[^\"]+\"\)/testForwarderId = new PublicKey(\"${TF_ID}\")/" tests/solana-pa-prototype.ts
+    sed -i -E "s/testForwarderId = new PublicKey\(\"[^\"]+\"\)/testForwarderId = new PublicKey(\"${TF_ID}\")/" tests/utils/adapterSuite.ts
   fi
 
   MV_OLD="$(read_declare_id "programs/mock-verifier/src/lib.rs")"

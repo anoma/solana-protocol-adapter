@@ -1,0 +1,66 @@
+/**
+ * Initialization authority (AUTH-01): only the program's upgrade authority
+ * may initialize the adapter. Needs an adapter that was never initialized,
+ * which the file's fresh validator provides.
+ */
+import { Keypair } from "@solana/web3.js";
+import { assert } from "chai";
+import {
+  errorHaystack,
+} from "./utils";
+import {
+  buildInitialize,
+  paStateExists,
+  assertPAError,
+  useAdapterSuite,
+} from "./utils/adapterSuite";
+
+describe("protocol-adapter (AUTH-01: initialization authority)", () => {
+  const { funder } = useAdapterSuite();
+
+  it("rejects initialization by a non-upgrade-authority signer", async () => {
+    // Needs an adapter that was never initialized — otherwise the `init`
+    // constraint on `pa_state` would fail with
+    // "already in use" before the AUTH-01 constraint on `program_data` is
+    // ever reached, which would prove nothing about this fix.
+    assert.isFalse(
+      await paStateExists(),
+      "PAState is already initialized; the AUTH-01 rejection test needs a " +
+        "validator on which the adapter was never initialized"
+    );
+
+    const stranger = Keypair.generate();
+    await funder.fund(stranger, 2);
+
+    let caught: any = null;
+    try {
+      await buildInitialize(stranger.publicKey).signers([stranger]).rpc();
+    } catch (e: any) {
+      caught = e;
+    }
+    assert.isNotNull(
+      caught,
+      "expected initialization by a non-upgrade-authority signer to fail"
+    );
+
+    // The error must be our Unauthorized code, and it must have been raised by
+    // the `program_data` account's upgrade-authority constraint specifically —
+    // not by account resolution, not by the `program` constraint, and not by
+    // any earlier check. Anchor names the offending account in its log line,
+    // which is what distinguishes "rejected for the right reason" from
+    // "rejected before the constraint was ever evaluated".
+    assertPAError(caught, "Unauthorized");
+    assert.match(
+      errorHaystack(caught),
+      /AnchorError caused by account: program_data/,
+      "Unauthorized must originate from the program_data upgrade-authority " +
+        `constraint. Got:\n${errorHaystack(caught)}`
+    );
+
+    // The rejected transaction must not have left PAState initialized.
+    assert.isFalse(
+      await paStateExists(),
+      "PAState must remain uninitialized after the rejected call"
+    );
+  });
+});

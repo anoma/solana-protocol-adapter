@@ -246,7 +246,7 @@ PYEOF
     echo "  anchor-test [--cluster <c>] [--mode <real|mock>] [spec file...]"
     echo "               Local: full deterministic integration flow (default),"
     echo "               each spec file on its own fresh validator; spec files"
-    echo "               (e.g. tests/01-spl-token-forwarder.ts) restrict the run."
+    echo "               (e.g. tests/settle.ts) restrict the run."
     echo "               devnet/mainnet: cluster-safe subset against deployed programs"
     echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
     echo "  regen-fixtures <real|mock>"

@@ -43,7 +43,6 @@ export type Fixture = {
   aggregation_strategy: string;
   aggregation_proof_type: string;
   selector: string; // "0x73c457ba" format
-  forwarder_type?: string;
   tx_b64: string;
   tx_tampered_b64?: string;
   consumed_nullifiers_b64: string[];

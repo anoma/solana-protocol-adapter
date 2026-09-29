@@ -1,43 +1,38 @@
 /**
- * SPL token forwarder emergency flow. Runs after the adapter suite, whose
- * final test stops the adapter for good: the committee names an emergency
- * caller, who withdraws from escrow through forward_emergency_call.
+ * SPL token forwarder emergency flow on a stopped adapter: the committee
+ * names an emergency caller, who withdraws from escrow through
+ * forward_emergency_call. The before hook initializes the adapter and the
+ * forwarder config (no emergency caller), then stops the adapter.
  */
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { createAccount, getAccount } from "@solana/spl-token";
 import { assert } from "chai";
-import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
-  EMERGENCY_CALLER_LABEL,
-  EMERGENCY_COMMITTEE_LABEL,
   approvedTokenAccount,
   assertRejects,
   createFundedEscrow,
   deriveConfigPda,
-  derivePaStatePda,
   emergencyWithdraw,
   makeFunder,
-  seededKeypair,
+  randomRef,
   setEmergencyCaller,
 } from "./utils";
+import {
+  ensureAdapterInitialized,
+  forwarderProgram,
+  initForwarderConfig,
+  paState,
+  provider,
+  stopAdapter,
+} from "./utils/adapterSuite";
 
-describe("zz-forwarder-emergency (adapter stopped)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const paProgram = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
-  const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
-
-  const [paState] = derivePaStatePda(paProgram.programId);
+describe("forwarder emergency (adapter stopped)", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
   const funder = makeFunder(provider);
 
   const authority = Keypair.generate();
-  const emergencyCommittee = seededKeypair(EMERGENCY_COMMITTEE_LABEL);
-  const emergencyCaller = seededKeypair(EMERGENCY_CALLER_LABEL);
+  const emergencyCommittee = Keypair.generate();
+  const emergencyCaller = Keypair.generate();
   const recipient = Keypair.generate();
 
   let mint: PublicKey;
@@ -51,12 +46,9 @@ describe("zz-forwarder-emergency (adapter stopped)", () => {
     await funder.fund(emergencyCommittee, 1);
     await funder.fund(emergencyCaller, 1);
 
-    const [state, config] = await Promise.all([
-      paProgram.account.paStateAccount.fetch(paState),
-      provider.connection.getAccountInfo(configPda),
-    ]);
-    assert.deepEqual(state.lifecycle, { stopped: {} }, "the adapter suite's final emergency-stop test must have run before this file");
-    assert.ok(config, "01-spl-token-forwarder.ts must have initialized the forwarder config");
+    await ensureAdapterInitialized();
+    await initForwarderConfig(randomRef(), emergencyCommittee.publicKey);
+    await stopAdapter();
 
     ({ mint, escrowPda, escrowAta } = await createFundedEscrow(provider, forwarderProgram.programId, authority, 100_000_000n));
     recipientAta = await createAccount(provider.connection, recipient, mint, recipient.publicKey);

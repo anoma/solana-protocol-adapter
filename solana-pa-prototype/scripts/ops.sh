@@ -98,8 +98,6 @@ Flags:
                    (close_markers_batch enabled). Refused on mainnet.
   --prebuilt       deploy/upgrade: ship the existing target/deploy artifacts
                    without rebuilding (for verify-build output)
-  --grep <re>      test (devnet/mainnet): run the describe blocks matching
-                   this regex instead of the cluster-safe allowlist
   --mode <m>       test: real (default) runs the suite against Groth16
                    fixtures and the devnet-cloned verifier; mock runs it
                    against mock fixtures and the localnet mock verifier.
@@ -136,7 +134,6 @@ RPC_OVERRIDE=""
 NO_IDL=false
 DEV_TEARDOWN=false
 PREBUILT=false
-TEST_GREP=""
 ASSUME_YES=false
 TEST_MODE="real"
 SPEC_FILES=()
@@ -169,11 +166,6 @@ while [[ $# -gt 0 ]]; do
     --prebuilt)
       PREBUILT=true
       shift
-      ;;
-    --grep)
-      [[ $# -ge 2 ]] || { echo "❌ --grep requires a value" >&2; exit 1; }
-      TEST_GREP="$2"
-      shift 2
       ;;
     --mode)
       [[ $# -ge 2 ]] || { echo "❌ --mode requires a value" >&2; exit 1; }
@@ -853,34 +845,29 @@ cmd_test() {
 
   ensure_node_modules
 
-  # Cluster-safe test describe blocks (explicit allowlist), anchored to the
-  # "protocol-adapter (<name>)" describe title so a test title that happens to
-  # contain one of these names (the dev_set_schema_version block names its
-  # tests after the instructions it guards) cannot pull its block in.
-  # Tests that require test-forwarder or permanently mutate state are excluded.
-  local grep_pattern
-  grep_pattern=$(cat <<'GREP'
-protocol-adapter \((Groth16 batch aggregation E2E|Re-initialization guard|Direct settle & duplicate nullifier|Settle error paths|Issue #6: Emergency Stop|TxData Expiration|TxData authority and bounds checks|update_expiry_config|TxData expiration enforcement|Settlement error paths — fixture variants|Tree growth and multi-settlement)\)
-GREP
+  # Cluster-safe spec files (explicit allowlist): none needs the test
+  # forwarder, stops the adapter, or leaves state another file's tests
+  # cannot run on. Spec files given on the command line replace the list.
+  # One mocha process runs them against the cluster's single deployment, in
+  # list order: settle.ts asserts the primary fixture unsettled before
+  # direct-settle.ts settles it.
+  local specs=(
+    tests/settle.ts
+    tests/direct-settle.ts
+    tests/authority.ts
+    tests/txdata-lifecycle.ts
+    tests/txdata-expiry-config.ts
+    tests/txdata-expiration.ts
+    tests/tree-growth.ts
   )
-
-  # --grep replaces the allowlist for a deliberate run of one block against a
-  # cluster (for example a settlement block excluded from the routine set).
-  if [[ -n "$TEST_GREP" ]]; then
-    grep_pattern="$TEST_GREP"
-  fi
-
-  local specs=('tests/**/*.ts')
   if [[ ${#SPEC_FILES[@]} -gt 0 ]]; then
     specs=("${SPEC_FILES[@]}")
   fi
 
-  echo "Running cluster integration tests (${CLUSTER}) matching: ${grep_pattern}"
+  echo "Running cluster integration tests (${CLUSTER}): ${specs[*]}"
   ANCHOR_PROVIDER_URL="$RPC_URL" \
   ANCHOR_WALLET="$WALLET" \
-    yarn run ts-mocha -p ./tsconfig.json -t 1000000 \
-      --grep "$grep_pattern" \
-      "${specs[@]}"
+    yarn run ts-mocha -p ./tsconfig.json -t 1000000 "${specs[@]}"
 
   echo ""
   echo "✅ Cluster tests passed (${CLUSTER})"
