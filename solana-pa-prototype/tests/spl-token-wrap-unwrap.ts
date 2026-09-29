@@ -48,6 +48,7 @@ import {
   closeAllNonceBitmaps,
   closeConfig,
   closeEscrow,
+  createFundedEscrow,
   setEmergencyCaller,
   setKindTableCommitment,
   createdCommitmentsOf as commitmentsOf,
@@ -426,6 +427,25 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     );
 
     assert.deepEqual(await balances(otherAta, recipientAta), before, "no tokens move");
+  });
+
+  // One escrow authority owns every mint's escrow account, so the owner
+  // check alone does not keep an unwrap to its mint: the input names the
+  // mint, and the escrow account must hold it.
+  it("rejects an unwrap that draws another mint's escrow", async () => {
+    const other = await createFundedEscrow(provider, forwarderProgram.programId, user, unwrapAmount);
+    assert.isTrue(other.escrowPda.equals(escrowPda), "every mint's escrow has the same authority");
+    const recipientOtherAta = (
+      await getOrCreateAssociatedTokenAccount(provider.connection, recipient, other.mint, recipient.publicKey)
+    ).address;
+    const before = await balances(other.escrowAta, recipientOtherAta);
+
+    await assertRejects(
+      settleForwarderFixture(unwrapFixture, unwrapSegment(recipientOtherAta, other.escrowAta), []),
+      /WrongTokenAccountMint/,
+    );
+
+    assert.deepEqual(await balances(other.escrowAta, recipientOtherAta), before, "no tokens move");
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_unwrap_sends_funds_to_the_user

@@ -314,7 +314,7 @@ export function useAdapterSuite() {
     return table;
   }
 
-  /** Add `mints`' escrow accounts to the settlement table: they are fixed for the deployment once the mint is supported. */
+  /** Add `mints`' escrow token accounts to the settlement table: they are fixed for the deployment once the mint is supported. */
   async function extendSettlementTable(mints: PublicKey[]): Promise<AddressLookupTableAccount> {
     ({ table } = await ensureSettlementLookupTable(
       provider.connection,

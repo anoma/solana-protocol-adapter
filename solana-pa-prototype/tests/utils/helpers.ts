@@ -219,12 +219,12 @@ export function encodeUnwrapInput(tokenMint: PublicKey, amount: bigint, recipien
   return operand;
 }
 
-/** A mint's escrow: the forwarder's PDA authority and its associated token account. */
+/** A mint's escrow: the forwarder's escrow authority and its associated token account for the mint. */
 export function escrowAccounts(
   forwarderProgramId: PublicKey,
   mint: PublicKey,
 ): { escrowPda: PublicKey; escrowAta: PublicKey } {
-  const escrowPda = deriveEscrowPda(forwarderProgramId, mint);
+  const escrowPda = deriveEscrowPda(forwarderProgramId);
   return { escrowPda, escrowAta: getAssociatedTokenAddressSync(mint, escrowPda, true) };
 }
 

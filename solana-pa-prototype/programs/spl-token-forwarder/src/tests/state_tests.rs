@@ -2,7 +2,8 @@
 
 use crate::state::{
     base64_of_hash, nonce_to_word_and_bit, pa_is_stopped, NonceBitmap, UnwrapInput, WrapInput,
-    WrapMessage, CONFIG_PDA, CONFIG_SEED, NONCES_PER_WORD, NONCE_BITMAP_SEED, SIGNED_MESSAGE_LEN,
+    WrapMessage, CONFIG_PDA, CONFIG_SEED, ESCROW_AUTHORITY, ESCROW_AUTHORITY_BUMP, ESCROW_SEED,
+    NONCES_PER_WORD, NONCE_BITMAP_SEED, SIGNED_MESSAGE_LEN,
 };
 use anchor_lang::prelude::{borsh, Pubkey};
 use anchor_lang::AccountSerialize;
@@ -16,6 +17,19 @@ fn config_pda_is_the_canonical_config_address() {
     assert_eq!(
         CONFIG_PDA, canonical,
         "CONFIG_PDA must equal find_program_address([CONFIG_SEED], program id)"
+    );
+}
+
+/// The compile-time escrow authority is the canonical PDA of the escrow
+/// seed: the one address that owns every mint's escrow token account, and
+/// the bump that signs for it.
+#[test]
+fn escrow_authority_is_the_canonical_escrow_address_and_bump() {
+    let canonical = Pubkey::find_program_address(&[ESCROW_SEED], &crate::ID);
+    assert_eq!(
+        (ESCROW_AUTHORITY, ESCROW_AUTHORITY_BUMP),
+        canonical,
+        "(ESCROW_AUTHORITY, ESCROW_AUTHORITY_BUMP) must equal find_program_address([ESCROW_SEED], program id)"
     );
 }
 

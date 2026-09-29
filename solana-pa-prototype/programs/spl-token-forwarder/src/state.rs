@@ -44,8 +44,16 @@ pub const CONFIG_SEED: &[u8] = b"config";
 pub const CONFIG_PDA: Pubkey = Pubkey::new_from_array(
     anchor_lang::derive_program_address(&[CONFIG_SEED], &crate::ID_CONST.to_bytes()).0,
 );
-/// Escrow authority PDA, one per token mint.
+/// Seed of the escrow authority.
 pub const ESCROW_SEED: &[u8] = b"escrow";
+const ESCROW_AUTHORITY_DERIVATION: ([u8; 32], u8) =
+    anchor_lang::derive_program_address(&[ESCROW_SEED], &crate::ID_CONST.to_bytes());
+/// The escrow authority, derived at compile time: the one PDA that owns every
+/// mint's escrow token account, as the EVM forwarder holds every token at
+/// its own address. Checking an account against it costs no PDA derivation.
+pub const ESCROW_AUTHORITY: Pubkey = Pubkey::new_from_array(ESCROW_AUTHORITY_DERIVATION.0);
+/// The escrow authority's canonical bump, with which it signs.
+pub const ESCROW_AUTHORITY_BUMP: u8 = ESCROW_AUTHORITY_DERIVATION.1;
 /// Nonce bitmap PDA, one per user per 256-nonce word.
 pub const NONCE_BITMAP_SEED: &[u8] = b"nonce_bitmap";
 pub const NONCES_PER_WORD: u64 = 256;
@@ -95,11 +103,6 @@ impl NonceBitmap {
         let bit_offset = bit_position % 8;
         self.bits[byte_index] |= 1 << bit_offset;
     }
-}
-
-/// The escrow authority for a token mint: the PDA that owns the escrow token account.
-pub fn derive_escrow_pda(program_id: &Pubkey, token_mint: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[ESCROW_SEED, token_mint.as_ref()], program_id)
 }
 
 /// The bitmap word a nonce lives in and its bit within that word.

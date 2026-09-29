@@ -58,9 +58,9 @@ export function deriveConfigPda(forwarderProgramId: PublicKey): [PublicKey, numb
   return PublicKey.findProgramAddressSync([CONFIG_SEED], forwarderProgramId);
 }
 
-/** A mint's escrow authority. */
-export function deriveEscrowPda(forwarderProgramId: PublicKey, mint: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([ESCROW_SEED, mint.toBuffer()], forwarderProgramId)[0];
+/** The escrow authority: the one PDA that owns every mint's escrow token account. */
+export function deriveEscrowPda(forwarderProgramId: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync([ESCROW_SEED], forwarderProgramId)[0];
 }
 
 /** The 256-nonce word a nonce belongs to. */

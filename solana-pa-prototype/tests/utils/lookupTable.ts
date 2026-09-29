@@ -18,7 +18,7 @@ import {
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { getRouterPda, getVerifierEntryPda } from "../../scripts/verifier-utils";
 import { escrowAccounts } from "./helpers";
-import { deriveConfigPda, deriveEventAuthorityPda, derivePaStatePda } from "./pda";
+import { deriveConfigPda, deriveEscrowPda, deriveEventAuthorityPda, derivePaStatePda } from "./pda";
 
 /** What fixes a deployment's settlement key set. */
 export interface SettlementKeySources {
@@ -56,11 +56,9 @@ export function settlementLookupKeys(s: SettlementKeySources): PublicKey[] {
     s.blockTimeForwarder,
     s.splTokenForwarder,
     forwarderConfig,
+    deriveEscrowPda(s.splTokenForwarder),
     TOKEN_PROGRAM_ID,
-    ...s.mints.flatMap((mint) => {
-      const { escrowPda, escrowAta } = escrowAccounts(s.splTokenForwarder, mint);
-      return [escrowPda, escrowAta];
-    }),
+    ...s.mints.map((mint) => escrowAccounts(s.splTokenForwarder, mint).escrowAta),
   ];
 }
 

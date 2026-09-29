@@ -99,7 +99,7 @@ solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
 
 ## The settlement lookup table
 
-Every settlement carries about fifteen accounts that never change for a deployment: PAState, the verifier router and its entry, the verifier program, the event authority, the two forwarders and the SPL forwarder's config, the sysvars, the SPL token program, and each supported mint's escrow PDA and escrow ATA. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps the first-wrap settlement (ed25519 authorization, inline bitmap init, settle) well inside the 1,232-byte packet.
+Every settlement carries about fifteen accounts that never change for a deployment: PAState, the verifier router and its entry, the verifier program, the event authority, the two forwarders and the SPL forwarder's config and escrow authority, the sysvars, the SPL token program, and each supported mint's escrow ATA. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps the first-wrap settlement (ed25519 authorization, inline bitmap init, settle) well inside the 1,232-byte packet.
 
 ```sh
 ./scripts/dev.sh lookup-table --cluster devnet                      # create
@@ -107,7 +107,7 @@ PA_LOOKUP_TABLE=<address> STF_TOKEN_MINTS=<mint>,<mint> \
   ./scripts/dev.sh lookup-table --cluster devnet                    # extend
 ```
 
-The command derives the key set from the deployed programs and the PAState's pinned router and selector, so it runs after `deploy pa`. The signing wallet is the table's authority and stays so (the table is not frozen) because supporting a new mint means extending it. A table entry need not exist on chain: the forwarder's keys go in before the forwarder is deployed, and a mint's escrow keys before `forwarder init` creates the escrow. Extending is idempotent; a rerun adds only what is missing.
+The command derives the key set from the deployed programs and the PAState's pinned router and selector, so it runs after `deploy pa`. The signing wallet is the table's authority and stays so (the table is not frozen) because supporting a new mint means extending it. A table entry need not exist on chain: the forwarder's keys go in before the forwarder is deployed, and a mint's escrow ATA before `forwarder init` creates it. Extending is idempotent; a rerun adds only what is missing.
 
 Record the address in the cluster's deployment record and ship it as `SETTLE_LOOKUP_TABLE` in anoma-pa-solana-client. A program-id rotation is a new deployment and gets a new table.
 
@@ -165,7 +165,7 @@ export STF_TOKEN_MINT=<base58 mint>          # optional: also creates the mint's
 ./scripts/dev.sh deploy stf --cluster devnet  # or: forwarder init, for an already deployed program
 ```
 
-The config pins the adapter program id, the logic ref, and the committee. A wrap is only executed when the adapter forwards it for a resource carrying that logic ref. Escrow accounts are associated token accounts owned by a per-mint PDA; `forwarder init` with `STF_TOKEN_MINT` creates one, and the same command adds further mints later. Add each new mint's escrow accounts to the settlement lookup table as well (`lookup-table` with `STF_TOKEN_MINTS`).
+The config pins the adapter program id, the logic ref, and the committee. A wrap is only executed when the adapter forwards it for a resource carrying that logic ref. One escrow authority, a PDA of the forwarder, owns every mint's escrow: the associated token account of the authority and the mint, as the EVM forwarder holds every token at its own address. `forwarder init` with `STF_TOKEN_MINT` creates a mint's escrow account, and the same command adds further mints later. Add each new mint's escrow account to the settlement lookup table as well (`lookup-table` with `STF_TOKEN_MINTS`).
 
 ### Nonce bitmaps
 
