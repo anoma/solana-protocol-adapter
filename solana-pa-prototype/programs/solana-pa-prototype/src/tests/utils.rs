@@ -75,6 +75,7 @@ pub(crate) use assert_anchor_err;
 
 use crate::merkle::EMPTY_TREE_ROOT_INITIAL;
 use crate::state::{PALifecycle, PAStateAccount};
+use crate::verifier_router::types::{Proof, Seal};
 use arm_core::aggregation_instance::{
     ActionAggregated, AggregationInstance, ConsumedResourceAggregated, CreatedResourceAggregated,
 };
@@ -82,9 +83,6 @@ use arm_core::delta_proof::DeltaProof;
 use arm_core::logic_instance::{AppData, ExpirableBlob};
 use arm_core::transaction::{Aggregation, Delta, Transaction};
 use arm_core::Digest;
-use groth_16_verifier::Proof;
-use verifier_router::Seal;
-use verifier_router::Selector;
 
 /// One action with one consumed and one created resource, anchored to the
 /// initial tree root and pinned to the compliance VK and empty kind table.
@@ -161,7 +159,7 @@ pub fn instance_with_consumed_and_created_payloads(
 }
 
 /// Arbitrary value; verifies the proof parser extracts the selector correctly.
-pub const FAKE_SELECTOR: Selector = [0x31, 0x0f, 0xe5, 0x98];
+pub const FAKE_SELECTOR: [u8; 4] = [0x31, 0x0f, 0xe5, 0x98];
 
 pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
     let proof = Proof {

@@ -121,6 +121,10 @@ case "${1:-}" in
     run_in_project "./scripts/regen-fixtures.sh ${1:-}"
     ;;
 
+  verifier-idls)
+    run_in_project "./scripts/verifier-idls.sh"
+    ;;
+
   lock-sync)
     shift
     sync_lockfiles_for_package "${1:-}"
@@ -257,6 +261,8 @@ PYEOF
     echo "  update-deps  Regenerate yarn.lock"
     echo "  coverage     Run unit tests with kcov and report line coverage"
     echo "  clean        Remove local validator/test artifacts"
+    echo "  verifier-idls Regenerate idls/ (RISC Zero verifier IDLs for declare_program!)"
+    echo "               from the risc0-solana v3.0.0 source"
     echo "  lock-check   Verify Cargo.lock files agree on shared git deps"
     echo "  lock-sync <pkg>  Update <pkg> in every Cargo.lock so they re-align"
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
