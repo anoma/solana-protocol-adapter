@@ -2190,7 +2190,6 @@ dependencies = [
  "base64 0.22.1",
  "bincode",
  "block-time-forwarder",
- "bs58",
  "ed25519-dalek",
  "futures",
  "groth_16_verifier",
@@ -6181,6 +6180,7 @@ name = "spl-token-forwarder"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "base64 0.21.7",
  "protocol-adapter",
 ]
 

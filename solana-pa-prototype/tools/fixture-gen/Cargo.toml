@@ -7,7 +7,6 @@ edition = "2021"
 anyhow = "1.0"
 # Merkle paths over the adapter's tree, as integrators derive them.
 anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "5b2df9475d08f61566a96b68fecb92088276d398", default-features = false }
-bs58 = "0.5"
 arm = { package = "anoma-rm-risc0", version = "=2.0.0-rc.6", default-features = false, features = ["aggregation", "prove"] }
 arm-gadgets = { package = "anoma-rm-risc0-gadgets", version = "=2.0.0-rc.6" }
 # The AnomaPay transfer resource: its logic proves the SPL forwarder fixtures.

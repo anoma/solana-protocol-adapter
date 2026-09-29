@@ -301,18 +301,8 @@ const FIXTURE_FORMAT: &str = "arm-risc0:Transaction(bincode)";
 
 enum Command {
     Generate(GenerateArgs),
-    StripCalls {
-        input: PathBuf,
-        output: PathBuf,
-    },
     Dump {
         input: PathBuf,
-    },
-    ImportBackendResult {
-        input: PathBuf,
-        output: PathBuf,
-        root_account_dir: Option<PathBuf>,
-        program_id: [u8; 32],
     },
     HistoricalRoot {
         batch_groth16_path: PathBuf,
@@ -320,13 +310,6 @@ enum Command {
         consumer_out: PathBuf,
         prover_choice: Option<ProverChoice>,
         mock: bool,
-    },
-    Mockify {
-        input: PathBuf,
-        output: PathBuf,
-    },
-    RefreshFields {
-        path: PathBuf,
     },
 }
 
@@ -472,15 +455,6 @@ fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> 
     Ok(())
 }
 
-fn decode_base58_32(s: &str) -> Result<[u8; 32]> {
-    let bytes = bs58::decode(s)
-        .into_vec()
-        .with_context(|| format!("invalid base58: {s}"))?;
-    bytes
-        .try_into()
-        .map_err(|v: Vec<u8>| anyhow!("expected 32 bytes, got {}", v.len()))
-}
-
 fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
     let program_id = block_time_forwarder::ID.to_bytes();
 
@@ -542,8 +516,9 @@ const RELAY_UNWRAP_AMOUNT: u64 = 1;
 
 /// A test-forwarder call relaying an unwrap to the SPL token forwarder under
 /// the transfer logic ref its config authorizes: the seeded mint, to the
-/// seeded recipient. Segment: test-forwarder, SPL forwarder program, config,
-/// instructions sysvar, escrow ATA, recipient ATA, escrow PDA, token program.
+/// seeded recipient. Segment: the test-forwarder, then the SPL forwarder's
+/// unwrap segment (program, config, instructions sysvar, escrow ATA,
+/// recipient ATA, escrow PDA, token program).
 fn test_forwarder_relay_payload_blob() -> Result<ExpirableBlob> {
     let seeded_pubkey =
         |label| Pubkey::new_from_array(seeded_keypair(label).verifying_key().to_bytes());
@@ -561,7 +536,7 @@ fn test_forwarder_relay_payload_blob() -> Result<ExpirableBlob> {
         instruction_data,
         expected_output: vec![RELAY_OK],
         output_mode: OutputMode::ReturnData,
-        num_accounts: 8,
+        num_accounts: anoma_pa_solana_client::FORWARDER_UNWRAP_NUM_ACCOUNTS + 1,
     }))
 }
 
@@ -756,7 +731,7 @@ async fn generate_anomapay_wrap_transaction(
 fn tree_leaves_of(paths: &[PathBuf]) -> Result<Vec<Digest>> {
     let mut leaves = Vec::new();
     for path in paths {
-        let (_, tx) = load_fixture_tx(path)?;
+        let tx = load_fixture_tx(path)?;
         let commitments = created_commitments(&tx)?;
         if commitments.is_empty() {
             bail!(
@@ -886,9 +861,19 @@ fn nonce_from_byte(byte: u8) -> [u8; 32] {
     nonce
 }
 
+/// The nonce of an action's first created resource: the compliance circuit
+/// requires created nonces to be derived from the action's consumed nullifiers.
+fn first_created_nonce(consumed_nf: Digest) -> Result<[u8; 32]> {
+    Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
+        .map_err(|e| anyhow!("derive created nonce: {e:?}"))
+}
+
 /// A deterministic passthrough-logic ephemeral resource with the given nonce
-/// byte, plus its nullifier under the default nullifier key.
-fn deterministic_ephemeral_resource(nonce_byte: u8) -> Result<(Resource, NullifierKey, Digest)> {
+/// byte, its nullifier under the default nullifier key, and the resource its
+/// action creates: the same resource under `first_created_nonce`.
+fn deterministic_ephemeral_resource(
+    nonce_byte: u8,
+) -> Result<(Resource, NullifierKey, Digest, Resource)> {
     let nf_key = NullifierKey::default();
     let consumed_resource = Resource {
         logic_ref: Digest::new(PASSTHROUGH_LOGIC_GUEST_ID),
@@ -901,7 +886,9 @@ fn deterministic_ephemeral_resource(nonce_byte: u8) -> Result<(Resource, Nullifi
     let consumed_nf = consumed_resource
         .nullifier(&nf_key)
         .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
-    Ok((consumed_resource, nf_key, consumed_nf))
+    let mut created_resource = consumed_resource;
+    created_resource.nonce = first_created_nonce(consumed_nf)?;
+    Ok((consumed_resource, nf_key, consumed_nf, created_resource))
 }
 
 /// Build the compliance witness for a single-consumed / single-created
@@ -910,7 +897,7 @@ fn deterministic_ephemeral_resource(nonce_byte: u8) -> Result<(Resource, Nullifi
 /// a fresh `rcv` and would make fixture generation nondeterministic.
 /// Carries the globally loaded kind table, so every instance commits to
 /// the table hash the PA pins at initialization.
-fn single_action_compliance_witness_with_rcv(
+fn single_action_compliance_witness(
     consumed: Resource,
     cm_merkle_path: MerklePath,
     nf_key: NullifierKey,
@@ -927,21 +914,6 @@ fn single_action_compliance_witness_with_rcv(
         INITIAL_ROOT,
         &rcv.to_bytes(),
         kind_table().to_vec(),
-    )
-}
-
-fn single_action_compliance_witness(
-    consumed: Resource,
-    cm_merkle_path: MerklePath,
-    nf_key: NullifierKey,
-    created: Resource,
-) -> ComplianceWitness {
-    single_action_compliance_witness_with_rcv(
-        consumed,
-        cm_merkle_path,
-        nf_key,
-        created,
-        Scalar::ONE,
     )
 }
 
@@ -1026,16 +998,16 @@ fn assemble_transaction(actions: Vec<Action>, rcvs: &[Vec<u8>]) -> Result<Transa
     let tx = Transaction::create(actions, Delta::Witness(delta_witness));
     let balanced_tx = arm::transaction::generate_delta_proof(tx)
         .map_err(|e| anyhow!("generate delta proof: {e:?}"))?;
+    verify_tx(&balanced_tx)?;
+    Ok(balanced_tx)
+}
+
+/// Verify a transaction's proofs and delta against the loaded kind table.
+fn verify_tx(tx: &Transaction) -> Result<()> {
     let kind_table_commitment =
         *kind_table_hash().ok_or_else(|| anyhow!("kind table not loaded"))?;
-    arm::transaction::verify(
-        &balanced_tx,
-        kind_table_commitment,
-        JournalEncoding::Risc0Serde,
-    )
-    .map_err(|e| anyhow!("verify tx: {e:?}"))?;
-
-    Ok(balanced_tx)
+    arm::transaction::verify(tx, kind_table_commitment, JournalEncoding::Risc0Serde)
+        .map_err(|e| anyhow!("verify tx: {e:?}"))
 }
 
 /// Prove a one-action transaction (the shape every single-action fixture uses).
@@ -1106,18 +1078,14 @@ async fn generate_transfer_shape_transaction(
         let nonce_byte = base_seed
             .checked_add(i as u8)
             .ok_or_else(|| anyhow!("nonce seed {base_seed} + {i} overflows a byte"))?;
-        let (consumed_resource, nf_key, consumed_nf) =
+        let (consumed_resource, nf_key, _, created_resource) =
             deterministic_ephemeral_resource(nonce_byte)?;
-
-        let mut created_resource = consumed_resource;
-        created_resource.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
-            .map_err(|e| anyhow!("derive created nonce: {e:?}"))?;
 
         // Distinct rcv per action: identical rcvs (with identical kinds and
         // quantities) would collapse the actions' delta points onto one
         // point, which is not the shape production transactions have.
         let rcv = Scalar::from((i + 1) as u64);
-        let witness = single_action_compliance_witness_with_rcv(
+        let witness = single_action_compliance_witness(
             consumed_resource,
             MerklePath::empty(),
             nf_key,
@@ -1182,19 +1150,15 @@ async fn generate_test_transaction_with_external_payload(
         } => 2,
         _ => 0,
     });
-    let (consumed_resource, nf_key, consumed_nf) = deterministic_ephemeral_resource(nonce_byte)?;
-
-    let mut created_resource = consumed_resource;
-    // The compliance circuit requires created nonces to be derived from the
-    // action's consumed nullifiers (index 0: first created resource).
-    created_resource.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
-        .map_err(|e| anyhow!("derive created nonce: {e:?}"))?;
+    let (consumed_resource, nf_key, _, created_resource) =
+        deterministic_ephemeral_resource(nonce_byte)?;
     // The consumed resource is ephemeral, so it needs no inclusion proof.
     let compliance_witness = single_action_compliance_witness(
         consumed_resource,
         MerklePath::empty(),
         nf_key,
         created_resource,
+        Scalar::ONE,
     );
 
     // Bind the external payload into the consumed resource's app_data via
@@ -1340,61 +1304,10 @@ fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
     Ok(roots.into_iter().collect())
 }
 
-#[derive(Serialize)]
-struct ValidatorAccountFixture {
-    pubkey: String,
-    account: ValidatorAccount,
-}
-
-#[derive(Serialize)]
-struct ValidatorAccount {
-    lamports: u64,
-    data: [String; 2],
-    owner: String,
-    executable: bool,
-    #[serde(rename = "rentEpoch")]
-    rent_epoch: u64,
-    space: u64,
-}
-
-fn write_root_marker_accounts(
-    roots: &[[u8; 32]],
-    program_id: [u8; 32],
-    out_dir: &Path,
-) -> Result<()> {
-    fs::create_dir_all(out_dir)
-        .with_context(|| format!("create root marker account dir {}", out_dir.display()))?;
-
-    let pa_program_id = Pubkey::new_from_array(program_id);
-    let (pa_state, _) =
-        Pubkey::find_program_address(&[solana_pa::state::PA_STATE_SEED], &pa_program_id);
-
-    for root in roots {
-        let (marker, _) = solana_pa::root::derive_root_pda(&pa_program_id, &pa_state, root);
-        let account = ValidatorAccountFixture {
-            pubkey: marker.to_string(),
-            account: ValidatorAccount {
-                lamports: 1_000_000,
-                data: [String::new(), "base64".to_string()],
-                owner: pa_program_id.to_string(),
-                executable: false,
-                rent_epoch: u64::MAX,
-                space: 0,
-            },
-        };
-        let out_path = out_dir.join(format!("root-marker-{marker}.json"));
-        fs::write(&out_path, serde_json::to_vec_pretty(&account)?)
-            .with_context(|| format!("write root marker account {}", out_path.display()))?;
-    }
-
-    Ok(())
-}
-
 /// Fields every fixture derives from a seal-encoded transaction: the
 /// serialized transaction and a serialized tampered clone (base64), its
 /// consumed nullifiers and historical roots (base64), and the seal's
-/// selector. Shared by the generate, import, and mockify paths so every
-/// fixture follows the same on-disk convention.
+/// selector.
 struct DerivedFixtureFields {
     tx_b64: String,
     tx_tampered_b64: String,
@@ -1426,55 +1339,6 @@ fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
             .collect(),
         selector,
     })
-}
-
-fn import_backend_result_fixture(
-    input: &Path,
-    output: &Path,
-    root_account_dir: Option<&Path>,
-    program_id: [u8; 32],
-) -> Result<()> {
-    let raw = fs::read(input).with_context(|| format!("read {}", input.display()))?;
-    let mut tx: Transaction = serde_json::from_slice(&raw)
-        .with_context(|| format!("decode backend Transaction JSON {}", input.display()))?;
-
-    arm::transaction::verify_aggregation(&tx, JournalEncoding::Risc0Serde)
-        .map_err(|e| anyhow!("verify imported backend aggregation proof: {e:?}"))?;
-
-    let roots = historical_roots(&tx).context("extract imported historical roots")?;
-
-    let aggregation = require_aggregation_mut(&mut tx)?;
-    aggregation.proof =
-        encode_seal(&aggregation.proof).map_err(|e| anyhow!("encode imported seal: {e:?}"))?;
-
-    let fields = derive_fixture_fields(&tx).context("derive imported fixture fields")?;
-    let fixture = Fixture {
-        format: FIXTURE_FORMAT,
-        aggregation_strategy: "batch",
-        aggregation_proof_type: "groth16",
-        selector: fields.selector,
-        labels: FixtureLabels {
-            forwarder_type: Some("anomapay_transfer"),
-            ..Default::default()
-        },
-        tx_b64: fields.tx_b64,
-        tx_tampered_b64: fields.tx_tampered_b64,
-        consumed_nullifiers_b64: fields.consumed_nullifiers_b64,
-        created_commitments_b64: fields.created_commitments_b64,
-        historical_roots_b64: fields.historical_roots_b64,
-    };
-
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create dir {parent:?}"))?;
-    }
-    fs::write(output, serde_json::to_vec_pretty(&fixture)?)
-        .with_context(|| format!("write imported fixture {}", output.display()))?;
-
-    if let Some(root_account_dir) = root_account_dir {
-        write_root_marker_accounts(&roots, program_id, root_account_dir)?;
-    }
-
-    Ok(())
 }
 
 /// Seal-encode the aggregation proof, serialize the transaction (and a
@@ -1550,7 +1414,7 @@ const TRANSFER_SHAPE_NONCE_BYTE: u8 = 9;
 /// The one commitment an existing fixture settles: the leaf the suite
 /// inserts at index 0 when that fixture is `batch_groth16.json`.
 fn read_sole_created_commitment(path: &Path) -> Result<Digest> {
-    let leaves = created_commitments(&load_fixture_tx(path)?.1)?;
+    let leaves = created_commitments(&load_fixture_tx(path)?)?;
     if leaves.len() != 1 {
         bail!(
             "{} must settle exactly one commitment to serve as the known single-leaf tree \
@@ -1571,12 +1435,8 @@ fn read_sole_created_commitment(path: &Path) -> Result<Digest> {
 /// build the consumer transaction afterward.
 fn build_historical_root_committer_witness() -> Result<(ComplianceWitness, Resource, NullifierKey)>
 {
-    let (consumed_resource, nf_key, consumed_nf) =
+    let (consumed_resource, nf_key, _, mut created_resource) =
         deterministic_ephemeral_resource(HISTORICAL_ROOT_NONCE_BYTE)?;
-
-    let mut created_resource = consumed_resource;
-    created_resource.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
-        .map_err(|e| anyhow!("derive committer created nonce: {e:?}"))?;
     created_resource.is_ephemeral = false;
 
     let compliance_witness = single_action_compliance_witness(
@@ -1584,6 +1444,7 @@ fn build_historical_root_committer_witness() -> Result<(ComplianceWitness, Resou
         MerklePath::empty(),
         nf_key.clone(),
         created_resource,
+        Scalar::ONE,
     );
 
     Ok((compliance_witness, created_resource, nf_key))
@@ -1612,14 +1473,14 @@ fn build_historical_root_consumer_witness(
         is_ephemeral: true,
         ..Default::default()
     };
-    created_resource.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
-        .map_err(|e| anyhow!("derive consumer created nonce: {e:?}"))?;
+    created_resource.nonce = first_created_nonce(consumed_nf)?;
 
     Ok(single_action_compliance_witness(
         committed_resource,
         merkle_path,
         committer_nf_key,
         created_resource,
+        Scalar::ONE,
     ))
 }
 
@@ -1793,11 +1654,8 @@ where
     Ok(result)
 }
 
-/// Read a fixture JSON and bincode-decode its transaction. Returns the raw
-/// JSON map alongside so callers can rewrite fields in place.
-fn load_fixture_tx(
-    path: &Path,
-) -> Result<(serde_json::Map<String, serde_json::Value>, Transaction)> {
+/// Read a fixture JSON and bincode-decode its transaction.
+fn load_fixture_tx(path: &Path) -> Result<Transaction> {
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let map: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&raw).context("parsing fixture JSON")?;
@@ -1806,138 +1664,11 @@ fn load_fixture_tx(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing tx_b64 field in {}", path.display()))?;
     let tx_bytes = BASE64.decode(tx_b64).context("decoding tx_b64")?;
-    let tx: Transaction =
-        bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
-    Ok((map, tx))
-}
-
-fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
-    let (mut fixture, mut tx) = load_fixture_tx(input)?;
-
-    let mut stripped = 0usize;
-    let instance = &mut require_aggregation_mut(&mut tx)?.instance;
-    for action in &mut instance.actions {
-        let resources = action
-            .consumed_publics
-            .iter_mut()
-            .map(|c| (&c.resource_nullifier, &mut c.app_data))
-            .chain(
-                action
-                    .created_publics
-                    .iter_mut()
-                    .map(|c| (&c.resource_commitment, &mut c.app_data)),
-            );
-        for (tag, app_data) in resources {
-            let count = app_data.external_payload.len();
-            if count > 0 {
-                eprintln!(
-                    "  Stripping {} external_payload blob(s) from resource tag {:?}",
-                    count,
-                    &tag.as_bytes()[..4]
-                );
-                app_data.external_payload.clear();
-                stripped += count;
-            }
-        }
-    }
-    eprintln!("Stripped {} external call(s) total", stripped);
-
-    let modified_bytes = bincode::serialize(&tx).context("re-serializing Transaction")?;
-    fixture.insert("tx_b64".into(), BASE64.encode(&modified_bytes).into());
-    fixture.remove("forwarder_type");
-
-    let output_str = serde_json::to_string_pretty(&fixture).context("serializing fixture")?;
-    fs::write(output, output_str).with_context(|| format!("writing {}", output.display()))?;
-    eprintln!("Wrote fixture to {}", output.display());
-    Ok(())
-}
-
-/// Convert an existing (real-proof) fixture into its mock twin: replace the
-/// aggregation seal with a mock seal derived from the transaction alone and
-/// relabel selector/proof type. Everything else about the transaction stays
-/// byte-identical, which the recomputed nullifier/root cross-checks enforce.
-/// Exists for imported fixtures whose proving inputs are not in this repo
-/// (the dev-mode pipeline cannot regenerate them).
-fn mockify_fixture(input: &Path, output: &Path) -> Result<()> {
-    let (mut fixture, mut tx) = load_fixture_tx(input)?;
-
-    let claim = mock_claim_digest(&tx)?;
-    require_aggregation_mut(&mut tx)?.proof = mock_seal_bytes(claim)?;
-
-    let fields = derive_fixture_fields(&tx)?;
-
-    // The mock twin must change nothing but the seal: the recomputed
-    // derived fields must match the input fixture exactly.
-    let existing_nullifiers: Vec<String> =
-        serde_json::from_value(fixture["consumed_nullifiers_b64"].clone())
-            .context("parsing consumed_nullifiers_b64")?;
-    if fields.consumed_nullifiers_b64 != existing_nullifiers {
-        bail!("recomputed nullifiers differ from the input fixture's — refusing to write");
-    }
-    let existing_roots: Vec<String> = fixture
-        .get("historical_roots_b64")
-        .map(|value| serde_json::from_value(value.clone()))
-        .transpose()
-        .context("parsing historical_roots_b64")?
-        .unwrap_or_default();
-    if fields.historical_roots_b64 != existing_roots {
-        bail!("recomputed historical roots differ from the input fixture's — refusing to write");
-    }
-
-    fixture.insert("tx_b64".into(), fields.tx_b64.into());
-    fixture.insert("tx_tampered_b64".into(), fields.tx_tampered_b64.into());
-    fixture.insert(
-        "created_commitments_b64".into(),
-        fields.created_commitments_b64.into(),
-    );
-    fixture.insert("selector".into(), fields.selector.into());
-    fixture.insert("aggregation_proof_type".into(), "mock".into());
-
-    fs::write(output, serde_json::to_string_pretty(&fixture)?)
-        .with_context(|| format!("writing {}", output.display()))?;
-    eprintln!("wrote mock fixture: {}", output.display());
-    Ok(())
-}
-
-/// Re-derive every transaction-derived fixture field from the fixture's own
-/// `tx_b64` and rewrite the JSON in place. The transaction (and therefore
-/// the proof) is untouched, so this needs no proving — it exists to migrate
-/// committed fixtures when the derived-field set changes.
-fn refresh_fixture_fields(path: &Path) -> Result<()> {
-    let (mut fixture, tx) = load_fixture_tx(path)?;
-
-    let fields = derive_fixture_fields(&tx)?;
-    if fields.tx_b64 != fixture["tx_b64"].as_str().unwrap_or_default() {
-        bail!("re-serialized transaction differs from tx_b64 — refusing to rewrite");
-    }
-
-    fixture.insert("tx_tampered_b64".into(), fields.tx_tampered_b64.into());
-    fixture.insert("selector".into(), fields.selector.into());
-    fixture.insert(
-        "consumed_nullifiers_b64".into(),
-        fields.consumed_nullifiers_b64.into(),
-    );
-    fixture.insert(
-        "created_commitments_b64".into(),
-        fields.created_commitments_b64.into(),
-    );
-    if fields.historical_roots_b64.is_empty() {
-        fixture.remove("historical_roots_b64");
-    } else {
-        fixture.insert(
-            "historical_roots_b64".into(),
-            fields.historical_roots_b64.into(),
-        );
-    }
-
-    fs::write(path, serde_json::to_string_pretty(&fixture)?)
-        .with_context(|| format!("writing {}", path.display()))?;
-    eprintln!("refreshed fixture fields: {}", path.display());
-    Ok(())
+    bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")
 }
 
 fn dump_fixture(input: &Path) -> Result<()> {
-    let (_, tx) = load_fixture_tx(input)?;
+    let tx = load_fixture_tx(input)?;
 
     eprintln!("Transaction:");
     match &tx.aggregation {
@@ -1999,66 +1730,8 @@ fn dump_fixture(input: &Path) -> Result<()> {
 
 fn print_usage() {
     eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen mockify <IN> <OUT>           Convert an existing fixture into its mock twin\n  fixture-gen refresh-fields <FIXTURE>     Re-derive fixture fields from tx_b64 in place (no proving)\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-relay        Test-forwarder relaying an unwrap to the SPL forwarder\n                           (the forwarder must reject a caller other than the adapter)\n  --spl-token-wrap         AnomaPay wrap proven with the transfer logic: the user's\n                           ed25519-authorized escrow deposit creates the owner's resource\n  --spl-token-unwrap       AnomaPay unwrap: the owner spends the wrapped resource, releasing\n                           the escrow to the recipient; needs --settled\n  --wrap-nonce N           (wrap) the forwarder nonce the user signs (default 1)\n  --kind-table PATH        Prove against this kind table instead of the committed\n                           empty one (kind_table.json); the PA must store its commitment\n  --settled FIXTURE        (unwrap) a fixture the suite settles before the unwrap, in\n                           settlement order, the wrap last; repeat per fixture\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --transfer-shape         Three single-unit actions with event-emitted payload blobs\n                           and no external calls (the captured mainnet transfer's shape);\n                           excludes the forwarder flags. Nonce bytes seed..seed+2 (default 9)\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof/zero_action/witness_delta variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent,\n    --forwarder-relay, --spl-token-wrap, --spl-token-unwrap.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - mockify replaces only the aggregation seal of an existing fixture; use it for\n    imported fixtures whose proving inputs are not in this repo.\n"
+        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-relay        Test-forwarder relaying an unwrap to the SPL forwarder\n                           (the forwarder must reject a caller other than the adapter)\n  --spl-token-wrap         AnomaPay wrap proven with the transfer logic: the user's\n                           ed25519-authorized escrow deposit creates the owner's resource\n  --spl-token-unwrap       AnomaPay unwrap: the owner spends the wrapped resource, releasing\n                           the escrow to the recipient; needs --settled\n  --wrap-nonce N           (wrap) the forwarder nonce the user signs (default 1)\n  --kind-table PATH        Prove against this kind table instead of the committed\n                           empty one (kind_table.json); the PA must store its commitment\n  --settled FIXTURE        (unwrap) a fixture the suite settles before the unwrap, in\n                           settlement order, the wrap last; repeat per fixture\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --transfer-shape         Three single-unit actions with event-emitted payload blobs\n                           and no external calls (the captured mainnet transfer's shape);\n                           excludes the forwarder flags. Nonce bytes seed..seed+2 (default 9)\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof/zero_action/witness_delta variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent,\n    --forwarder-relay, --spl-token-wrap, --spl-token-unwrap.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n"
     );
-}
-
-fn parse_import_backend_result_args(args: impl Iterator<Item = String>) -> Result<Command> {
-    let mut args = args;
-    let mut root_account_dir: Option<PathBuf> = None;
-    let mut program_id_b58: Option<String> = None;
-    let mut positionals: Vec<PathBuf> = Vec::new();
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--root-account-dir" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--root-account-dir requires a value"))?;
-                root_account_dir = Some(PathBuf::from(value));
-            }
-            "--program-id" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--program-id requires a value"))?;
-                program_id_b58 = Some(value);
-            }
-            _ if arg.starts_with("--root-account-dir=") => {
-                let value = arg
-                    .split_once('=')
-                    .map(|(_, value)| value)
-                    .ok_or_else(|| anyhow!("--root-account-dir requires a value"))?;
-                root_account_dir = Some(PathBuf::from(value));
-            }
-            _ if arg.starts_with("--program-id=") => {
-                let value = arg
-                    .split_once('=')
-                    .map(|(_, value)| value)
-                    .ok_or_else(|| anyhow!("--program-id requires a value"))?;
-                program_id_b58 = Some(value.to_string());
-            }
-            _ if arg.starts_with('-') => {
-                return Err(anyhow!("unknown flag in import-backend-result mode: {arg}"));
-            }
-            _ => positionals.push(PathBuf::from(arg)),
-        }
-    }
-
-    if positionals.len() != 2 {
-        return Err(anyhow!(
-            "Usage: fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>"
-        ));
-    }
-    let program_id_b58 = program_id_b58
-        .ok_or_else(|| anyhow!("import-backend-result requires --program-id PROGRAM_ID_B58"))?;
-    let program_id = decode_base58_32(&program_id_b58).context("invalid --program-id")?;
-
-    Ok(Command::ImportBackendResult {
-        input: positionals.remove(0),
-        output: positionals.remove(0),
-        root_account_dir,
-        program_id,
-    })
 }
 
 fn parse_historical_root_args(args: impl Iterator<Item = String>) -> Result<Command> {
@@ -2114,16 +1787,6 @@ fn parse_args() -> Result<Command> {
     // Check for subcommands before flag parsing.
     if let Some(first) = raw_args.first() {
         match first.as_str() {
-            "strip-calls" => {
-                if raw_args.len() != 3 {
-                    return Err(anyhow!(
-                        "Usage: fixture-gen strip-calls <input.json> <output.json>"
-                    ));
-                }
-                let output = PathBuf::from(raw_args.remove(2));
-                let input = PathBuf::from(raw_args.remove(1));
-                return Ok(Command::StripCalls { input, output });
-            }
             "dump" => {
                 if raw_args.len() != 2 {
                     return Err(anyhow!("Usage: fixture-gen dump <input.json>"));
@@ -2131,30 +1794,9 @@ fn parse_args() -> Result<Command> {
                 let input = PathBuf::from(raw_args.remove(1));
                 return Ok(Command::Dump { input });
             }
-            "import-backend-result" => {
-                let args = raw_args.into_iter().skip(1);
-                return parse_import_backend_result_args(args);
-            }
             "historical-root" => {
                 let args = raw_args.into_iter().skip(1);
                 return parse_historical_root_args(args);
-            }
-            "mockify" => {
-                if raw_args.len() != 3 {
-                    return Err(anyhow!(
-                        "Usage: fixture-gen mockify <input.json> <output.json>"
-                    ));
-                }
-                let output = PathBuf::from(raw_args.remove(2));
-                let input = PathBuf::from(raw_args.remove(1));
-                return Ok(Command::Mockify { input, output });
-            }
-            "refresh-fields" => {
-                if raw_args.len() != 2 {
-                    return Err(anyhow!("Usage: fixture-gen refresh-fields <fixture.json>"));
-                }
-                let path = PathBuf::from(raw_args.remove(1));
-                return Ok(Command::RefreshFields { path });
             }
             _ => {}
         }
@@ -2443,21 +2085,7 @@ async fn main() -> Result<()> {
         mock,
         kind_table: _,
     } = match command {
-        Command::StripCalls { input, output } => return strip_calls_from_fixture(&input, &output),
         Command::Dump { input } => return dump_fixture(&input),
-        Command::ImportBackendResult {
-            input,
-            output,
-            root_account_dir,
-            program_id,
-        } => {
-            return import_backend_result_fixture(
-                &input,
-                &output,
-                root_account_dir.as_deref(),
-                program_id,
-            );
-        }
         Command::HistoricalRoot {
             batch_groth16_path,
             committer_out,
@@ -2473,12 +2101,6 @@ async fn main() -> Result<()> {
                 prover_choice,
             )
             .await;
-        }
-        Command::Mockify { input, output } => {
-            return mockify_fixture(&input, &output);
-        }
-        Command::RefreshFields { path } => {
-            return refresh_fixture_fields(&path);
         }
         Command::Generate(args) => args,
     };
@@ -2753,31 +2375,22 @@ mod tests {
         Ok(r)
     }
 
-    #[test]
-    fn decode_base58_32_system_program() {
-        // Solana system program: "11111111111111111111111111111111" (32 '1's) = 32 zero bytes
-        let result = decode_base58_32("11111111111111111111111111111111").unwrap();
-        assert_eq!(result, [0u8; 32]);
-    }
-
-    #[test]
-    fn decode_base58_32_wrong_length_returns_error() {
-        assert!(decode_base58_32("1").is_err());
-    }
-
     /// Helper: build a minimal valid transaction with a real delta proof.
     /// Uses the passthrough logic circuit and ephemeral resources.
     fn build_valid_tx_with_delta_proof(nonce_byte: u8) -> Transaction {
         init_test_kind_table();
-        let (consumed, nf_key, consumed_nf) = deterministic_ephemeral_resource(nonce_byte).unwrap();
+        let (consumed, nf_key, consumed_nf, created) =
+            deterministic_ephemeral_resource(nonce_byte).unwrap();
         let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
-
-        let mut created = consumed;
-        created.nonce = Resource::derive_nonce_from_nullifiers(0, &[consumed_nf]).unwrap();
         let created_cm = created.commitment();
 
-        let witness =
-            single_action_compliance_witness(consumed, MerklePath::empty(), nf_key, created);
+        let witness = single_action_compliance_witness(
+            consumed,
+            MerklePath::empty(),
+            nf_key,
+            created,
+            Scalar::ONE,
+        );
         let cu = arm::compliance_unit::create(&witness, LocalProofType::Succinct).unwrap();
 
         let tags = vec![consumed_nf, created_cm];
@@ -2832,12 +2445,7 @@ mod tests {
     #[test]
     fn valid_tx_passes_delta_verification() {
         let tx = build_valid_tx_with_delta_proof(100);
-        arm::transaction::verify(
-            &tx,
-            *kind_table_hash().unwrap(),
-            JournalEncoding::Risc0Serde,
-        )
-        .unwrap();
+        verify_tx(&tx).unwrap();
     }
 
     /// Swapping the nullifier and commitment tags in the delta message
@@ -2845,12 +2453,7 @@ mod tests {
     #[test]
     fn swapped_tags_invalidate_delta_proof() {
         let tx = build_valid_tx_with_delta_proof(101);
-        arm::transaction::verify(
-            &tx,
-            *kind_table_hash().unwrap(),
-            JournalEncoding::Risc0Serde,
-        )
-        .unwrap();
+        verify_tx(&tx).unwrap();
 
         // Swap nullifier and commitment in the compliance instance. This
         // changes the action tree root and therefore the delta message,
@@ -2865,11 +2468,7 @@ mod tests {
         })
         .unwrap();
 
-        let result = arm::transaction::verify(
-            &swapped,
-            *kind_table_hash().unwrap(),
-            JournalEncoding::Risc0Serde,
-        );
+        let result = verify_tx(&swapped);
         assert!(result.is_err(), "swapped nf/cm must invalidate delta proof");
     }
 
@@ -2877,12 +2476,7 @@ mod tests {
     #[test]
     fn mutated_delta_x_invalidates_proof() {
         let mut tx = build_valid_tx_with_delta_proof(102);
-        arm::transaction::verify(
-            &tx,
-            *kind_table_hash().unwrap(),
-            JournalEncoding::Risc0Serde,
-        )
-        .unwrap();
+        verify_tx(&tx).unwrap();
 
         // Flip a word in delta_x
         let actions = tx.actions.as_mut().unwrap();
@@ -2891,11 +2485,7 @@ mod tests {
         })
         .unwrap();
 
-        let result = arm::transaction::verify(
-            &tx,
-            *kind_table_hash().unwrap(),
-            JournalEncoding::Risc0Serde,
-        );
+        let result = verify_tx(&tx);
         assert!(
             result.is_err(),
             "mutated delta_x must invalidate delta proof"
@@ -2906,12 +2496,7 @@ mod tests {
     #[test]
     fn mutated_nullifier_invalidates_delta_proof() {
         let mut tx = build_valid_tx_with_delta_proof(103);
-        arm::transaction::verify(
-            &tx,
-            *kind_table_hash().unwrap(),
-            JournalEncoding::Risc0Serde,
-        )
-        .unwrap();
+        verify_tx(&tx).unwrap();
 
         // Corrupt the nullifier
         let actions = tx.actions.as_mut().unwrap();
@@ -2920,11 +2505,7 @@ mod tests {
         })
         .unwrap();
 
-        let result = arm::transaction::verify(
-            &tx,
-            *kind_table_hash().unwrap(),
-            JournalEncoding::Risc0Serde,
-        );
+        let result = verify_tx(&tx);
         assert!(
             result.is_err(),
             "mutated nullifier must invalidate delta proof"
