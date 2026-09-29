@@ -12,10 +12,10 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   RUST_VERSION: "1.93.0"
-  # Must match the Solana pinned by flake.nix (solanaVersion) — the SBF build
-  # runs under platform-tools' own cargo, and an older one cannot parse
-  # edition-2024 manifests in the dependency graph.
-  SOLANA_VERSION: "3.1.14"
+  # Must match the Solana pinned by flake.nix (solanaVersion): its
+  # cargo-build-sbf downloads the platform-tools release flake.nix provides
+  # (v1.57), the minimum for the SBPF v3 programs the build targets.
+  SOLANA_VERSION: "4.3.0"
   ANCHOR_VERSION: "1.2.0"
 
 jobs:

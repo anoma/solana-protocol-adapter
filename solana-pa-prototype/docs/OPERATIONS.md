@@ -85,14 +85,14 @@ The deployed PA should be the deterministic `solana-verify` Docker build, so the
 ./scripts/dev.sh upgrade pa --cluster devnet --prebuilt   # ship that exact artifact
 ```
 
-`verify-build` builds with the pinned image (`[workspace.metadata.cli]` in `Cargo.toml` selects it — keep it in lockstep with `flake.nix`) and fails loudly if the deployed program doesn't match. **A normal build overwrites the artifact with non-matching bytes** — after any `anchor-test` or `build-*`, rerun `verify-build` before an upgrade you intend to keep verified. Validate the artifact behaviorally before shipping: `dev.sh validator` (backgrounded), `dev.sh deploy --cluster localnet --prebuilt`, `dev.sh anchor-test --cluster localnet --prebuilt`.
+`verify-build` needs solana-verify 0.5.2 (`cargo install solana-verify --version 0.5.2 --locked`). It builds with the pinned image (`[workspace.metadata.cli]` in `Cargo.toml` selects it — keep it in lockstep with `flake.nix`) for SBPF v3, the architecture every build of these programs targets, and fails loudly if the deployed program doesn't match. **A normal build overwrites the artifact with non-matching bytes** — after any `anchor-test` or `build-*`, rerun `verify-build` before an upgrade you intend to keep verified. Validate the artifact behaviorally before shipping: `dev.sh validator` (backgrounded), `dev.sh deploy --cluster localnet --prebuilt`, `dev.sh anchor-test --cluster localnet --prebuilt`.
 
 The deployment is then reproduced and checked with:
 
 ```sh
 solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
   https://github.com/anoma/solana-protocol-adapter --mount-path solana-pa-prototype \
-  --library-name protocol_adapter
+  --library-name protocol_adapter --arch v3
 ```
 
 **Reach depends on repo visibility.** This repository is private, so today only people with read access (their git credentials satisfy the clone) can run the check; the on-chain verification PDA points at a repo outsiders cannot fetch. The explorer "Verified" badge requires more on both axes: the OtterSec remote API serves mainnet only, and its worker must be able to clone the repo — i.e. the source (at least at the recorded commit) must be public. A mainnet deployment that should carry the badge therefore requires opening the source; that is a product decision, not an operational step.

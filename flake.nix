@@ -53,41 +53,65 @@
           solanaRelease = {
             "x86_64-linux" = {
               target = "x86_64-unknown-linux-gnu";
-              releaseHash = "sha256-Bvl8BlzJd8vsLxP/ybydO5L+9IVDH8s3Ciad5pUy71E=";
-              platformToolsHash = "sha256-izhh6T2vCF7BK2XE+sN02b7EWHo94Whx2msIqwwdkH4=";
-              criterionVersion = "v2.3.3";
-              criterionHash = "sha256-7n+S1yaFY4SKo66Qu/XfhmBLjQ+w5JQrDs+/YgFZZVA=";
+              releaseHash = "sha256-yXKJqKux0O+0l9i1yyhbqr2bf46mZH9dFFxdyP82Eeg=";
+              platformToolsAsset = "linux-x86_64";
+              platformToolsHash = "sha256-sPevEErfcm//KmoJ6i6y8tKWXJIpX01ziMCNFA4MKwA=";
             };
             "x86_64-darwin" = {
               target = "x86_64-apple-darwin";
-              releaseHash = "sha256-43aO0B2qHjz8Aq8+PrOWzsLUipns+AzV173/UQ+AjR8=";
-              platformToolsHash = "sha256-HdTysfe1MWwvGJjzfHXtSV7aoIMzM0kVP+lV5Wg3kdE=";
-              criterionVersion = "v2.3.2";
-              criterionHash = "sha256-pw12DJO7CgNk1HaZxJgTFxF8oTX6vskURIvqAu3c7fI=";
+              releaseHash = "sha256-RCTTmUBOxF1VUzxg0LUkt92a3cpxg8ZQt7EzgovPVYw=";
+              platformToolsAsset = "osx-x86_64";
+              platformToolsHash = "sha256-5vYjGxSeZK1swSYF0PmTQFzlWGKqREBsAjVjFZ+MPK8=";
             };
             "aarch64-darwin" = {
               target = "aarch64-apple-darwin";
-              releaseHash = "sha256-VM/CaAvWQm/aBGGe4Bkz9ApknIBW86Ybog3FTdQn6+0=";
-              platformToolsHash = "sha256-Fyffsx6DPOd30B5wy0s869JrN2vwnYBSfwJFfUz2/QA=";
-              criterionVersion = "v2.3.2";
-              criterionHash = "sha256-pw12DJO7CgNk1HaZxJgTFxF8oTX6vskURIvqAu3c7fI=";
+              releaseHash = "sha256-C/vXaaVeMvCh/huS9282DwHuGUdfrPjDHLkPmdzKf+A=";
+              platformToolsAsset = "osx-aarch64";
+              platformToolsHash = "sha256-SMMsLsOsNym1yvH91sQUVJYSXt8EOyZisFhr+8kys0o=";
             };
           }.${system};
 
-          platformToolsMachine = if pkgs.stdenv.isDarwin then "osx" else "linux";
-          platformToolsArch = if system == "aarch64-darwin" then "aarch64" else "x86_64";
+          solanaVersion = "4.3.0";
 
-          platformToolsSrc = pkgs.fetchurl {
-            url = "https://github.com/anza-xyz/platform-tools/releases/download/v1.52/platform-tools-${platformToolsMachine}-${platformToolsArch}.tar.bz2";
-            hash = solanaRelease.platformToolsHash;
+          # The platform-tools release cargo-build-sbf 4.3.0 and Anchor 1.2.0
+          # both default to (Rust 1.95, LLVM 22).
+          platformToolsVersion = "v1.57";
+
+          platformTools = pkgs.stdenvNoCC.mkDerivation {
+            pname = "platform-tools";
+            version = platformToolsVersion;
+
+            src = pkgs.fetchurl {
+              url = "https://github.com/anza-xyz/platform-tools/releases/download/${platformToolsVersion}/platform-tools-${solanaRelease.platformToolsAsset}.tar.bz2";
+              hash = solanaRelease.platformToolsHash;
+            };
+
+            nativeBuildInputs = lib.optionals pkgs.stdenv.isLinux [
+              pkgs.autoPatchelfHook
+            ];
+
+            buildInputs = lib.optionals pkgs.stdenv.isLinux [
+              pkgs.stdenv.cc.cc.lib
+              pkgs.zlib
+            ];
+
+            dontUnpack = true;
+
+            installPhase = ''
+              runHook preInstall
+
+              mkdir -p "$out"
+              tar -xjf "$src" -C "$out"
+
+              # The debugger (lldb, its library and Python bindings) is not
+              # used to build, and liblldb links host libraries (Python 3.10,
+              # ncurses, libedit, libxml2) that autoPatchelf cannot satisfy.
+              rm -rf "$out/llvm/lib/liblldb"* "$out/llvm/lib/python"*
+              rm -f "$out/llvm/bin/lldb"*
+
+              runHook postInstall
+            '';
           };
-
-          criterionSrc = pkgs.fetchurl {
-            url = "https://github.com/Snaipe/Criterion/releases/download/${solanaRelease.criterionVersion}/criterion-${solanaRelease.criterionVersion}-${platformToolsMachine}-x86_64.tar.bz2";
-            hash = solanaRelease.criterionHash;
-          };
-
-          solanaVersion = "3.1.14";
 
           solanaToolchain = pkgs.stdenvNoCC.mkDerivation {
             pname = "agave-release";
@@ -98,16 +122,13 @@
               hash = solanaRelease.releaseHash;
             };
 
-            nativeBuildInputs = [
-              pkgs.bash
-            ] ++ lib.optionals pkgs.stdenv.isLinux [
+            nativeBuildInputs = lib.optionals pkgs.stdenv.isLinux [
               pkgs.autoPatchelfHook
             ];
 
             buildInputs = lib.optionals pkgs.stdenv.isLinux [
               pkgs.stdenv.cc.cc.lib
               pkgs.zlib
-              pkgs.libffi
               pkgs.openssl
               pkgs.udev
             ];
@@ -120,64 +141,40 @@
               mkdir -p "$out"
               tar -xjf "$src" --strip-components=1 -C "$out"
 
-              mkdir -p "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools"
-              tar -xjf "${platformToolsSrc}" --strip-components=1 -C "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools"
-              mkdir -p "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/bin"
-              cat > "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/bin/lldb-argdumper" <<'EOF'
-#!${pkgs.bash}/bin/bash
-set -euo pipefail
-exec "$(dirname "$0")/../llvm/bin/lldb" "$@"
-EOF
-              chmod +x "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/bin/lldb-argdumper"
-              ln -sfn llvm/lib "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/lib"
-              touch "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools-v1.52.md"
-
-              mkdir -p "$out/bin/platform-tools-sdk/sbf/dependencies/criterion"
-              tar -xjf "${criterionSrc}" --strip-components=1 -C "$out/bin/platform-tools-sdk/sbf/dependencies/criterion"
-              touch "$out/bin/platform-tools-sdk/sbf/dependencies/criterion-${solanaRelease.criterionVersion}.md"
-
-              # Remove optional components with unsatisfiable deps (SGX, CUDA, lldb)
-              rm -rf "$out/bin/perf-libs"
-              rm -rf "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/llvm/lib/liblldb"*
-              rm -rf "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/llvm/lib/python3.10"
-              rm -f "$out/bin/platform-tools-sdk/sbf/dependencies/platform-tools/llvm/bin/lldb"*
-
+              # cargo-build-sbf only looks for platform-tools under
+              # $HOME/.cache/solana/<version>/platform-tools, so the wrapper
+              # links the Nix-built release there, then runs the real binary
+              # against it: no download, and the platform-tools rustc/cargo
+              # on PATH in place of a rustup toolchain.
               mv "$out/bin/cargo-build-sbf" "$out/bin/cargo-build-sbf-real"
               cat > "$out/bin/cargo-build-sbf" <<'EOF'
 #!@bash@
 set -euo pipefail
 
-REAL_BIN="@out@/bin/cargo-build-sbf-real"
-DEFAULT_SDK="@out@/bin/platform-tools-sdk/sbf"
-SBF_SDK="''${SBF_SDK_PATH:-$DEFAULT_SDK}"
-TOOLCHAIN_BIN="$SBF_SDK/dependencies/platform-tools/rust/bin"
-
-if [[ ! -x "$TOOLCHAIN_BIN/rustc" ]]; then
-  echo "Missing Solana SBF rust toolchain at: $TOOLCHAIN_BIN" >&2
+tools_link="$HOME/.cache/solana/@toolsVersion@/platform-tools"
+if [[ -e "$tools_link" && ! -L "$tools_link" ]]; then
+  echo "cargo-build-sbf: $tools_link is a directory, not the Nix platform-tools link." >&2
+  echo "It was downloaded outside the Nix shell; remove it so the pinned release is used." >&2
   exit 1
 fi
+mkdir -p "$(dirname "$tools_link")"
+ln -sfn "@platformTools@" "$tools_link"
 
 if [[ "''${1:-}" == "build-sbf" ]]; then
   shift
-  exec env PATH="$TOOLCHAIN_BIN:$PATH" "$REAL_BIN" \
-    build-sbf \
-    --no-rustup-override \
-    --skip-tools-install \
-    --disable-remap-cwd \
-    --sbf-sdk "$SBF_SDK" \
-    "$@"
 fi
 
-exec env PATH="$TOOLCHAIN_BIN:$PATH" "$REAL_BIN" \
+exec env PATH="@platformTools@/rust/bin:$PATH" "@out@/bin/cargo-build-sbf-real" \
   --no-rustup-override \
   --skip-tools-install \
   --disable-remap-cwd \
-  --sbf-sdk "$SBF_SDK" \
   "$@"
 EOF
               substituteInPlace "$out/bin/cargo-build-sbf" \
                 --subst-var out \
-                --subst-var-by bash "${pkgs.bash}/bin/bash"
+                --subst-var-by bash "${pkgs.bash}/bin/bash" \
+                --subst-var-by platformTools "${platformTools}" \
+                --subst-var-by toolsVersion "${platformToolsVersion}"
               chmod +x "$out/bin/cargo-build-sbf"
 
               runHook postInstall
@@ -228,7 +225,6 @@ EOF
             shellHook = ''
               export CARGO_TERM_COLOR=always
               export RUST_BACKTRACE=1
-              export SBF_SDK_PATH="${solanaToolchain}/bin/platform-tools-sdk/sbf"
 
               # In paths containing spaces, this injected rpath tokenization breaks linking.
               if [[ "''${NIX_LDFLAGS:-}" == *"/outputs/out/lib"* ]]; then

@@ -44,6 +44,14 @@ arm-core = { package = "anoma-rm-core", version = "=2.0.0-rc.6", features = ["bo
 # ARM Solana-specific types (Borsh, syscalls, delta verification)
 arm-solana = { package = "anoma-rm-solana", version = "=2.0.0-rc.6" }
 
+# arm-solana's delta verification calls the sol_secp256k1_recover syscall
+# through solana-nostd-secp256k1-recover. SBPF v3 programs may not carry
+# undefined symbols, so v3 targets reach syscalls by their static hash; that
+# crate selects the static form with this Cargo feature instead of the
+# target's `static-syscalls` target feature, so the targets that have the
+# target feature turn the Cargo feature on here.
+[target.'cfg(target_feature = "static-syscalls")'.dependencies]
+solana-nostd-secp256k1-recover = { version = "0.2.0", features = ["static-syscalls"] }
 
 [dev-dependencies]
 # Forwarder example program (used in tests for constants/encoding)

@@ -98,12 +98,15 @@ ensure_wallet() {
   fi
 }
 
-# `anchor build` defaults to SBPF v3 and platform-tools v1.57. These programs
-# are built for SBPF v0 (cargo build-sbf's own default) with the platform-tools
-# release flake.nix ships, so local, CI, and deployed builds use one compiler.
-# Keep the tools version in lockstep with flake.nix's platform-tools.
+# The SBPF version every program build targets: local and CI builds here, and
+# the solana-verify deterministic build (ops.sh verify-build), whose
+# `cargo build-sbf` would otherwise default to v0. The platform-tools release
+# is left to the tools' shared default (v1.57 for Anchor 1.2.0 and
+# cargo-build-sbf 4.3.0), which is the release flake.nix provides.
+SBPF_ARCH="v3"
+
 anchor_build() {
-  checked_sbf_build anchor build --arch v0 --tools-version v1.52 "$@"
+  checked_sbf_build anchor build --arch "$SBPF_ARCH" "$@"
 }
 
 # Run an SBF build command and fail if it failed or reported a stack-frame

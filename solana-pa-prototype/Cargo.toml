@@ -9,7 +9,7 @@ resolver = "2"
 # platform-tools cannot parse the edition-2024 manifests in our dependency
 # graph. Keep in lockstep with flake.nix's solanaVersion and CI.
 [workspace.metadata.cli]
-solana = "3.1.14"
+solana = "4.3.0"
 
 [workspace.dependencies]
 anchor-lang = "1.2.0"
