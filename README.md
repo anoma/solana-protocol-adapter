@@ -482,12 +482,12 @@ Proofs are dispatched to the AnomaPay workers queue. Set `QUEUE_BASE_URL` and `Q
 
 ```bash
 cd solana-pa-prototype
-cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- tests/fixtures/batch_groth16.json
+cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- batch tests/fixtures/batch_groth16.json
 ```
 
 Generate the mismatch fixture used by the `ExternalCallOutputMismatch` test:
 ```bash
-cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- --output-mismatch tests/fixtures/batch_groth16_mismatch.json
+cargo run --locked --manifest-path tools/fixture-gen/Cargo.toml --release -- output-mismatch tests/fixtures/batch_groth16_mismatch.json
 ```
 
 `fixture-gen` builds `passthrough-logic-guest` in Docker during build/startup.

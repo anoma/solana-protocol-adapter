@@ -77,19 +77,16 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // after-each drain.
   const funder = makeFunder(provider);
 
-  const wrapFixture = requireFixture("spl_token_wrap.json", "--spl-token-wrap");
+  const wrapFixture = requireFixture("spl_token_wrap.json");
   // The same wrap terms (user, mint, amount, nonce) under a different
   // nullifier: a replay of the nonce the adapter cannot catch.
-  const wrapReplayFixture = requireFixture("spl_token_wrap_replay.json", "--spl-token-wrap");
-  const unwrapFixture = requireFixture("spl_token_unwrap.json", "--spl-token-unwrap");
+  const wrapReplayFixture = requireFixture("spl_token_wrap_replay.json");
+  const unwrapFixture = requireFixture("spl_token_unwrap.json");
   // A second wrap (forwarder nonce 2) proven against the solana-devnet kind
   // table, which lists this mint's transfer kind under the forwarder's label.
-  const devnetTableWrapFixture = requireFixture(
-    "spl_token_wrap_devnet_kind_table.json",
-    "--spl-token-wrap --wrap-nonce 2 --kind-table tools/fixture-gen/kind_table_solana_devnet.json",
-  );
+  const devnetTableWrapFixture = requireFixture("spl_token_wrap_devnet_kind_table.json");
   // A program the adapter invokes, relaying an unwrap to this forwarder.
-  const relayFixture = requireFixture("batch_forwarder_relay.json", "--forwarder-relay");
+  const relayFixture = requireFixture("batch_forwarder_relay.json");
   const wrap = wrapFixture.spl_token_wrap!;
   const unwrap = unwrapFixture.spl_token_unwrap!;
 

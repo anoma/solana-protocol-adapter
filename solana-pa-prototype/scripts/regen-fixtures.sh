@@ -42,15 +42,15 @@ gen() {
   cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- "$@"
 }
 
-gen "${MOCK_FLAG[@]}" --error-variants "$OUT_DIR" "$OUT_DIR/batch_groth16.json"
-gen "${MOCK_FLAG[@]}" --output-mismatch "$OUT_DIR/batch_groth16_mismatch.json"
-gen "${MOCK_FLAG[@]}" "$OUT_DIR/batch_groth16_v2.json"
-gen "${MOCK_FLAG[@]}" "$OUT_DIR/batch_groth16_v3.json"
-gen "${MOCK_FLAG[@]}" --multi-external-call "$OUT_DIR/batch_groth16_multi_call.json"
-gen "${MOCK_FLAG[@]}" --forwarder-fail "$OUT_DIR/batch_forwarder_fail.json"
-gen "${MOCK_FLAG[@]}" --forwarder-silent "$OUT_DIR/batch_forwarder_silent.json"
-gen "${MOCK_FLAG[@]}" --forwarder-relay "$OUT_DIR/batch_forwarder_relay.json"
-gen "${MOCK_FLAG[@]}" --transfer-shape "$OUT_DIR/batch_groth16_transfer_shape.json"
+gen batch "${MOCK_FLAG[@]}" --error-variants "$OUT_DIR" "$OUT_DIR/batch_groth16.json"
+gen output-mismatch "${MOCK_FLAG[@]}" "$OUT_DIR/batch_groth16_mismatch.json"
+gen batch "${MOCK_FLAG[@]}" "$OUT_DIR/batch_groth16_v2.json"
+gen batch "${MOCK_FLAG[@]}" "$OUT_DIR/batch_groth16_v3.json"
+gen batch "${MOCK_FLAG[@]}" --multi-external-call "$OUT_DIR/batch_groth16_multi_call.json"
+gen forwarder-fail "${MOCK_FLAG[@]}" "$OUT_DIR/batch_forwarder_fail.json"
+gen forwarder-silent "${MOCK_FLAG[@]}" "$OUT_DIR/batch_forwarder_silent.json"
+gen forwarder-relay "${MOCK_FLAG[@]}" "$OUT_DIR/batch_forwarder_relay.json"
+gen transfer-shape "${MOCK_FLAG[@]}" "$OUT_DIR/batch_groth16_transfer_shape.json"
 
 # The historical-root pair is proven over the tree [batch_groth16,
 # committer]: its spec file settles exactly those two first, so the
@@ -66,16 +66,16 @@ gen historical-root "$OUT_DIR/batch_groth16.json" \
 # and the unwrap. The unwrap consumes the resource the wrap creates, through
 # a Merkle path over a fresh adapter's tree holding only the wrap: its spec
 # file settles the wrap and nothing else before it.
-gen "${MOCK_FLAG[@]}" --spl-token-wrap "$OUT_DIR/spl_token_wrap.json"
-gen "${MOCK_FLAG[@]}" --spl-token-wrap "$OUT_DIR/spl_token_wrap_replay.json"
-gen "${MOCK_FLAG[@]}" --spl-token-unwrap \
+gen spl-token-wrap "${MOCK_FLAG[@]}" "$OUT_DIR/spl_token_wrap.json"
+gen spl-token-wrap "${MOCK_FLAG[@]}" "$OUT_DIR/spl_token_wrap_replay.json"
+gen spl-token-unwrap "${MOCK_FLAG[@]}" \
   --settled="$OUT_DIR/spl_token_wrap.json" \
   "$OUT_DIR/spl_token_unwrap.json"
 
 # A second wrap (forwarder nonce 2) proven against the solana-devnet kind
 # table from anoma/risc0-kind-tables (data/generated/staging), settled
 # after set_kind_table_commitment installs that table.
-gen "${MOCK_FLAG[@]}" --spl-token-wrap --wrap-nonce 2 \
+gen spl-token-wrap "${MOCK_FLAG[@]}" --wrap-nonce 2 \
   --kind-table tools/fixture-gen/kind_table_solana_devnet.json \
   "$OUT_DIR/spl_token_wrap_devnet_kind_table.json"
 
