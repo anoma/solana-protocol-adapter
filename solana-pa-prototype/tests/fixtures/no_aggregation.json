@@ -3,10 +3,10 @@
   "aggregation_strategy": "batch",
   "aggregation_proof_type": "groth16",
   "selector": "0x73c457ba",
-  "tx_b64": "AAEAAABBAAAAAAAAAIRf7sxc2drM8+Th0BWcYk+lv4K9dLZLg14tBH+5bjqUCfW0cWLy+7MOMuVsW84K3a5PTRXcifGtriJ3pnMau4MbAAA=",
+  "tx_b64": "AAEAAABBAAAAAAAAAPB0ndFnGZ1kSsL5Jtzmr8Uclx/tgGT3T8rH+7hDIKneGuEFwizX8y1seCM/+tkm/RmmLJjKGb93/rfpUVI5PKUbAAA=",
   "tx_tampered_b64": "",
   "consumed_nullifiers_b64": [
-    "MBAOb7KPPiGjeMHDO0Em404VdeqhwiAiOQy9qagkwsQ="
+    "2IF4/dbOfTVF4DUQlcVm7Im8BBM10gjWe1YR5YoJ2uU="
   ],
   "created_commitments_b64": []
 }
