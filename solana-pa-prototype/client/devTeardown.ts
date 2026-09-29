@@ -1,13 +1,13 @@
 /**
  * Builders for the adapter's `dev-teardown` instructions, which production
- * builds do not compile in. They live apart from helpers.ts because the
- * operator scripts that run against production builds import helpers.ts, and
- * naming one of these instructions there would stop them compiling against
- * production types. Only the suite and close-pdas.ts import this module.
+ * builds do not compile in. They are kept out of instructions.ts so that
+ * only the tools meant for dev deployments reach them: the suite and
+ * close-pdas.ts import this module, and the operator scripts that run
+ * against production deployments do not.
  */
 import { Program } from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
-import { ProtocolAdapter } from "../../target/types/protocol_adapter";
+import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { derivePaStatePda } from "./pda";
 
 /**

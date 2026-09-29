@@ -8,17 +8,9 @@ import * as anchor from "@anchor-lang/core";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { getAccount, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { assert } from "chai";
-import {
-  assertRejects,
-  closeAllNonceBitmaps,
-  closeEscrow,
-  createFundedEscrow,
-  deriveConfigPda,
-  deriveNonceBitmapPda,
-  makeFunder,
-  randomRef,
-  closeConfig,
-} from "./utils";
+import { closeAllNonceBitmaps, closeEscrow, closeConfig } from "../client/instructions";
+import { deriveConfigPda, deriveNonceBitmapPda } from "../client/pda";
+import { assertRejects, createFundedEscrow, makeFunder, randomRef } from "./utils";
 import {
   ensureAdapterInitialized,
   forwarderProgram,

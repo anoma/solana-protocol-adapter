@@ -5,14 +5,8 @@
 import * as anchor from "@anchor-lang/core";
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  MAX_EXPIRY_SLOTS,
-  MIN_ALLOWED_EXPIRY,
-  MIN_EXPIRY_SLOTS,
-  SEVEN_DAYS_SLOTS,
-  AUTHORITY_MISMATCH_PATTERN,
-  errorHaystack,
-} from "./utils";
+import { MAX_EXPIRY_SLOTS, MIN_ALLOWED_EXPIRY, MIN_EXPIRY_SLOTS, SEVEN_DAYS_SLOTS } from "../client/constants";
+import { AUTHORITY_MISMATCH_PATTERN, errorHaystack } from "./utils";
 import {
   provider,
   program,

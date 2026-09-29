@@ -1,7 +1,7 @@
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { setKindTableCommitment } from "../tests/utils/helpers";
+import { setKindTableCommitment } from "../client/instructions";
 import { requireHexBytes } from "./cli-utils";
 
 async function main() {

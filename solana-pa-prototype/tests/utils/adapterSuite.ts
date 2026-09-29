@@ -3,7 +3,7 @@
  * settlement builders, error assertions, precondition helpers, and
  * `useAdapterSuite`, the hooks a spec file installs inside its own top-level
  * describe. Only spec files import this module: it resolves the workspace
- * programs when loaded, which the operator scripts importing ./index cannot.
+ * programs when loaded.
  */
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
@@ -22,30 +22,25 @@ import { BlockTimeForwarder } from "../../target/types/block_time_forwarder";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { TestForwarder } from "../../target/types/test_forwarder";
-import {
-  getRouterPda,
-  getVerifierEntryPda,
-  VERIFIER_ROUTER_ID,
-  verifierForSelector,
-} from "../../scripts/verifier-utils";
-import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
-import { createdCommitmentsOf, loadFixture, parseSelectorFromFixture, readJson } from "./fixtures";
-import {
-  confirmedTransaction,
-  emergencyStop,
-  initializeAdapter,
-  initializeForwarder,
-  initTxData as initTxDataOf,
-  makeFunder,
-  uploadTxData as uploadTxDataTo,
-} from "./helpers";
-import { ensureSettlementLookupTable, sendV0, settlementLookupKeys } from "./lookupTable";
-import { predictRootMarkerPda as predictRootMarkerPdaOf } from "./merkle";
+import { MockVerifier } from "../../target/types/mock_verifier";
+import { emergencyStop, initializeAdapter, initializeForwarder } from "../../client/instructions";
+import { ensureSettlementLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
   derivePaStatePda,
   deriveRootMarkerPda,
-} from "./pda";
+} from "../../client/pda";
+import { getRouterPda, getVerifierEntryPda, GROTH16_VERIFIER_ID, VERIFIER_ROUTER_ID } from "../../client/verifier";
+import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
+import { createdCommitmentsOf, loadFixture, parseSelectorFromFixture, readJson } from "./fixtures";
+import {
+  confirmedTransaction,
+  initTxData as initTxDataOf,
+  makeFunder,
+  sendV0,
+  uploadTxData as uploadTxDataTo,
+} from "./helpers";
+import { predictRootMarkerPda as predictRootMarkerPdaOf } from "./merkle";
 
 type Meta = { pubkey: PublicKey; isWritable: boolean; isSigner: boolean };
 
@@ -58,6 +53,33 @@ export const [paState] = derivePaStatePda(program.programId);
 
 /** The primary fixture: one ephemeral consumed resource, one created, a block-time-forwarder call. */
 export const fixture = loadFixture("batch_groth16.json");
+
+// Verifiers by router selector. Fixtures carry their selector, so tests
+// derive the verifier program and its error codes from the fixture instead
+// of hardcoding one. `rejectionCode` rejects a well-formed proof that does not
+// verify; `malformedProofCode` rejects proof bytes that are not valid curve
+// points. Unknown selectors fail loudly rather than silently defaulting to
+// some verifier.
+type Verifier = { program: PublicKey; rejectionCode: number; malformedProofCode: number };
+
+function verifierForSelector(selector: Buffer): Verifier {
+  const hex = selector.toString("hex");
+  switch (hex) {
+    // groth_16_verifier: VerificationError, PairingError
+    case "73c457ba":
+      return { program: GROTH16_VERIFIER_ID, rejectionCode: 6000, malformedProofCode: 6003 };
+    // mock-verifier (programs/mock-verifier, localnet only): ClaimDigestMismatch
+    // for both (it checks no curve points; offset 6600 keeps it disjoint)
+    case "ffffffff":
+      return {
+        program: (anchor.workspace.MockVerifier as Program<MockVerifier>).programId,
+        rejectionCode: 6600,
+        malformedProofCode: 6600,
+      };
+    default:
+      throw new Error(`no verifier registered for selector 0x${hex}`);
+  }
+}
 
 export const PROOF_SELECTOR = parseSelectorFromFixture(fixture.selector);
 export const VERIFIER = verifierForSelector(PROOF_SELECTOR);

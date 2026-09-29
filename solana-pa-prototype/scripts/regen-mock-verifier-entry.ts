@@ -19,7 +19,7 @@
 import { PublicKey } from "@solana/web3.js";
 import * as crypto from "crypto";
 import { writeGenesisAccountFixtures } from "./genesis-account";
-import { VERIFIER_ROUTER_ID, MOCK_SELECTOR, getVerifierEntryPda } from "./verifier-utils";
+import { VERIFIER_ROUTER_ID, MOCK_SELECTOR, getVerifierEntryPda } from "../client/verifier";
 
 const args = process.argv.slice(2);
 if (args.length !== 1) {

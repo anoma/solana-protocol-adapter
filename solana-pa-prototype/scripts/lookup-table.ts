@@ -4,7 +4,7 @@
  *
  *   ./scripts/dev.sh lookup-table --cluster <c> [--wallet <path>]
  *
- * The key set is `settlementLookupKeys` (tests/utils/lookupTable.ts), fed
+ * The key set is `settlementLookupKeys` (client/lookupTable.ts), fed
  * by the deployed programs and PAState's pinned router and selector; see
  * docs/OPERATIONS.md, "The settlement lookup table". The wallet pays and is
  * the table's authority.
@@ -19,10 +19,10 @@ import { Program } from "@anchor-lang/core";
 import { BlockTimeForwarder } from "../target/types/block_time_forwarder";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
-import { ensureSettlementLookupTable, settlementLookupKeys } from "../tests/utils/lookupTable";
-import { derivePaStatePda } from "../tests/utils/pda";
+import { ensureSettlementLookupTable, settlementLookupKeys } from "../client/lookupTable";
+import { derivePaStatePda } from "../client/pda";
 import { parsePubkey, requirePubkey } from "./cli-utils";
-import { getVerifierEntryPda, verifierOfEntry } from "./verifier-utils";
+import { getVerifierEntryPda, verifierOfEntry } from "../client/verifier";
 
 async function main() {
   const provider = anchor.AnchorProvider.env();

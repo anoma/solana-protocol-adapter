@@ -5,7 +5,8 @@
  */
 import { PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { AUTHORITY_MISMATCH_PATTERN, errorHaystack, emergencyStop } from "./utils";
+import { emergencyStop } from "../client/instructions";
+import { AUTHORITY_MISMATCH_PATTERN, errorHaystack } from "./utils";
 import {
   provider,
   program,

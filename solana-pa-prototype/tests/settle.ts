@@ -5,10 +5,10 @@
  */
 import { PublicKey, SystemProgram, Keypair, ComputeBudgetProgram, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
+import { SCHEMA_VERSION } from "../client/constants";
+import { VERIFIER_ROUTER_ID } from "../client/verifier";
 import {
   EMPTY_TREE_ROOT_INITIAL,
-  SCHEMA_VERSION,
   loadFixture,
   errorHaystack,
   createdCommitmentsOf as commitmentsOf,

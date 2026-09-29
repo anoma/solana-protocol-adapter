@@ -4,7 +4,8 @@
  */
 import { Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { assert } from "chai";
-import { AUTHORITY_MISMATCH_PATTERN, closeAllMarkers, closeMarkersBatch } from "./utils";
+import { closeAllMarkers, closeMarkersBatch } from "../client/devTeardown";
+import { AUTHORITY_MISMATCH_PATTERN } from "./utils";
 import { provider, program, ensureAdapterInitialized, stopAdapter, useAdapterSuite } from "./utils/adapterSuite";
 
 // ── Close instruction tests ──────────────────────────────────────────────

@@ -1,8 +1,8 @@
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { initializeAdapter } from "../tests/utils/helpers";
-import { derivePaStatePda } from "../tests/utils/pda";
+import { initializeAdapter } from "../client/instructions";
+import { derivePaStatePda } from "../client/pda";
 import { requireHexBytes, requirePubkey } from "./cli-utils";
 
 async function main() {

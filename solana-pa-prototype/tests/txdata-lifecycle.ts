@@ -5,16 +5,10 @@
 import * as anchor from "@anchor-lang/core";
 import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
-import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
-import {
-  MIN_EXPIRY_SLOTS,
-  MAX_EXPIRY_SLOTS,
-  SEED_MISMATCH_PATTERN,
-  ADDRESS_MISMATCH_PATTERN,
-  deriveTxDataPda,
-  errorHaystack,
-  freshUploadId,
-} from "./utils";
+import { MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS } from "../client/constants";
+import { deriveTxDataPda } from "../client/pda";
+import { VERIFIER_ROUTER_ID } from "../client/verifier";
+import { SEED_MISMATCH_PATTERN, ADDRESS_MISMATCH_PATTERN, errorHaystack, freshUploadId } from "./utils";
 import {
   provider,
   program,

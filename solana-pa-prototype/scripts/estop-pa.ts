@@ -1,8 +1,8 @@
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { emergencyStop } from "../tests/utils/helpers";
-import { derivePaStatePda } from "../tests/utils/pda";
+import { emergencyStop } from "../client/instructions";
+import { derivePaStatePda } from "../client/pda";
 
 function isStopped(lifecycle: object): boolean {
   return "stopped" in lifecycle;

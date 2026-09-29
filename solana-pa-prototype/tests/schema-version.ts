@@ -5,8 +5,10 @@
 import * as anchor from "@anchor-lang/core";
 import { PublicKey, SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
-import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
-import { loadFixture, randomRef, closeMarkersBatch, emergencyStop, setKindTableCommitment } from "./utils";
+import { emergencyStop, setKindTableCommitment } from "../client/instructions";
+import { closeMarkersBatch } from "../client/devTeardown";
+import { VERIFIER_ROUTER_ID } from "../client/verifier";
+import { loadFixture, randomRef } from "./utils";
 import {
   provider,
   program,

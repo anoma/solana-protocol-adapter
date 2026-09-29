@@ -55,8 +55,8 @@ import {
   initializeForwarder,
   setEmergencyCaller,
   setLogicRef,
-} from "../tests/utils/helpers";
-import { deriveConfigPda, derivePaStatePda } from "../tests/utils/pda";
+} from "../client/instructions";
+import { deriveConfigPda, derivePaStatePda } from "../client/pda";
 import { fail, requireHexBytes, requirePubkey, requireRawAmount } from "./cli-utils";
 
 const provider = anchor.AnchorProvider.env();

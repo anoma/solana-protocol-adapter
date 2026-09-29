@@ -5,7 +5,9 @@
  */
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { assertRejects, deriveConfigPda, initializeForwarder, makeFunder, randomRef } from "./utils";
+import { initializeForwarder } from "../client/instructions";
+import { deriveConfigPda } from "../client/pda";
+import { assertRejects, makeFunder, randomRef } from "./utils";
 import { forwarderProgram, program as paProgram, provider } from "./utils/adapterSuite";
 
 describe("forwarder initialize", () => {

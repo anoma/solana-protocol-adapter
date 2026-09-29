@@ -5,13 +5,9 @@
  */
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  EMPTY_KIND_TABLE_COMMITMENT,
-  AUTHORITY_MISMATCH_PATTERN,
-  randomRef,
-  assertRejects,
-  setKindTableCommitment,
-} from "./utils";
+import { setKindTableCommitment } from "../client/instructions";
+import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
+import { AUTHORITY_MISMATCH_PATTERN, randomRef, assertRejects } from "./utils";
 import {
   provider,
   program,

@@ -7,16 +7,9 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { createAccount, getAccount } from "@solana/spl-token";
 import { assert } from "chai";
-import {
-  approvedTokenAccount,
-  assertRejects,
-  createFundedEscrow,
-  deriveConfigPda,
-  emergencyWithdraw,
-  makeFunder,
-  randomRef,
-  setEmergencyCaller,
-} from "./utils";
+import { emergencyWithdraw, setEmergencyCaller } from "../client/instructions";
+import { deriveConfigPda } from "../client/pda";
+import { approvedTokenAccount, assertRejects, createFundedEscrow, makeFunder, randomRef } from "./utils";
 import {
   ensureAdapterInitialized,
   forwarderProgram,

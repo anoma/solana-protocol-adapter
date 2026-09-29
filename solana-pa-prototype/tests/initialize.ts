@@ -6,8 +6,8 @@
  */
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
+import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
 import { errorHaystack } from "./utils";
-import { EMPTY_KIND_TABLE_COMMITMENT } from "./utils/constants";
 import {
   buildInitialize,
   cpiEventsOf,

@@ -3,7 +3,7 @@
  * settles the primary fixture, leaving markers to attempt.
  */
 import { assert } from "chai";
-import { closeMarkersBatch } from "./utils";
+import { closeMarkersBatch } from "../client/devTeardown";
 import {
   provider,
   program,

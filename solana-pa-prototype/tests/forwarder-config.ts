@@ -8,18 +8,10 @@
 import * as anchor from "@anchor-lang/core";
 import { Keypair, PublicKey, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  OP_UNWRAP,
-  assertRejects,
-  confirmedTransaction,
-  deriveConfigPda,
-  deriveProgramDataPda,
-  encodeUnwrapInput,
-  makeFunder,
-  randomRef,
-  setLogicRef,
-  setEmergencyCaller,
-} from "./utils";
+import { encodeUnwrapInput, setLogicRef, setEmergencyCaller } from "../client/instructions";
+import { OP_UNWRAP } from "../client/constants";
+import { deriveConfigPda, deriveProgramDataPda } from "../client/pda";
+import { assertRejects, confirmedTransaction, makeFunder, randomRef } from "./utils";
 import { forwarderProgram, initForwarderConfig, paState, program as paProgram, provider } from "./utils/adapterSuite";
 
 describe("forwarder config (logic ref and direct-call guards)", () => {

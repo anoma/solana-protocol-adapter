@@ -4,8 +4,8 @@
  */
 import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
-import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
-import { emergencyStop } from "./utils";
+import { emergencyStop } from "../client/instructions";
+import { VERIFIER_ROUTER_ID } from "../client/verifier";
 import {
   provider,
   program,

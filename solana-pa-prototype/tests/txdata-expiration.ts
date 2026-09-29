@@ -6,8 +6,9 @@
 import * as anchor from "@anchor-lang/core";
 import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
-import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
-import { MAX_EXPIRY_SLOTS, MIN_ALLOWED_EXPIRY, waitForSlotPast } from "./utils";
+import { MAX_EXPIRY_SLOTS, MIN_ALLOWED_EXPIRY } from "../client/constants";
+import { VERIFIER_ROUTER_ID } from "../client/verifier";
+import { waitForSlotPast } from "./utils";
 import {
   provider,
   program,

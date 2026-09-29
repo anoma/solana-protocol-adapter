@@ -4,7 +4,7 @@ import { Program } from "@anchor-lang/core";
 import { createHash } from "crypto";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
-import { deriveRootMarkerPda } from "./pda";
+import { deriveRootMarkerPda } from "../../client/pda";
 
 const MAX_TREE_DEPTH = 32;
 

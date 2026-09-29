@@ -4,7 +4,8 @@
  */
 import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import { RESULT_LT, loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils";
+import { RESULT_LT } from "../client/constants";
+import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils";
 import {
   provider,
   program,

@@ -6,7 +6,7 @@
  */
 import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { assert } from "chai";
-import { VERIFIER_ROUTER_ID } from "../../scripts/verifier-utils";
+import { VERIFIER_ROUTER_ID } from "../../client/verifier";
 import { assertRejects, loadFixture } from "../utils";
 import {
   DUMMY_ROOT_MARKER,

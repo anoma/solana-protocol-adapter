@@ -25,32 +25,30 @@ import {
 } from "@solana/spl-token";
 import { assert } from "chai";
 import {
-  EMPTY_KIND_TABLE_COMMITMENT,
+  escrowAccounts,
+  escrowTransferAccounts,
+  setLogicRef,
+  closeAllNonceBitmaps,
+  closeConfig,
+  closeEscrow,
+  setEmergencyCaller,
+  setKindTableCommitment,
+} from "../client/instructions";
+import { EMPTY_KIND_TABLE_COMMITMENT, NONCES_PER_WORD } from "../client/constants";
+import { deriveTxDataPda, deriveConfigPda, deriveNonceBitmapPda, nonceWordIndex } from "../client/pda";
+import {
   SOLANA_DEVNET_KIND_TABLE_COMMITMENT,
   randomRef,
   requireFixture,
   type Fixture,
   predictRootAfterAppend,
-  deriveTxDataPda,
-  NONCES_PER_WORD,
   approvedTokenAccount,
   assertRejects,
   compileV0,
-  deriveConfigPda,
-  deriveNonceBitmapPda,
-  escrowAccounts,
-  escrowTransferAccounts,
   makeFunder,
-  nonceWordIndex,
   seededKeypair,
-  setLogicRef,
   freshUploadId,
-  closeAllNonceBitmaps,
-  closeConfig,
-  closeEscrow,
   createFundedEscrow,
-  setEmergencyCaller,
-  setKindTableCommitment,
   createdCommitmentsOf as commitmentsOf,
 } from "./utils";
 import {
