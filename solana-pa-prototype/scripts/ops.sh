@@ -847,7 +847,7 @@ cmd_test() {
   echo "Running cluster integration tests (${CLUSTER}): ${specs[*]}"
   ANCHOR_PROVIDER_URL="$RPC_URL" \
   ANCHOR_WALLET="$WALLET" \
-    yarn run ts-mocha -p ./tsconfig.json -t 1000000 "${specs[@]}"
+    yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 "${specs[@]}"
 
   echo ""
   echo "✅ Cluster tests passed (${CLUSTER})"
