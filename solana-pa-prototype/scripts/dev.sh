@@ -155,7 +155,7 @@ case "${1:-}" in
 
   coverage)
     echo "Building test binaries..."
-    BUILD_JSON=$(run_in_project "cargo test -p protocol-adapter -p block-time-forwarder -p spl-token-forwarder --no-run --message-format=json 2>/dev/null")
+    BUILD_JSON=$(run_in_project "cargo test -p protocol-adapter -p block-time-forwarder -p spl-token-forwarder --no-run --message-format=json")
     BINS=$(echo "$BUILD_JSON" | jq -r 'select(.executable != null and .profile.test == true) | .executable')
 
     if [[ -z "$BINS" ]]; then
@@ -174,9 +174,9 @@ case "${1:-}" in
     done
 
     # Find merged coverage (or single-binary coverage)
-    COV_JSON=$(find "$KCOV_DIR" -name coverage.json -path "*/kcov-merged/*" 2>/dev/null | head -1)
+    COV_JSON=$(find "$KCOV_DIR" -name coverage.json -path "*/kcov-merged/*" -print -quit)
     if [[ -z "$COV_JSON" ]]; then
-      COV_JSON=$(find "$KCOV_DIR" -name coverage.json 2>/dev/null | head -1)
+      COV_JSON=$(find "$KCOV_DIR" -name coverage.json -print -quit)
     fi
 
     if [[ -z "$COV_JSON" ]]; then
@@ -243,8 +243,10 @@ PYEOF
     echo "  anchor-build Build Anchor programs (development build, dev-teardown enabled)"
     echo "  release-build Build the production binaries (no dev-teardown; verifies"
     echo "               the dev-only instructions are absent from the IDL)"
-    echo "  anchor-test [--cluster <c>]"
-    echo "               Local: full deterministic integration flow (default)."
+    echo "  anchor-test [--cluster <c>] [--mode <real|mock>] [spec file...]"
+    echo "               Local: full deterministic integration flow (default),"
+    echo "               each spec file on its own fresh validator; spec files"
+    echo "               (e.g. tests/01-spl-token-forwarder.ts) restrict the run."
     echo "               devnet/mainnet: cluster-safe subset against deployed programs"
     echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
     echo "  regen-fixtures <real|mock>"

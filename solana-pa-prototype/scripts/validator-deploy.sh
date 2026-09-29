@@ -15,6 +15,9 @@
 # Exported after sync_program_ids:
 #   PA_ID, BTF_ID, TF_ID, MV_ID
 #
+# Exported after workspace_program_args:
+#   WORKSPACE_PROGRAM_ARGS
+#
 # Exported after start_validator:
 #   VALIDATOR_PID
 
@@ -25,11 +28,16 @@ VALIDATOR_LEDGER="${VALIDATOR_LEDGER:-${PROJECT_DIR}/.validator-ledger}"
 VALIDATOR_LOG="${VALIDATOR_LOG:-${PROJECT_DIR}/.validator.log}"
 ANCHOR_WALLET_PATH="${ANCHOR_WALLET:-$HOME/.config/solana/id.json}"
 
-# RISC0 verifier programs and PDAs cloned from devnet
+# RISC0 verifier programs and PDAs copied from devnet into every local
+# validator's genesis. fetch_devnet_clones downloads them once into
+# DEVNET_CLONE_DIR (gitignored), so each validator start is offline.
 VERIFIER_ROUTER="BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"
 GROTH16_VERIFIER="2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"
 ROUTER_PDA="9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"
 VERIFIER_ENTRY_PDA="4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
+DEVNET_CLONE_PROGRAMS=("$VERIFIER_ROUTER" "$GROTH16_VERIFIER")
+DEVNET_CLONE_ACCOUNTS=("$ROUTER_PDA" "$VERIFIER_ENTRY_PDA")
+DEVNET_CLONE_DIR="${PROJECT_DIR}/.cache/devnet-clones"
 # Selector registered for the groth16 verifier entry above
 GROTH16_SELECTOR="0x73c457ba"
 # Selector the synthetic genesis VerifierEntry registers the localnet
@@ -62,9 +70,9 @@ assert_known_programs() {
     if [[ $ok -eq 0 ]]; then
       echo "    ❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
       echo "       Builds and deploys go by name. Register '${pkg}' in ALL of:" >&2
-      echo "       EXPECTED_PROGRAMS, PROGRAM_KEYPAIRS, sync_program_ids," >&2
-      echo "       build_programs_dev, build_programs_release, and" >&2
-      echo "       deploy_programs (this file), plus the PROGRAMS/PROGRAM_LIBRS" >&2
+      echo "       EXPECTED_PROGRAMS, PROGRAM_KEYPAIRS (which also drives the" >&2
+      echo "       local validator's genesis), sync_program_ids, build_programs_dev," >&2
+      echo "       and build_programs_release (this file), plus the PROGRAMS/PROGRAM_LIBRS" >&2
       echo "       registries in ops.sh if it deploys to real clusters —" >&2
       echo "       otherwise it silently never gets built or deployed." >&2
       exit 1
@@ -133,17 +141,25 @@ validate_test_mode() {
   fi
 }
 
+# Poll the validator's health endpoint until it answers. A refused
+# connection is the expected state while it boots, so the probe's own
+# output is discarded; a validator that exits during boot fails at once.
 wait_for_validator() {
   local url="$1"
   local attempts=60
 
   for _ in $(seq 1 "$attempts"); do
-    if curl -fsS "${url}/health" >/dev/null 2>&1; then
+    if curl -fs -o /dev/null "${url}/health"; then
       return 0
+    fi
+    if ! kill -0 "$VALIDATOR_PID"; then
+      echo "Validator process ${VALIDATOR_PID} exited during startup" >&2
+      return 1
     fi
     sleep 1
   done
 
+  echo "Validator did not become healthy within ${attempts}s" >&2
   return 1
 }
 
@@ -161,12 +177,11 @@ sync_program_id() {
   # Safety: verify the keypair matches what's committed in git.
   # If someone accidentally regenerated a keypair, this catches it
   # before we silently rewrite declare_id! to a new program ID.
-  local committed_keypair
-  committed_keypair="$(git show HEAD:"$keypair" 2>/dev/null || true)"
-  if [[ -n "$committed_keypair" ]]; then
+  # A keypair not yet committed has nothing to compare against.
+  if git cat-file -e HEAD:"$keypair"; then
     local committed_id
-    committed_id="$(echo "$committed_keypair" | solana-keygen pubkey /dev/stdin 2>/dev/null || true)"
-    if [[ -n "$committed_id" && "$committed_id" != "$id" ]]; then
+    committed_id="$(git show HEAD:"$keypair" | solana-keygen pubkey /dev/stdin)"
+    if [[ "$committed_id" != "$id" ]]; then
       echo "    ❌ ${name} keypair was regenerated! Local: $id, committed: $committed_id" >&2
       echo "    Restore with: git checkout HEAD -- $keypair" >&2
       exit 1
@@ -220,8 +235,8 @@ restore_program_keypairs() {
   if [[ "$missing" == "true" ]]; then
     # git show/checkout use paths relative to repo root, not working dir
     local git_root
-    git_root="$(git rev-parse --show-prefix 2>/dev/null)"
-    if git show "HEAD:${git_root}target/deploy/protocol_adapter-keypair.json" >/dev/null 2>&1; then
+    git_root="$(git rev-parse --show-prefix)"
+    if git cat-file -e "HEAD:${git_root}target/deploy/protocol_adapter-keypair.json"; then
       echo "    Restoring program keypairs from git..."
       git checkout HEAD -- target/deploy/
     fi
@@ -271,15 +286,17 @@ lock_commit_for() {
   if [[ ! -f "$lockfile" ]]; then
     return 0
   fi
-  # `grep` returns 1 when this lockfile doesn't include $pkg — a legitimate
-  # case (different lockfiles have different dep sets, e.g. the guest lockfile
-  # doesn't include workspace-only deps like anoma-pa-solana-client). Suppress
-  # so callers under `set -e` see the empty string instead of an early exit.
-  grep -A2 "^name = \"${pkg}\"$" "$lockfile" \
-    | grep "^source" \
-    | grep -oP '#\K[a-f0-9]+' \
-    | head -1 \
-    || true
+  # A lockfile without $pkg is a legitimate case: different lockfiles have
+  # different dep sets (the guest lockfile lacks workspace-only deps like
+  # anoma-pa-solana-client). It, and a package with no git source, print
+  # nothing.
+  local block
+  if ! block="$(grep -A2 "^name = \"${pkg}\"$" "$lockfile")"; then
+    return 0
+  fi
+  if [[ "$block" =~ source\ =\ \"git\+[^\"#]*#([a-f0-9]+)\" ]]; then
+    echo "${BASH_REMATCH[1]}"
+  fi
 }
 
 # Verify every package in LOCK_SYNC_PACKAGES resolves to the same commit
@@ -507,13 +524,81 @@ check_required_fixture() {
   fi
 }
 
+# Download the devnet RISC0 verifier stack into DEVNET_CLONE_DIR: each
+# program's binary and its devnet upgrade authority (the groth16 verifier's
+# authority is the router PDA, which the router relies on), and each PDA's
+# account data. Overwrites the previous download, so every run starts from
+# devnet's current state.
+fetch_devnet_clones() {
+  local id addr
+  mkdir -p "$DEVNET_CLONE_DIR"
+  echo "    Fetching the devnet verifier stack into ${DEVNET_CLONE_DIR}"
+  for id in "${DEVNET_CLONE_PROGRAMS[@]}"; do
+    solana program dump --url devnet "$id" "${DEVNET_CLONE_DIR}/${id}.so"
+    solana program show --url devnet "$id" --output json |
+      node -e '
+        let raw = "";
+        process.stdin.on("data", (d) => (raw += d)).on("end", () => {
+          const { authority } = JSON.parse(raw);
+          if (!authority) {
+            console.error(`devnet program ${process.argv[1]} reports no upgrade authority`);
+            process.exit(1);
+          }
+          process.stdout.write(authority);
+        });
+      ' "$id" >"${DEVNET_CLONE_DIR}/${id}.authority"
+  done
+  for addr in "${DEVNET_CLONE_ACCOUNTS[@]}"; do
+    solana account --url devnet "$addr" --output json --output-file "${DEVNET_CLONE_DIR}/${addr}.json" >/dev/null
+  done
+}
+
+# Set WORKSPACE_PROGRAM_ARGS to the solana-test-validator arguments that load
+# every workspace program at genesis from target/deploy, upgradeable, with
+# the provider wallet as upgrade authority (what `anchor deploy` would set).
+workspace_program_args() {
+  local kp so
+  WORKSPACE_PROGRAM_ARGS=()
+  for kp in "${PROGRAM_KEYPAIRS[@]}"; do
+    so="target/deploy/$(basename "$kp" -keypair.json).so"
+    if [[ ! -f "$so" ]]; then
+      echo "❌ ${so} is missing; build the programs first." >&2
+      exit 1
+    fi
+    WORKSPACE_PROGRAM_ARGS+=(--upgradeable-program "$kp" "$so" "$ANCHOR_WALLET_PATH")
+  done
+}
+
+# Start a validator on a fresh ledger with the devnet verifier stack (from
+# fetch_devnet_clones) and the genesis account fixtures preloaded. Extra
+# arguments are passed to solana-test-validator (e.g. WORKSPACE_PROGRAM_ARGS).
 start_validator() {
-  # Kill any existing validator on the target port to avoid bind conflicts
-  local existing_pid
-  existing_pid=$(lsof -ti :8899 2>/dev/null || true)
-  if [[ -n "$existing_pid" ]]; then
-    echo "Killing existing process on port 8899 (pid $existing_pid)"
-    kill -9 $existing_pid 2>/dev/null || true
+  local clone_args=() id addr file
+  for id in "${DEVNET_CLONE_PROGRAMS[@]}"; do
+    for file in "${DEVNET_CLONE_DIR}/${id}.so" "${DEVNET_CLONE_DIR}/${id}.authority"; do
+      if [[ ! -s "$file" ]]; then
+        echo "❌ ${file} is missing; run fetch_devnet_clones first." >&2
+        return 1
+      fi
+    done
+    clone_args+=(--upgradeable-program "$id" "${DEVNET_CLONE_DIR}/${id}.so" "$(<"${DEVNET_CLONE_DIR}/${id}.authority")")
+  done
+  for addr in "${DEVNET_CLONE_ACCOUNTS[@]}"; do
+    file="${DEVNET_CLONE_DIR}/${addr}.json"
+    if [[ ! -s "$file" ]]; then
+      echo "❌ ${file} is missing; run fetch_devnet_clones first." >&2
+      return 1
+    fi
+    clone_args+=(--account "$addr" "$file")
+  done
+
+  # A process left on the RPC port (e.g. by an interrupted run) would make
+  # the new validator fail to bind. lsof exits 1 when nothing listens.
+  local existing_pids
+  if existing_pids="$(lsof -ti :8899)"; then
+    echo "Killing existing process on port 8899 (pid(s) ${existing_pids//$'\n'/ })"
+    # shellcheck disable=SC2086
+    kill -9 $existing_pids
     sleep 1
   fi
 
@@ -537,41 +622,42 @@ start_validator() {
   }
   add_genesis_accounts tests/fixtures/verifier-entries verifier-entry-
 
+  local started_at="$EPOCHREALTIME"
   solana-test-validator \
     --reset \
     --ledger "$VALIDATOR_LEDGER" \
     --rpc-port 8899 \
     --faucet-port 9900 \
     --bind-address 127.0.0.1 \
-    --url devnet \
-    --clone-upgradeable-program "$VERIFIER_ROUTER" \
-    --clone-upgradeable-program "$GROTH16_VERIFIER" \
-    --clone "$ROUTER_PDA" \
-    --clone "$VERIFIER_ENTRY_PDA" \
+    "${clone_args[@]}" \
     "${account_args[@]}" \
+    "$@" \
     --log \
     >"$VALIDATOR_LOG" 2>&1 &
   VALIDATOR_PID=$!
 
   if ! wait_for_validator "$CLUSTER_URL"; then
     echo "Validator failed to start. Last lines from ${VALIDATOR_LOG}:"
-    tail -n 50 "$VALIDATOR_LOG" || true
+    tail -n 50 "$VALIDATOR_LOG"
     return 1
   fi
+  echo "Validator ready (pid ${VALIDATOR_PID}) in $(awk -v a="$started_at" -v b="$EPOCHREALTIME" 'BEGIN { printf "%.2f", b - a }')s"
 }
 
-deploy_programs() {
-  anchor deploy --provider.cluster "$CLUSTER_URL" --program-name protocol_adapter
-  anchor deploy --provider.cluster "$CLUSTER_URL" --program-name block_time_forwarder
-  anchor deploy --provider.cluster "$CLUSTER_URL" --program-name spl_token_forwarder
-  anchor deploy --provider.cluster "$CLUSTER_URL" --program-name test_forwarder
-  anchor deploy --provider.cluster "$CLUSTER_URL" --program-name mock_verifier
-}
-
+# Stop the validator started by start_validator and reap it. It exits 143
+# on the SIGTERM sent here; any other status means it had already died.
 stop_validator() {
-  if [[ -n "${VALIDATOR_PID:-}" ]] && kill -0 "$VALIDATOR_PID" >/dev/null 2>&1; then
-    kill "$VALIDATOR_PID" >/dev/null 2>&1 || true
-    wait "$VALIDATOR_PID" >/dev/null 2>&1 || true
+  if [[ -z "${VALIDATOR_PID:-}" ]]; then
+    return 0
   fi
+  local pid="$VALIDATOR_PID" status=0
   VALIDATOR_PID=""
+  if ! kill "$pid"; then
+    echo "Validator (pid ${pid}) had already exited" >&2
+  fi
+  wait "$pid" || status=$?
+  if [[ $status -ne 0 && $status -ne 143 ]]; then
+    echo "❌ Validator (pid ${pid}) exited with status ${status}; log: ${VALIDATOR_LOG}" >&2
+    return 1
+  fi
 }

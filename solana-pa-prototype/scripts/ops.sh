@@ -68,9 +68,12 @@ Commands:
   idl-publish            Publish the PA's production IDL on chain (init or
                          upgrade the Anchor IDL account; signer must be the
                          upgrade authority)
-  test [--cluster <c>]   No cluster (or localnet): full deterministic local
-                         integration flow. devnet/mainnet: cluster-safe test
-                         subset against the programs deployed there.
+  test [--cluster <c>] [spec file...]
+                         No cluster (or localnet): full deterministic local
+                         integration flow, each spec file on its own fresh
+                         validator. devnet/mainnet: cluster-safe test subset
+                         against the programs deployed there. Spec files
+                         (paths under tests/) restrict the run to them.
   build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
   build-release          Build the production binaries, no deploy (verifies
                          close_markers_batch is absent from the IDL)
@@ -80,9 +83,9 @@ Commands:
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
   validator              Start the local test validator (RISC0 verifier stack
-                         cloned from devnet, marker fixtures preloaded)
-  validator-deploy       Sync IDs, build, start the validator, deploy all
-                         programs, and keep the validator running
+                         copied from devnet, marker fixtures preloaded)
+  validator-deploy       Sync IDs, build, start the validator with all
+                         programs loaded at genesis, and keep it running
 
 Flags:
   --cluster <c>    Target cluster (required except test/build-dev/build-release)
@@ -136,6 +139,7 @@ PREBUILT=false
 TEST_GREP=""
 ASSUME_YES=false
 TEST_MODE="real"
+SPEC_FILES=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -188,6 +192,8 @@ while [[ $# -gt 0 ]]; do
     *)
       if [[ -z "$COMMAND" ]]; then
         COMMAND="$1"
+      elif [[ "$COMMAND" == "test" ]]; then
+        SPEC_FILES+=("$1")
       elif [[ -z "$TARGET" ]]; then
         TARGET="$1"
       else
@@ -288,9 +294,18 @@ get_program_id() {
   solana-keygen pubkey "target/deploy/${name}-keypair.json"
 }
 
+# True when <program_id> is a program on the cluster, false when no account
+# exists there; any other failure (an unreachable RPC) exits.
 is_deployed() {
-  local program_id="$1"
-  solana program show "$program_id" --url "$RPC_URL" >/dev/null 2>&1
+  local program_id="$1" out
+  if out="$(solana program show "$program_id" --url "$RPC_URL" 2>&1)"; then
+    return 0
+  fi
+  if [[ "$out" == "Error: Unable to find the account ${program_id}" ]]; then
+    return 1
+  fi
+  echo "❌ solana program show ${program_id} failed: ${out}" >&2
+  exit 1
 }
 
 # Exit unless program <pid> (called <label> in the message) is deployed on
@@ -717,13 +732,17 @@ cmd_status() {
   if [[ -f "target/deploy/protocol_adapter-keypair.json" ]]; then
     local pa_pid pa_state pa_state_addr
     pa_pid="$(get_program_id "protocol_adapter")"
-    pa_state="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" 2>/dev/null | head -1 || true)"
+    pa_state="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" | awk 'NR == 1')"
     if [[ -n "$pa_state" ]]; then
       pa_state_addr="$(echo "$pa_state" | awk '{print $1}')"
-      if solana account "$pa_state_addr" --url "$RPC_URL" >/dev/null 2>&1; then
+      local out
+      if out="$(solana account "$pa_state_addr" --url "$RPC_URL" 2>&1)"; then
         echo "PAState PDA: ✅ initialized — ${pa_state_addr}"
-      else
+      elif [[ "$out" == "Error: AccountNotFound: pubkey=${pa_state_addr}" ]]; then
         echo "PAState PDA: not initialized — ${pa_state_addr}"
+      else
+        echo "❌ solana account ${pa_state_addr} failed: ${out}" >&2
+        exit 1
       fi
     fi
   fi
@@ -851,12 +870,17 @@ GREP
     grep_pattern="$TEST_GREP"
   fi
 
+  local specs=('tests/**/*.ts')
+  if [[ ${#SPEC_FILES[@]} -gt 0 ]]; then
+    specs=("${SPEC_FILES[@]}")
+  fi
+
   echo "Running cluster integration tests (${CLUSTER}) matching: ${grep_pattern}"
   ANCHOR_PROVIDER_URL="$RPC_URL" \
   ANCHOR_WALLET="$WALLET" \
     yarn run ts-mocha -p ./tsconfig.json -t 1000000 \
       --grep "$grep_pattern" \
-      'tests/**/*.ts'
+      "${specs[@]}"
 
   echo ""
   echo "✅ Cluster tests passed (${CLUSTER})"
@@ -899,26 +923,30 @@ case "$COMMAND" in
     ;;
   validator)
     require_cmd solana-test-validator
-    # start_validator (validator-deploy.sh) clones the RISC0 verifier stack
-    # from devnet and preloads the synthetic verifier-entry account fixtures
+    # start_validator (validator-deploy.sh) preloads the RISC0 verifier stack
+    # copied from devnet and the synthetic verifier-entry account fixtures
     # — a bare validator cannot settle anything.
+    require_cmd solana
+    require_cmd node
+    fetch_devnet_clones
     start_validator
     trap 'stop_validator' EXIT INT TERM
     echo "Validator running (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
     tail -f "$VALIDATOR_LOG"
     ;;
   validator-deploy)
-    # Full local stack, kept running: sync IDs, build, start the validator,
-    # deploy all programs, then hold the validator up for external clients
-    # (harnesses, manual testing). Ctrl-C tears the validator down.
+    # Full local stack, kept running: sync IDs, build, start the validator
+    # with every program loaded at genesis, then hold it up for external
+    # clients (harnesses, manual testing). Ctrl-C tears the validator down.
     require_commands
     ensure_wallet
     ensure_lockfile_sync
     sync_program_ids
     build_programs_dev
-    start_validator
+    fetch_devnet_clones
+    workspace_program_args
+    start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
     trap 'stop_validator' EXIT INT TERM
-    deploy_programs
     echo "Validator running with programs deployed (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
     tail -f "$VALIDATOR_LOG"
     ;;
@@ -928,10 +956,11 @@ case "$COMMAND" in
     # on localnet) — the validation path for verify-build artifacts, which
     # the full flow would rebuild and clobber.
     if [[ "$PREBUILT" != "true" && ( -z "$CLUSTER" || "$CLUSTER" == "localnet" ) ]]; then
-      # Full deterministic local flow: sync IDs, build, start a validator,
-      # deploy, run the whole suite. Guard against Cargo.lock skew first.
+      # Full deterministic local flow: sync IDs, build, then each spec file
+      # (all, or the ones given) on its own fresh validator with the programs
+      # loaded at genesis. Guard against Cargo.lock skew first.
       ensure_lockfile_sync
-      PA_TEST_MODE="$TEST_MODE" exec "${SCRIPT_DIR}/anchor-test.sh"
+      PA_TEST_MODE="$TEST_MODE" exec "${SCRIPT_DIR}/anchor-test.sh" all "${SPEC_FILES[@]}"
     fi
     # Everything below is the cluster-subset path, where the mock verifier
     # is never deployed.

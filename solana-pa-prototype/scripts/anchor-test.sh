@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
+# Local integration flow. Every spec file runs against its own validator
+# started on a fresh ledger, so no file depends on another's on-chain state
+# or on the order files run in.
+#
+#   anchor-test.sh [all|build|test] [spec file...]
+#
+# Phase selection, so CI can build once and fan the test phase out per mode:
+#   all   (default) sync IDs, build, then the spec files
+#   build           sync IDs and build the programs, nothing else
+#   test            the spec files against existing artifacts
+# Spec files default to every tests/**/*.ts outside tests/utils/ (the
+# support modules the specs import), in sorted order.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,15 +21,28 @@ source "${SCRIPT_DIR}/validator-deploy.sh"
 
 cd "$PROJECT_DIR"
 
-# Phase selection, so CI can build once and fan the test phase out per mode:
-#   all   (default) sync IDs, build, then validator + deploy + suite
-#   build           sync IDs and build the programs, nothing else
-#   test            validator + deploy + suite against existing artifacts
 PHASE="${1:-all}"
 if [[ "$PHASE" != "all" && "$PHASE" != "build" && "$PHASE" != "test" ]]; then
   echo "❌ phase must be 'all', 'build', or 'test', got '${PHASE}'" >&2
   exit 1
 fi
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+SPEC_FILES=("$@")
+if [[ "$PHASE" == "build" && ${#SPEC_FILES[@]} -gt 0 ]]; then
+  echo "❌ phase 'build' runs no tests; drop the spec file arguments" >&2
+  exit 1
+fi
+if [[ ${#SPEC_FILES[@]} -eq 0 ]]; then
+  mapfile -t SPEC_FILES < <(find tests -name '*.ts' -not -path 'tests/utils/*' | LC_ALL=C sort)
+fi
+for spec in "${SPEC_FILES[@]}"; do
+  if [[ ! -f "$spec" ]]; then
+    echo "❌ spec file not found: ${spec} (paths are relative to ${PROJECT_DIR})" >&2
+    exit 1
+  fi
+done
 
 # real: fixtures with Groth16 proofs, verified by the devnet-cloned verifier.
 # mock: fixtures with mock seals, verified by the localnet mock verifier.
@@ -60,23 +85,25 @@ check_required_fixture "$PA_TEST_MODE"
 echo "==> Type-checking scripts and tests"
 yarn run tsc --noEmit -p ./tsconfig.json
 
+echo "==> (2/3) Preparing validator genesis"
+fetch_devnet_clones
+workspace_program_args
+
 trap 'stop_validator' EXIT
 
-echo "==> (2/3) Starting validator"
-
-# Kill any stale validator from a previous interrupted run
-if pkill -f solana-test-validator 2>/dev/null; then
-  sleep 1
-fi
-
-start_validator
-
-echo "==> (3/3) Deploying and running tests"
-deploy_programs
-
-ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
-ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
-  yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 'tests/**/*.ts'
+echo "==> (3/3) Running ${#SPEC_FILES[@]} spec file(s), each on a fresh validator"
+for i in "${!SPEC_FILES[@]}"; do
+  spec="${SPEC_FILES[$i]}"
+  echo "==> [$((i + 1))/${#SPEC_FILES[@]}] ${spec}"
+  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
+  if ! ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
+    ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
+    yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 "$spec"; then
+    echo "❌ ${spec} failed (validator log: ${VALIDATOR_LOG})" >&2
+    exit 1
+  fi
+  stop_validator
+done
 
 if [[ "$PHASE" != "test" ]]; then
   # Anchor's SBF toolchain can leave incompatible host debug artifacts in
@@ -86,8 +113,7 @@ if [[ "$PHASE" != "test" ]]; then
   cargo clean \
     --package block-time-forwarder \
     --package spl-token-forwarder \
-    --package protocol-adapter \
-    >/dev/null 2>&1 || true
+    --package protocol-adapter
 fi
 
 echo "==> All tests passed"
