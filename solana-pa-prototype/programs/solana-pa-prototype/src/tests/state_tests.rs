@@ -1,6 +1,7 @@
 use crate::state::PAStateAccount;
 use crate::tests::utils::create_test_pa_state;
 use anchor_lang::prelude::*;
+use arm_core::compliance::hash_kind_table_entries;
 
 fn serialized(state: &PAStateAccount) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -48,4 +49,13 @@ fn trailing_bytes_still_deserialize() {
     let decoded = PAStateAccount::try_deserialize(&mut bytes.as_slice())
         .expect("trailing bytes appended by a newer layout must not break deserialization");
     assert_eq!(decoded.schema_version, PAStateAccount::SCHEMA_VERSION);
+}
+
+#[test]
+fn empty_kind_table_commitment_is_the_commitment_of_no_entries() {
+    assert_eq!(
+        PAStateAccount::EMPTY_KIND_TABLE_COMMITMENT,
+        <[u8; 32]>::from(hash_kind_table_entries(&[])),
+        "the constant initialize stores must be the ARM's commitment of the empty kind table"
+    );
 }

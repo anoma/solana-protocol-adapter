@@ -78,7 +78,6 @@ use crate::state::{PALifecycle, PAStateAccount};
 use arm_core::aggregation_instance::{
     ActionAggregated, AggregationInstance, ConsumedResourceAggregated, CreatedResourceAggregated,
 };
-use arm_core::compliance::hash_kind_table_entries;
 use arm_core::delta_proof::DeltaProof;
 use arm_core::logic_instance::{AppData, ExpirableBlob};
 use arm_core::transaction::{Aggregation, Delta, Transaction};
@@ -87,18 +86,12 @@ use groth_16_verifier::Proof;
 use verifier_router::Seal;
 use verifier_router::Selector;
 
-/// Commitment of the empty kind table — what a deployment with no
-/// pre-registered kinds pins at initialization.
-pub fn empty_kind_table_commitment() -> Digest {
-    hash_kind_table_entries(&[])
-}
-
 /// One action with one consumed and one created resource, anchored to the
 /// initial tree root and pinned to the compliance VK and empty kind table.
 pub fn minimal_instance() -> AggregationInstance {
     AggregationInstance {
         compliance_key: arm_core::constants::COMPLIANCE_VK,
-        kind_table_commitment: empty_kind_table_commitment(),
+        kind_table_commitment: Digest::from_bytes(PAStateAccount::EMPTY_KIND_TABLE_COMMITMENT),
         actions: vec![ActionAggregated {
             consumed_publics: vec![ConsumedResourceAggregated {
                 resource_nullifier: Digest::from_bytes([1u8; 32]),
@@ -190,13 +183,7 @@ pub fn create_test_pa_state() -> PAStateAccount {
 }
 
 pub fn create_test_pa_state_with(authority: Pubkey, stopped: bool) -> PAStateAccount {
-    let mut state = PAStateAccount::running(
-        0,
-        authority,
-        Pubkey::default(),
-        FAKE_SELECTOR,
-        empty_kind_table_commitment().into(),
-    );
+    let mut state = PAStateAccount::running(0, authority, Pubkey::default(), FAKE_SELECTOR);
     if stopped {
         state.lifecycle = PALifecycle::Stopped;
     }

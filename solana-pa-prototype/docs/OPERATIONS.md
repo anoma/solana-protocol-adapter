@@ -113,13 +113,13 @@ Record the address in the cluster's deployment record and ship it as `SETTLE_LOO
 
 ## The kind table
 
-The PA stores the sha256 commitment of the kind table every settled aggregation instance must carry, and rejects a transaction proven against any other table. `initialize` installs the first commitment; the authority replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
+The PA stores the sha256 commitment of the kind table every settled aggregation instance must carry, and rejects a transaction proven against any other table. `initialize` installs the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`) and emits `KindTableCommitmentUpdatedEvent` with it, as pa-evm's initializer does; the authority replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
 
 ```sh
 PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # authority wallet
 ```
 
-The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the new value, as pa-evm's `KindTableCommitmentUpdated` does. From that slot on, transactions proven against the previous table are rejected (`KindTableCommitmentMismatch`), so provers must load the new table before it is installed. Today every deployment stores the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`); the generated Solana tables and their commitments come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
+The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the new value, as pa-evm's `KindTableCommitmentUpdated` does. From that slot on, transactions proven against the previous table are rejected (`KindTableCommitmentMismatch`), so provers must load the new table before it is installed. The generated Solana tables and their commitments come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
 
 ## Emergency stop
 

@@ -1,6 +1,7 @@
 /**
- * Initialization authority (AUTH-01): only the program's upgrade authority
- * may initialize the adapter. Needs an adapter that was never initialized,
+ * `initialize`: only the program's upgrade authority may call it (AUTH-01),
+ * and it starts every deployment on the empty kind table, announcing it as
+ * pa-evm's initializer does. Needs an adapter that was never initialized,
  * which the file's fresh validator provides.
  */
 import { Keypair } from "@solana/web3.js";
@@ -8,14 +9,19 @@ import { assert } from "chai";
 import {
   errorHaystack,
 } from "./utils";
+import { EMPTY_KIND_TABLE_COMMITMENT } from "./utils/constants";
 import {
   buildInitialize,
+  cpiEventsOf,
+  paState,
   paStateExists,
+  program,
+  provider,
   assertPAError,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
-describe("protocol-adapter (AUTH-01: initialization authority)", () => {
+describe("protocol-adapter (initialize)", () => {
   const { funder } = useAdapterSuite();
 
   it("rejects initialization by a non-upgrade-authority signer", async () => {
@@ -61,6 +67,25 @@ describe("protocol-adapter (AUTH-01: initialization authority)", () => {
     assert.isFalse(
       await paStateExists(),
       "PAState must remain uninitialized after the rejected call"
+    );
+  });
+
+  it("stores the empty kind table and emits KindTableCommitmentUpdated", async () => {
+    assert.isFalse(await paStateExists(), "this test initializes the adapter, so it must start uninitialized");
+
+    const sig = await buildInitialize(provider.wallet.publicKey).rpc();
+
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.deepEqual(
+      Buffer.from(state.kindTableCommitment),
+      EMPTY_KIND_TABLE_COMMITMENT,
+      "initialize must store the empty kind table's commitment"
+    );
+    const { events } = await cpiEventsOf(sig);
+    assert.deepEqual(
+      events.map((e) => [e.name, Buffer.from(e.data.kindTableCommitment ?? []).toString("hex")]),
+      [["kindTableCommitmentUpdatedEvent", EMPTY_KIND_TABLE_COMMITMENT.toString("hex")]],
+      "initialize must emit exactly one KindTableCommitmentUpdated carrying the empty kind table, as pa-evm's initializer does"
     );
   });
 });

@@ -253,15 +253,14 @@ export async function createFundedEscrow(
 // Adapter governance. Each builder is the one form of its instruction the
 // suite and the operator scripts both send; callers add signers and send.
 
-/** The adapter's `initialize`, paid by `payer`, pinning the verifier and the kind table. */
+/** The adapter's `initialize`, paid by `payer`, pinning the verifier; it starts on the empty kind table. */
 export function initializeAdapter(
   program: Program<ProtocolAdapter>,
   payer: PublicKey,
   verifierRouter: PublicKey,
-  proofSelector: number[],
-  kindTableCommitment: number[]
+  proofSelector: number[]
 ) {
-  return program.methods.initialize(verifierRouter, proofSelector, kindTableCommitment).accountsPartial({
+  return program.methods.initialize(verifierRouter, proofSelector).accountsPartial({
     paState: derivePaStatePda(program.programId)[0],
     payer,
     systemProgram: SystemProgram.programId,

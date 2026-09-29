@@ -109,10 +109,7 @@ Initialization parameters (required by deploy/init when the PA is a target):
                        Devnet: ${VERIFIER_ROUTER}
   PA_PROOF_SELECTOR    4-byte Groth16 verifier selector (hex).
                        Devnet: ${GROTH16_SELECTOR}
-  PA_KIND_TABLE_COMMITMENT
-                       sha256 commitment (hex, 32 bytes) of the kind table
-                       every settled aggregation instance must carry.
-                       Empty table: ${EMPTY_KIND_TABLE_COMMITMENT}
+The PA starts on the empty kind table; set-kind-table installs another.
 
 Forwarder initialization parameters (required by deploy/forwarder init when
 the SPL token forwarder is a target):
@@ -450,15 +447,13 @@ assert_declare_id_synced() {
 }
 
 require_init_params() {
-  if [[ -z "${PA_VERIFIER_ROUTER:-}" || -z "${PA_PROOF_SELECTOR:-}" || -z "${PA_KIND_TABLE_COMMITMENT:-}" ]]; then
-    echo "❌ Missing PA_VERIFIER_ROUTER, PA_PROOF_SELECTOR and/or PA_KIND_TABLE_COMMITMENT." >&2
-    echo "   initialize pins the verifier router, proof selector, and kind-table" >&2
-    echo "   commitment for the lifetime of the deployment; there is no safe default." >&2
+  if [[ -z "${PA_VERIFIER_ROUTER:-}" || -z "${PA_PROOF_SELECTOR:-}" ]]; then
+    echo "❌ Missing PA_VERIFIER_ROUTER and/or PA_PROOF_SELECTOR." >&2
+    echo "   initialize pins the verifier router and proof selector for the" >&2
+    echo "   lifetime of the deployment; there is no safe default." >&2
     echo "   Devnet values:" >&2
     echo "     PA_VERIFIER_ROUTER=${VERIFIER_ROUTER}" >&2
     echo "     PA_PROOF_SELECTOR=${GROTH16_SELECTOR}" >&2
-    echo "   Empty kind table (fixture-gen's committed kind_table.json):" >&2
-    echo "     PA_KIND_TABLE_COMMITMENT=${EMPTY_KIND_TABLE_COMMITMENT}" >&2
     exit 1
   fi
 }
