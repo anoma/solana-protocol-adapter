@@ -11,7 +11,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  RUST_VERSION: "1.93.0"
   # Must match the Solana pinned by flake.nix (solanaVersion): its
   # cargo-build-sbf downloads the platform-tools release flake.nix provides
   # (v1.57), the minimum for the SBPF v3 programs the build targets.
@@ -24,14 +23,13 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
-          toolchain: ${{ env.RUST_VERSION }}
           components: rustfmt
 
       - name: Check formatting
@@ -43,14 +41,13 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
+        uses: dtolnay/rust-toolchain@1.98.1
         with:
-          toolchain: ${{ env.RUST_VERSION }}
           components: clippy
 
       - name: Setup Rust cache
@@ -76,14 +73,12 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -101,7 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -109,9 +104,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libudev-dev pkg-config
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_VERSION }}
+        uses: dtolnay/rust-toolchain@1.98.1
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -119,9 +112,9 @@ jobs:
           workspaces: solana-pa-prototype
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install Yarn
         run: npm install -g yarn
@@ -142,14 +135,14 @@ jobs:
 
       - name: Install node dependencies
         working-directory: ./solana-pa-prototype
-        run: yarn install --frozen-lockfile || yarn install
+        run: yarn install --frozen-lockfile
 
       - name: Build programs
         working-directory: ./solana-pa-prototype
         run: ./scripts/anchor-test.sh build
 
       - name: Upload program artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: anchor-programs
           if-no-files-found: error
@@ -172,14 +165,14 @@ jobs:
       matrix:
         mode: [real, mock]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install Yarn
         run: npm install -g yarn
@@ -200,10 +193,10 @@ jobs:
 
       - name: Install node dependencies
         working-directory: ./solana-pa-prototype
-        run: yarn install --frozen-lockfile || yarn install
+        run: yarn install --frozen-lockfile
 
       - name: Download program artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: anchor-programs
           path: solana-pa-prototype/target

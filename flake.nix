@@ -2,7 +2,7 @@
   description = "Solana Protocol Adapter development environment";
 
   inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
     flake-utils.url = "github:numtide/flake-utils";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -24,11 +24,11 @@
           };
           lib = pkgs.lib;
 
-          # Rust 1.93.0: pinned to match CI exactly; Anchor 1.2.0 needs 1.89+.
-          rustToolchain = pkgs.rust-bin.stable."1.93.0".default;
+          # Pinned to match CI exactly (dtolnay/rust-toolchain@<version> in ci.yml).
+          rustToolchain = pkgs.rust-bin.stable."1.98.1".default;
 
-          # nixos-25.05 ships anchor 0.31.1, and its rustc is below Anchor
-          # 1.2.0's MSRV, so the CLI is built here with the pinned toolchain.
+          # nixos-26.05 ships anchor 1.0.2, not the 1.2.0 the programs build
+          # with, so the CLI is built here with the pinned toolchain.
           anchorCli = (pkgs.makeRustPlatform {
             cargo = rustToolchain;
             rustc = rustToolchain;
@@ -189,8 +189,7 @@ EOF
               solanaToolchain
               rustToolchain
               anchorCli
-              pkgs.cargo-risczero
-              pkgs.nodejs_20
+              pkgs.nodejs_24
               pkgs.yarn
               pkgs.pkg-config
               pkgs.openssl
@@ -199,10 +198,6 @@ EOF
               pkgs.cmake
               pkgs.protobuf
               pkgs.podman
-              pkgs.conmon
-              pkgs.crun
-              pkgs.fuse-overlayfs
-              pkgs.slirp4netns
               pkgs.git
               pkgs.curl
               pkgs.jq
@@ -213,13 +208,14 @@ EOF
               pkgs.coreutils
               pkgs.bashInteractive
             ]
+            # The rootless container runtime podman drives on Linux; on macOS
+            # podman runs containers inside its own `podman machine` VM.
             ++ lib.optionals pkgs.stdenv.isLinux [
               pkgs.udev
-            ]
-            ++ lib.optionals pkgs.stdenv.isDarwin [
-              pkgs.libiconv
-              pkgs.darwin.apple_sdk.frameworks.Security
-              pkgs.darwin.apple_sdk.frameworks.SystemConfiguration
+              pkgs.conmon
+              pkgs.crun
+              pkgs.fuse-overlayfs
+              pkgs.slirp4netns
             ];
 
             shellHook = ''
@@ -243,36 +239,38 @@ EOF
               chmod +x "$_nix_cache/bin/docker"
               export PATH="$_nix_cache:$_nix_cache/bin:$PATH"
 
-              # Configure podman for rootless container execution (used by risc0 groth16 prover).
-              # newuidmap is a setuid binary that nix cannot provide — it must come from the host.
-              if ! command -v newuidmap >/dev/null 2>&1; then
-                echo ""
-                echo "WARNING: newuidmap not found. Fixture generation (risc0 groth16 prover) will fail."
-                echo "Install it with: sudo apt install uidmap   (Debian/Ubuntu)"
-                echo "                 sudo dnf install shadow-utils  (Fedora/RHEL)"
-                echo ""
-              fi
-
-              export CONTAINERS_CONF="$_nix_cache/containers/containers.conf"
-              export CONTAINERS_STORAGE_CONF="$_nix_cache/containers/storage.conf"
               export CONTAINERS_REGISTRIES_CONF="$_nix_cache/containers/registries.conf"
-
-              cat > "$CONTAINERS_CONF" <<'CONF'
-              [engine]
-              runtime = "crun"
-              CONF
-
-              cat > "$CONTAINERS_STORAGE_CONF" <<CONF
-              [storage]
-              driver = "overlay"
-              rootless_storage_path = "$_nix_cache/containers/storage"
-              [storage.options.overlay]
-              mount_program = "$(command -v fuse-overlayfs)"
-              CONF
-
               cat > "$CONTAINERS_REGISTRIES_CONF" <<'CONF'
               unqualified-search-registries = ["docker.io"]
               CONF
+
+              ${lib.optionalString pkgs.stdenv.isLinux ''
+                # Configure podman for rootless container execution (used by risc0 groth16 prover).
+                # newuidmap is a setuid binary that nix cannot provide — it must come from the host.
+                if ! command -v newuidmap >/dev/null; then
+                  echo ""
+                  echo "WARNING: newuidmap not found. Fixture generation (risc0 groth16 prover) will fail."
+                  echo "Install it with: sudo apt install uidmap   (Debian/Ubuntu)"
+                  echo "                 sudo dnf install shadow-utils  (Fedora/RHEL)"
+                  echo ""
+                fi
+
+                export CONTAINERS_CONF="$_nix_cache/containers/containers.conf"
+                export CONTAINERS_STORAGE_CONF="$_nix_cache/containers/storage.conf"
+
+                cat > "$CONTAINERS_CONF" <<'CONF'
+                [engine]
+                runtime = "crun"
+                CONF
+
+                cat > "$CONTAINERS_STORAGE_CONF" <<CONF
+                [storage]
+                driver = "overlay"
+                rootless_storage_path = "$_nix_cache/containers/storage"
+                [storage.options.overlay]
+                mount_program = "${pkgs.fuse-overlayfs}/bin/fuse-overlayfs"
+                CONF
+              ''}
 
               mkdir -p "$HOME/.config/containers"
               if [ ! -f "$HOME/.config/containers/policy.json" ]; then
