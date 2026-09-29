@@ -15,17 +15,22 @@ export const MOCK_VERIFIER_ID = new PublicKey("H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKv
 export const MOCK_SELECTOR = Buffer.from([0xff, 0xff, 0xff, 0xff]);
 
 // Verifiers by router selector. Fixtures carry their selector, so tests
-// derive the verifier program (and the error code it rejects bad seals
-// with) from the fixture instead of hardcoding one. Unknown selectors fail
-// loudly rather than silently defaulting to some verifier.
-const VERIFIERS_BY_SELECTOR: Record<string, { program: PublicKey; rejectionCode: number }> = {
-  // groth_16_verifier: VerificationError
-  "73c457ba": { program: GROTH16_VERIFIER_ID, rejectionCode: 6000 },
-  // mock-verifier: ClaimDigestMismatch (offset 6600 keeps it disjoint)
-  ffffffff: { program: MOCK_VERIFIER_ID, rejectionCode: 6600 },
+// derive the verifier program and its error codes from the fixture instead
+// of hardcoding one. `rejectionCode` rejects a well-formed proof that does not
+// verify; `malformedProofCode` rejects proof bytes that are not valid curve
+// points. Unknown selectors fail loudly rather than silently defaulting to
+// some verifier.
+type Verifier = { program: PublicKey; rejectionCode: number; malformedProofCode: number };
+
+const VERIFIERS_BY_SELECTOR: Record<string, Verifier> = {
+  // groth_16_verifier: VerificationError, PairingError
+  "73c457ba": { program: GROTH16_VERIFIER_ID, rejectionCode: 6000, malformedProofCode: 6003 },
+  // mock-verifier: ClaimDigestMismatch for both (it checks no curve points;
+  // offset 6600 keeps it disjoint)
+  ffffffff: { program: MOCK_VERIFIER_ID, rejectionCode: 6600, malformedProofCode: 6600 },
 };
 
-export function verifierForSelector(selector: Buffer): { program: PublicKey; rejectionCode: number } {
+export function verifierForSelector(selector: Buffer): Verifier {
   const hex = selector.toString("hex");
   const verifier = VERIFIERS_BY_SELECTOR[hex];
   if (!verifier) {

@@ -87,7 +87,7 @@ case "${1:-}" in
     # full deterministic local flow; devnet/mainnet runs the cluster-safe
     # subset against the programs already deployed there.
     shift
-    run_in_project "./scripts/ops.sh test $(printf '%q ' "$@")"
+    run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
   deploy|upgrade|teardown|close-pdas|init|set-kind-table|forwarder|lookup-table|estop|status|balance|sync-ids|idl-publish|verify-build)

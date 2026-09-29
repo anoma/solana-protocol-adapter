@@ -139,7 +139,9 @@ export async function assertRejects(action: Promise<unknown>, expected: RegExp |
   try {
     await action;
   } catch (e: any) {
-    assert.match(errorHaystack(e), expected instanceof RegExp ? expected : new RegExp(expected));
+    const pattern = expected instanceof RegExp ? expected : new RegExp(expected);
+    const haystack = errorHaystack(e);
+    assert.isTrue(pattern.test(haystack), `expected rejection matching ${pattern}, got:\n${haystack}`);
     return;
   }
   assert.fail(`expected rejection matching ${expected}`);

@@ -97,13 +97,13 @@ describe("Security: mutation-based settle tests", () => {
 
   // The primary fixture with its seal's pi_c[0] flipped and the selector
   // intact (fixture-gen's corrupt_seal.json variant): the router routes it
-  // to the fixture's verifier, which rejects it, and the adapter's failure
-  // line carries that verifier's code through the CPI.
+  // to the fixture's verifier, which rejects the malformed point, and the
+  // adapter's failure line carries that verifier's code through the CPI.
   it("rejects transaction with corrupted proof bytes", () => {
     const corrupt = loadFixture("corrupt_seal.json");
     return assertRejects(
       settleUploaded(Buffer.from(corrupt.tx_b64, "base64"), deriveNullifierAccounts(corrupt.consumed_nullifiers_b64)),
-      paFailurePattern(VERIFIER.rejectionCode)
+      paFailurePattern(VERIFIER.malformedProofCode)
     );
   });
 
