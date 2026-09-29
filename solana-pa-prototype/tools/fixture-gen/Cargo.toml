@@ -12,11 +12,14 @@ arm-gadgets = { package = "anoma-rm-risc0-gadgets", version = "=2.0.0-rc.6" }
 # The AnomaPay transfer resource: its logic proves the SPL forwarder fixtures.
 transfer_library = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "963d6cb574aa9bdecd167861acc20a3300712808" }
 transfer_witness = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "963d6cb574aa9bdecd167861acc20a3300712808" }
-base64 = "0.22"
+base64 = "0.23"
 anchor-lang = "1.2.0"
+# held at 1.3: anoma-rm-risc0 2.0.0-rc.6 encodes Transaction with bincode 1.3; bincode 3.0.0 is a compile_error! stub
 bincode = "1.3.3"
 hex = "0.4"
+# held at =0.13.3: anoma-rm-risc0 2.0.0-rc.6 requires k256 =0.13.3, and its Scalar/AffinePoint types are used here
 k256 = "=0.13.3"
+# locked at 3.0.4 with risc0-zkp 3.0.3: passthrough-logic-methods pins risc0-binfmt =3.0.3, risc0-zkvm >=3.0.5 requires risc0-binfmt ^3.0.5, and risc0-zkvm 3.0.4 does not compile against risc0-zkp 3.0.5
 risc0-zkvm = "3.0.3"
 passthrough-logic-methods = { path = "passthrough-logic/methods" }
 serde = { version = "1.0", features = ["derive"] }
@@ -24,7 +27,7 @@ serde_json = "1.0"
 block-time-forwarder = { path = "../../programs/block-time-forwarder", default-features = false, features = ["no-entrypoint"] }
 test-forwarder = { path = "../../programs/test-forwarder", default-features = false, features = ["no-entrypoint"] }
 spl-token-forwarder = { path = "../../programs/spl-token-forwarder", default-features = false, features = ["no-entrypoint"] }
-ed25519-dalek = "2.1"
+ed25519-dalek = "3.0"
 solana-pa = { package = "protocol-adapter", path = "../../programs/solana-pa-prototype", default-features = false, features = ["no-entrypoint"] }
 heliax-ap-orchestrator-sdk = { git = "https://github.com/anoma/anomapay-workers-queue.git", rev = "5cda5181ccff13e9b8204d3a8aa52ab50303aac1" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

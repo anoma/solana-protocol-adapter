@@ -25,7 +25,7 @@ export function closeMarkersBatch(program: Program<ProtocolAdapter>, authority: 
     );
   }
   return (method as () => ReturnType<Program<ProtocolAdapter>["methods"][keyof Program<ProtocolAdapter>["methods"]]>)()
-    .accounts({ paState: derivePaStatePda(program.programId)[0], authority })
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority })
     .remainingAccounts(markers.map((pubkey) => ({ pubkey, isWritable: true, isSigner: false })));
 }
 

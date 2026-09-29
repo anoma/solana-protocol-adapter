@@ -11,6 +11,7 @@ import {
   loadFixture,
   errorHaystack,
   createdCommitmentsOf as commitmentsOf,
+  tamperedTxOf,
 } from "./utils";
 import {
   provider,
@@ -42,7 +43,7 @@ describe("settlement", () => {
 
   describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
     const tx = Buffer.from(fixture.tx_b64, "base64");
-    const txTampered = Buffer.from(fixture.tx_tampered_b64, "base64");
+    const txTampered = tamperedTxOf(fixture);
 
     const remainingAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
     const nullifierPdas = remainingAccounts.map((a) => a.pubkey);
