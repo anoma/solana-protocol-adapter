@@ -21,7 +21,10 @@ use risc0_zkvm::{MaybePruned, ReceiptClaim};
 declare_id!("H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKvgDhrvVVHvHf");
 
 // The Groth16 verifier's `verify` instruction types, generated from
-// idls/groth_16_verifier.json (reproduce with `./scripts/dev.sh verifier-idls`).
+// idls/groth_16_verifier.json: the IDL of risc0/risc0-solana v3.0.0
+// (ee41593), the release the deployed verifiers run, built from that source
+// with its Anchor 0.31.1 (the IDL committed in that repository is stale). The
+// real-mode suite exercises it against the deployed router.
 declare_program!(groth_16_verifier);
 use groth_16_verifier::types::Proof;
 

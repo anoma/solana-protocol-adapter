@@ -196,33 +196,6 @@ EOF
         {
           packages.default = solanaToolchain;
 
-          # scripts/verifier-idls.sh builds the RISC Zero verifier IDLs from
-          # risc0-solana v3.0.0, an Anchor 0.31 workspace. Anchor 0.31's IDL
-          # build resolves that source's type aliases only under
-          # `cargo +nightly`, so it runs with nixos-25.05's anchor 0.31.1 and a
-          # nightly toolchain, apart from the default shell's Anchor 1.2.0.
-          devShells.verifier-idls =
-            let
-              rustNightly = pkgs.rust-bin.nightly.latest.minimal;
-              # `cargo +nightly` dispatches to the Nix-provided nightly
-              # toolchain instead of relying on rustup.
-              cargoWrapper = pkgs.writeShellScriptBin "cargo" ''
-                if [ "''${1:-}" = "+nightly" ]; then
-                  shift
-                  exec env PATH="${rustNightly}/bin:$PATH" RUSTC="${rustNightly}/bin/rustc" "${rustNightly}/bin/cargo" "$@"
-                fi
-                exec "${rustToolchain}/bin/cargo" "$@"
-              '';
-            in
-            pkgs.mkShell {
-              packages = [
-                cargoWrapper
-                rustToolchain
-                pkgs.anchor
-                pkgs.git
-              ];
-            };
-
           devShells.default = pkgs.mkShell {
             packages = [
               solanaToolchain

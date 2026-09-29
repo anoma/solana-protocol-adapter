@@ -4,7 +4,10 @@ use anchor_lang::prelude::*;
 declare_id!("28Hvr1YFv2ouGN2fS99aF3ZzYXzkncJVVaHcZNhquLFT");
 
 // CPI client and types of the RISC Zero verifier router, generated from
-// idls/verifier_router.json (reproduce with `./scripts/dev.sh verifier-idls`).
+// idls/verifier_router.json: the IDL of risc0/risc0-solana v3.0.0 (ee41593),
+// the release the deployed verifiers run, built from that source with its
+// Anchor 0.31.1 (the IDL committed in that repository is stale). The
+// real-mode suite exercises it against the deployed router.
 declare_program!(verifier_router);
 
 #[cfg(all(
