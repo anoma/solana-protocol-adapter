@@ -5,11 +5,7 @@
  */
 import { PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  AUTHORITY_MISMATCH_PATTERN,
-  errorHaystack,
-  emergencyStop,
-} from "./utils";
+import { AUTHORITY_MISMATCH_PATTERN, errorHaystack, emergencyStop } from "./utils";
 import {
   provider,
   program,
@@ -36,7 +32,11 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
   it("initializes with paused=false", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(JSON.stringify(state.lifecycle), JSON.stringify({ running: {} }), "State should be Running after initialize");
+    assert.equal(
+      JSON.stringify(state.lifecycle),
+      JSON.stringify({ running: {} }),
+      "State should be Running after initialize",
+    );
   });
 
   it("rejects emergency_stop from non-authority", async () => {
@@ -44,19 +44,13 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
     await funder.fund(nonAuthority, 1);
 
     try {
-      await emergencyStop(program, nonAuthority.publicKey)
-        .signers([nonAuthority])
-        .rpc();
+      await emergencyStop(program, nonAuthority.publicKey).signers([nonAuthority]).rpc();
       assert.fail("expected emergency_stop to fail for non-authority");
     } catch (e: any) {
       const haystack = errorHaystack(e);
       // Anchor's has_one constraint produces "A has one constraint was violated"
       // or our custom error "Unauthorized"
-      assert.match(
-        haystack,
-        AUTHORITY_MISMATCH_PATTERN,
-        "Should fail with Unauthorized or has_one constraint error"
-      );
+      assert.match(haystack, AUTHORITY_MISMATCH_PATTERN, "Should fail with Unauthorized or has_one constraint error");
     }
   });
 
@@ -77,11 +71,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       assert.fail("expected propose_authority to fail for non-authority");
     } catch (e: any) {
       const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        AUTHORITY_MISMATCH_PATTERN,
-        "Should fail with Unauthorized or has_one constraint error"
-      );
+      assert.match(haystack, AUTHORITY_MISMATCH_PATTERN, "Should fail with Unauthorized or has_one constraint error");
     }
   });
 
@@ -103,10 +93,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
     // Authority hasn't changed yet
     const stateAfterPropose = await program.account.paStateAccount.fetch(paState);
-    assert.ok(
-      stateAfterPropose.authority.equals(currentAuthority),
-      "Authority should NOT change after propose"
-    );
+    assert.ok(stateAfterPropose.authority.equals(currentAuthority), "Authority should NOT change after propose");
 
     // Step 2: accept (signed by new authority)
     await program.methods
@@ -119,10 +106,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     const stateAfterAccept = await program.account.paStateAccount.fetch(paState);
-    assert.ok(
-      stateAfterAccept.authority.equals(newAuthority.publicKey),
-      "Authority should be updated after accept"
-    );
+    assert.ok(stateAfterAccept.authority.equals(newAuthority.publicKey), "Authority should be updated after accept");
 
     // Restore: propose back, accept with provider wallet
     await program.methods
@@ -143,10 +127,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     const stateRestored = await program.account.paStateAccount.fetch(paState);
-    assert.ok(
-      stateRestored.authority.equals(currentAuthority),
-      "Authority should be restored to original"
-    );
+    assert.ok(stateRestored.authority.equals(currentAuthority), "Authority should be restored to original");
   });
 
   it("old authority cannot call emergency_stop after transfer", async () => {
@@ -174,16 +155,11 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     try {
-      await emergencyStop(program, provider.wallet.publicKey)
-        .rpc();
+      await emergencyStop(program, provider.wallet.publicKey).rpc();
       assert.fail("expected emergency_stop to fail for old authority");
     } catch (e: any) {
       const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        AUTHORITY_MISMATCH_PATTERN,
-        "Should fail with Unauthorized or has_one constraint error"
-      );
+      assert.match(haystack, AUTHORITY_MISMATCH_PATTERN, "Should fail with Unauthorized or has_one constraint error");
     }
 
     // Restore
@@ -216,10 +192,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
     // Authority is still the provider — proposal doesn't transfer
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.ok(
-      state.authority.equals(provider.wallet.publicKey),
-      "Authority should still be provider after propose"
-    );
+    assert.ok(state.authority.equals(provider.wallet.publicKey), "Authority should still be provider after propose");
 
     // Overwrite with a real candidate, complete transfer, then restore
     const realCandidate = Keypair.generate();
@@ -243,10 +216,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     const stateAfter = await program.account.paStateAccount.fetch(paState);
-    assert.ok(
-      stateAfter.authority.equals(realCandidate.publicKey),
-      "Authority should transfer to the real candidate"
-    );
+    assert.ok(stateAfter.authority.equals(realCandidate.publicKey), "Authority should transfer to the real candidate");
 
     // Restore
     await program.methods

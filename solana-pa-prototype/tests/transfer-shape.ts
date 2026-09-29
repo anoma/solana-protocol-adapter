@@ -4,10 +4,7 @@
  */
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  loadFixture,
-  createdCommitmentsOf as commitmentsOf,
-} from "./utils";
+import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils";
 import {
   program,
   paState,
@@ -95,15 +92,10 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     });
 
     const stateAfter = await program.account.paStateAccount.fetch(paState);
-    assert.equal(
-      stateAfter.nextIndex.toNumber(),
-      nextIndexBefore + 3,
-      "three created commitments should be appended",
-    );
+    assert.equal(stateAfter.nextIndex.toNumber(), nextIndexBefore + 3, "three created commitments should be appended");
 
     const { tx: txResult, events } = await cpiEventsOf(sig);
-    const innerCount =
-      txResult.meta?.innerInstructions?.reduce((n, g) => n + g.instructions.length, 0) ?? 0;
+    const innerCount = txResult.meta?.innerInstructions?.reduce((n, g) => n + g.instructions.length, 0) ?? 0;
     console.log(
       `transfer-shape settlement: ${txResult!.meta?.computeUnitsConsumed} CU, ` +
         `${events.length} CPI events, ${innerCount} inner instructions of the ` +
@@ -132,9 +124,7 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     const discoveryEvents = events.filter((e) => e.name === "discoveryPayloadEvent");
     assert.equal(resourceEvents.length, 3, "one resource payload event per created resource");
     assert.equal(discoveryEvents.length, 3, "one discovery payload event per created resource");
-    const createdTags = txEvents[0].data.tags.filter(
-      (_: unknown, i: number) => !txEvents[0].data.isConsumed[i],
-    );
+    const createdTags = txEvents[0].data.tags.filter((_: unknown, i: number) => !txEvents[0].data.isConsumed[i]);
     for (const [evs, byteLen] of [
       [resourceEvents, 2048],
       [discoveryEvents, 768],

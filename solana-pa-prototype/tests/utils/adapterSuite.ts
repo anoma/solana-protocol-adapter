@@ -20,7 +20,12 @@ import { assert } from "chai";
 import path from "path";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
-import { getRouterPda, getVerifierEntryPda, VERIFIER_ROUTER_ID, verifierForSelector } from "../../scripts/verifier-utils";
+import {
+  getRouterPda,
+  getVerifierEntryPda,
+  VERIFIER_ROUTER_ID,
+  verifierForSelector,
+} from "../../scripts/verifier-utils";
 import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
 import { createdCommitmentsOf, loadFixture, parseSelectorFromFixture, readJson } from "./fixtures";
 import {
@@ -34,7 +39,11 @@ import {
 } from "./helpers";
 import { ensureSettlementLookupTable, sendV0, settlementLookupKeys } from "./lookupTable";
 import { predictRootMarkerPda as predictRootMarkerPdaOf } from "./merkle";
-import { deriveNullifierAccounts as deriveNullifierAccountsFromB64, derivePaStatePda, deriveRootMarkerPda } from "./pda";
+import {
+  deriveNullifierAccounts as deriveNullifierAccountsFromB64,
+  derivePaStatePda,
+  deriveRootMarkerPda,
+} from "./pda";
 
 type Meta = { pubkey: PublicKey; isWritable: boolean; isSigner: boolean };
 
@@ -140,14 +149,14 @@ export async function assertFixtureUnsettled(fixtureName: string): Promise<void>
     info,
     `${fixtureName} is already settled on this validator (its first nullifier ` +
       `marker exists). These tests require a fresh ledger: run them through ` +
-      `'./scripts/dev.sh anchor-test', which gives every spec file its own, or deploy to a fresh devnet.`
+      `'./scripts/dev.sh anchor-test', which gives every spec file its own, or deploy to a fresh devnet.`,
   );
 }
 
 /** The fixture's nullifier markers followed by the block-time forwarder's call segment and any historical root markers. */
 export function buildSettleRemainingAccounts(
   nullifierAccounts: Meta[],
-  options?: { additionalHistoricalRootMarkers?: PublicKey[] }
+  options?: { additionalHistoricalRootMarkers?: PublicKey[] },
 ): Meta[] {
   const accounts = [
     ...nullifierAccounts,
@@ -163,7 +172,7 @@ export function buildSettleRemainingAccounts(
 // Anchor assigns 6000 + enum_variant_index.
 const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "protocol_adapter.json");
 export const PA_ERRORS: Record<string, number> = Object.fromEntries(
-  (readJson<{ errors?: { name: string; code: number }[] }>(IDL_PATH).errors ?? []).map((e) => [e.name, e.code])
+  (readJson<{ errors?: { name: string; code: number }[] }>(IDL_PATH).errors ?? []).map((e) => [e.name, e.code]),
 );
 
 export const PA_ERROR_NAMES = new Map(Object.entries(PA_ERRORS).map(([k, v]) => [v, k]));
@@ -195,13 +204,16 @@ export function assertPAError(e: any, errorName: string): void {
     expectedCode,
     `Expected PA error ${errorName} (${expectedCode}), ` +
       `got ${actualName ?? "unknown"} (${actualCode})` +
-      `\nLogs:\n${logs.slice(-15).join("\n")}`
+      `\nLogs:\n${logs.slice(-15).join("\n")}`,
   );
 }
 
 /** The adapter's own failure line for `code`: an adapter error, or an inner program's code propagated through a CPI. */
 export function paFailurePattern(code: number): RegExp {
-  return new RegExp(`Program ${program.programId.toBase58()} failed: custom program error: 0x${code.toString(16)}$`, "m");
+  return new RegExp(
+    `Program ${program.programId.toBase58()} failed: custom program error: 0x${code.toString(16)}$`,
+    "m",
+  );
 }
 
 /** Anchor's CPI event tag: the fixed 8-byte `EVENT_IX_TAG_LE`, the little-endian encoding of the u64 0x1d9acb512ea545e4. */
@@ -246,7 +258,7 @@ export function settleFromTxDataBuilder(
   txData: PublicKey,
   newRootMarker: PublicKey,
   remainingAccounts: Meta[],
-  heapFrame = true
+  heapFrame = true,
 ) {
   return program.methods
     .settleFromTxdata(uploadId)
@@ -317,7 +329,7 @@ export function useAdapterSuite() {
         splTokenForwarder: forwarderProgram.programId,
         mints,
       }),
-      table?.key
+      table?.key,
     ));
     return table;
   }
@@ -325,7 +337,7 @@ export function useAdapterSuite() {
   async function uploadTxData(
     authority: Keypair,
     payload: Buffer,
-    expiresSlotOverride?: anchor.BN
+    expiresSlotOverride?: anchor.BN,
   ): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey }> {
     const upload = await uploadTxDataTo(program, paState, authority, payload, expiresSlotOverride);
     openTxData.push({ uploadId: upload.uploadId, txData: upload.txData, authority });
@@ -335,7 +347,7 @@ export function useAdapterSuite() {
   async function initTxData(
     authority: Keypair,
     payloadSize: number,
-    expiresSlotOverride?: anchor.BN
+    expiresSlotOverride?: anchor.BN,
   ): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
     const init = await initTxDataOf(program, paState, authority, payloadSize, expiresSlotOverride);
     openTxData.push({ uploadId: init.uploadId, txData: init.txData, authority });
@@ -351,7 +363,11 @@ export function useAdapterSuite() {
     if (!(await provider.connection.getAccountInfo(entry.txData))) return;
     await program.methods
       .txdataClose(entry.uploadId)
-      .accountsPartial({ txData: entry.txData, authority: entry.authority.publicKey, refund: entry.authority.publicKey })
+      .accountsPartial({
+        txData: entry.txData,
+        authority: entry.authority.publicKey,
+        refund: entry.authority.publicKey,
+      })
       .signers([entry.authority])
       .rpc();
   }
@@ -374,19 +390,25 @@ export function useAdapterSuite() {
     payload: Buffer,
     remainingAccounts: Meta[],
     options?: { newRootMarker?: PublicKey; createdCommitments?: Buffer[] },
-    preInstructions: anchor.web3.TransactionInstruction[] = []
+    preInstructions: anchor.web3.TransactionInstruction[] = [],
   ): Promise<string> {
     const { uploadId, txData } = await uploadTxData(authority, payload);
     const newRootMarker =
       options?.newRootMarker ?? (await predictRootMarkerPda(requireCommitments(options?.createdCommitments)));
-    const settle = await settleFromTxDataBuilder(authority.publicKey, uploadId, txData, newRootMarker, remainingAccounts).transaction();
+    const settle = await settleFromTxDataBuilder(
+      authority.publicKey,
+      uploadId,
+      txData,
+      newRootMarker,
+      remainingAccounts,
+    ).transaction();
     return sendV0(provider, [...preInstructions, ...settle.instructions], [authority], await settlementTable());
   }
 
   async function settleFixtureViaTxData(
     payload: Buffer,
     remainingAccounts: Meta[],
-    options?: { newRootMarker?: PublicKey; createdCommitments?: Buffer[] }
+    options?: { newRootMarker?: PublicKey; createdCommitments?: Buffer[] },
   ): Promise<string> {
     const authority = Keypair.generate();
     await funder.fund(authority, 2);
@@ -428,7 +450,7 @@ export function useAdapterSuite() {
       `    [sol] spent ${((testStartBalance - balance) / LAMPORTS_PER_SOL).toFixed(4)}, ` +
         `recovered ${(recovered / LAMPORTS_PER_SOL).toFixed(4)} ` +
         `(${drained} keypairs), ` +
-        `wallet ${(balance / LAMPORTS_PER_SOL).toFixed(4)} SOL`
+        `wallet ${(balance / LAMPORTS_PER_SOL).toFixed(4)} SOL`,
     );
   });
 
@@ -466,8 +488,12 @@ export function useAdapterSuite() {
     console.log(`  [sol]   end balance:       ${sol(suiteEndBalance)} SOL`);
     console.log(`  [sol]   total spent:       ${sol(totalSpent)} SOL`);
     console.log(`  [sol]   breakdown:`);
-    console.log(`  [sol]     PAState rent:    ${sol(paStateRent)} SOL (${allAccounts.length - markerCount - txdataCount} accounts)`);
-    console.log(`  [sol]     marker rent:     ${sol(markerRent)} SOL (${markerCount} nullifier/root markers × ${markerLamports} lamports each)`);
+    console.log(
+      `  [sol]     PAState rent:    ${sol(paStateRent)} SOL (${allAccounts.length - markerCount - txdataCount} accounts)`,
+    );
+    console.log(
+      `  [sol]     marker rent:     ${sol(markerRent)} SOL (${markerCount} nullifier/root markers × ${markerLamports} lamports each)`,
+    );
     console.log(`  [sol]     unclosed TxData: ${sol(txdataRent)} SOL (${txdataCount} accounts)`);
     console.log(`  [sol]     tx fees + dust:  ${sol(txFees)} SOL`);
     console.log(`  [sol]   total accounted:   ${sol(accountRent + txFees)} SOL`);

@@ -40,20 +40,14 @@ export function verifierForSelector(selector: Buffer): Verifier {
 }
 
 export function getRouterPda(routerProgramId: PublicKey = VERIFIER_ROUTER_ID): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("router")],
-    routerProgramId
-  );
+  return PublicKey.findProgramAddressSync([Buffer.from("router")], routerProgramId);
 }
 
 export function getVerifierEntryPda(
   selector: Buffer | Uint8Array,
-  routerProgramId: PublicKey = VERIFIER_ROUTER_ID
+  routerProgramId: PublicKey = VERIFIER_ROUTER_ID,
 ): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [Buffer.from("verifier"), selector],
-    routerProgramId
-  );
+  return PublicKey.findProgramAddressSync([Buffer.from("verifier"), selector], routerProgramId);
 }
 
 /**

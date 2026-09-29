@@ -70,7 +70,7 @@ export function requireFixture(filename: string, flags: string): Fixture {
     const mock = process.env.PA_TEST_MODE === "mock" ? "--mock " : "";
     const target = path.relative(process.cwd(), path.join(FIXTURE_DIR, filename));
     throw new Error(
-      `${filename} missing (${e.message}); generate with: ./scripts/dev.sh gen-fixtures ${mock}${flags} ${target}`
+      `${filename} missing (${e.message}); generate with: ./scripts/dev.sh gen-fixtures ${mock}${flags} ${target}`,
     );
   }
 }

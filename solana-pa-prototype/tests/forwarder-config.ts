@@ -45,9 +45,13 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
       await funder.fund(impostor, 1);
       await assertRejects(
         setLogicRef(forwarderProgram, impostor.publicKey, randomRef()).signers([impostor]).rpc(),
-        /caused by account: program_data\. Error Code: UnauthorizedCaller/
+        /caused by account: program_data\. Error Code: UnauthorizedCaller/,
       );
-      assert.deepEqual((await forwarderProgram.account.config.fetch(configPda)).logicRef, logicRef, "the config is untouched");
+      assert.deepEqual(
+        (await forwarderProgram.account.config.fetch(configPda)).logicRef,
+        logicRef,
+        "the config is untouched",
+      );
     });
 
     // The upgrade-authority check reads whatever ProgramData is passed; the
@@ -56,7 +60,7 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
     it("rejects the upgrade authority of another program's ProgramData", () =>
       assertRejects(
         rotate(randomRef(), deriveProgramDataPda(paProgram.programId)),
-        /caused by account: program\. Error Code: UnauthorizedCaller/
+        /caused by account: program\. Error Code: UnauthorizedCaller/,
       ));
 
     it("rotates the logic ref in place and leaves the rest of the config untouched", async () => {
@@ -76,7 +80,11 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
       // pa-evm's rotation (ERC20ForwarderV2.reinitialize behind upgradeToAndCall)
       // emits only the proxy's Upgraded and Initialized events, nothing naming
       // the logic ref; the config account is where the new ref is read.
-      assert.deepEqual(events.map((e) => e.name), [], "the rotation emits no forwarder event");
+      assert.deepEqual(
+        events.map((e) => e.name),
+        [],
+        "the rotation emits no forwarder event",
+      );
     });
   });
 
@@ -91,7 +99,7 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
           .forwardCall(logicRef, Buffer.concat([Buffer.from([OP_UNWRAP]), operand]))
           .accountsPartial({ config: configPda, ixSysvar: SYSVAR_INSTRUCTIONS_PUBKEY })
           .rpc(),
-        /UnauthorizedCaller/
+        /UnauthorizedCaller/,
       );
     });
 
@@ -103,7 +111,7 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
         setEmergencyCaller(forwarderProgram, impostor.publicKey, paState, Keypair.generate().publicKey)
           .signers([impostor])
           .rpc(),
-        /UnauthorizedCaller/
+        /UnauthorizedCaller/,
       );
     });
   });

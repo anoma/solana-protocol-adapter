@@ -108,7 +108,7 @@ describe("TxData lifecycle", () => {
       assert.equal(
         txDataAccount.expiresSlot.toNumber(),
         expiresSlot.toNumber(),
-        "expires_slot should be set correctly"
+        "expires_slot should be set correctly",
       );
     });
 
@@ -137,10 +137,7 @@ describe("TxData lifecycle", () => {
       assert.ok(!after, "TxData should not exist after close");
 
       const balanceAfter = await provider.connection.getBalance(authority.publicKey);
-      assert.ok(
-        balanceAfter > balanceBefore,
-        "Authority balance should increase after close (rent refund)"
-      );
+      assert.ok(balanceAfter > balanceBefore, "Authority balance should increase after close (rent refund)");
     });
 
     // Two-layer security model:
@@ -153,10 +150,7 @@ describe("TxData lifecycle", () => {
       // This tests Anchor's account existence check.
       const authority = Keypair.generate();
       const attacker = Keypair.generate();
-      await Promise.all([
-        funder.fund(authority, 2),
-        funder.fund(attacker, 1),
-      ]);
+      await Promise.all([funder.fund(authority, 2), funder.fund(attacker, 1)]);
 
       const { uploadId, uploadIdLe } = await initTxData(authority, 100);
 
@@ -181,7 +175,7 @@ describe("TxData lifecycle", () => {
         assert.match(
           haystack,
           /AccountNotInitialized/,
-          `Expected AccountNotInitialized (account doesn't exist), got: ${haystack}`
+          `Expected AccountNotInitialized (account doesn't exist), got: ${haystack}`,
         );
       }
     });
@@ -193,10 +187,7 @@ describe("TxData lifecycle", () => {
       // This tests Anchor's PDA seed verification.
       const authority = Keypair.generate();
       const attacker = Keypair.generate();
-      await Promise.all([
-        funder.fund(authority, 2),
-        funder.fund(attacker, 1),
-      ]);
+      await Promise.all([funder.fund(authority, 2), funder.fund(attacker, 1)]);
 
       const { uploadId, txData: authorityTxData } = await initTxData(authority, 100);
 
@@ -206,7 +197,7 @@ describe("TxData lifecycle", () => {
         await program.methods
           .txdataClose(uploadId)
           .accountsPartial({
-            txData: authorityTxData,  // <-- Attacker passes authority's actual TxData
+            txData: authorityTxData, // <-- Attacker passes authority's actual TxData
             authority: attacker.publicKey,
             refund: attacker.publicKey,
           })
@@ -216,11 +207,7 @@ describe("TxData lifecycle", () => {
       } catch (e: any) {
         const haystack = errorHaystack(e);
         // MUST be ConstraintSeeds - Anchor computes PDA from signer, doesn't match passed account
-        assert.match(
-          haystack,
-          SEED_MISMATCH_PATTERN,
-          `Expected ConstraintSeeds (PDA mismatch), got: ${haystack}`
-        );
+        assert.match(haystack, SEED_MISMATCH_PATTERN, `Expected ConstraintSeeds (PDA mismatch), got: ${haystack}`);
       }
     });
 
@@ -282,10 +269,7 @@ describe("TxData lifecycle", () => {
     it("rejects txdata_close_expired for non-expired TxData", async () => {
       const authority = Keypair.generate();
       const cleaner = Keypair.generate();
-      await Promise.all([
-        funder.fund(authority, 2),
-        funder.fund(cleaner, 1),
-      ]);
+      await Promise.all([funder.fund(authority, 2), funder.fund(cleaner, 1)]);
 
       const slot = await provider.connection.getSlot("confirmed");
       const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50000));
@@ -305,11 +289,9 @@ describe("TxData lifecycle", () => {
         assertPAError(e, "TxDataNotExpired");
       }
     });
-
   });
 
   describe("protocol-adapter (TxData authority and bounds checks)", () => {
-
     it("rejects txdata_write that exceeds payload capacity", async () => {
       const authority = Keypair.generate();
       await funder.fund(authority, 2);
@@ -334,10 +316,7 @@ describe("TxData lifecycle", () => {
     it("rejects txdata_write from wrong authority", async () => {
       const authority = Keypair.generate();
       const wrongAuthority = Keypair.generate();
-      await Promise.all([
-        funder.fund(authority, 2),
-        funder.fund(wrongAuthority, 1),
-      ]);
+      await Promise.all([funder.fund(authority, 2), funder.fund(wrongAuthority, 1)]);
 
       const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -355,21 +334,14 @@ describe("TxData lifecycle", () => {
         assert.fail("expected txdata_write from wrong authority to fail");
       } catch (e: any) {
         const haystack = errorHaystack(e);
-        assert.match(
-          haystack,
-          SEED_MISMATCH_PATTERN,
-          `Expected authority constraint error, got: ${haystack}`
-        );
+        assert.match(haystack, SEED_MISMATCH_PATTERN, `Expected authority constraint error, got: ${haystack}`);
       }
     });
 
     it("rejects settle_from_txdata from wrong authority", async () => {
       const authority = Keypair.generate();
       const wrongAuthority = Keypair.generate();
-      await Promise.all([
-        funder.fund(authority, 2),
-        funder.fund(wrongAuthority, 2),
-      ]);
+      await Promise.all([funder.fund(authority, 2), funder.fund(wrongAuthority, 2)]);
 
       const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -396,19 +368,13 @@ describe("TxData lifecycle", () => {
             verifierEntry: verifierEntryPda,
             verifierProgram: VERIFIER_PROGRAM_ID,
           })
-          .preInstructions([
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          ])
+          .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })])
           .signers([wrongAuthority])
           .rpc();
         assert.fail("expected settle_from_txdata from wrong authority to fail");
       } catch (e: any) {
         const haystack = errorHaystack(e);
-        assert.match(
-          haystack,
-          SEED_MISMATCH_PATTERN,
-          `Expected authority constraint error, got: ${haystack}`
-        );
+        assert.match(haystack, SEED_MISMATCH_PATTERN, `Expected authority constraint error, got: ${haystack}`);
       }
     });
 
@@ -432,11 +398,7 @@ describe("TxData lifecycle", () => {
         assert.fail("expected txdata_close with wrong refund to fail");
       } catch (e: any) {
         const haystack = errorHaystack(e);
-        assert.match(
-          haystack,
-          ADDRESS_MISMATCH_PATTERN,
-          `Expected ConstraintAddress, got: ${haystack}`
-        );
+        assert.match(haystack, ADDRESS_MISMATCH_PATTERN, `Expected ConstraintAddress, got: ${haystack}`);
       }
     });
 
@@ -444,10 +406,7 @@ describe("TxData lifecycle", () => {
       const authority = Keypair.generate();
       const cleaner = Keypair.generate();
       const wrongRefund = Keypair.generate().publicKey;
-      await Promise.all([
-        funder.fund(authority, 2),
-        funder.fund(cleaner, 1),
-      ]);
+      await Promise.all([funder.fund(authority, 2), funder.fund(cleaner, 1)]);
 
       const slot = await provider.connection.getSlot("confirmed");
       const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50_000));
@@ -467,11 +426,7 @@ describe("TxData lifecycle", () => {
         assert.fail("expected txdata_close_expired with wrong refund to fail");
       } catch (e: any) {
         const haystack = errorHaystack(e);
-        assert.match(
-          haystack,
-          ADDRESS_MISMATCH_PATTERN,
-          `Expected ConstraintAddress, got: ${haystack}`
-        );
+        assert.match(haystack, ADDRESS_MISMATCH_PATTERN, `Expected ConstraintAddress, got: ${haystack}`);
       }
     });
   });

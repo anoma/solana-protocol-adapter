@@ -6,9 +6,7 @@
  */
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  errorHaystack,
-} from "./utils";
+import { errorHaystack } from "./utils";
 import { EMPTY_KIND_TABLE_COMMITMENT } from "./utils/constants";
 import {
   buildInitialize,
@@ -32,7 +30,7 @@ describe("protocol-adapter (initialize)", () => {
     assert.isFalse(
       await paStateExists(),
       "PAState is already initialized; the AUTH-01 rejection test needs a " +
-        "validator on which the adapter was never initialized"
+        "validator on which the adapter was never initialized",
     );
 
     const stranger = Keypair.generate();
@@ -44,10 +42,7 @@ describe("protocol-adapter (initialize)", () => {
     } catch (e: any) {
       caught = e;
     }
-    assert.isNotNull(
-      caught,
-      "expected initialization by a non-upgrade-authority signer to fail"
-    );
+    assert.isNotNull(caught, "expected initialization by a non-upgrade-authority signer to fail");
 
     // The error must be our Unauthorized code, and it must have been raised by
     // the `program_data` account's upgrade-authority constraint specifically —
@@ -60,14 +55,11 @@ describe("protocol-adapter (initialize)", () => {
       errorHaystack(caught),
       /AnchorError caused by account: program_data/,
       "Unauthorized must originate from the program_data upgrade-authority " +
-        `constraint. Got:\n${errorHaystack(caught)}`
+        `constraint. Got:\n${errorHaystack(caught)}`,
     );
 
     // The rejected transaction must not have left PAState initialized.
-    assert.isFalse(
-      await paStateExists(),
-      "PAState must remain uninitialized after the rejected call"
-    );
+    assert.isFalse(await paStateExists(), "PAState must remain uninitialized after the rejected call");
   });
 
   it("stores the empty kind table and emits KindTableCommitmentUpdated", async () => {
@@ -79,13 +71,13 @@ describe("protocol-adapter (initialize)", () => {
     assert.deepEqual(
       Buffer.from(state.kindTableCommitment),
       EMPTY_KIND_TABLE_COMMITMENT,
-      "initialize must store the empty kind table's commitment"
+      "initialize must store the empty kind table's commitment",
     );
     const { events } = await cpiEventsOf(sig);
     assert.deepEqual(
       events.map((e) => [e.name, Buffer.from(e.data.kindTableCommitment).toString("hex")]),
       [["kindTableCommitmentUpdatedEvent", EMPTY_KIND_TABLE_COMMITMENT.toString("hex")]],
-      "initialize must emit exactly one KindTableCommitmentUpdated carrying the empty kind table, as pa-evm's initializer does"
+      "initialize must emit exactly one KindTableCommitmentUpdated carrying the empty kind table, as pa-evm's initializer does",
     );
   });
 });

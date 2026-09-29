@@ -18,14 +18,14 @@ async function main() {
   const verifierRouter = requirePubkey(
     "PA_VERIFIER_ROUTER",
     "the RISC0 verifier router program ID this deployment must trust, as a base58 pubkey.\n" +
-      "   This script will not guess a default — initializing against the wrong router installs the wrong verifier."
+      "   This script will not guess a default — initializing against the wrong router installs the wrong verifier.",
   );
   const proofSelector = requireHexBytes(
     "PA_PROOF_SELECTOR",
     4,
     "the 4-byte Groth16 verifier selector (hex, e.g. 0xdeadbeef) registered with the verifier router " +
       "for the circuit this deployment must accept.\n" +
-      "   This script will not guess a default — initializing with the wrong selector installs the wrong verifier."
+      "   This script will not guess a default — initializing with the wrong selector installs the wrong verifier.",
   );
 
   const [paState] = derivePaStatePda(program.programId);

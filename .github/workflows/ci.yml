@@ -143,6 +143,10 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: yarn install --frozen-lockfile
 
+      - name: Check TypeScript formatting
+        working-directory: ./solana-pa-prototype
+        run: yarn run lint
+
       - name: Build programs
         working-directory: ./solana-pa-prototype
         run: ./scripts/anchor-test.sh build

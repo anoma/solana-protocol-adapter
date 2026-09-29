@@ -59,7 +59,12 @@ async function main() {
     splTokenForwarder: forwarder.programId,
     mints,
   });
-  const { table, added, signature } = await ensureSettlementLookupTable(provider.connection, wallet.payer, keys, existing);
+  const { table, added, signature } = await ensureSettlementLookupTable(
+    provider.connection,
+    wallet.payer,
+    keys,
+    existing,
+  );
 
   console.log(`settlement lookup table: ${table.key.toBase58()} (authority ${wallet.publicKey.toBase58()})`);
   for (const key of keys) {
@@ -67,7 +72,9 @@ async function main() {
   }
   console.log(signature ? `${added.length} key(s) added in ${signature}` : "0 keys added, nothing sent");
   if (!existing) {
-    console.log("Record the address in the cluster's deployment record and in anoma-pa-solana-client's SETTLE_LOOKUP_TABLE.");
+    console.log(
+      "Record the address in the cluster's deployment record and in anoma-pa-solana-client's SETTLE_LOOKUP_TABLE.",
+    );
   }
 }
 

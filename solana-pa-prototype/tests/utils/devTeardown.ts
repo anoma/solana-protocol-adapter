@@ -21,7 +21,7 @@ export function closeMarkersBatch(program: Program<ProtocolAdapter>, authority: 
   if (typeof method !== "function") {
     throw new Error(
       "Instruction 'close_markers_batch' is not present in the program's IDL (target/idl/protocol_adapter.json): " +
-        "the program was built without the 'dev-teardown' feature."
+        "the program was built without the 'dev-teardown' feature.",
     );
   }
   return (method as () => ReturnType<Program<ProtocolAdapter>["methods"][keyof Program<ProtocolAdapter>["methods"]]>)()
@@ -35,10 +35,16 @@ export function closeMarkersBatch(program: Program<ProtocolAdapter>, authority: 
  * be the PA authority of a stopped adapter. Returns how many were closed.
  */
 export async function closeAllMarkers(program: Program<ProtocolAdapter>, authority: PublicKey): Promise<number> {
-  const markers = await program.provider.connection.getProgramAccounts(program.programId, { filters: [{ dataSize: 0 }] });
+  const markers = await program.provider.connection.getProgramAccounts(program.programId, {
+    filters: [{ dataSize: 0 }],
+  });
   const BATCH_SIZE = 20;
   for (let i = 0; i < markers.length; i += BATCH_SIZE) {
-    await closeMarkersBatch(program, authority, markers.slice(i, i + BATCH_SIZE).map(({ pubkey }) => pubkey)).rpc();
+    await closeMarkersBatch(
+      program,
+      authority,
+      markers.slice(i, i + BATCH_SIZE).map(({ pubkey }) => pubkey),
+    ).rpc();
   }
   return markers.length;
 }

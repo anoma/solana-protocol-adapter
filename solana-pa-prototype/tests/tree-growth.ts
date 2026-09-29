@@ -4,10 +4,7 @@
  */
 import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  loadFixture,
-  createdCommitmentsOf as commitmentsOf,
-} from "./utils";
+import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils";
 import {
   provider,
   program,
@@ -58,7 +55,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     assert.ok(
       v2TxSig,
       "v2 settlement did not produce a transaction signature — the preceding " +
-      "'settles v2 fixture' test must have failed"
+        "'settles v2 fixture' test must have failed",
     );
 
     const { events } = await cpiEventsOf(v2TxSig);
@@ -66,12 +63,10 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
     assert.isAtLeast(actionEvents.length, 1, "Should emit actionExecutedEvent");
     assert.ok(
-      Array.isArray(actionEvents[0].data.actionTreeRoot) &&
-        actionEvents[0].data.actionTreeRoot.length === 32,
+      Array.isArray(actionEvents[0].data.actionTreeRoot) && actionEvents[0].data.actionTreeRoot.length === 32,
       "action_tree_root should be 32 bytes",
     );
-    assert.equal(actionEvents[0].data.actionTagCount, 2,
-      "action_tag_count should be 2 (consumed + created)");
+    assert.equal(actionEvents[0].data.actionTagCount, 2, "action_tag_count should be 2 (consumed + created)");
 
     const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
     assert.equal(txEvents.length, 1, "Should emit exactly one transactionExecutedEvent");
@@ -87,10 +82,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
 
     const fwdEvents = events.filter((e) => e.name === "forwarderCallExecutedEvent");
     assert.isAtLeast(fwdEvents.length, 1, "Should emit forwarderCallExecutedEvent");
-    assert.ok(
-      fwdEvents[0].data.forwarder.equals(blockTimeForwarderId),
-      `forwarder should be ${blockTimeForwarderId}`,
-    );
+    assert.ok(fwdEvents[0].data.forwarder.equals(blockTimeForwarderId), `forwarder should be ${blockTimeForwarderId}`);
     const outputBytes = Buffer.from(fwdEvents[0].data.output);
     assert.deepEqual(outputBytes, Buffer.from([0x00]), "output should be RESULT_LT (0x00)");
   });
@@ -105,10 +97,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
 
     const info = await provider.connection.getAccountInfo(rootMarkerPda);
     assert.ok(info, "Root marker should exist for the current root after settlement");
-    assert.ok(
-      info!.owner.equals(program.programId),
-      "Root marker should be owned by the PA program",
-    );
+    assert.ok(info!.owner.equals(program.programId), "Root marker should be owned by the PA program");
   });
 
   it("settles v3 fixture (appends one leaf)", async () => {

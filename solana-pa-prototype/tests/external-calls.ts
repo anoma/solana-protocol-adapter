@@ -5,9 +5,7 @@
  */
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  loadFixture,
-} from "./utils";
+import { loadFixture } from "./utils";
 import {
   blockTimeForwarderId,
   testForwarderId,
@@ -51,8 +49,11 @@ describe("protocol-adapter (External call error paths)", () => {
       // btf's AccountSysvarMismatch = Anchor error 3015 (0xBC7).
       const code = extractPAErrorCode(e);
       assert.isNotNull(code, "Expected a program error code in logs");
-      assert.notEqual(code, PA_ERRORS["ExternalCallCpiFailed"],
-        "Solana CPI error propagation: inner error code should appear, not PA's remapped code");
+      assert.notEqual(
+        code,
+        PA_ERRORS["ExternalCallCpiFailed"],
+        "Solana CPI error propagation: inner error code should appear, not PA's remapped code",
+      );
     }
   });
 
@@ -61,10 +62,7 @@ describe("protocol-adapter (External call error paths)", () => {
     const payload = Buffer.from(failFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(failFixture.consumed_nullifiers_b64);
 
-    const remainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: testForwarderId, isWritable: false, isSigner: false },
-    ];
+    const remainingAccounts = [...nullifierAccounts, { pubkey: testForwarderId, isWritable: false, isSigner: false }];
 
     try {
       await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
@@ -74,8 +72,7 @@ describe("protocol-adapter (External call error paths)", () => {
       // propagates through instead of PA's ExternalCallCpiFailed (6019).
       const code = extractPAErrorCode(e);
       assert.isNotNull(code, "Expected a program error code in logs");
-      assert.equal(code, 6000,
-        "test-forwarder's IntentionalFailure (6000) should propagate through CPI");
+      assert.equal(code, 6000, "test-forwarder's IntentionalFailure (6000) should propagate through CPI");
     }
   });
 
@@ -84,10 +81,7 @@ describe("protocol-adapter (External call error paths)", () => {
     const payload = Buffer.from(silentFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(silentFixture.consumed_nullifiers_b64);
 
-    const remainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: testForwarderId, isWritable: false, isSigner: false },
-    ];
+    const remainingAccounts = [...nullifierAccounts, { pubkey: testForwarderId, isWritable: false, isSigner: false }];
 
     try {
       await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });

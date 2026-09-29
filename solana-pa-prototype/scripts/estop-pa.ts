@@ -21,14 +21,14 @@ async function main() {
     account = await program.account.paStateAccount.fetch(paState);
   } catch {
     console.error(
-      `❌ PAState (${paState.toBase58()}) does not exist — the PA is not initialized, so there is nothing to stop.`
+      `❌ PAState (${paState.toBase58()}) does not exist — the PA is not initialized, so there is nothing to stop.`,
     );
     process.exit(1);
   }
 
   if (!provider.wallet.publicKey.equals(account.authority)) {
     console.error(
-      `❌ Wallet ${provider.wallet.publicKey.toBase58()} is not the PA authority (${account.authority.toBase58()}).`
+      `❌ Wallet ${provider.wallet.publicKey.toBase58()} is not the PA authority (${account.authority.toBase58()}).`,
     );
     process.exit(1);
   }
@@ -50,7 +50,7 @@ async function main() {
   const after = await program.account.paStateAccount.fetch(paState);
   if (!isStopped(after.lifecycle)) {
     console.error(
-      `❌ Transaction ${signature} landed but PAState lifecycle is still not Stopped — investigate before retrying.`
+      `❌ Transaction ${signature} landed but PAState lifecycle is still not Stopped — investigate before retrying.`,
     );
     process.exit(1);
   }

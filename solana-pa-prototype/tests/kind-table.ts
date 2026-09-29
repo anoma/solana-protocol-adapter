@@ -62,25 +62,51 @@ describe("protocol-adapter (kind table commitment)", () => {
   it("rejects set_kind_table_commitment from a non-authority signer", async () => {
     const stranger = Keypair.generate();
     await funder.fund(stranger, 1);
-    await assertRejects(setKindTableCommitment(program, stranger.publicKey, randomRef()).signers([stranger]).rpc(), AUTHORITY_MISMATCH_PATTERN);
-    assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the commitment is untouched");
+    await assertRejects(
+      setKindTableCommitment(program, stranger.publicKey, randomRef()).signers([stranger]).rpc(),
+      AUTHORITY_MISMATCH_PATTERN,
+    );
+    assert.deepEqual(
+      (await program.account.paStateAccount.fetch(paState)).kindTableCommitment,
+      empty,
+      "the commitment is untouched",
+    );
   });
 
-  it("rejects a zero commitment", () => assertRejects(setKindTableCommitment(program, provider.wallet.publicKey, Array(32).fill(0)).rpc(), /ZeroKindTableCommitment/));
+  it("rejects a zero commitment", () =>
+    assertRejects(
+      setKindTableCommitment(program, provider.wallet.publicKey, Array(32).fill(0)).rpc(),
+      /ZeroKindTableCommitment/,
+    ));
 
   it("stores a new commitment, emits KindTableCommitmentUpdated, and rejects transactions proven against the previous table until it is restored", async () => {
     const rotated = randomRef();
     const sig = await setKindTableCommitment(program, provider.wallet.publicKey, rotated).rpc();
-    assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, rotated, "the new commitment is stored");
+    assert.deepEqual(
+      (await program.account.paStateAccount.fetch(paState)).kindTableCommitment,
+      rotated,
+      "the new commitment is stored",
+    );
     const { events } = await cpiEventsOf(sig);
     const updated = events.find((e) => e.name === "kindTableCommitmentUpdatedEvent");
-    assert.ok(updated, `a KindTableCommitmentUpdatedEvent is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`);
+    assert.ok(
+      updated,
+      `a KindTableCommitmentUpdatedEvent is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`,
+    );
     // pa-evm: `event KindTableCommitmentUpdated(bytes32 kindTableCommitment)`.
-    assert.deepEqual(updated!.data, { kindTableCommitment: rotated }, "the event carries exactly pa-evm's field, the new commitment");
+    assert.deepEqual(
+      updated!.data,
+      { kindTableCommitment: rotated },
+      "the event carries exactly pa-evm's field, the new commitment",
+    );
     await assertRejects(resettlePrimaryFixture(), /KindTableCommitmentMismatch/);
 
     await setKindTableCommitment(program, provider.wallet.publicKey, empty).rpc();
-    assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the empty table's commitment is restored");
+    assert.deepEqual(
+      (await program.account.paStateAccount.fetch(paState)).kindTableCommitment,
+      empty,
+      "the empty table's commitment is restored",
+    );
     await assertRejects(resettlePrimaryFixture(), /DuplicateNullifier/);
   });
 });

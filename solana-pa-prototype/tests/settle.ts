@@ -56,43 +56,30 @@ describe("settlement", () => {
         newRootMarker?: PublicKey;
         createdCommitments?: Buffer[];
         additionalHistoricalRootMarkers?: PublicKey[];
-      }
+      },
     ) {
       await funder.fund(authority, 2);
       return uploadAndSettleV0(
         authority,
         payload,
         buildSettleRemainingAccounts(options?.nullifierAccounts ?? remainingAccounts, options),
-        options
+        options,
       );
     }
-
 
     it("initializes with depth 1 (variable-depth tree)", async () => {
       const state = await program.account.paStateAccount.fetch(paState);
       assert.equal(
         state.schemaVersion,
         1,
-        "a freshly initialized adapter carries schema version 1 (PAStateAccount::SCHEMA_VERSION)"
+        "a freshly initialized adapter carries schema version 1 (PAStateAccount::SCHEMA_VERSION)",
       );
-      assert.isAtLeast(
-        state.currentDepth,
-        1,
-        "Tree depth should be at least 1"
-      );
-      assert.equal(
-        state.frontier.length,
-        state.currentDepth,
-        "Frontier length should equal current depth"
-      );
+      assert.isAtLeast(state.currentDepth, 1, "Tree depth should be at least 1");
+      assert.equal(state.frontier.length, state.currentDepth, "Frontier length should equal current depth");
       if (state.nextIndex.toNumber() === 0) {
         // Fresh PA: root should be genesis
         const rootBytes = Buffer.from(state.root as number[]);
-        assert.deepEqual(
-          rootBytes,
-          EMPTY_TREE_ROOT_INITIAL,
-          "Initial root should be ZEROS[0] for depth-1 tree"
-        );
+        assert.deepEqual(rootBytes, EMPTY_TREE_ROOT_INITIAL, "Initial root should be ZEROS[0] for depth-1 tree");
       }
     });
 
@@ -116,7 +103,7 @@ describe("settlement", () => {
       assert.equal(
         accountInfo!.data.length,
         expectedSize,
-        `Account size (${accountInfo!.data.length}) should match expected size for depth ${state.currentDepth} (${expectedSize})`
+        `Account size (${accountInfo!.data.length}) should match expected size for depth ${state.currentDepth} (${expectedSize})`,
       );
     });
 
@@ -163,7 +150,7 @@ describe("settlement", () => {
       // If not present, this test can pass without exercising the external call path.
       assert.ok(
         tx.includes(Buffer.from(blockTimeForwarderId.toBytes())),
-        "fixture tx must include block-time-forwarder program id bytes (external_payload injected)"
+        "fixture tx must include block-time-forwarder program id bytes (external_payload injected)",
       );
 
       // Requires a fresh ledger: the assertions below pin an exact state
@@ -172,8 +159,8 @@ describe("settlement", () => {
       assert.isNull(
         firstNullifier,
         "batch_groth16.json is already settled on this validator (its first " +
-        "nullifier marker exists). These tests require a fresh ledger. Reset it " +
-        "with './scripts/dev.sh clean' and re-run, or deploy to a fresh devnet."
+          "nullifier marker exists). These tests require a fresh ledger. Reset it " +
+          "with './scripts/dev.sh clean' and re-run, or deploy to a fresh devnet.",
       );
 
       // Get the current state before settlement to know the pre-settlement root
@@ -195,11 +182,7 @@ describe("settlement", () => {
 
       // Verify the root changed after settlement
       const rootAfterBytes = Buffer.from(stateAfter.root as number[]);
-      assert.notDeepEqual(
-        rootAfterBytes,
-        rootBeforeBytes,
-        "Root should change after appending commitment"
-      );
+      assert.notDeepEqual(rootAfterBytes, rootBeforeBytes, "Root should change after appending commitment");
     });
 
     it("reverts on unexpected forwarder call output (ExternalCallOutputMismatch)", async () => {
@@ -237,7 +220,7 @@ describe("settlement", () => {
         assert.match(
           haystack,
           /already in use|already been initialized|0x0/i,
-          `Expected 'already in use' error, got: ${haystack}`
+          `Expected 'already in use' error, got: ${haystack}`,
         );
       }
     });
@@ -263,9 +246,7 @@ describe("settlement", () => {
             verifierEntry: verifierEntryPda,
             verifierProgram: VERIFIER_PROGRAM_ID,
           })
-          .preInstructions([
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          ])
+          .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })])
           .signers([payer])
           .rpc();
         assert.fail("expected wrong verifier_router_program to fail");
@@ -319,11 +300,7 @@ describe("settlement", () => {
         const name = code !== null ? PA_ERROR_NAMES.get(code) : null;
         const validErrors = ["NullifierPdaMismatch", "UnregisteredForwarder", "InvalidTransactionData"];
         assert.isNotNull(code, "Expected a PA error code");
-        assert.include(
-          validErrors,
-          name,
-          `Expected one of ${validErrors.join("|")}, got ${name} (${code})`,
-        );
+        assert.include(validErrors, name, `Expected one of ${validErrors.join("|")}, got ${name} (${code})`);
       }
     });
 

@@ -4,8 +4,25 @@
  * operations it refuses while the adapter runs.
  */
 import * as anchor from "@anchor-lang/core";
-import { AccountMeta, AddressLookupTableAccount, PublicKey, SystemProgram, Keypair, Ed25519Program, PACKET_DATA_SIZE, SYSVAR_INSTRUCTIONS_PUBKEY, VersionedTransaction } from "@solana/web3.js";
-import { approve, createMint, getAccount, getOrCreateAssociatedTokenAccount, mintTo, TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import {
+  AccountMeta,
+  AddressLookupTableAccount,
+  PublicKey,
+  SystemProgram,
+  Keypair,
+  Ed25519Program,
+  PACKET_DATA_SIZE,
+  SYSVAR_INSTRUCTIONS_PUBKEY,
+  VersionedTransaction,
+} from "@solana/web3.js";
+import {
+  approve,
+  createMint,
+  getAccount,
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
 import { assert } from "chai";
 import {
   EMPTY_KIND_TABLE_COMMITMENT,
@@ -118,7 +135,8 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     userAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, user.publicKey)).address;
     await mintTo(provider.connection, user, mint, userAta, user, Number(wrapAmount));
     await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, escrowPda, true);
-    recipientAta = (await getOrCreateAssociatedTokenAccount(provider.connection, recipient, mint, recipient.publicKey)).address;
+    recipientAta = (await getOrCreateAssociatedTokenAccount(provider.connection, recipient, mint, recipient.publicKey))
+      .address;
     await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
 
     settlementTable = await extendSettlementTable([mint]);
@@ -132,7 +150,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   async function settleForwarderFixture(
     fx: Fixture,
     forwarderAccounts: AccountMeta[],
-    preInstructions: anchor.web3.TransactionInstruction[]
+    preInstructions: anchor.web3.TransactionInstruction[],
   ): Promise<string> {
     const authority = Keypair.generate();
     await funder.fund(authority, 2);
@@ -141,7 +159,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       Buffer.from(fx.tx_b64, "base64"),
       [...deriveNullifierAccounts(fx.consumed_nullifiers_b64), ...forwarderAccounts],
       { createdCommitments: commitmentsOf(fx) },
-      preInstructions
+      preInstructions,
     );
   }
 
@@ -190,7 +208,8 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       })
       .instruction();
 
-  const balances = (...atas: PublicKey[]) => Promise.all(atas.map((ata) => getAccount(provider.connection, ata).then((a) => a.amount)));
+  const balances = (...atas: PublicKey[]) =>
+    Promise.all(atas.map((ata) => getAccount(provider.connection, ata).then((a) => a.amount)));
 
   // Mirrors EmergencyMigratableForwarderBase.t.sol: test_setEmergencyCaller_reverts_if_the_pa_is_not_stopped
   it("rejects set_emergency_caller while the adapter is running", async () => {
@@ -201,7 +220,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       setEmergencyCaller(forwarderProgram, emergencyCommittee.publicKey, paState, Keypair.generate().publicKey)
         .signers([emergencyCommittee])
         .rpc(),
-      /ProtocolAdapterNotStopped/
+      /ProtocolAdapterNotStopped/,
     );
   });
 
@@ -225,13 +244,22 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const instructions = [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx(), ...settle.instructions];
     const message = await compileV0(provider, instructions, settlementTable);
     const size = new VersionedTransaction(message).serialize().length;
-    const lookedUp = message.addressTableLookups.reduce((n, l) => n + l.writableIndexes.length + l.readonlyIndexes.length, 0);
+    const lookedUp = message.addressTableLookups.reduce(
+      (n, l) => n + l.writableIndexes.length + l.readonlyIndexes.length,
+      0,
+    );
     console.log(
       `first-wrap settlement as v0: ${size} bytes, ${message.staticAccountKeys.length} static keys, ${lookedUp} looked up`,
     );
     assert.isAtMost(size, PACKET_DATA_SIZE, "the first-wrap settlement must fit one packet");
 
-    const perSettlement = [txData, DUMMY_ROOT_MARKER, ...nullifierAccounts.map((a) => a.pubkey), userAta, nonceBitmapPda];
+    const perSettlement = [
+      txData,
+      DUMMY_ROOT_MARKER,
+      ...nullifierAccounts.map((a) => a.pubkey),
+      userAta,
+      nonceBitmapPda,
+    ];
     const explained = [
       provider.wallet.publicKey,
       authority.publicKey,
@@ -250,7 +278,10 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // create the bitmap during the wrap; a wrap on a word without one fails.
   it("rejects a wrap whose nonce bitmap does not exist", async () => {
     assert.isNull(await provider.connection.getAccountInfo(nonceBitmapPda), "no bitmap yet for this word");
-    await assertRejects(settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]), /NonceBitmapMissing/);
+    await assertRejects(
+      settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]),
+      /NonceBitmapMissing/,
+    );
   });
 
   // Mirrors ForwarderBase.t.sol: test_forwardCall_reverts_if_the_logic_ref_is_wrong,
@@ -263,18 +294,28 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
     await rotate(randomRef());
     try {
-      await assertRejects(settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]), /UnauthorizedLogicRef/);
+      await assertRejects(
+        settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]),
+        /UnauthorizedLogicRef/,
+      );
     } finally {
       await rotate(fixtureRef);
     }
-    assert.deepEqual((await forwarderProgram.account.config.fetch(configPda)).logicRef, fixtureRef, "the fixture's ref is authorized again");
+    assert.deepEqual(
+      (await forwarderProgram.account.config.fetch(configPda)).logicRef,
+      fixtureRef,
+      "the fixture's ref is authorized again",
+    );
   });
 
   // The destination account is chosen by the submitter, not by the proof.
   it("rejects a wrap whose destination the escrow does not own", async () => {
     await assertRejects(
-      settleForwarderFixture(wrapFixture, wrapSegment(recipientAta), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]),
-      /WrongTokenAccountOwner/
+      settleForwarderFixture(wrapFixture, wrapSegment(recipientAta), [
+        wrapAuthorizationIx(wrapFixture),
+        await initNonceBitmapIx(),
+      ]),
+      /WrongTokenAccountOwner/,
     );
   });
 
@@ -286,8 +327,11 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const before = await balances(otherAta, escrowAta);
 
     await assertRejects(
-      settleForwarderFixture(wrapFixture, wrapSegment(escrowAta, otherAta), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]),
-      /WrongTokenAccountOwner/
+      settleForwarderFixture(wrapFixture, wrapSegment(escrowAta, otherAta), [
+        wrapAuthorizationIx(wrapFixture),
+        await initNonceBitmapIx(),
+      ]),
+      /WrongTokenAccountOwner/,
     );
 
     assert.deepEqual(await balances(otherAta, escrowAta), before, "no tokens move");
@@ -298,15 +342,21 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // not move tokens of another one.
   it("rejects a wrap that moves tokens of another mint", async () => {
     const otherMint = await createMint(provider.connection, user, user.publicKey, null, 6);
-    const userOtherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, otherMint, user.publicKey)).address;
+    const userOtherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, otherMint, user.publicKey))
+      .address;
     await mintTo(provider.connection, user, otherMint, userOtherAta, user, Number(wrapAmount));
     await approve(provider.connection, user, userOtherAta, escrowPda, user, Number(wrapAmount));
-    const escrowOwnedOtherAta = (await getOrCreateAssociatedTokenAccount(provider.connection, user, otherMint, escrowPda, true)).address;
+    const escrowOwnedOtherAta = (
+      await getOrCreateAssociatedTokenAccount(provider.connection, user, otherMint, escrowPda, true)
+    ).address;
     const before = await balances(userOtherAta, escrowOwnedOtherAta, escrowAta);
 
     await assertRejects(
-      settleForwarderFixture(wrapFixture, wrapSegment(escrowOwnedOtherAta, userOtherAta), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]),
-      /WrongTokenAccountMint/
+      settleForwarderFixture(wrapFixture, wrapSegment(escrowOwnedOtherAta, userOtherAta), [
+        wrapAuthorizationIx(wrapFixture),
+        await initNonceBitmapIx(),
+      ]),
+      /WrongTokenAccountMint/,
     );
 
     assert.deepEqual(await balances(userOtherAta, escrowOwnedOtherAta, escrowAta), before, "no tokens move");
@@ -318,7 +368,10 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("settles a wrap: escrow receives the tokens and the nonce is marked used", async () => {
     const [userBefore, escrowBefore] = await balances(userAta, escrowAta);
 
-    const sig = await settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx()]);
+    const sig = await settleForwarderFixture(wrapFixture, wrapSegment(), [
+      wrapAuthorizationIx(wrapFixture),
+      await initNonceBitmapIx(),
+    ]);
 
     const [userAfter, escrowAfter] = await balances(userAta, escrowAta);
     assert.equal(userAfter, userBefore - wrapAmount, "user balance decreases by the wrap amount");
@@ -344,7 +397,10 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("rejects a wrap that replays a used nonce", async () => {
     await approve(provider.connection, user, userAta, escrowPda, user, Number(wrapAmount));
     const [escrowBefore] = await balances(escrowAta);
-    await assertRejects(settleForwarderFixture(wrapReplayFixture, wrapSegment(), [wrapAuthorizationIx(wrapReplayFixture)]), /NonceAlreadyUsed/);
+    await assertRejects(
+      settleForwarderFixture(wrapReplayFixture, wrapSegment(), [wrapAuthorizationIx(wrapReplayFixture)]),
+      /NonceAlreadyUsed/,
+    );
     assert.deepEqual(await balances(escrowAta), [escrowBefore], "escrow is unchanged");
   });
 
@@ -356,10 +412,20 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // The escrow PDA signs the release; as a delegate it could move any account
   // that approved it. An unwrap pays only from an account the escrow owns.
   it("rejects an unwrap whose source the escrow does not own", async () => {
-    const otherAta = await approvedTokenAccount(provider.connection, funder, mint, user, escrowPda, Number(unwrapAmount));
+    const otherAta = await approvedTokenAccount(
+      provider.connection,
+      funder,
+      mint,
+      user,
+      escrowPda,
+      Number(unwrapAmount),
+    );
     const before = await balances(otherAta, recipientAta);
 
-    await assertRejects(settleForwarderFixture(unwrapFixture, unwrapSegment(recipientAta, otherAta), []), /WrongTokenAccountOwner/);
+    await assertRejects(
+      settleForwarderFixture(unwrapFixture, unwrapSegment(recipientAta, otherAta), []),
+      /WrongTokenAccountOwner/,
+    );
 
     assert.deepEqual(await balances(otherAta, recipientAta), before, "no tokens move");
   });
@@ -390,12 +456,17 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     );
     await mintTo(provider.connection, user, mint, userAta, user, Number(amount));
     await approve(provider.connection, user, userAta, escrowPda, user, Number(amount));
-    const settleDevnetWrap = () => settleForwarderFixture(devnetTableWrapFixture, wrapSegment(), [wrapAuthorizationIx(devnetTableWrapFixture)]);
+    const settleDevnetWrap = () =>
+      settleForwarderFixture(devnetTableWrapFixture, wrapSegment(), [wrapAuthorizationIx(devnetTableWrapFixture)]);
 
     await assertRejects(settleDevnetWrap(), /KindTableCommitmentMismatch/);
 
     const empty = Array.from(EMPTY_KIND_TABLE_COMMITMENT);
-    await setKindTableCommitment(program, provider.wallet.publicKey, Array.from(SOLANA_DEVNET_KIND_TABLE_COMMITMENT)).rpc();
+    await setKindTableCommitment(
+      program,
+      provider.wallet.publicKey,
+      Array.from(SOLANA_DEVNET_KIND_TABLE_COMMITMENT),
+    ).rpc();
     try {
       const [userBefore, escrowBefore] = await balances(userAta, escrowAta);
       await settleDevnetWrap();
@@ -405,7 +476,11 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     } finally {
       await setKindTableCommitment(program, provider.wallet.publicKey, empty).rpc();
     }
-    assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the empty table's commitment is restored");
+    assert.deepEqual(
+      (await program.account.paStateAccount.fetch(paState)).kindTableCommitment,
+      empty,
+      "the empty table's commitment is restored",
+    );
   });
 
   // The adapter invokes another program during a settlement, and that program
@@ -428,7 +503,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       closeEscrow(forwarderProgram, emergencyCommittee.publicKey, paState, { mint, escrowPda, escrowAta, recipientAta })
         .signers([emergencyCommittee])
         .rpc(),
-      /ProtocolAdapterNotStopped/
+      /ProtocolAdapterNotStopped/,
     );
     assert.deepEqual(await balances(escrowAta, recipientAta), before, "no tokens move");
   });
@@ -437,14 +512,14 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     assert.isNotEmpty(await forwarderProgram.account.nonceBitmap.all(), "the wraps above created nonce bitmaps");
     await assertRejects(
       closeAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [emergencyCommittee]),
-      /ProtocolAdapterNotStopped/
+      /ProtocolAdapterNotStopped/,
     );
   });
 
   it("rejects close_config while the adapter is running", () =>
     assertRejects(
       closeConfig(forwarderProgram, emergencyCommittee.publicKey, paState).signers([emergencyCommittee]).rpc(),
-      /ProtocolAdapterNotStopped/
+      /ProtocolAdapterNotStopped/,
     ));
 
   after(() => funder.drainAll());

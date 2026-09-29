@@ -6,11 +6,7 @@
  */
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  EMPTY_TREE_ROOT_INITIAL,
-  loadFixture,
-  createdCommitmentsOf as commitmentsOf,
-} from "./utils";
+import { EMPTY_TREE_ROOT_INITIAL, loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils";
 import {
   provider,
   program,
@@ -49,11 +45,7 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
   function consumerHistoricalRoot(): { rootB64: string; marker: PublicKey } {
     const consumerFixture = loadFixture("batch_groth16_historical_root.json");
     const historicalRoots = consumerFixture.historical_roots_b64 ?? [];
-    assert.lengthOf(
-      historicalRoots,
-      1,
-      "consumer fixture must carry exactly one historical (non-current) root",
-    );
+    assert.lengthOf(historicalRoots, 1, "consumer fixture must carry exactly one historical (non-current) root");
     const rootB64 = historicalRoots[0];
 
     // The exact trap every other fixture falls into: if the claimed root were
@@ -110,10 +102,7 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
 
     const markerInfo = await provider.connection.getAccountInfo(marker);
     assert.ok(markerInfo, "historical root marker should exist from the committer's settlement");
-    assert.ok(
-      markerInfo!.owner.equals(program.programId),
-      "root marker should be owned by the PA program",
-    );
+    assert.ok(markerInfo!.owner.equals(program.programId), "root marker should be owned by the PA program");
 
     await assertFixtureUnsettled("batch_groth16_historical_root.json");
 

@@ -28,26 +28,12 @@ export function deriveTxDataPda(paProgramId: PublicKey, authority: PublicKey, up
   return PublicKey.findProgramAddressSync([TX_DATA_SEED, authority.toBuffer(), uploadIdLe], paProgramId)[0];
 }
 
-export function deriveNullifierPda(
-  programId: PublicKey,
-  paState: PublicKey,
-  nullifier: Buffer
-): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync(
-    [NULLIFIER_SEED, paState.toBuffer(), nullifier],
-    programId
-  );
+export function deriveNullifierPda(programId: PublicKey, paState: PublicKey, nullifier: Buffer): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([NULLIFIER_SEED, paState.toBuffer(), nullifier], programId);
 }
 
-export function deriveRootMarkerPda(
-  paState: PublicKey,
-  root: Buffer,
-  programId: PublicKey
-): PublicKey {
-  return PublicKey.findProgramAddressSync(
-    [ROOT_MARKER_SEED, paState.toBuffer(), root],
-    programId
-  )[0];
+export function deriveRootMarkerPda(paState: PublicKey, root: Buffer, programId: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync([ROOT_MARKER_SEED, paState.toBuffer(), root], programId)[0];
 }
 
 /**
@@ -57,7 +43,7 @@ export function deriveRootMarkerPda(
 export function deriveNullifierAccounts(
   nullifierB64s: string[],
   paState: PublicKey,
-  programId: PublicKey
+  programId: PublicKey,
 ): AccountMeta[] {
   return nullifierB64s.map((nfB64) => {
     const nf = Buffer.from(nfB64, "base64");
@@ -86,14 +72,11 @@ export function nonceWordIndex(nonce: bigint): bigint {
 export function deriveNonceBitmapPda(
   forwarderProgramId: PublicKey,
   user: PublicKey,
-  nonce: bigint
+  nonce: bigint,
 ): [PublicKey, number] {
   const wordIndex = Buffer.alloc(8);
   wordIndex.writeBigUInt64LE(nonceWordIndex(nonce));
-  return PublicKey.findProgramAddressSync(
-    [NONCE_BITMAP_SEED, user.toBuffer(), wordIndex],
-    forwarderProgramId
-  );
+  return PublicKey.findProgramAddressSync([NONCE_BITMAP_SEED, user.toBuffer(), wordIndex], forwarderProgramId);
 }
 
 /** The adapter's event authority PDA, the signer of its `#[event_cpi]` self-invocations. Seed: `["__event_authority"]`. */

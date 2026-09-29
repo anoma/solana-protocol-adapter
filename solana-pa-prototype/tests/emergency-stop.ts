@@ -5,9 +5,7 @@
 import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
-import {
-  emergencyStop,
-} from "./utils";
+import { emergencyStop } from "./utils";
 import {
   provider,
   program,
@@ -30,19 +28,25 @@ describe("protocol-adapter (Emergency Stop E2E)", () => {
 
   it("emergency_stop pauses protocol", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
-    assert.equal(JSON.stringify(stateBefore.lifecycle), JSON.stringify({ running: {} }), "Should be Running before emergency_stop");
+    assert.equal(
+      JSON.stringify(stateBefore.lifecycle),
+      JSON.stringify({ running: {} }),
+      "Should be Running before emergency_stop",
+    );
 
-    await emergencyStop(program, provider.wallet.publicKey)
-      .rpc();
+    await emergencyStop(program, provider.wallet.publicKey).rpc();
 
     const stateAfter = await program.account.paStateAccount.fetch(paState);
-    assert.equal(JSON.stringify(stateAfter.lifecycle), JSON.stringify({ stopped: {} }), "Should be Stopped after emergency_stop");
+    assert.equal(
+      JSON.stringify(stateAfter.lifecycle),
+      JSON.stringify({ stopped: {} }),
+      "Should be Stopped after emergency_stop",
+    );
   });
 
   it("rejects emergency_stop when already paused", async () => {
     try {
-      await emergencyStop(program, provider.wallet.publicKey)
-        .rpc();
+      await emergencyStop(program, provider.wallet.publicKey).rpc();
       assert.fail("expected emergency_stop to fail when already paused");
     } catch (e: any) {
       assertPAError(e, "AlreadyStopped");
@@ -68,9 +72,7 @@ describe("protocol-adapter (Emergency Stop E2E)", () => {
           verifierEntry: verifierEntryPda,
           verifierProgram: VERIFIER_PROGRAM_ID,
         })
-        .preInstructions([
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ])
+        .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })])
         .signers([payer])
         .rpc();
       assert.fail("expected settle to fail when paused");

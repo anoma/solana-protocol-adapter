@@ -7,10 +7,7 @@ import * as anchor from "@anchor-lang/core";
 import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
-import {
-  MAX_EXPIRY_SLOTS,
-  waitForSlotPast,
-} from "./utils";
+import { MAX_EXPIRY_SLOTS, waitForSlotPast } from "./utils";
 import {
   provider,
   program,
@@ -40,8 +37,6 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
   // On devnet, slots advance at ~2.5/s and tx confirmation takes seconds.
   // 30 slots gives enough room to init+write before expiration.
   const EXPIRY_OFFSET = 30;
-
-
 
   it("rejects txdata_write on expired TxData", async () => {
     const authority = Keypair.generate();
@@ -122,10 +117,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
   it("allows permissionless close of expired TxData", async () => {
     const authority = Keypair.generate();
     const cleaner = Keypair.generate();
-    await Promise.all([
-      funder.fund(authority, 2),
-      funder.fund(cleaner, 1),
-    ]);
+    await Promise.all([funder.fund(authority, 2), funder.fund(cleaner, 1)]);
 
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + EXPIRY_OFFSET);
@@ -155,7 +147,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
     const refundBalanceAfter = await provider.connection.getBalance(authority.publicKey);
     assert.ok(
       refundBalanceAfter > refundBalanceBefore,
-      "Authority balance should increase after expired close (rent refund)"
+      "Authority balance should increase after expired close (rent refund)",
     );
   });
 
@@ -163,9 +155,11 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
     const authority = Keypair.generate();
     await funder.fund(authority, 2);
 
-    const { uploadId, txData, expiresSlot } = await initTxData(authority, 100, new anchor.BN(
-      (await provider.connection.getSlot("confirmed")) + EXPIRY_OFFSET
-    ));
+    const { uploadId, txData, expiresSlot } = await initTxData(
+      authority,
+      100,
+      new anchor.BN((await provider.connection.getSlot("confirmed")) + EXPIRY_OFFSET),
+    );
 
     // Wait for the original expiry to pass so the extend would need to
     // satisfy bounds from current slot. Then try extending to current_slot + 5
@@ -195,9 +189,11 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
     const authority = Keypair.generate();
     await funder.fund(authority, 2);
 
-    const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(
-      (await provider.connection.getSlot("confirmed")) + 1000
-    ));
+    const { uploadId, txData } = await initTxData(
+      authority,
+      100,
+      new anchor.BN((await provider.connection.getSlot("confirmed")) + 1000),
+    );
 
     const currentSlot = await provider.connection.getSlot("confirmed");
     const tooLateExpiry = new anchor.BN(currentSlot + MAX_EXPIRY_SLOTS + 100_000);

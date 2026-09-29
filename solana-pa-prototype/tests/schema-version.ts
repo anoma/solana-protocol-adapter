@@ -6,13 +6,7 @@ import * as anchor from "@anchor-lang/core";
 import { PublicKey, SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
-import {
-  loadFixture,
-  randomRef,
-  closeMarkersBatch,
-  emergencyStop,
-  setKindTableCommitment,
-} from "./utils";
+import { loadFixture, randomRef, closeMarkersBatch, emergencyStop, setKindTableCommitment } from "./utils";
 import {
   provider,
   program,
@@ -104,7 +98,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       const settlePayload = Buffer.from(settleFixture.tx_b64, "base64");
       ({ uploadId: settleUploadId, txData: settleTxData } = await uploadTxData(settleAuthority, settlePayload));
       settleRemainingAccounts = buildSettleRemainingAccounts(
-        deriveNullifierAccounts(settleFixture.consumed_nullifiers_b64)
+        deriveNullifierAccounts(settleFixture.consumed_nullifiers_b64),
       );
 
       keptUploads = [keepTxData(extendTxData), keepTxData(settleTxData)];
@@ -143,10 +137,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       {
         name: "accept_authority",
         run: () =>
-          program.methods
-            .acceptAuthority()
-            .accountsPartial({ paState, newAuthority: provider.wallet.publicKey })
-            .rpc(),
+          program.methods.acceptAuthority().accountsPartial({ paState, newAuthority: provider.wallet.publicKey }).rpc(),
       },
       {
         name: "set_kind_table_commitment",
@@ -207,9 +198,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
         run: async () => {
           const fx = loadFixture("wrong_root.json");
           const payload = Buffer.from(fx.tx_b64, "base64");
-          const remaining = buildSettleRemainingAccounts(
-            deriveNullifierAccounts(fx.consumed_nullifiers_b64)
-          );
+          const remaining = buildSettleRemainingAccounts(deriveNullifierAccounts(fx.consumed_nullifiers_b64));
           return settleFixtureViaTxData(payload, remaining, { newRootMarker: DUMMY_ROOT_MARKER });
         },
       },
@@ -226,15 +215,11 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       },
       {
         name: "close_markers_batch",
-        run: () =>
-          closeMarkersBatch(program, provider.wallet.publicKey, [])
-            .rpc(),
+        run: () => closeMarkersBatch(program, provider.wallet.publicKey, []).rpc(),
       },
       {
         name: "emergency_stop",
-        run: () =>
-          emergencyStop(program, provider.wallet.publicKey)
-            .rpc(),
+        run: () => emergencyStop(program, provider.wallet.publicKey).rpc(),
       },
     ];
 

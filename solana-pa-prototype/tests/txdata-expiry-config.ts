@@ -5,11 +5,7 @@
 import * as anchor from "@anchor-lang/core";
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  SEVEN_DAYS_SLOTS,
-  AUTHORITY_MISMATCH_PATTERN,
-  errorHaystack,
-} from "./utils";
+import { SEVEN_DAYS_SLOTS, AUTHORITY_MISMATCH_PATTERN, errorHaystack } from "./utils";
 import {
   provider,
   program,
@@ -36,16 +32,8 @@ describe("protocol-adapter (update_expiry_config)", () => {
       .rpc();
 
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(
-      state.minExpirySlots.toNumber(),
-      50,
-      "min_expiry_slots should be 50"
-    );
-    assert.equal(
-      state.maxExpirySlots.toNumber(),
-      5000,
-      "max_expiry_slots should be 5000"
-    );
+    assert.equal(state.minExpirySlots.toNumber(), 50, "min_expiry_slots should be 50");
+    assert.equal(state.maxExpirySlots.toNumber(), 5000, "max_expiry_slots should be 5000");
   });
 
   it("rejects min >= max", async () => {
@@ -109,11 +97,7 @@ describe("protocol-adapter (update_expiry_config)", () => {
       assert.fail("expected update_expiry_config from wrong authority to fail");
     } catch (e: any) {
       const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        AUTHORITY_MISMATCH_PATTERN,
-        `Expected authority constraint error, got: ${haystack}`
-      );
+      assert.match(haystack, AUTHORITY_MISMATCH_PATTERN, `Expected authority constraint error, got: ${haystack}`);
     }
   });
 

@@ -80,7 +80,8 @@ describe("Security: mutation-based settle tests", () => {
 
   it("rejects empty payload", () => assertRejects(settleInline(Buffer.alloc(0)), paError("InvalidTransactionData")));
 
-  it("rejects single-byte payload", () => assertRejects(settleInline(Buffer.from([0x00])), paError("InvalidTransactionData")));
+  it("rejects single-byte payload", () =>
+    assertRejects(settleInline(Buffer.from([0x00])), paError("InvalidTransactionData")));
 
   it("rejects truncated valid transaction", () =>
     assertRejects(settleInline(truncate(validTx, 64)), paError("InvalidTransactionData")));
@@ -90,7 +91,7 @@ describe("Security: mutation-based settle tests", () => {
   it("rejects zero-action transaction", () =>
     assertRejects(
       settleInline(Buffer.from(loadFixture("zero_action.json").tx_b64, "base64")),
-      paError("InvalidTransactionData")
+      paError("InvalidTransactionData"),
     ));
 
   // --- Proof mutations ---
@@ -103,7 +104,7 @@ describe("Security: mutation-based settle tests", () => {
     const corrupt = loadFixture("corrupt_seal.json");
     return assertRejects(
       settleUploaded(Buffer.from(corrupt.tx_b64, "base64"), deriveNullifierAccounts(corrupt.consumed_nullifiers_b64)),
-      paFailurePattern(VERIFIER.malformedProofCode)
+      paFailurePattern(VERIFIER.malformedProofCode),
     );
   });
 

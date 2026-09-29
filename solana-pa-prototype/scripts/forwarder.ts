@@ -87,16 +87,21 @@ async function closeEscrowFor(mint: PublicKey, recipientOwner: PublicKey) {
   if (!balance) fail(`escrow ATA ${escrowAta.toBase58()} does not exist; nothing to drain`);
   const recipientAta = await recipientAtaFor(mint, recipientOwner);
   await closeEscrow(forwarder, wallet.publicKey, paState, { mint, escrowPda, escrowAta, recipientAta }).rpc();
-  console.log(`✅ Drained ${balance!.value.uiAmountString} of ${mint.toBase58()} to ${recipientAta.toBase58()} and closed the escrow ATA`);
+  console.log(
+    `✅ Drained ${balance!.value.uiAmountString} of ${mint.toBase58()} to ${recipientAta.toBase58()} and closed the escrow ATA`,
+  );
 }
 
 async function init() {
   const logicRef = requireHexBytes(
     "STF_LOGIC_REF",
     32,
-    "the 32-byte hex logic ref (verifying key) of the resource logic this forwarder serves"
+    "the 32-byte hex logic ref (verifying key) of the resource logic this forwarder serves",
   );
-  const committee = requirePubkey("STF_EMERGENCY_COMMITTEE", "the committee that can name an emergency caller and close accounts");
+  const committee = requirePubkey(
+    "STF_EMERGENCY_COMMITTEE",
+    "the committee that can name an emergency caller and close accounts",
+  );
 
   const existing = await forwarder.account.config.fetchNullable(configPda);
   if (existing) {
@@ -128,7 +133,11 @@ async function closeConfigCommand() {
 }
 
 async function setLogicRefCommand() {
-  const logicRef = requireHexBytes("STF_LOGIC_REF", 32, "the 32-byte hex logic ref (verifying key) the config should authorize from now on");
+  const logicRef = requireHexBytes(
+    "STF_LOGIC_REF",
+    32,
+    "the 32-byte hex logic ref (verifying key) the config should authorize from now on",
+  );
   const existing = await requireConfig();
   const previous = Buffer.from(existing.logicRef).toString("hex");
   await setLogicRef(forwarder, wallet.publicKey, logicRef).rpc();
@@ -150,7 +159,13 @@ async function withdraw() {
   const { escrowPda, escrowAta } = escrowAccounts(forwarder.programId, mint);
   const recipientAta = await recipientAtaFor(mint, recipient);
 
-  await emergencyWithdraw(forwarder, paState, wallet.publicKey, { mint, amount, recipient }, { escrowAta, recipientAta, escrowPda }).rpc();
+  await emergencyWithdraw(
+    forwarder,
+    paState,
+    wallet.publicKey,
+    { mint, amount, recipient },
+    { escrowAta, recipientAta, escrowPda },
+  ).rpc();
   console.log(`✅ Withdrew ${amount} raw units of ${mint.toBase58()} to ${recipientAta.toBase58()}`);
 }
 

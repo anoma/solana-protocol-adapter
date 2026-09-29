@@ -40,10 +40,7 @@ export function writeGenesisAccountFixtures(args: {
       },
     };
     const outPath = path.join(outDir, `${prefix}${pubkey.toBase58()}.json`);
-    const body = JSON.stringify(account, null, 2).replace(
-      '"__RENT_EPOCH__"',
-      "18446744073709551615"
-    );
+    const body = JSON.stringify(account, null, 2).replace('"__RENT_EPOCH__"', "18446744073709551615");
     fs.writeFileSync(outPath, body);
     console.log(`  wrote ${outPath} (owner ${owner.toBase58()})`);
   }

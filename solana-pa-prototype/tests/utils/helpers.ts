@@ -26,11 +26,7 @@ import { deriveConfigPda, deriveEscrowPda, derivePaStatePda, deriveProgramDataPd
 /**
  * Fund a keypair from the provider wallet, topping up to the requested amount.
  */
-export async function fundKeypair(
-  provider: anchor.AnchorProvider,
-  kp: Keypair,
-  sol: number
-): Promise<void> {
+export async function fundKeypair(provider: anchor.AnchorProvider, kp: Keypair, sol: number): Promise<void> {
   const needed = sol * LAMPORTS_PER_SOL;
   const balance = await provider.connection.getBalance(kp.publicKey);
   if (balance >= needed) return;
@@ -40,7 +36,7 @@ export async function fundKeypair(
       fromPubkey: provider.wallet.publicKey,
       toPubkey: kp.publicKey,
       lamports: needed - balance,
-    })
+    }),
   );
   await provider.sendAndConfirm(tx);
 }
@@ -53,7 +49,7 @@ export async function fundKeypair(
  */
 export async function drainKeypairs(
   provider: anchor.AnchorProvider,
-  keypairs: Keypair[]
+  keypairs: Keypair[],
 ): Promise<{ recovered: number; drained: number }> {
   const MIN_DRAIN = 5000;
   let recovered = 0;
@@ -68,7 +64,7 @@ export async function drainKeypairs(
         fromPubkey: kp.publicKey,
         toPubkey: provider.wallet.publicKey,
         lamports: drainAmount,
-      })
+      }),
     );
     drainTx.recentBlockhash = blockhash;
     drainTx.feePayer = kp.publicKey;
@@ -108,7 +104,7 @@ export async function approvedTokenAccount(
   mint: PublicKey,
   mintAuthority: Keypair,
   delegate: PublicKey,
-  amount: number | bigint
+  amount: number | bigint,
 ): Promise<PublicKey> {
   const owner = Keypair.generate();
   await funder.fund(owner, 1);
@@ -167,13 +163,12 @@ export async function initTxData(
   paState: PublicKey,
   authority: Keypair,
   payloadSize: number,
-  expiresSlotOverride?: anchor.BN
+  expiresSlotOverride?: anchor.BN,
 ): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
   const { uploadId, uploadIdLe } = freshUploadId();
   const txData = deriveTxDataPda(program.programId, authority.publicKey, uploadIdLe);
   const expiresSlot =
-    expiresSlotOverride ??
-    new anchor.BN((await program.provider.connection.getSlot("confirmed")) + 10_000);
+    expiresSlotOverride ?? new anchor.BN((await program.provider.connection.getSlot("confirmed")) + 10_000);
   await program.methods
     .txdataInit(uploadId, payloadSize, expiresSlot)
     .accountsPartial({
@@ -193,7 +188,7 @@ export async function uploadTxData(
   paState: PublicKey,
   authority: Keypair,
   payload: Buffer,
-  expiresSlotOverride?: anchor.BN
+  expiresSlotOverride?: anchor.BN,
 ): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
   const upload = await initTxData(program, paState, authority, payload.length, expiresSlotOverride);
   const { uploadId, txData } = upload;
@@ -227,7 +222,7 @@ export function encodeUnwrapInput(tokenMint: PublicKey, amount: bigint, recipien
 /** A mint's escrow: the forwarder's PDA authority and its associated token account. */
 export function escrowAccounts(
   forwarderProgramId: PublicKey,
-  mint: PublicKey
+  mint: PublicKey,
 ): { escrowPda: PublicKey; escrowAta: PublicKey } {
   const escrowPda = deriveEscrowPda(forwarderProgramId, mint);
   return { escrowPda, escrowAta: getAssociatedTokenAddressSync(mint, escrowPda, true) };
@@ -241,7 +236,7 @@ export async function createFundedEscrow(
   provider: anchor.AnchorProvider,
   forwarderProgramId: PublicKey,
   payer: Keypair,
-  amount: bigint
+  amount: bigint,
 ): Promise<{ mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey }> {
   const mint = await createMint(provider.connection, payer, payer.publicKey, null, 6);
   const { escrowPda, escrowAta } = escrowAccounts(forwarderProgramId, mint);
@@ -258,7 +253,7 @@ export function initializeAdapter(
   program: Program<ProtocolAdapter>,
   payer: PublicKey,
   verifierRouter: PublicKey,
-  proofSelector: number[]
+  proofSelector: number[],
 ) {
   return program.methods.initialize(verifierRouter, proofSelector).accountsPartial({
     paState: derivePaStatePda(program.programId)[0],
@@ -271,7 +266,9 @@ export function initializeAdapter(
 
 /** `emergency_stop` by `authority`. */
 export function emergencyStop(program: Program<ProtocolAdapter>, authority: PublicKey) {
-  return program.methods.emergencyStop().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+  return program.methods
+    .emergencyStop()
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
 }
 
 /** `set_kind_table_commitment` by `authority`. */
@@ -287,11 +284,9 @@ export function initializeForwarder(
   adapterProgramId: PublicKey,
   logicRef: number[],
   committee: PublicKey,
-  authority: PublicKey
+  authority: PublicKey,
 ) {
-  return forwarder.methods
-    .initialize(adapterProgramId, logicRef, committee)
-    .accounts({ authority });
+  return forwarder.methods.initialize(adapterProgramId, logicRef, committee).accounts({ authority });
 }
 
 /**
@@ -303,7 +298,7 @@ export function setLogicRef(
   forwarder: Program<SplTokenForwarder>,
   authority: PublicKey,
   logicRef: number[],
-  programData: PublicKey = deriveProgramDataPda(forwarder.programId)
+  programData: PublicKey = deriveProgramDataPda(forwarder.programId),
 ) {
   return forwarder.methods.setLogicRef(logicRef).accounts({ authority, programData });
 }
@@ -319,7 +314,7 @@ export const randomRef = (): number[] => Array.from(Keypair.generate().publicKey
 export function escrowTransferAccounts(
   escrowAta: PublicKey,
   recipientAta: PublicKey,
-  escrowPda: PublicKey
+  escrowPda: PublicKey,
 ): AccountMeta[] {
   return [
     { pubkey: escrowAta, isSigner: false, isWritable: true },
@@ -335,7 +330,7 @@ export function emergencyWithdraw(
   paState: PublicKey,
   caller: PublicKey,
   withdrawal: { mint: PublicKey; amount: bigint; recipient: PublicKey },
-  accounts: { escrowAta: PublicKey; recipientAta: PublicKey; escrowPda: PublicKey }
+  accounts: { escrowAta: PublicKey; recipientAta: PublicKey; escrowPda: PublicKey },
 ) {
   return forwarder.methods
     .forwardEmergencyCall(encodeUnwrapInput(withdrawal.mint, withdrawal.amount, withdrawal.recipient))
@@ -351,7 +346,7 @@ export function closeEscrow(
   forwarder: Program<SplTokenForwarder>,
   authority: PublicKey,
   paState: PublicKey,
-  accounts: { mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey }
+  accounts: { mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey },
 ) {
   return forwarder.methods.closeEscrow().accountsPartial({
     authority,
@@ -370,7 +365,7 @@ export function setEmergencyCaller(
   forwarder: Program<SplTokenForwarder>,
   committee: PublicKey,
   paState: PublicKey,
-  caller: PublicKey
+  caller: PublicKey,
 ) {
   return forwarder.methods.setEmergencyCaller(caller).accounts({ committee, paState });
 }
@@ -392,7 +387,7 @@ export async function closeAllNonceBitmaps(
   forwarder: Program<SplTokenForwarder>,
   authority: PublicKey,
   paState: PublicKey,
-  signers: Keypair[]
+  signers: Keypair[],
 ): Promise<number> {
   const bitmaps = await forwarder.account.nonceBitmap.all();
   const config = deriveConfigPda(forwarder.programId)[0];
@@ -402,7 +397,9 @@ export async function closeAllNonceBitmaps(
       .closeNonceBitmapsBatch()
       .accountsPartial({ authority, config, paState })
       .remainingAccounts(
-        bitmaps.slice(i, i + BATCH_SIZE).map(({ publicKey }) => ({ pubkey: publicKey, isWritable: true, isSigner: false }))
+        bitmaps
+          .slice(i, i + BATCH_SIZE)
+          .map(({ publicKey }) => ({ pubkey: publicKey, isWritable: true, isSigner: false })),
       )
       .signers(signers)
       .rpc();
@@ -413,7 +410,7 @@ export async function closeAllNonceBitmaps(
 /** Wait for `sig` to reach confirmed commitment and fetch the transaction; fail if it is not fetchable then. */
 export async function confirmedTransaction(
   connection: Connection,
-  sig: string
+  sig: string,
 ): Promise<anchor.web3.VersionedTransactionResponse> {
   await connection.confirmTransaction(sig, "confirmed");
   const tx = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
@@ -425,7 +422,7 @@ export async function confirmedTransaction(
 export async function waitForSlotPast(
   connection: Connection,
   targetSlot: number,
-  timeoutMs: number = 30000
+  timeoutMs: number = 30000,
 ): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {

@@ -4,18 +4,8 @@
  */
 import { Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  AUTHORITY_MISMATCH_PATTERN,
-  closeAllMarkers,
-  closeMarkersBatch,
-} from "./utils";
-import {
-  provider,
-  program,
-  ensureAdapterInitialized,
-  stopAdapter,
-  useAdapterSuite,
-} from "./utils/adapterSuite";
+import { AUTHORITY_MISMATCH_PATTERN, closeAllMarkers, closeMarkersBatch } from "./utils";
+import { provider, program, ensureAdapterInitialized, stopAdapter, useAdapterSuite } from "./utils/adapterSuite";
 
 // ── Close instruction tests ──────────────────────────────────────────────
 
@@ -29,9 +19,11 @@ describe("protocol-adapter (Close instructions)", () => {
   });
 
   it("close_markers_batch closes marker PDAs and refunds rent", async () => {
-    const markersBefore = (await provider.connection.getProgramAccounts(program.programId, {
-      filters: [{ dataSize: 0 }],
-    })).length;
+    const markersBefore = (
+      await provider.connection.getProgramAccounts(program.programId, {
+        filters: [{ dataSize: 0 }],
+      })
+    ).length;
     assert.isAbove(markersBefore, 0, "the before hook's settlement leaves markers to close");
     const balanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
 
@@ -45,7 +37,9 @@ describe("protocol-adapter (Close instructions)", () => {
 
     const balanceAfter = await provider.connection.getBalance(provider.wallet.publicKey);
     assert.ok(balanceAfter > balanceBefore, "Authority should have received rent refund");
-    console.log(`    Closed ${markersBefore} markers, recovered ${((balanceAfter - balanceBefore) / LAMPORTS_PER_SOL).toFixed(6)} SOL`);
+    console.log(
+      `    Closed ${markersBefore} markers, recovered ${((balanceAfter - balanceBefore) / LAMPORTS_PER_SOL).toFixed(6)} SOL`,
+    );
   });
 
   it("close_markers_batch rejects non-authority", async () => {
@@ -59,5 +53,4 @@ describe("protocol-adapter (Close instructions)", () => {
       assert.match(e.toString(), AUTHORITY_MISMATCH_PATTERN);
     }
   });
-
 });

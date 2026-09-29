@@ -6,9 +6,7 @@
 import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
-import {
-  loadFixture,
-} from "./utils";
+import { loadFixture } from "./utils";
 import {
   program,
   paState,

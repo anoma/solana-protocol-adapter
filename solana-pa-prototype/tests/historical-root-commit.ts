@@ -3,10 +3,7 @@
  * tree the before hook builds (the primary fixture at leaf 0).
  */
 import { assert } from "chai";
-import {
-  loadFixture,
-  createdCommitmentsOf as commitmentsOf,
-} from "./utils";
+import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils";
 import {
   program,
   paState,

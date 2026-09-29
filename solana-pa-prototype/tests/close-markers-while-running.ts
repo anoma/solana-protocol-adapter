@@ -3,9 +3,7 @@
  * settles the primary fixture, leaving markers to attempt.
  */
 import { assert } from "chai";
-import {
-  closeMarkersBatch,
-} from "./utils";
+import { closeMarkersBatch } from "./utils";
 import {
   provider,
   program,
@@ -34,8 +32,11 @@ describe("protocol-adapter (close_markers_batch requires stopped state)", () => 
     assert.ok(markers.length > 0, "Should have markers to close");
 
     try {
-      await closeMarkersBatch(program, provider.wallet.publicKey, markers.map(({ pubkey }) => pubkey))
-        .rpc();
+      await closeMarkersBatch(
+        program,
+        provider.wallet.publicKey,
+        markers.map(({ pubkey }) => pubkey),
+      ).rpc();
       assert.fail("close_markers_batch should fail when PA is not stopped");
     } catch (e: any) {
       assertPAError(e, "NotStopped");

@@ -75,7 +75,7 @@ function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
 export async function predictRootMarkerPda(
   program: Program<ProtocolAdapter>,
   paState: PublicKey,
-  createdCommitments: Buffer[]
+  createdCommitments: Buffer[],
 ): Promise<PublicKey> {
   const root = await predictRootAfterAppend(program, paState, createdCommitments);
   return deriveRootMarkerPda(paState, root, program.programId);
@@ -85,7 +85,7 @@ export async function predictRootMarkerPda(
 export async function predictRootAfterAppend(
   program: Program<ProtocolAdapter>,
   paState: PublicKey,
-  createdCommitments: Buffer[]
+  createdCommitments: Buffer[],
 ): Promise<Buffer> {
   const state = await program.account.paStateAccount.fetch(paState);
   return computeRootAfterAppend(state, createdCommitments);

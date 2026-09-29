@@ -56,7 +56,12 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
 
     const funded = await createFundedEscrow(provider, forwarderProgram.programId, emergencyCommittee, ESCROW_FUNDING);
     const recipientAta = (
-      await getOrCreateAssociatedTokenAccount(provider.connection, emergencyCommittee, funded.mint, emergencyCommittee.publicKey)
+      await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        emergencyCommittee,
+        funded.mint,
+        emergencyCommittee.publicKey,
+      )
     ).address;
     escrow = { ...funded, recipientAta };
 
@@ -69,12 +74,17 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
   const closeConfigAs = (authority: Keypair) =>
     closeConfig(forwarderProgram, authority.publicKey, paState).signers([authority]).rpc();
 
-  it("close_escrow rejects a non-committee authority", () => assertRejects(closeEscrowAs(impostor), /UnauthorizedCaller/));
+  it("close_escrow rejects a non-committee authority", () =>
+    assertRejects(closeEscrowAs(impostor), /UnauthorizedCaller/));
 
   it("close_nonce_bitmaps_batch rejects a non-committee authority", () =>
-    assertRejects(closeAllNonceBitmaps(forwarderProgram, impostor.publicKey, paState, [impostor]), /UnauthorizedCaller/));
+    assertRejects(
+      closeAllNonceBitmaps(forwarderProgram, impostor.publicKey, paState, [impostor]),
+      /UnauthorizedCaller/,
+    ));
 
-  it("close_config rejects a non-committee authority", () => assertRejects(closeConfigAs(impostor), /UnauthorizedCaller/));
+  it("close_config rejects a non-committee authority", () =>
+    assertRejects(closeConfigAs(impostor), /UnauthorizedCaller/));
 
   it("close_nonce_bitmaps_batch rejects a program account that is not a bitmap", () =>
     // The config PDA is program-owned but is not a nonce bitmap.
@@ -85,20 +95,22 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
         .remainingAccounts([{ pubkey: configPda, isWritable: true, isSigner: false }])
         .signers([emergencyCommittee])
         .rpc(),
-      /InvalidNonceBitmapPda/
+      /InvalidNonceBitmapPda/,
     ));
 
   it("closes every nonce bitmap and refunds their rent", async () => {
     const committeeBefore = await provider.connection.getBalance(emergencyCommittee.publicKey);
 
-    const closed = await closeAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [emergencyCommittee]);
+    const closed = await closeAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [
+      emergencyCommittee,
+    ]);
 
     assert.isAbove(closed, 0, "the before hook created a nonce bitmap to close");
     assert.isEmpty(await forwarderProgram.account.nonceBitmap.all(), "every nonce bitmap is closed");
     assert.isAbove(
       await provider.connection.getBalance(emergencyCommittee.publicKey),
       committeeBefore,
-      "the committee recovers more rent than it pays in fees"
+      "the committee recovers more rent than it pays in fees",
     );
   });
 
@@ -112,13 +124,22 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
     assert.isNull(await provider.connection.getAccountInfo(escrow.escrowAta), "escrow ATA is closed");
     const recipientAfter = (await getAccount(provider.connection, escrow.recipientAta)).amount;
     assert.equal(recipientAfter - recipientBefore, ESCROW_FUNDING, "every token is drained to the recipient");
-    assert.isAbove(await provider.connection.getBalance(emergencyCommittee.publicKey), committeeBefore, "rent returns to the committee");
+    assert.isAbove(
+      await provider.connection.getBalance(emergencyCommittee.publicKey),
+      committeeBefore,
+      "rent returns to the committee",
+    );
   });
 
   it("close_escrow closes an empty escrow", async () => {
     const { mint, ...empty } = await createFundedEscrow(provider, forwarderProgram.programId, emergencyCommittee, 0n);
     const recipientAta = (
-      await getOrCreateAssociatedTokenAccount(provider.connection, emergencyCommittee, mint, emergencyCommittee.publicKey)
+      await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        emergencyCommittee,
+        mint,
+        emergencyCommittee.publicKey,
+      )
     ).address;
     assert.equal((await getAccount(provider.connection, empty.escrowAta)).amount, 0n);
 
@@ -133,7 +154,11 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
     await closeConfigAs(emergencyCommittee);
 
     assert.isNull(await provider.connection.getAccountInfo(configPda), "config PDA is closed");
-    assert.isAbove(await provider.connection.getBalance(emergencyCommittee.publicKey), committeeBefore, "rent returns to the committee");
+    assert.isAbove(
+      await provider.connection.getBalance(emergencyCommittee.publicKey),
+      committeeBefore,
+      "rent returns to the committee",
+    );
   });
 
   after(() => funder.drainAll());

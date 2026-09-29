@@ -17,21 +17,12 @@
  */
 import * as crypto from "crypto";
 import { writeGenesisAccountFixtures } from "./genesis-account";
-import {
-  VERIFIER_ROUTER_ID,
-  MOCK_VERIFIER_ID,
-  MOCK_SELECTOR,
-  getVerifierEntryPda,
-} from "./verifier-utils";
+import { VERIFIER_ROUTER_ID, MOCK_VERIFIER_ID, MOCK_SELECTOR, getVerifierEntryPda } from "./verifier-utils";
 
 // Anchor account layout: discriminator ‖ selector: [u8;4] ‖ verifier: Pubkey
 // ‖ estopped: bool (risc0-solana verifier_router::state::VerifierEntry).
 function verifierEntryData(): Buffer {
-  const discriminator = crypto
-    .createHash("sha256")
-    .update("account:VerifierEntry")
-    .digest()
-    .subarray(0, 8);
+  const discriminator = crypto.createHash("sha256").update("account:VerifierEntry").digest().subarray(0, 8);
   return Buffer.concat([
     discriminator,
     MOCK_SELECTOR,

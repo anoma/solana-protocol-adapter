@@ -50,21 +50,26 @@ describe("forwarder emergency (adapter stopped)", () => {
     await initForwarderConfig(randomRef(), emergencyCommittee.publicKey);
     await stopAdapter();
 
-    ({ mint, escrowPda, escrowAta } = await createFundedEscrow(provider, forwarderProgram.programId, authority, 100_000_000n));
+    ({ mint, escrowPda, escrowAta } = await createFundedEscrow(
+      provider,
+      forwarderProgram.programId,
+      authority,
+      100_000_000n,
+    ));
     recipientAta = await createAccount(provider.connection, recipient, mint, recipient.publicKey);
   });
 
   const withdraw = (
     caller: Keypair,
     amount: bigint,
-    accounts: Partial<{ escrowAta: PublicKey; recipientAta: PublicKey }> = {}
+    accounts: Partial<{ escrowAta: PublicKey; recipientAta: PublicKey }> = {},
   ) =>
     emergencyWithdraw(
       forwarderProgram,
       paState,
       caller.publicKey,
       { mint, amount, recipient: recipient.publicKey },
-      { escrowAta, recipientAta, escrowPda, ...accounts }
+      { escrowAta, recipientAta, escrowPda, ...accounts },
     )
       .signers([caller])
       .rpc();
@@ -82,7 +87,8 @@ describe("forwarder emergency (adapter stopped)", () => {
   });
 
   // Mirrors: test_setEmergencyCaller_reverts_if_the_new_emergency_caller_is_the_zero_address
-  it("rejects a zero emergency caller", () => assertRejects(setEmergencyCallerAsCommittee(PublicKey.default), /ZeroAddressNotAllowed/));
+  it("rejects a zero emergency caller", () =>
+    assertRejects(setEmergencyCallerAsCommittee(PublicKey.default), /ZeroAddressNotAllowed/));
 
   // Mirrors: test_setEmergencyCaller_sets_the_emergency_caller and
   // test_emergencyCaller_returns_the_emergency_caller_after_it_has_been_set
@@ -119,7 +125,8 @@ describe("forwarder emergency (adapter stopped)", () => {
   // Mirrors: test_forwardEmergencyCall_forwards_calls_if_the_pa_is_stopped_and_the_caller_is_the_emergency_caller
   it("lets the emergency caller withdraw from escrow", async () => {
     const amount = 25_000_000n;
-    const balances = () => Promise.all([getAccount(provider.connection, escrowAta), getAccount(provider.connection, recipientAta)]);
+    const balances = () =>
+      Promise.all([getAccount(provider.connection, escrowAta), getAccount(provider.connection, recipientAta)]);
     const [escrowBefore, recipientBefore] = await balances();
 
     await withdraw(emergencyCaller, amount);
