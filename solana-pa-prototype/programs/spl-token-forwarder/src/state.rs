@@ -2,6 +2,8 @@
 //! Amounts are u64: SPL Token's own width.
 
 use anchor_lang::prelude::*;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use protocol_adapter::state::{PALifecycle, PAStateAccount, PA_STATE_SEED};
 
 /// Configuration account for the forwarder.
@@ -97,17 +99,10 @@ pub const SIGNED_MESSAGE_LEN: usize = 44;
 /// Standard base64 of a 32-byte hash. Wallets reject raw binary in
 /// signMessage as a possible transaction, so the user signs text.
 pub fn base64_of_hash(hash: &[u8; 32]) -> [u8; SIGNED_MESSAGE_LEN] {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = [b'='; SIGNED_MESSAGE_LEN];
-    for (chunk, slot) in hash.chunks(3).zip(out.chunks_mut(4)) {
-        let mut triple = 0u32;
-        for (i, byte) in chunk.iter().enumerate() {
-            triple |= (*byte as u32) << (16 - 8 * i);
-        }
-        for (i, c) in slot.iter_mut().enumerate().take(chunk.len() + 1) {
-            *c = ALPHABET[((triple >> (18 - 6 * i)) & 0x3F) as usize];
-        }
-    }
+    let mut out = [0u8; SIGNED_MESSAGE_LEN];
+    STANDARD
+        .encode_slice(hash, &mut out)
+        .expect("32 bytes encode to exactly 44 base64 characters");
     out
 }
 
@@ -128,13 +123,17 @@ pub struct WrapMessage {
 impl WrapMessage {
     pub const SIZE: usize = 120;
 
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.try_to_vec()
-            .expect("serializing fixed-size fields into memory cannot fail")
-    }
-
+    /// sha256 of the Borsh encoding, hashed field by field in Borsh order.
     pub fn hash(&self) -> [u8; 32] {
-        anchor_lang::solana_program::hash::hash(&self.to_bytes()).to_bytes()
+        anchor_lang::solana_program::hash::hashv(&[
+            &self.forwarder_id,
+            &self.token_mint,
+            &self.amount.to_le_bytes(),
+            &self.nonce.to_le_bytes(),
+            &self.deadline.to_le_bytes(),
+            &self.action_tree_root,
+        ])
+        .to_bytes()
     }
 
     /// The bytes the ed25519 instruction must carry: base64 of the hash.
@@ -169,11 +168,6 @@ impl WrapInput {
             return Err(crate::ErrorCode::InvalidWrapInputLength.into());
         }
         Self::try_from_slice(data).map_err(|_| crate::ErrorCode::InvalidWrapInputLength.into())
-    }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        self.try_to_vec()
-            .expect("serializing fixed-size fields into memory cannot fail")
     }
 
     pub fn to_message(&self, forwarder_id: &Pubkey) -> WrapMessage {

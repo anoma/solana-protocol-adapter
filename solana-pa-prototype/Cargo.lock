@@ -2812,6 +2812,7 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anoma-pa-solana-client",
+ "base64 0.21.7",
  "hex-literal",
  "protocol-adapter",
 ]

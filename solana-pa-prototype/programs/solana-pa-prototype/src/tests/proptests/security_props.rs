@@ -1,8 +1,10 @@
 use super::strategies::arb_digest;
 use crate::merkle::append_to_tree;
 use crate::tests::utils::{create_test_pa_state, minimal_instance};
+use arm_core::aggregation_instance::{ActionAggregated, AggregationInstance};
 use arm_core::logic_instance::ExpirableBlob;
 use arm_core::Digest;
+use arm_solana::journal::aggregation_journal_digest;
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -10,103 +12,71 @@ use proptest::prelude::*;
 //
 // The digest is recomputed from the typed instance (`to_journal`), so a
 // mutated instance necessarily produces a different Groth16 public input and
-// the proof no longer verifies. These properties pin that binding for each
-// field category.
+// the proof no longer verifies.
 // ---------------------------------------------------------------------------
 
-fn journal_digest(instance: &arm_core::aggregation_instance::AggregationInstance) -> [u8; 32] {
-    arm_solana::journal::aggregation_journal_digest(instance)
-}
+/// Overwrites one instance field with the given digest (or tampers with it).
+type InstanceMutation = fn(&mut AggregationInstance, Digest);
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(10_000))]
+/// Mutating any field the settlement acts on changes the journal digest.
+/// The app-data case is the H-001 core regression: a tampered transaction
+/// cannot keep its Groth16 proof valid.
+#[test]
+fn every_instance_field_mutation_changes_journal_digest() {
+    let replacement = Digest::from_bytes([0xEE; 32]);
+    let mutations: [(&str, InstanceMutation); 10] = [
+        ("nullifier", |i, d| {
+            i.actions[0].consumed_publics[0].resource_nullifier = d
+        }),
+        ("commitment", |i, d| {
+            i.actions[0].created_publics[0].resource_commitment = d
+        }),
+        ("consumed logic ref", |i, d| {
+            i.actions[0].consumed_publics[0].resource_logic_ref = d
+        }),
+        ("created logic ref", |i, d| {
+            i.actions[0].created_publics[0].resource_logic_ref = d
+        }),
+        ("commitment tree root", |i, d| {
+            i.actions[0].consumed_publics[0].commitment_tree_root = d
+        }),
+        ("action tree root", |i, d| i.actions[0].action_tree_root = d),
+        ("compliance key", |i, d| i.compliance_key = d),
+        ("kind table commitment", |i, d| i.kind_table_commitment = d),
+        ("app data", |i, _| {
+            i.actions[0].consumed_publics[0]
+                .app_data
+                .resource_payload
+                .push(ExpirableBlob {
+                    blob: vec![0xEE],
+                    deletion_criterion: 0,
+                })
+        }),
+        ("extra action", |i, d| {
+            i.actions.push(ActionAggregated {
+                consumed_publics: vec![],
+                created_publics: vec![],
+                delta_x: [0u32; 8],
+                delta_y: [0u32; 8],
+                action_tree_root: d,
+            })
+        }),
+    ];
 
-    /// Mutating any resource tag (nullifier or commitment) changes the digest.
-    #[test]
-    fn tag_mutation_changes_journal_digest(replacement in arb_digest()) {
-        let instance = minimal_instance();
-        let honest = journal_digest(&instance);
-
-        let mut nf_mutated = instance.clone();
-        prop_assume!(nf_mutated.actions[0].consumed_publics[0].resource_nullifier != replacement);
-        nf_mutated.actions[0].consumed_publics[0].resource_nullifier = replacement;
-        prop_assert_ne!(honest, journal_digest(&nf_mutated));
-
-        let mut cm_mutated = instance.clone();
-        prop_assume!(cm_mutated.actions[0].created_publics[0].resource_commitment != replacement);
-        cm_mutated.actions[0].created_publics[0].resource_commitment = replacement;
-        prop_assert_ne!(honest, journal_digest(&cm_mutated));
-    }
-
-    /// Mutating a logic ref or the consumed root changes the digest.
-    #[test]
-    fn logic_ref_and_root_mutation_changes_journal_digest(replacement in arb_digest()) {
-        let instance = minimal_instance();
-        let honest = journal_digest(&instance);
-
-        let mut lr_mutated = instance.clone();
-        prop_assume!(lr_mutated.actions[0].consumed_publics[0].resource_logic_ref != replacement);
-        lr_mutated.actions[0].consumed_publics[0].resource_logic_ref = replacement;
-        prop_assert_ne!(honest, journal_digest(&lr_mutated));
-
-        let mut root_mutated = instance.clone();
-        prop_assume!(
-            root_mutated.actions[0].consumed_publics[0].commitment_tree_root != replacement
+    let instance = minimal_instance();
+    let honest = aggregation_journal_digest(&instance);
+    for (field, mutate) in mutations {
+        let mut mutated = instance.clone();
+        mutate(&mut mutated, replacement);
+        assert_ne!(
+            mutated, instance,
+            "{field}: mutation must change the instance"
         );
-        root_mutated.actions[0].consumed_publics[0].commitment_tree_root = replacement;
-        prop_assert_ne!(honest, journal_digest(&root_mutated));
-    }
-
-    /// Mutating the compliance key or kind-table commitment changes the digest.
-    #[test]
-    fn binding_field_mutation_changes_journal_digest(replacement in arb_digest()) {
-        let instance = minimal_instance();
-        let honest = journal_digest(&instance);
-
-        let mut key_mutated = instance.clone();
-        prop_assume!(key_mutated.compliance_key != replacement);
-        key_mutated.compliance_key = replacement;
-        prop_assert_ne!(honest, journal_digest(&key_mutated));
-
-        let mut table_mutated = instance.clone();
-        prop_assume!(table_mutated.kind_table_commitment != replacement);
-        table_mutated.kind_table_commitment = replacement;
-        prop_assert_ne!(honest, journal_digest(&table_mutated));
-    }
-
-    /// H-001 core regression: any mutation of a resource's `app_data` changes
-    /// the journal digest, so a tampered transaction cannot keep its Groth16
-    /// proof valid.
-    #[test]
-    fn app_data_mutation_changes_journal_digest(poison in any::<u8>()) {
-        let instance = minimal_instance();
-        let honest = journal_digest(&instance);
-
-        let mut tampered = instance.clone();
-        tampered.actions[0].consumed_publics[0]
-            .app_data
-            .resource_payload
-            .push(ExpirableBlob { blob: vec![poison as u32], deletion_criterion: 0 });
-
-        prop_assert_ne!(honest, journal_digest(&tampered));
-    }
-
-    /// Appending an extra action (even an empty one) changes the digest.
-    #[test]
-    fn extra_action_changes_journal_digest(root in arb_digest()) {
-        let instance = minimal_instance();
-        let honest = journal_digest(&instance);
-
-        let mut extended = instance.clone();
-        extended.actions.push(arm_core::aggregation_instance::ActionAggregated {
-            consumed_publics: vec![],
-            created_publics: vec![],
-            delta_x: [0u32; 8],
-            delta_y: [0u32; 8],
-            action_tree_root: root,
-        });
-
-        prop_assert_ne!(honest, journal_digest(&extended));
+        assert_ne!(
+            honest,
+            aggregation_journal_digest(&mutated),
+            "{field}: mutation must change the journal digest"
+        );
     }
 }
 
@@ -208,20 +178,9 @@ fn merkle_tree_rejects_at_max_capacity() {
     // Create a state at depth 3 (capacity = 8) to test the boundary quickly
     let depth = 3usize;
     let mut state = PAStateAccount {
-        schema_version: PAStateAccount::SCHEMA_VERSION,
-        bump: 0,
-        authority: anchor_lang::prelude::Pubkey::default(),
-        pending_authority: None,
-        verifier_router: anchor_lang::prelude::Pubkey::default(),
-        proof_selector: [0; 4],
-        kind_table_commitment: [0; 32],
-        lifecycle: crate::state::PALifecycle::Running,
-        root: crate::merkle::EMPTY_TREE_ROOT_INITIAL.into(),
-        next_index: 0,
         current_depth: depth as u8,
         frontier: (0..depth).map(|i| ZEROS[i].into()).collect(),
-        min_expiry_slots: 100,
-        max_expiry_slots: 216_000,
+        ..create_test_pa_state()
     };
 
     // Fill to capacity (2^3 = 8 leaves). Each append grows the tree as needed.

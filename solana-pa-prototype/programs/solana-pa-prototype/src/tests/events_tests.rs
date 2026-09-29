@@ -11,7 +11,7 @@ fn event_instruction_data_is_tag_then_discriminator_then_borsh() {
         action_tree_root: [7u8; 32],
         action_tag_count: 3,
     };
-    let data = event_instruction_data(&event);
+    let data = event_instruction_data(&event).unwrap();
 
     // Sha256("anchor:event")[..8] as a little-endian u64: 0x1d9acb512ea545e4.
     assert_eq!(
@@ -23,4 +23,24 @@ fn event_instruction_data_is_tag_then_discriminator_then_borsh() {
     assert_eq!(&data[16..48], &[7u8; 32]);
     assert_eq!(&data[48..52], &3u32.to_le_bytes());
     assert_eq!(data.len(), 52);
+}
+
+/// A variable-length event body is Borsh-encoded in place after the tag and
+/// discriminator, byte-for-byte what Anchor's own `Event::data` produces.
+#[test]
+fn event_instruction_data_is_tag_then_anchor_event_data_for_a_blob_event() {
+    use anchor_lang::{AnchorSerialize, Event};
+    let event = crate::ResourcePayloadEvent {
+        tag: [9u8; 32],
+        index: 2,
+        blob: (0..=200u8).collect(),
+    };
+    let data = event_instruction_data(&event).unwrap();
+
+    let mut expected = anchor_lang::event::EVENT_IX_TAG_LE.to_vec();
+    expected.extend_from_slice(crate::ResourcePayloadEvent::DISCRIMINATOR);
+    expected.extend_from_slice(&event.try_to_vec().unwrap());
+    assert_eq!(data, expected);
+    assert_eq!(&data[8..], event.data().as_slice());
+    assert_eq!(data.len(), 8 + 8 + 32 + 4 + 4 + 201);
 }
