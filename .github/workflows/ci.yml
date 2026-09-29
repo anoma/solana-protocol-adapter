@@ -57,18 +57,12 @@ jobs:
         with:
           workspaces: solana-pa-prototype
 
+      # Lints the workspace, then each program with dev features (e.g. the
+      # PA's dev-teardown instructions) again with them enabled, since
+      # production builds never compile that gated code.
       - name: Run clippy
         working-directory: ./solana-pa-prototype
-        run: |
-          cargo clippy --workspace --all-targets -- -D warnings
-
-      # close_markers_batch and its account struct compile only under
-      # dev-teardown, which production builds do not enable. Without this the
-      # gated code is never linted at all.
-      - name: Run clippy (dev-teardown feature)
-        working-directory: ./solana-pa-prototype
-        run: |
-          cargo clippy -p protocol-adapter --features dev-teardown --all-targets -- -D warnings
+        run: ./scripts/ops.sh clippy
 
   # Rust unit tests
   test:
@@ -91,7 +85,7 @@ jobs:
 
       - name: Run tests
         working-directory: ./solana-pa-prototype
-        run: cargo test -p protocol-adapter -p block-time-forwarder -p spl-token-forwarder
+        run: cargo test --workspace
 
   # Build the programs once; the per-mode test jobs below reuse the
   # artifacts instead of repeating the SBF build.

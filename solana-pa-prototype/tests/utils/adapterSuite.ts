@@ -18,8 +18,10 @@ import {
 } from "@solana/web3.js";
 import { assert } from "chai";
 import path from "path";
+import { BlockTimeForwarder } from "../../target/types/block_time_forwarder";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
+import { TestForwarder } from "../../target/types/test_forwarder";
 import {
   getRouterPda,
   getVerifierEntryPda,
@@ -63,11 +65,8 @@ export const VERIFIER_PROGRAM_ID = VERIFIER.program;
 export const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
 export const [verifierEntryPda] = getVerifierEntryPda(PROOF_SELECTOR, VERIFIER_ROUTER_ID);
 
-// Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-export const blockTimeForwarderId = new PublicKey("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf");
-
-// Must match `programs/test-forwarder/src/lib.rs::declare_id!`.
-export const testForwarderId = new PublicKey("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD");
+export const blockTimeForwarderId = (anchor.workspace.BlockTimeForwarder as Program<BlockTimeForwarder>).programId;
+export const testForwarderId = (anchor.workspace.TestForwarder as Program<TestForwarder>).programId;
 
 export function deriveRootPda(root: Buffer): PublicKey {
   return deriveRootMarkerPda(paState, root, program.programId);

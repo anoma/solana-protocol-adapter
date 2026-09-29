@@ -12,9 +12,6 @@
 #   VALIDATOR_LOG        - log file (default: $PROJECT_DIR/.validator.log)
 #   ANCHOR_WALLET_PATH   - wallet path (default: ~/.config/solana/id.json)
 #
-# Exported after sync_program_ids:
-#   PA_ID, BTF_ID, TF_ID, MV_ID
-#
 # Exported after workspace_program_args:
 #   WORKSPACE_PROGRAM_ARGS
 #
@@ -46,31 +43,87 @@ MOCK_SELECTOR="0xffffffff"
 
 VALIDATOR_PID=""
 
-# Package names the build functions below build by name. A program added
-# under programs/ that isn't in this list would otherwise silently stop being
-# built on a forward-merge — fail loudly instead. This is the single copy:
-# dev.sh and ops.sh both route builds through the functions in this file.
-EXPECTED_PROGRAMS=(protocol-adapter block-time-forwarder spl-token-forwarder test-forwarder mock-verifier)
+# The workspace programs (every package under programs/), one row each,
+# keyed by the program's [lib] name: its Anchor program name, its key in
+# Anchor.toml, and the basename of its binary and keypair in target/deploy/.
+# Every build, program-ID sync, genesis load, deploy, lint, and cleanup
+# iterates this table; load_workspace_programs fails if it and programs/
+# disagree. Columns:
+#   target        ops.sh deploy target; "-" marks a localnet-only program
+#                 (integration-suite support, never deployed to a cluster)
+#   sol           SOL a cluster deploy of it needs: rent for its binary
+#                 (PA 659K ~4.7, BTF 177K ~1.3, STF 337K ~2.4) plus fee
+#                 headroom; "-" for localnet-only programs
+#   dev_features  Cargo features of the development build ("-": none)
+#   dev_only_ix   the instructions those features add, which the production
+#                 build's IDL must lack (build_programs_release checks it)
+PROGRAM_TABLE="
+protocol_adapter      pa   5  dev-teardown  close_markers_batch,dev_set_schema_version
+block_time_forwarder  btf  2  -             -
+spl_token_forwarder   stf  3  -             -
+test_forwarder        -    -  -             -
+mock_verifier         -    -  -             -
+"
 
-assert_known_programs() {
-  local dir pkg known ok
-  for dir in "$PROJECT_DIR"/programs/*/; do
-    pkg="$(sed -n 's/^name = "\(.*\)"$/\1/p' "${dir}Cargo.toml" | head -1)"
-    ok=0
-    for known in "${EXPECTED_PROGRAMS[@]}"; do
-      if [[ "$pkg" == "$known" ]]; then
-        ok=1
-        break
-      fi
-    done
-    if [[ $ok -eq 0 ]]; then
-      echo "    ❌ Unrecognized program under programs/: '${pkg}' (${dir})" >&2
-      echo "       Builds and deploys go by name. Register '${pkg}' in ALL of:" >&2
-      echo "       EXPECTED_PROGRAMS, PROGRAM_KEYPAIRS (which also drives the" >&2
-      echo "       local validator's genesis), sync_program_ids, build_programs_dev," >&2
-      echo "       and build_programs_release (this file), plus the PROGRAMS/PROGRAM_LIBRS" >&2
-      echo "       registries in ops.sh if it deploys to real clusters —" >&2
-      echo "       otherwise it silently never gets built or deployed." >&2
+# Parsed from PROGRAM_TABLE: PROGRAM_NAMES and PROGRAM_TARGETS in table
+# order; per name, PROGRAM_DEV_FEATURES and PROGRAM_DEV_ONLY_IX; per target,
+# PROGRAM_BY_TARGET (its program name) and PROGRAM_DEPLOY_SOL.
+PROGRAM_NAMES=()
+PROGRAM_TARGETS=()
+declare -A PROGRAM_DEV_FEATURES=() PROGRAM_DEV_ONLY_IX=() PROGRAM_BY_TARGET=() PROGRAM_DEPLOY_SOL=()
+
+parse_program_table() {
+  local name target sol features dev_ix
+  while read -r name target sol features dev_ix; do
+    [[ -n "$name" ]] || continue
+    PROGRAM_NAMES+=("$name")
+    PROGRAM_DEV_FEATURES[$name]="$features"
+    PROGRAM_DEV_ONLY_IX[$name]="$dev_ix"
+    if [[ "$target" != "-" ]]; then
+      PROGRAM_TARGETS+=("$target")
+      PROGRAM_BY_TARGET[$target]="$name"
+      PROGRAM_DEPLOY_SOL[$target]="$sol"
+    fi
+  done <<<"$PROGRAM_TABLE"
+}
+parse_program_table
+
+# Per program name, from cargo metadata: its Cargo package name and the path
+# of its lib.rs (directory names do not track program names — the PA's is
+# solana-pa-prototype). Filled by load_workspace_programs, which needs cargo,
+# so sourcing this file stays safe outside the Nix shell.
+declare -A PROGRAM_PACKAGE=() PROGRAM_SRC=()
+
+load_workspace_programs() {
+  if [[ ${#PROGRAM_SRC[@]} -gt 0 ]]; then
+    return 0
+  fi
+  local metadata rows lib pkg src name
+  metadata="$(cargo metadata --no-deps --format-version=1 --manifest-path "$PROJECT_DIR/Cargo.toml")"
+  # Every workspace member is a program (members = programs/*).
+  rows="$(node -e '
+    const { packages } = JSON.parse(require("fs").readFileSync(0, "utf-8"));
+    for (const p of packages) {
+      const lib = p.targets.find((t) => t.kind.includes("lib"));
+      if (!lib) {
+        console.error(`workspace package ${p.name} has no lib target`);
+        process.exit(1);
+      }
+      console.log(lib.name, p.name, lib.src_path);
+    }
+  ' <<<"$metadata")"
+  while read -r lib pkg src; do
+    if [[ -z "${PROGRAM_DEV_FEATURES[$lib]+set}" ]]; then
+      echo "    ❌ Program '${lib}' (package ${pkg}) is not in PROGRAM_TABLE (scripts/validator-deploy.sh)." >&2
+      echo "       Builds, ID sync, and deploys iterate that table; add a row for it." >&2
+      exit 1
+    fi
+    PROGRAM_PACKAGE[$lib]="$pkg"
+    PROGRAM_SRC[$lib]="$src"
+  done <<<"$rows"
+  for name in "${PROGRAM_NAMES[@]}"; do
+    if [[ -z "${PROGRAM_SRC[$name]+set}" ]]; then
+      echo "    ❌ PROGRAM_TABLE lists '${name}', which is not a program under programs/." >&2
       exit 1
     fi
   done
@@ -88,6 +141,11 @@ require_cmd() {
 
 read_declare_id() {
   sed -n 's/^declare_id!("\([^"]*\)").*/\1/p' "$1" | head -n 1
+}
+
+# The program ID of <name>, from its deploy keypair.
+get_program_id() {
+  solana-keygen pubkey "target/deploy/${1}-keypair.json"
 }
 
 ensure_wallet() {
@@ -194,22 +252,25 @@ wait_for_validator() {
 
 # ── Sync helpers ───────────────────────────────────────────────────────
 
+# Point <name>'s declare_id! and Anchor.toml entries at its deploy keypair.
+# Requires load_workspace_programs.
 sync_program_id() {
   local name="$1"
-  local keypair="$2"
-  local lib_rs="$3"
-  local anchor_key="$4"
+  local keypair="target/deploy/${name}-keypair.json"
+  local lib_rs="${PROGRAM_SRC[$name]}"
 
   local id
-  id="$(solana-keygen pubkey "$keypair")"
+  id="$(get_program_id "$name")"
 
   # Safety: verify the keypair matches what's committed in git.
   # If someone accidentally regenerated a keypair, this catches it
   # before we silently rewrite declare_id! to a new program ID.
   # A keypair not yet committed has nothing to compare against.
-  if git cat-file -e HEAD:"$keypair"; then
+  # (`HEAD:./path` resolves against the working directory; a bare
+  # `HEAD:path` resolves against the repository root.)
+  if git cat-file -e "HEAD:./${keypair}"; then
     local committed_id
-    committed_id="$(git show HEAD:"$keypair" | solana-keygen pubkey /dev/stdin)"
+    committed_id="$(git show "HEAD:./${keypair}" | solana-keygen pubkey /dev/stdin)"
     if [[ "$committed_id" != "$id" ]]; then
       echo "    ❌ ${name} keypair was regenerated! Local: $id, committed: $committed_id" >&2
       echo "    Restore with: git checkout HEAD -- $keypair" >&2
@@ -223,12 +284,10 @@ sync_program_id() {
   if [[ "$current" != "$id" ]]; then
     echo "    ${name} program ID mismatch: $current -> $id" >&2
     sed -i -E "s/^declare_id!\(\"[^\"]+\"\);/declare_id!(\"${id}\");/" "$lib_rs"
-    sed -i -E "s/^${anchor_key} = \"[^\"]+\"$/${anchor_key} = \"${id}\"/" Anchor.toml
+    sed -i -E "s/^${name} = \"[^\"]+\"$/${name} = \"${id}\"/" Anchor.toml
   else
     echo "    ${name} program ID already synced: $id" >&2
   fi
-
-  printf '%s' "$id"
 }
 
 # ── Main functions ─────────────────────────────────────────────────────
@@ -244,20 +303,12 @@ require_commands() {
   require_cmd curl
 }
 
-PROGRAM_KEYPAIRS=(
-  target/deploy/protocol_adapter-keypair.json
-  target/deploy/block_time_forwarder-keypair.json
-  target/deploy/spl_token_forwarder-keypair.json
-  target/deploy/test_forwarder-keypair.json
-  target/deploy/mock_verifier-keypair.json
-)
-
 # Restore committed program keypairs from git if missing locally.
 # Returns nonzero if any keypair is still missing afterward (not in git).
 restore_program_keypairs() {
-  local kp missing=false
-  for kp in "${PROGRAM_KEYPAIRS[@]}"; do
-    if [[ ! -f "$kp" ]]; then
+  local name missing=false
+  for name in "${PROGRAM_NAMES[@]}"; do
+    if [[ ! -f "target/deploy/${name}-keypair.json" ]]; then
       missing=true
       break
     fi
@@ -271,8 +322,8 @@ restore_program_keypairs() {
       git checkout HEAD -- target/deploy/
     fi
   fi
-  for kp in "${PROGRAM_KEYPAIRS[@]}"; do
-    [[ -f "$kp" ]] || return 1
+  for name in "${PROGRAM_NAMES[@]}"; do
+    [[ -f "target/deploy/${name}-keypair.json" ]] || return 1
   done
 }
 
@@ -367,179 +418,138 @@ ensure_lockfile_sync() {
 sync_program_ids() {
   ensure_node_modules
   ensure_program_keypairs
+  load_workspace_programs
 
-  PA_ID="$(sync_program_id "PA" \
-    "target/deploy/protocol_adapter-keypair.json" \
-    "programs/solana-pa-prototype/src/lib.rs" \
-    "protocol_adapter")"
+  local name mv_before
+  mv_before="$(read_declare_id "${PROGRAM_SRC[mock_verifier]}")"
+  for name in "${PROGRAM_NAMES[@]}"; do
+    sync_program_id "$name"
+  done
 
-  BTF_OLD="$(read_declare_id "programs/block-time-forwarder/src/lib.rs")"
-  BTF_ID="$(sync_program_id "BTF" \
-    "target/deploy/block_time_forwarder-keypair.json" \
-    "programs/block-time-forwarder/src/lib.rs" \
-    "block_time_forwarder")"
-
-  # BTF ID also appears in the integration tests (fixture-gen reads the crate's ID)
-  if [[ "$BTF_OLD" != "$BTF_ID" ]]; then
-    sed -i -E "s/blockTimeForwarderId = new PublicKey\(\"[^\"]+\"\)/blockTimeForwarderId = new PublicKey(\"${BTF_ID}\")/" tests/utils/adapterSuite.ts
+  # The preloaded mock VerifierEntry genesis account embeds the mock
+  # verifier's ID — regenerate it on rotation.
+  if [[ "$(read_declare_id "${PROGRAM_SRC[mock_verifier]}")" != "$mv_before" ]]; then
+    echo "    mock_verifier ID changed — regenerating mock verifier-entry account fixture" >&2
+    npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts "$(get_program_id mock_verifier)" >&2
   fi
+}
 
-  # Nothing else carries the STF id: fixture-gen and the tests read the crate's ID.
-  sync_program_id "STF" \
-    "target/deploy/spl_token_forwarder-keypair.json" \
-    "programs/spl-token-forwarder/src/lib.rs" \
-    "spl_token_forwarder" >/dev/null
-
-  TF_OLD="$(read_declare_id "programs/test-forwarder/src/lib.rs")"
-  TF_ID="$(sync_program_id "TF" \
-    "target/deploy/test_forwarder-keypair.json" \
-    "programs/test-forwarder/src/lib.rs" \
-    "test_forwarder")"
-
-  # TF ID also appears in the integration tests (fixture-gen reads the crate's ID)
-  if [[ "$TF_OLD" != "$TF_ID" ]]; then
-    sed -i -E "s/testForwarderId = new PublicKey\(\"[^\"]+\"\)/testForwarderId = new PublicKey(\"${TF_ID}\")/" tests/utils/adapterSuite.ts
-  fi
-
-  MV_OLD="$(read_declare_id "programs/mock-verifier/src/lib.rs")"
-  MV_ID="$(sync_program_id "MV" \
-    "target/deploy/mock_verifier-keypair.json" \
-    "programs/mock-verifier/src/lib.rs" \
-    "mock_verifier")"
-
-  # MV ID also appears in the TS verifier utils, and the preloaded mock
-  # VerifierEntry account fixture embeds it — regenerate on rotation.
-  if [[ "$MV_OLD" != "$MV_ID" ]]; then
-    sed -i -E "s/MOCK_VERIFIER_ID = new PublicKey\(\"[^\"]+\"\)/MOCK_VERIFIER_ID = new PublicKey(\"${MV_ID}\")/" scripts/verifier-utils/index.ts
-    echo "    MV ID changed — regenerating mock verifier-entry account fixture" >&2
-    npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts >&2
+# The Cargo arguments of <name>'s development build, into DEV_CARGO_ARGS.
+dev_cargo_args() {
+  DEV_CARGO_ARGS=()
+  if [[ "${PROGRAM_DEV_FEATURES[$1]}" != "-" ]]; then
+    DEV_CARGO_ARGS=(-- --features "${PROGRAM_DEV_FEATURES[$1]}")
   fi
 }
 
 build_programs_dev() {
   # $1 = "noidl" skips IDL generation — a separate host `cargo test` compile
   # pass per program that pure compile checks don't need. Anything that runs
-  # the TS operator scripts or tests needs the IDL (and target/types).
-  local idl_flag=""
+  # the TS operator scripts or tests needs the IDLs (and target/types): they
+  # resolve every program, and its ID, through the Anchor workspace.
+  local idl_flag=() name
   if [[ "${1:-}" == "noidl" ]]; then
-    idl_flag="--no-idl"
+    idl_flag=(--no-idl)
   fi
 
-  assert_known_programs
+  load_workspace_programs
 
-  echo "    Building programs (development build, dev-teardown enabled)..."
-  # dev-teardown enables close_markers_batch (development-only marker PDA
-  # reclamation). It's a protocol-adapter-only Cargo feature, so it must
-  # be scoped with -p rather than passed to the whole-workspace build.
-  anchor_build -p protocol_adapter ${idl_flag} -- --features dev-teardown
-  anchor_build -p block_time_forwarder ${idl_flag}
-  anchor_build -p spl_token_forwarder ${idl_flag}
-  # Nothing consumes the test-only programs' IDLs; always skip their IDL pass.
-  anchor_build -p test_forwarder --no-idl
-  anchor_build -p mock_verifier --no-idl
+  echo "    Building programs (development build)..."
+  # One build per program: dev features are per-package Cargo features.
+  for name in "${PROGRAM_NAMES[@]}"; do
+    dev_cargo_args "$name"
+    anchor_build -p "$name" "${idl_flag[@]}" "${DEV_CARGO_ARGS[@]}"
+  done
 }
 
-# Prints the names of instructions gated by a `#[cfg(...)]` attribute whose
-# argument mentions `dev-teardown` (a bare `feature = "dev-teardown"`, no
-# spaces, or wrapped in `all(...)`/`any(...)`), one per line: any `pub fn`
-# following such an attribute, skipping over doc comments (`///`), line
-# comments (`//`), further attributes (e.g. `#[derive(Accounts)]`), and
-# blank lines in between. A cfg attribute whose next item is not a `pub fn`
-# (a struct, an impl block, etc.) gates that item instead of an instruction
-# and is classified silently rather than printed. Every cfg occurrence found
-# must land in one of those two buckets — if end-of-file arrives while an
-# attribute is still waiting for its item, that occurrence is left
-# unclassified and the mismatch is caught below.
-dev_only_instructions() {
-  awk -v src="$1" '
-    /#\[cfg\(/ && /dev-teardown/ {
-      cfg_count++
-      pending = 1
-      next
-    }
-    pending && /^[[:space:]]*($|#\[|\/\/)/ { next }
-    pending && /pub fn/ {
-      match($0, /pub fn [A-Za-z0-9_]+/)
-      print substr($0, RSTART + 7, RLENGTH - 7)
-      classified++
-      pending = 0
-      next
-    }
-    pending {
-      classified++
-      pending = 0
-    }
-    END {
-      if (cfg_count + 0 != classified + 0) {
-        printf "❌ release build: %d dev-teardown cfg attribute(s) in %s could not be classified as an instruction or an item\n", cfg_count - classified, src > "/dev/stderr"
-        exit 1
-      }
-    }
-  ' "$1"
-}
-
-# The production build: plain `anchor build`, no dev-teardown feature, so
-# the dev-only instructions (derived from `#[cfg(feature = "dev-teardown")]`
-# in lib.rs) must be absent from the deployed binary. The IDL is generated
-# for protocol-adapter and checked, so this stays a self-checking command
+# The production build: plain `anchor build` of the cluster programs, none of
+# their dev features. Each program with dev features gets its production IDL
+# checked against its development IDL, so this stays a self-checking command
 # rather than a convention nothing enforces.
 build_programs_release() {
-  assert_known_programs
+  load_workspace_programs
 
-  local idl_path="target/idl/protocol_adapter.json"
-  rm -f "$idl_path"
-
-  echo "    Building programs (production build)..."
-  anchor_build -p protocol_adapter
-  anchor_build -p block_time_forwarder --no-idl
-  # The forwarder's operator script resolves the program through the Anchor
-  # workspace, which needs its IDL and types.
-  anchor_build -p spl_token_forwarder
-  anchor_build -p test_forwarder --no-idl
-  anchor_build -p mock_verifier --no-idl
-
-  if [[ ! -f "$idl_path" ]]; then
-    echo "❌ release build: anchor build did not produce an IDL at ${idl_path}" >&2
-    exit 1
-  fi
-  local lib_rs="$PROJECT_DIR/programs/solana-pa-prototype/src/lib.rs"
-  local ix_names
-  ix_names="$(dev_only_instructions "$lib_rs")"
-  if [[ -z "$ix_names" ]]; then
-    echo "❌ release build: no dev-teardown-gated instructions found in lib.rs; the IDL self-check cannot run" >&2
-    exit 1
-  fi
-
-  local dev_only_ix
-  for dev_only_ix in $ix_names; do
-    if grep -q "\"${dev_only_ix}\"" "$idl_path"; then
-      echo "❌ release build: ${dev_only_ix} is present in the production IDL (${idl_path})." >&2
-      echo "   dev-teardown must not be enabled for a production build." >&2
+  local target name idl_path
+  echo "    Building the cluster programs (production build)..."
+  for target in "${PROGRAM_TARGETS[@]}"; do
+    name="${PROGRAM_BY_TARGET[$target]}"
+    idl_path="target/idl/${name}.json"
+    rm -f "$idl_path"
+    anchor_build -p "$name"
+    if [[ ! -f "$idl_path" ]]; then
+      echo "❌ release build: anchor build did not produce an IDL at ${idl_path}" >&2
       exit 1
     fi
+    if [[ "${PROGRAM_DEV_FEATURES[$name]}" != "-" ]]; then
+      assert_release_idl_lacks_dev_only "$name"
+    fi
   done
-  echo "    ✅ Production build: dev-only instructions ($(echo "$ix_names" | paste -sd, -)) are absent from the IDL."
+}
+
+# <name>'s production IDL (target/idl) must be exactly its development IDL
+# minus the dev-only instructions PROGRAM_TABLE declares, and each declared
+# instruction must be in the development IDL. So the check fails when a
+# dev-only instruction reaches the production build, and when the development
+# build gains or loses anything the declaration does not account for. The
+# development IDL comes from the IDL half of the development build (same
+# features), without the SBF compile.
+assert_release_idl_lacks_dev_only() {
+  local name="$1"
+  local dev_idl
+  dev_idl="$(mktemp --suffix .json)"
+  dev_cargo_args "$name"
+  anchor idl build -p "$name" -o "$dev_idl" "${DEV_CARGO_ARGS[@]}"
+  if ! node -e '
+    const fs = require("fs");
+    const [name, devPath, releasePath, declaredList] = process.argv.slice(1);
+    const dev = JSON.parse(fs.readFileSync(devPath, "utf-8"));
+    const release = JSON.parse(fs.readFileSync(releasePath, "utf-8"));
+    const declared = declaredList === "-" ? [] : declaredList.split(",");
+    const devNames = dev.instructions.map((ix) => ix.name);
+    const releaseNames = release.instructions.map((ix) => ix.name);
+    const problems = [];
+    const report = (what, names) => names.length && problems.push(`${what}: ${names.join(", ")}`);
+    report("declared dev-only but absent from the development IDL", declared.filter((n) => !devNames.includes(n)));
+    report("dev-only instruction present in the production IDL", declared.filter((n) => releaseNames.includes(n)));
+    report(
+      "only in the development IDL but not declared dev-only",
+      devNames.filter((n) => !releaseNames.includes(n) && !declared.includes(n)),
+    );
+    report("only in the production IDL", releaseNames.filter((n) => !devNames.includes(n)));
+    const expected = { ...dev, instructions: dev.instructions.filter((ix) => !declared.includes(ix.name)) };
+    if (problems.length === 0 && JSON.stringify(expected) !== JSON.stringify(release)) {
+      problems.push("the IDLs differ beyond the declared dev-only instructions (types, accounts, events, or instruction signatures)");
+    }
+    if (problems.length > 0) {
+      console.error(`❌ release build: ${name} production IDL (${releasePath}) is not its development IDL minus the declared dev-only instructions (${declaredList}):`);
+      problems.forEach((p) => console.error(`   - ${p}`));
+      process.exit(1);
+    }
+    console.log(`    ✅ Production build: ${name} IDL is the development IDL minus its dev-only instructions (${declared.join(", ")}).`);
+  ' "$name" "$dev_idl" "target/idl/${name}.json" "${PROGRAM_DEV_ONLY_IX[$name]}"; then
+    rm -f "$dev_idl"
+    exit 1
+  fi
+  rm -f "$dev_idl"
 }
 
 # Validate the required fixture for the given test mode ($1, real|mock):
 # it must exist, contain the current BTF program ID, and carry the selector
 # its mode demands — a mock fixture in the real dir (or vice versa) would
 # silently run the suite against the wrong verifier.
-# Requires BTF_ID (exported by sync_program_ids).
 check_required_fixture() {
   local mode="$1"
-  local subdir="" mock_flag="" expected_selector="$GROTH16_SELECTOR"
+  local subdir="" expected_selector="$GROTH16_SELECTOR"
   if [[ "$mode" == "mock" ]]; then
     subdir="mock/"
-    mock_flag="--mock "
     expected_selector="$MOCK_SELECTOR"
   fi
   local required_fixture="tests/fixtures/${subdir}batch_groth16.json"
   if [[ ! -f "$required_fixture" ]] ||
-    ! fixture_matches_program_id "$required_fixture" "$BTF_ID" "$expected_selector"; then
+    ! fixture_matches_program_id "$required_fixture" "$(get_program_id block_time_forwarder)" "$expected_selector"; then
     echo "Required fixture is missing, stale, or carries the wrong selector"
     echo "for ${mode} mode (expected ${expected_selector}): ${required_fixture}"
-    echo "Regenerate with: ./scripts/dev.sh gen-fixtures ${mock_flag}${required_fixture}"
+    echo "Regenerate with: ./scripts/dev.sh regen-fixtures ${mode}"
     exit 1
   fi
 }
@@ -568,15 +578,15 @@ fetch_devnet_clones() {
 # every workspace program at genesis from target/deploy, upgradeable, with
 # the provider wallet as upgrade authority (what `anchor deploy` would set).
 workspace_program_args() {
-  local kp so
+  local name so
   WORKSPACE_PROGRAM_ARGS=()
-  for kp in "${PROGRAM_KEYPAIRS[@]}"; do
-    so="target/deploy/$(basename "$kp" -keypair.json).so"
+  for name in "${PROGRAM_NAMES[@]}"; do
+    so="target/deploy/${name}.so"
     if [[ ! -f "$so" ]]; then
       echo "❌ ${so} is missing; build the programs first ('./scripts/anchor-test.sh build', or the default phase)." >&2
       exit 1
     fi
-    WORKSPACE_PROGRAM_ARGS+=(--upgradeable-program "$kp" "$so" "$ANCHOR_WALLET_PATH")
+    WORKSPACE_PROGRAM_ARGS+=(--upgradeable-program "target/deploy/${name}-keypair.json" "$so" "$ANCHOR_WALLET_PATH")
   done
 }
 

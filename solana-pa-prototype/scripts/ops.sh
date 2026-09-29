@@ -15,36 +15,22 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=validator-deploy.sh
 source "${SCRIPT_DIR}/validator-deploy.sh"
 
-# Deployable program targets: shorthand → binary name under target/deploy/.
-# test-forwarder and mock-verifier are deliberately absent: they exist only
-# for the local integration suite and are never deployed to a real cluster.
-declare -A PROGRAMS=(
-  [pa]="protocol_adapter"
-  [btf]="block_time_forwarder"
-  [stf]="spl_token_forwarder"
-)
-
-# Source file per target. Directory names are historical and deliberately do
-# not track the crate/binary name (the PA crate is protocol-adapter, its
-# directory solana-pa-prototype), so this cannot be derived by munging.
-declare -A PROGRAM_LIBRS=(
-  [pa]="programs/solana-pa-prototype/src/lib.rs"
-  [btf]="programs/block-time-forwarder/src/lib.rs"
-  [stf]="programs/spl-token-forwarder/src/lib.rs"
-)
+# Deploy targets, their programs, and which programs are localnet-only come
+# from PROGRAM_TABLE (validator-deploy.sh).
+DEPLOY_TARGETS="$(IFS='|'; echo "${PROGRAM_TARGETS[*]}")"
 
 usage() {
   cat <<USAGE
 Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]
 
 Commands:
-  deploy [pa|btf|stf|all]
+  deploy [${DEPLOY_TARGETS}|all]
                          First-time deploy (default target: all). Deploys the
                          production build; initializes the PA and the SPL
                          token forwarder config if deployed.
-  upgrade [pa|btf|stf|all]
+  upgrade [${DEPLOY_TARGETS}|all]
                          Rebuild + deploy over existing programs
-  teardown [pa|btf|stf|all]
+  teardown [${DEPLOY_TARGETS}|all]
                          PERMANENT: close programs, reclaim rent. Closed
                          program IDs are burned forever.
   close-pdas             Close all PA marker PDAs, reclaim rent. Requires the
@@ -77,9 +63,12 @@ Commands:
                          (paths under tests/) restrict the run to them.
   build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
   build-release          Build the production binaries, no deploy (verifies
-                         close_markers_batch is absent from the IDL)
-  sync-ids               Sync declare_id!/Anchor.toml/test refs to the
-                         committed program keypairs (use after rotating IDs)
+                         each production IDL is its development IDL minus
+                         the declared dev-only instructions)
+  clippy                 Lint every program, and each one with dev features
+                         again with them enabled
+  sync-ids               Sync declare_id!/Anchor.toml to the committed
+                         program keypairs (use after rotating IDs)
   verify-build [--cluster <c>]
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
@@ -89,7 +78,7 @@ Commands:
                          programs loaded at genesis, and keep it running
 
 Flags:
-  --cluster <c>    Target cluster (required except test/build-dev/build-release)
+  --cluster <c>    Target cluster (required except test/build-dev/build-release/clippy)
   --wallet <path>  Wallet keypair. Defaults: devnet → scripts/devnet-wallet.json,
                    localnet → ~/.config/solana/id.json, mainnet → none (required).
                    The wallet must exist; nothing is auto-generated.
@@ -280,11 +269,6 @@ ensure_balance() {
   exit 1
 }
 
-get_program_id() {
-  local name="$1"
-  solana-keygen pubkey "target/deploy/${name}-keypair.json"
-}
-
 # True when <program_id> is a program on the cluster, false when no account
 # exists there; any other failure (an unreachable RPC) exits.
 is_deployed() {
@@ -393,7 +377,7 @@ build_for_deploy() {
     # a solana-verify deterministic build, which a rebuild here would clobber.
     local t so
     for t in $(resolve_targets "$TARGET"); do
-      so="target/deploy/${PROGRAMS[$t]}.so"
+      so="target/deploy/${PROGRAM_BY_TARGET[$t]}.so"
       if [[ ! -f "$so" ]]; then
         echo "❌ --prebuilt: ${so} does not exist. Build it first (e.g. verify-build" >&2
         echo "   for the PA's deterministic artifact, build-release for the rest)." >&2
@@ -435,9 +419,10 @@ require_deploy_keypairs() {
 assert_declare_id_synced() {
   local targets="$1"
   local t name lib_rs declared actual
+  load_workspace_programs
   for t in $targets; do
-    name="${PROGRAMS[$t]}"
-    lib_rs="${PROGRAM_LIBRS[$t]}"
+    name="${PROGRAM_BY_TARGET[$t]}"
+    lib_rs="${PROGRAM_SRC[$name]}"
     declared="$(read_declare_id "$lib_rs")"
     actual="$(get_program_id "$name")"
     if [[ "$declared" != "$actual" ]]; then
@@ -460,36 +445,26 @@ require_init_params() {
   fi
 }
 
-# Resolve target list from user argument to space-separated shorthand names.
+# Resolve target list from user argument to space-separated target names.
 resolve_targets() {
   local target="${1:-all}"
-  case "$target" in
-    all)
-      echo "${!PROGRAMS[*]}"
-      ;;
-    pa|btf|stf)
-      echo "$target"
-      ;;
-    *)
-      echo "❌ Unknown target: ${target}" >&2
-      echo "Valid targets: pa, btf, stf, all" >&2
-      exit 1
-      ;;
-  esac
+  if [[ "$target" == "all" ]]; then
+    echo "${PROGRAM_TARGETS[*]}"
+  elif [[ -n "${PROGRAM_BY_TARGET[$target]+set}" ]]; then
+    echo "$target"
+  else
+    echo "❌ Unknown target: ${target}" >&2
+    echo "Valid targets: ${PROGRAM_TARGETS[*]}, all" >&2
+    exit 1
+  fi
 }
 
-# Estimate minimum SOL needed for deployment.
-# PA ~4.7 SOL (659K binary), BTF ~1.3 SOL (177K binary), STF ~2.4 SOL (337K binary).
-# Estimates include headroom for transaction fees.
+# Minimum SOL needed to deploy the given targets (PROGRAM_TABLE's sol column).
 estimate_balance_needed() {
   local targets="$1"
-  local total=0
+  local t total=0
   for t in $targets; do
-    case "$t" in
-      pa)  total=$(awk "BEGIN{print $total + 5}") ;;
-      btf) total=$(awk "BEGIN{print $total + 2}") ;;
-      stf) total=$(awk "BEGIN{print $total + 3}") ;;
-    esac
+    total=$(awk "BEGIN{print $total + ${PROGRAM_DEPLOY_SOL[$t]}}")
   done
   echo "$total"
 }
@@ -543,7 +518,7 @@ cmd_deploy() {
   build_for_deploy
 
   for t in $targets; do
-    deploy_one "${PROGRAMS[$t]}"
+    deploy_one "${PROGRAM_BY_TARGET[$t]}"
   done
 
   if [[ " $targets " == *" pa "* ]]; then
@@ -556,7 +531,7 @@ cmd_deploy() {
   echo ""
   echo "✅ Deploy complete (${CLUSTER})"
   for t in $targets; do
-    echo "  ${t}: $(get_program_id "${PROGRAMS[$t]}")"
+    echo "  ${t}: $(get_program_id "${PROGRAM_BY_TARGET[$t]}")"
   done
 }
 
@@ -572,7 +547,7 @@ cmd_upgrade() {
   # Verify target programs are already deployed
   for t in $targets; do
     local pid
-    pid="$(get_program_id "${PROGRAMS[$t]}")"
+    pid="$(get_program_id "${PROGRAM_BY_TARGET[$t]}")"
     if ! is_deployed "$pid"; then
       echo "❌ ${t} (${pid}) is not deployed — use 'deploy' for first-time deployment"
       exit 1
@@ -583,13 +558,13 @@ cmd_upgrade() {
 
   # Deploy overwrites the existing program binary in-place (no close needed)
   for t in $targets; do
-    deploy_one "${PROGRAMS[$t]}"
+    deploy_one "${PROGRAM_BY_TARGET[$t]}"
   done
 
   echo ""
   echo "✅ Upgrade complete (${CLUSTER})"
   for t in $targets; do
-    echo "  ${t}: $(get_program_id "${PROGRAMS[$t]}")"
+    echo "  ${t}: $(get_program_id "${PROGRAM_BY_TARGET[$t]}")"
   done
 }
 
@@ -609,7 +584,7 @@ cmd_teardown() {
   echo ""
 
   for t in $targets; do
-    close_one "${PROGRAMS[$t]}"
+    close_one "${PROGRAM_BY_TARGET[$t]}"
   done
 
   echo ""
@@ -699,8 +674,8 @@ cmd_status() {
   print_explorer_link "$pubkey"
   echo ""
 
-  for t in "${!PROGRAMS[@]}"; do
-    local name="${PROGRAMS[$t]}"
+  for t in "${PROGRAM_TARGETS[@]}"; do
+    local name="${PROGRAM_BY_TARGET[$t]}"
     local keypair="target/deploy/${name}-keypair.json"
     if [[ -f "$keypair" ]]; then
       local pid
@@ -841,10 +816,10 @@ cmd_test() {
 
   ensure_balance 2
 
-  # Verify both programs are deployed
-  for t in "${!PROGRAMS[@]}"; do
+  # Verify the cluster programs are deployed
+  for t in "${PROGRAM_TARGETS[@]}"; do
     local pid
-    pid="$(get_program_id "${PROGRAMS[$t]}")"
+    pid="$(get_program_id "${PROGRAM_BY_TARGET[$t]}")"
     require_deployed "$pid" "$t" "deploy"
   done
 
@@ -878,6 +853,19 @@ cmd_test() {
   echo "✅ Cluster tests passed (${CLUSTER})"
 }
 
+# The feature-gated code of a program with dev features compiles only with
+# them, so each such program is linted a second time with them enabled.
+cmd_clippy() {
+  load_workspace_programs
+  cargo clippy --workspace --all-targets -- -D warnings
+  local name
+  for name in "${PROGRAM_NAMES[@]}"; do
+    if [[ "${PROGRAM_DEV_FEATURES[$name]}" != "-" ]]; then
+      cargo clippy -p "${PROGRAM_PACKAGE[$name]}" --features "${PROGRAM_DEV_FEATURES[$name]}" --all-targets -- -D warnings
+    fi
+  done
+}
+
 # ---------- dispatch ----------
 
 cd "$PROJECT_DIR"
@@ -893,8 +881,8 @@ case "$COMMAND" in
     ;;
   sync-ids)
     # Adopt the program IDs in target/deploy/ (restored from git, or freshly
-    # committed when rotating to new IDs): sync declare_id!, Anchor.toml,
-    # and the fixture/test references.
+    # committed when rotating to new IDs): sync declare_id! and Anchor.toml,
+    # and regenerate the mock verifier-entry fixture that embeds an ID.
     require_cmd anchor
     require_cmd solana-keygen
     require_cmd yarn
@@ -903,7 +891,13 @@ case "$COMMAND" in
     ;;
   build-release)
     require_cmd anchor
+    require_cmd node
     build_programs_release
+    ;;
+  clippy)
+    require_cmd cargo
+    require_cmd node
+    cmd_clippy
     ;;
   verify-build)
     if [[ -n "$CLUSTER" ]]; then

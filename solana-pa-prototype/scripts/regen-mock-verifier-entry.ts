@@ -1,6 +1,6 @@
 /**
  * Regenerate the preloaded mock VerifierEntry account fixture for the
- * current mock-verifier program ID.
+ * mock-verifier program ID given as the only argument.
  *
  * The risc0 verifier router dispatches a seal to the verifier registered
  * under the seal's selector via a VerifierEntry PDA. The devnet-cloned
@@ -11,13 +11,21 @@
  * embeds the mock-verifier program ID, so rotating that ID strands the
  * committed fixture; this script regenerates it.
  *
- * Called by sync_program_ids (validator-deploy.sh) whenever the
- * mock-verifier program ID changes. Standalone:
- * npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts
+ * Called by sync_program_ids (validator-deploy.sh), with the ID of the
+ * committed mock-verifier keypair, whenever that ID changes — before the
+ * build, so no IDL carries the new ID yet. Standalone:
+ * npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts <mock-verifier ID>
  */
+import { PublicKey } from "@solana/web3.js";
 import * as crypto from "crypto";
 import { writeGenesisAccountFixtures } from "./genesis-account";
-import { VERIFIER_ROUTER_ID, MOCK_VERIFIER_ID, MOCK_SELECTOR, getVerifierEntryPda } from "./verifier-utils";
+import { VERIFIER_ROUTER_ID, MOCK_SELECTOR, getVerifierEntryPda } from "./verifier-utils";
+
+const args = process.argv.slice(2);
+if (args.length !== 1) {
+  throw new Error("usage: regen-mock-verifier-entry.ts <mock-verifier program ID>");
+}
+const mockVerifierId = new PublicKey(args[0]);
 
 // Anchor account layout: discriminator ‖ selector: [u8;4] ‖ verifier: Pubkey
 // ‖ estopped: bool (risc0-solana verifier_router::state::VerifierEntry).
@@ -26,7 +34,7 @@ function verifierEntryData(): Buffer {
   return Buffer.concat([
     discriminator,
     MOCK_SELECTOR,
-    MOCK_VERIFIER_ID.toBuffer(),
+    mockVerifierId.toBuffer(),
     Buffer.from([0]), // estopped = false
   ]);
 }
