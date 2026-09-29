@@ -82,9 +82,8 @@ export function deriveNullifierAccounts(nullifierB64s: string[]): Meta[] {
 }
 
 // The one set of initialize arguments every spec file deploys with: the
-// verifier router, the fixture's selector, and the kind-table commitment
-// every fixture's aggregation instance carries. Callers add `.signers()`
-// when the payer is not the provider wallet.
+// verifier router and the fixture's selector. Callers add `.signers()` when
+// the payer is not the provider wallet.
 export const buildInitialize = (payer: PublicKey) =>
   initializeAdapter(program, payer, VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR));
 

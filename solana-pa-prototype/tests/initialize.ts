@@ -83,7 +83,7 @@ describe("protocol-adapter (initialize)", () => {
     );
     const { events } = await cpiEventsOf(sig);
     assert.deepEqual(
-      events.map((e) => [e.name, Buffer.from(e.data.kindTableCommitment ?? []).toString("hex")]),
+      events.map((e) => [e.name, Buffer.from(e.data.kindTableCommitment).toString("hex")]),
       [["kindTableCommitmentUpdatedEvent", EMPTY_KIND_TABLE_COMMITMENT.toString("hex")]],
       "initialize must emit exactly one KindTableCommitmentUpdated carrying the empty kind table, as pa-evm's initializer does"
     );
