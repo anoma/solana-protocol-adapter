@@ -62,6 +62,7 @@ pub struct EmergencyWithdraw {
 
 /// Operation codes, the first byte of a `forward_call` input.
 pub const OP_WRAP: u8 = 0;
+#[constant]
 pub const OP_UNWRAP: u8 = 1;
 
 /// Return data of a successful `forward_call`.
@@ -560,7 +561,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = authority,
-        space = 8 + Config::INIT_SPACE,
+        space = Config::DISCRIMINATOR.len() + Config::INIT_SPACE,
         seeds = [CONFIG_SEED],
         bump
     )]

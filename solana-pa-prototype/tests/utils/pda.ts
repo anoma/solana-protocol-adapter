@@ -6,7 +6,7 @@ import {
   NONCES_PER_WORD,
   NULLIFIER_SEED,
   PA_STATE_SEED,
-  ROOT_MARKER_SEED,
+  ROOT_SEED,
   TX_DATA_SEED,
 } from "./constants";
 
@@ -33,7 +33,7 @@ export function deriveNullifierPda(programId: PublicKey, paState: PublicKey, nul
 }
 
 export function deriveRootMarkerPda(paState: PublicKey, root: Buffer, programId: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([ROOT_MARKER_SEED, paState.toBuffer(), root], programId)[0];
+  return PublicKey.findProgramAddressSync([ROOT_SEED, paState.toBuffer(), root], programId)[0];
 }
 
 /**

@@ -9,6 +9,7 @@ use crate::error::PAError;
 use anchor_lang::prelude::*;
 
 /// Seeds prefix for nullifier PDA derivation.
+#[constant]
 pub const NULLIFIER_SEED: &[u8] = b"nullifier";
 
 /// Derive the PDA address for a nullifier marker.

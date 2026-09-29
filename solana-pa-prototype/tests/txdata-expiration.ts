@@ -7,7 +7,7 @@ import * as anchor from "@anchor-lang/core";
 import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
-import { MAX_EXPIRY_SLOTS, waitForSlotPast } from "./utils";
+import { MAX_EXPIRY_SLOTS, MIN_ALLOWED_EXPIRY, waitForSlotPast } from "./utils";
 import {
   provider,
   program,
@@ -31,7 +31,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
   before(async () => {
     await ensureAdapterInitialized();
     // Lower min_expiry_slots so we can create short-lived TxData
-    await setExpiryBounds(10, MAX_EXPIRY_SLOTS);
+    await setExpiryBounds(MIN_ALLOWED_EXPIRY, MAX_EXPIRY_SLOTS);
   });
 
   // On devnet, slots advance at ~2.5/s and tx confirmation takes seconds.

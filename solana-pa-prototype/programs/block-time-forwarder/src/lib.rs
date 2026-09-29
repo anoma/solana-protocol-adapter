@@ -15,6 +15,7 @@ use anchor_lang::solana_program::program::set_return_data;
 
 declare_id!("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf");
 
+#[constant]
 pub const RESULT_LT: u8 = 0; // expected < current
 pub const RESULT_EQ: u8 = 1; // expected == current
 pub const RESULT_GT: u8 = 2; // expected > current

@@ -5,7 +5,14 @@
 import * as anchor from "@anchor-lang/core";
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { SEVEN_DAYS_SLOTS, AUTHORITY_MISMATCH_PATTERN, errorHaystack } from "./utils";
+import {
+  MAX_EXPIRY_SLOTS,
+  MIN_ALLOWED_EXPIRY,
+  MIN_EXPIRY_SLOTS,
+  SEVEN_DAYS_SLOTS,
+  AUTHORITY_MISMATCH_PATTERN,
+  errorHaystack,
+} from "./utils";
 import {
   provider,
   program,
@@ -51,16 +58,16 @@ describe("protocol-adapter (update_expiry_config)", () => {
     }
   });
 
-  it("rejects min < 10", async () => {
+  it("rejects min < MIN_ALLOWED_EXPIRY", async () => {
     try {
       await program.methods
-        .updateExpiryConfig(new anchor.BN(5), new anchor.BN(1000))
+        .updateExpiryConfig(new anchor.BN(MIN_ALLOWED_EXPIRY - 1), new anchor.BN(1000))
         .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
         .rpc();
-      assert.fail("expected update_expiry_config with min < 10 to fail");
+      assert.fail("expected update_expiry_config with min < MIN_ALLOWED_EXPIRY to fail");
     } catch (e: any) {
       assertPAError(e, "InvalidExpiryConfig");
     }
@@ -103,7 +110,7 @@ describe("protocol-adapter (update_expiry_config)", () => {
 
   it("restores default config", async () => {
     await program.methods
-      .updateExpiryConfig(new anchor.BN(100), new anchor.BN(216_000))
+      .updateExpiryConfig(new anchor.BN(MIN_EXPIRY_SLOTS), new anchor.BN(MAX_EXPIRY_SLOTS))
       .accountsPartial({
         paState,
         authority: provider.wallet.publicKey,
@@ -111,7 +118,15 @@ describe("protocol-adapter (update_expiry_config)", () => {
       .rpc();
 
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(state.minExpirySlots.toNumber(), 100, "min_expiry_slots should be restored to 100");
-    assert.equal(state.maxExpirySlots.toNumber(), 216_000, "max_expiry_slots should be restored to 216_000");
+    assert.equal(
+      state.minExpirySlots.toNumber(),
+      MIN_EXPIRY_SLOTS,
+      "min_expiry_slots should be restored to the default",
+    );
+    assert.equal(
+      state.maxExpirySlots.toNumber(),
+      MAX_EXPIRY_SLOTS,
+      "max_expiry_slots should be restored to the default",
+    );
   });
 });

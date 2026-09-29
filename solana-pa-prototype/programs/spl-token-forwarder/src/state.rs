@@ -37,6 +37,7 @@ pub fn derive_pa_state_pda(pa_program_id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[PA_STATE_SEED], pa_program_id)
 }
 
+#[constant]
 pub const CONFIG_SEED: &[u8] = b"config";
 /// The config's address, derived at compile time: `initialize` creates the
 /// config only at this canonical PDA, so checking an account against it
@@ -45,6 +46,7 @@ pub const CONFIG_PDA: Pubkey = Pubkey::new_from_array(
     anchor_lang::derive_program_address(&[CONFIG_SEED], &crate::ID_CONST.to_bytes()).0,
 );
 /// Seed of the escrow authority.
+#[constant]
 pub const ESCROW_SEED: &[u8] = b"escrow";
 const ESCROW_AUTHORITY_DERIVATION: ([u8; 32], u8) =
     anchor_lang::derive_program_address(&[ESCROW_SEED], &crate::ID_CONST.to_bytes());
@@ -55,7 +57,9 @@ pub const ESCROW_AUTHORITY: Pubkey = Pubkey::new_from_array(ESCROW_AUTHORITY_DER
 /// The escrow authority's canonical bump, with which it signs.
 pub const ESCROW_AUTHORITY_BUMP: u8 = ESCROW_AUTHORITY_DERIVATION.1;
 /// Nonce bitmap PDA, one per user per 256-nonce word.
+#[constant]
 pub const NONCE_BITMAP_SEED: &[u8] = b"nonce_bitmap";
+#[constant]
 pub const NONCES_PER_WORD: u64 = 256;
 
 /// One 256-nonce word of a user's wrap nonces (Permit2's bitmap pattern).
@@ -73,7 +77,7 @@ pub struct NonceBitmap {
 
 impl NonceBitmap {
     /// Account size: Anchor discriminator, the word, and the bump.
-    pub const ACCOUNT_SIZE: usize = 8 + Self::INIT_SPACE;
+    pub const ACCOUNT_SIZE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
 
     /// Whether `key` is the address of `user`'s word `word_index` under the
     /// stored bump. `init_nonce_bitmap` creates bitmaps only at the canonical

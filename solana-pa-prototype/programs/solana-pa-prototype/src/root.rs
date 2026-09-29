@@ -15,6 +15,7 @@ use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
 
 /// Seeds prefix for root marker PDA derivation.
+#[constant]
 pub const ROOT_SEED: &[u8] = b"root";
 
 /// Derive the PDA address for a root marker.

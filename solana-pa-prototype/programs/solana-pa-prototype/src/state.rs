@@ -64,9 +64,27 @@ impl anchor_lang::IdlBuild for PALifecycle {
     }
 }
 
+impl Space for PALifecycle {
+    /// The one byte `serialize` writes.
+    const INIT_SPACE: usize = 1;
+}
+
+/// The layout number of `PAStateAccount` this binary reads and writes.
+/// Bumped on every change to the account layout; unrelated to release names.
+#[constant]
+pub const SCHEMA_VERSION: u8 = 1;
+
+/// The commitment of the empty kind table, under which every resource
+/// kind is derived via hash-to-curve: the table every deployment starts
+/// on, as pa-evm's `_EMPTY_KIND_TABLE_COMMITMENT`.
+#[constant]
+pub const EMPTY_KIND_TABLE_COMMITMENT: [u8; 32] =
+    hex_literal::hex!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
 /// Protocol Adapter state — commitment tree frontier with variable depth (1-32).
 /// Nullifiers and historical roots are stored as separate PDA marker accounts.
 #[account]
+#[derive(InitSpace)]
 pub struct PAStateAccount {
     /// Layout number of this account's bytes. Always the first field, so it
     /// sits at byte 8 of the account data (after Anchor's discriminator) in
@@ -103,36 +121,24 @@ pub struct PAStateAccount {
     /// Tree depth (1-32). Capacity = 2^current_depth.
     pub current_depth: u8,
     /// Filled subtree hashes at each level. Grows via realloc when tree expands.
+    #[max_len(MAX_TREE_DEPTH)]
     pub frontier: Vec<[u8; 32]>,
     pub min_expiry_slots: u64,
     pub max_expiry_slots: u64,
 }
 
 impl PAStateAccount {
-    /// The layout this binary reads and writes. Bumped on every change to the
-    /// account layout; unrelated to release names.
-    pub const SCHEMA_VERSION: u8 = 1;
+    /// The account at full depth, every frontier level filled.
+    pub const MAX_SPACE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
 
-    /// The commitment of the empty kind table, under which every resource
-    /// kind is derived via hash-to-curve: the table every deployment starts
-    /// on, as pa-evm's `_EMPTY_KIND_TABLE_COMMITMENT`.
-    pub const EMPTY_KIND_TABLE_COMMITMENT: [u8; 32] =
-        hex_literal::hex!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
-
-    /// discriminator(8) + schema_version(1) + bump(1) + authority(32) +
-    /// verifier_router(32) + proof_selector(4) + kind_table_commitment(32) +
-    /// pending_authority(1+32) + lifecycle(1) + root(32) + next_index(8) +
-    /// current_depth(1) + min_expiry_slots(8) + max_expiry_slots(8)
-    pub const BASE_SPACE: usize = 8 + 1 + 1 + 32 + 32 + 4 + 32 + 33 + 1 + 32 + 8 + 1 + 8 + 8;
-
-    pub const VEC_OVERHEAD: usize = 4;
-
+    /// The account at `depth`: full size less the frontier levels not yet
+    /// reached. Every other field is sized for its largest encoding, so the
+    /// account never needs to grow for anything but the frontier.
     pub const fn space_for_depth(depth: usize) -> usize {
-        Self::BASE_SPACE + Self::VEC_OVERHEAD + (32 * depth)
+        Self::MAX_SPACE - size_of::<[u8; 32]>() * (MAX_TREE_DEPTH - depth)
     }
 
-    pub const INITIAL_SPACE: usize = Self::space_for_depth(1);
-    pub const MAX_SPACE: usize = Self::BASE_SPACE + Self::VEC_OVERHEAD + (32 * MAX_TREE_DEPTH);
+    pub const INITIAL_SPACE: usize = Self::space_for_depth(INITIAL_TREE_DEPTH);
 
     pub fn depth(&self) -> usize {
         self.current_depth as usize
@@ -176,12 +182,12 @@ impl PAStateAccount {
         proof_selector: [u8; 4],
     ) -> Self {
         Self {
-            schema_version: Self::SCHEMA_VERSION,
+            schema_version: SCHEMA_VERSION,
             bump,
             authority,
             verifier_router,
             proof_selector,
-            kind_table_commitment: Self::EMPTY_KIND_TABLE_COMMITMENT,
+            kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
             pending_authority: None,
             lifecycle: PALifecycle::Running,
             root: EMPTY_TREE_ROOT_INITIAL.into(),
@@ -194,10 +200,12 @@ impl PAStateAccount {
     }
 }
 
+#[constant]
 pub const PA_STATE_SEED: &[u8] = b"pa_state";
 
 /// Chunked transaction upload buffer.
 #[account]
+#[derive(InitSpace)]
 pub struct TxDataAccount {
     pub bump: u8,
     pub authority: Pubkey,
@@ -205,15 +213,15 @@ pub struct TxDataAccount {
     pub refund: Pubkey,
     pub written_len: u32,
     pub expires_slot: u64,
+    /// Sized per upload by `space`; `INIT_SPACE` counts it empty.
+    #[max_len(0)]
     pub payload: Vec<u8>,
 }
 
 impl TxDataAccount {
-    /// discriminator(8) + bump(1) + authority(32) + refund(32) + written_len(4) + expires_slot(8)
-    pub const HEADER_SIZE: usize = 8 + 1 + 32 + 32 + 4 + 8;
-
-    pub fn space(payload_capacity: usize) -> usize {
-        Self::HEADER_SIZE + 4 + payload_capacity // +4 for Vec length prefix
+    /// The account holding a payload of `payload_capacity` bytes.
+    pub const fn space(payload_capacity: usize) -> usize {
+        Self::DISCRIMINATOR.len() + Self::INIT_SPACE + payload_capacity
     }
 
     /// Write a chunk at the given offset, updating `written_len` high-water mark.
@@ -232,15 +240,20 @@ impl TxDataAccount {
     }
 }
 
+#[constant]
 pub const TX_DATA_SEED: &[u8] = b"tx_data";
 
 /// Hard floor for `min_expiry_slots` configuration (~4 seconds at 400ms/slot).
+#[constant]
 pub const MIN_ALLOWED_EXPIRY: u64 = 10;
 /// Default minimum expiry (~40 seconds at 400ms/slot).
+#[constant]
 pub const MIN_EXPIRY_SLOTS: u64 = 100;
 /// Default maximum expiry (~24 hours at 400ms/slot).
+#[constant]
 pub const MAX_EXPIRY_SLOTS: u64 = 216_000;
 /// Hard ceiling for `max_expiry_slots` configuration (~7 days at 400ms/slot).
+#[constant]
 pub const SEVEN_DAYS_SLOTS: u64 = 7 * 24 * 60 * 60 * 1000 / 400;
 
 /// Anoma protocol deletion criterion value meaning "never delete."

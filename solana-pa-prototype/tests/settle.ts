@@ -8,6 +8,7 @@ import { assert } from "chai";
 import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
 import {
   EMPTY_TREE_ROOT_INITIAL,
+  SCHEMA_VERSION,
   loadFixture,
   errorHaystack,
   createdCommitmentsOf as commitmentsOf,
@@ -69,11 +70,7 @@ describe("settlement", () => {
 
     it("initializes with depth 1 (variable-depth tree)", async () => {
       const state = await program.account.paStateAccount.fetch(paState);
-      assert.equal(
-        state.schemaVersion,
-        1,
-        "a freshly initialized adapter carries schema version 1 (PAStateAccount::SCHEMA_VERSION)",
-      );
+      assert.equal(state.schemaVersion, SCHEMA_VERSION, "a freshly initialized adapter carries SCHEMA_VERSION");
       assert.isAtLeast(state.currentDepth, 1, "Tree depth should be at least 1");
       assert.equal(state.frontier.length, state.currentDepth, "Frontier length should equal current depth");
       if (state.nextIndex.toNumber() === 0) {
@@ -84,22 +81,16 @@ describe("settlement", () => {
     });
 
     it("account size matches expected size for current depth (no over-allocation)", async () => {
-      // Space formula: BASE_SPACE (201) + VEC_OVERHEAD (4) + 32 * depth
-      // BASE_SPACE breakdown matches state.rs: discriminator(8) +
-      // schema_version(1) + bump(1) + authority(32) + verifier_router(32) +
-      // proof_selector(4) + kind_table_commitment(32) + pending_authority(33) +
-      // lifecycle(1) + root(32) + next_index(8) + current_depth(1) +
-      // expiry bounds(16)
-      const BASE_SPACE = 201;
-      const VEC_OVERHEAD = 4;
-      const spaceForDepth = (depth: number) => BASE_SPACE + VEC_OVERHEAD + 32 * depth;
-
+      // The account holds the current frontier and every other field at its
+      // largest encoding (a pending authority set), and nothing more.
       const state = await program.account.paStateAccount.fetch(paState);
       const accountInfo = await provider.connection.getAccountInfo(paState);
 
       assert.ok(accountInfo, "PAState account should exist");
 
-      const expectedSize = spaceForDepth(state.currentDepth);
+      const expectedSize = (
+        await program.coder.accounts.encode("paStateAccount", { ...state, pendingAuthority: PublicKey.default })
+      ).length;
       assert.equal(
         accountInfo!.data.length,
         expectedSize,

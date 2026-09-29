@@ -4,7 +4,7 @@
  */
 import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils";
+import { RESULT_LT, loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils";
 import {
   provider,
   program,
@@ -84,7 +84,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     assert.isAtLeast(fwdEvents.length, 1, "Should emit forwarderCallExecutedEvent");
     assert.ok(fwdEvents[0].data.forwarder.equals(blockTimeForwarderId), `forwarder should be ${blockTimeForwarderId}`);
     const outputBytes = Buffer.from(fwdEvents[0].data.output);
-    assert.deepEqual(outputBytes, Buffer.from([0x00]), "output should be RESULT_LT (0x00)");
+    assert.deepEqual(outputBytes, Buffer.from([RESULT_LT]), "output should be RESULT_LT");
   });
 
   it("retains a root marker for the v2 settlement's resulting root", async () => {

@@ -1,4 +1,4 @@
-use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
+use crate::state::{PAStateAccount, TxDataAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::tests::utils::create_minimal_transaction;
 use arm_core::transaction::Transaction;
 use arm_core::Digest;
@@ -40,6 +40,14 @@ mod governance_tests {
         assert_eq!(PAStateAccount::space_for_depth(1), 237);
         assert_eq!(PAStateAccount::space_for_depth(2), 269);
         assert_eq!(PAStateAccount::space_for_depth(32), 1229);
+    }
+
+    #[test]
+    fn test_tx_data_account_space_calculation() {
+        // discriminator(8) + bump(1) + authority(32) + refund(32) +
+        // written_len(4) + expires_slot(8) + payload length prefix(4)
+        assert_eq!(TxDataAccount::space(0), 89);
+        assert_eq!(TxDataAccount::space(1000), 1089);
     }
 }
 
