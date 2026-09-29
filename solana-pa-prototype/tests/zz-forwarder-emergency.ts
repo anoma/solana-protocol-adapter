@@ -62,13 +62,17 @@ describe("zz-forwarder-emergency (adapter stopped)", () => {
     recipientAta = await createAccount(provider.connection, recipient, mint, recipient.publicKey);
   });
 
-  const withdraw = (caller: Keypair, amount: bigint) =>
+  const withdraw = (
+    caller: Keypair,
+    amount: bigint,
+    accounts: Partial<{ escrowAta: PublicKey; recipientAta: PublicKey }> = {}
+  ) =>
     emergencyWithdraw(
       forwarderProgram,
       paState,
       caller.publicKey,
       { mint, amount, recipient: recipient.publicKey },
-      { escrowAta, recipientAta, escrowPda }
+      { escrowAta, recipientAta, escrowPda, ...accounts }
     )
       .signers([caller])
       .rpc();
@@ -110,35 +114,13 @@ describe("zz-forwarder-emergency (adapter stopped)", () => {
   // The destination is chosen by the caller, not by the input; it must be the recipient's.
   it("rejects a withdrawal to a token account the recipient does not own", async () => {
     const foreignAta = await createAccount(provider.connection, authority, mint, authority.publicKey);
-    await assertRejects(
-      emergencyWithdraw(
-        forwarderProgram,
-        paState,
-        emergencyCaller.publicKey,
-        { mint, amount: 1000n, recipient: recipient.publicKey },
-        { escrowAta, recipientAta: foreignAta, escrowPda }
-      )
-        .signers([emergencyCaller])
-        .rpc(),
-      /WrongTokenAccountOwner/
-    );
+    await assertRejects(withdraw(emergencyCaller, 1000n, { recipientAta: foreignAta }), /WrongTokenAccountOwner/);
   });
 
   // The escrow PDA signs the withdrawal; it pays only from an account the escrow owns.
   it("rejects a withdrawal whose source the escrow does not own", async () => {
     const otherAta = await approvedTokenAccount(provider.connection, funder, mint, authority, escrowPda, 1000);
-    await assertRejects(
-      emergencyWithdraw(
-        forwarderProgram,
-        paState,
-        emergencyCaller.publicKey,
-        { mint, amount: 1000n, recipient: recipient.publicKey },
-        { escrowAta: otherAta, recipientAta, escrowPda }
-      )
-        .signers([emergencyCaller])
-        .rpc(),
-      /WrongTokenAccountOwner/
-    );
+    await assertRejects(withdraw(emergencyCaller, 1000n, { escrowAta: otherAta }), /WrongTokenAccountOwner/);
     assert.equal((await getAccount(provider.connection, otherAta)).amount, 1000n, "no tokens move");
   });
 

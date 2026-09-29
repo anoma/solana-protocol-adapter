@@ -87,7 +87,7 @@ export function parseSelectorFromFixture(selectorHex: string): Buffer {
 /** The created commitments a successful settlement of `fixture` appends. */
 export function createdCommitmentsOf(fixture: Fixture): Buffer[] {
   if (!fixture.created_commitments_b64?.length) {
-    throw new Error("fixture is missing created_commitments_b64 — regenerate or refresh-fields it");
+    throw new Error("fixture is missing created_commitments_b64 — regenerate it with ./scripts/dev.sh regen-fixtures");
   }
   return fixture.created_commitments_b64.map((b) => Buffer.from(b, "base64"));
 }

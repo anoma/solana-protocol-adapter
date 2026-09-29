@@ -30,7 +30,7 @@ import {
 } from "../../scripts/verifier-utils";
 
 import {
-  PA_STATE_SEED,
+  derivePaStatePda,
   readJson,
   loadFixture,
   parseSelectorFromFixture,
@@ -44,7 +44,7 @@ const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
 
 const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
-const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+const [paState] = derivePaStatePda(program.programId);
 
 const fixture = loadFixture("batch_groth16.json");
 const PROOF_SELECTOR = parseSelectorFromFixture(fixture.selector);

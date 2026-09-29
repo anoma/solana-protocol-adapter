@@ -86,7 +86,7 @@ async function closeEscrowFor(mint: PublicKey, recipientOwner: PublicKey) {
   const balance = await connection.getTokenAccountBalance(escrowAta).catch(() => null);
   if (!balance) fail(`escrow ATA ${escrowAta.toBase58()} does not exist; nothing to drain`);
   const recipientAta = await recipientAtaFor(mint, recipientOwner);
-  await closeEscrow(forwarder, configPda, wallet.publicKey, paState, { mint, escrowPda, escrowAta, recipientAta }).rpc();
+  await closeEscrow(forwarder, wallet.publicKey, paState, { mint, escrowPda, escrowAta, recipientAta }).rpc();
   console.log(`✅ Drained ${balance!.value.uiAmountString} of ${mint.toBase58()} to ${recipientAta.toBase58()} and closed the escrow ATA`);
 }
 
@@ -165,7 +165,7 @@ async function teardown() {
   const mint = requireMint();
   await requireConfig();
 
-  const closed = await closeAllNonceBitmaps(forwarder, configPda, wallet.publicKey, paState, []);
+  const closed = await closeAllNonceBitmaps(forwarder, wallet.publicKey, paState, []);
   console.log(`Closed ${closed} nonce bitmap(s)`);
 
   const { escrowAta } = escrowAccounts(forwarder.programId, mint);

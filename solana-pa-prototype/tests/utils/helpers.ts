@@ -21,8 +21,7 @@ import { assert } from "chai";
 import { createHash } from "crypto";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
-import { TX_DATA_SEED } from "./constants";
-import { deriveConfigPda, derivePaStatePda, deriveProgramDataPda } from "./pda";
+import { deriveConfigPda, deriveEscrowPda, derivePaStatePda, deriveProgramDataPda, deriveTxDataPda } from "./pda";
 
 /**
  * Fund a keypair from the provider wallet, topping up to the requested amount.
@@ -91,8 +90,9 @@ export function makeFunder(provider: anchor.AnchorProvider) {
       funded.push(kp);
     },
     async drainAll() {
-      await drainKeypairs(provider, funded);
+      const drained = await drainKeypairs(provider, funded);
       funded.length = 0;
+      return drained;
     },
   };
 }
@@ -146,29 +146,34 @@ export async function assertRejects(action: Promise<unknown>, expected: RegExp |
 }
 
 /**
- * Create a TxData account under `authority` and write `payload` into it in
- * 700-byte chunks. The upload id is the wall clock so consecutive uploads
- * by one authority never collide.
+ * A TxData upload id and its little-endian seed bytes. The id is the wall
+ * clock so consecutive uploads by one authority never collide.
  */
-export async function uploadTxData(
-  program: Program<ProtocolAdapter>,
-  paState: PublicKey,
-  authority: Keypair,
-  payload: Buffer,
-  expiresSlotOverride?: anchor.BN
-): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
+export function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
   const uploadId = new anchor.BN(Date.now());
   const uploadIdLe = Buffer.alloc(8);
   uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
-  const [txData] = PublicKey.findProgramAddressSync(
-    [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-    program.programId
-  );
+  return { uploadId, uploadIdLe };
+}
+
+/**
+ * Create an empty TxData account of `payloadSize` bytes under `authority`,
+ * expiring 10,000 slots from now unless `expiresSlotOverride` is given.
+ */
+export async function initTxData(
+  program: Program<ProtocolAdapter>,
+  paState: PublicKey,
+  authority: Keypair,
+  payloadSize: number,
+  expiresSlotOverride?: anchor.BN
+): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
+  const { uploadId, uploadIdLe } = freshUploadId();
+  const txData = deriveTxDataPda(program.programId, authority.publicKey, uploadIdLe);
   const expiresSlot =
     expiresSlotOverride ??
     new anchor.BN((await program.provider.connection.getSlot("confirmed")) + 10_000);
   await program.methods
-    .txdataInit(uploadId, payload.length, expiresSlot)
+    .txdataInit(uploadId, payloadSize, expiresSlot)
     .accountsPartial({
       paState,
       txData,
@@ -177,7 +182,19 @@ export async function uploadTxData(
     })
     .signers([authority])
     .rpc();
+  return { uploadId, uploadIdLe, txData, expiresSlot };
+}
 
+/** Create a TxData account under `authority` and write `payload` into it in 700-byte chunks. */
+export async function uploadTxData(
+  program: Program<ProtocolAdapter>,
+  paState: PublicKey,
+  authority: Keypair,
+  payload: Buffer,
+  expiresSlotOverride?: anchor.BN
+): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
+  const upload = await initTxData(program, paState, authority, payload.length, expiresSlotOverride);
+  const { uploadId, txData } = upload;
   const chunkSize = 700;
   for (let offset = 0; offset < payload.length; offset += chunkSize) {
     const chunk = payload.subarray(offset, Math.min(payload.length, offset + chunkSize));
@@ -187,7 +204,7 @@ export async function uploadTxData(
       .signers([authority])
       .rpc();
   }
-  return { uploadId, uploadIdLe, txData, expiresSlot };
+  return upload;
 }
 
 // SPL token forwarder
@@ -210,7 +227,7 @@ export function escrowAccounts(
   forwarderProgramId: PublicKey,
   mint: PublicKey
 ): { escrowPda: PublicKey; escrowAta: PublicKey } {
-  const [escrowPda] = PublicKey.findProgramAddressSync([Buffer.from("escrow"), mint.toBuffer()], forwarderProgramId);
+  const escrowPda = deriveEscrowPda(forwarderProgramId, mint);
   return { escrowPda, escrowAta: getAssociatedTokenAddressSync(mint, escrowPda, true) };
 }
 
@@ -331,14 +348,13 @@ export function emergencyWithdraw(
  */
 export function closeEscrow(
   forwarder: Program<SplTokenForwarder>,
-  configPda: PublicKey,
   authority: PublicKey,
   paState: PublicKey,
   accounts: { mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey }
 ) {
   return forwarder.methods.closeEscrow().accountsPartial({
     authority,
-    config: configPda,
+    config: deriveConfigPda(forwarder.programId)[0],
     escrowAta: accounts.escrowAta,
     escrowPda: accounts.escrowPda,
     recipientAta: accounts.recipientAta,
@@ -373,17 +389,17 @@ export function closeConfig(forwarder: Program<SplTokenForwarder>, authority: Pu
  */
 export async function closeAllNonceBitmaps(
   forwarder: Program<SplTokenForwarder>,
-  configPda: PublicKey,
   authority: PublicKey,
   paState: PublicKey,
   signers: Keypair[]
 ): Promise<number> {
   const bitmaps = await forwarder.account.nonceBitmap.all();
+  const config = deriveConfigPda(forwarder.programId)[0];
   const BATCH_SIZE = 20;
   for (let i = 0; i < bitmaps.length; i += BATCH_SIZE) {
     await forwarder.methods
       .closeNonceBitmapsBatch()
-      .accountsPartial({ authority, config: configPda, paState })
+      .accountsPartial({ authority, config, paState })
       .remainingAccounts(
         bitmaps.slice(i, i + BATCH_SIZE).map(({ publicKey }) => ({ pubkey: publicKey, isWritable: true, isSigner: false }))
       )
@@ -391,6 +407,17 @@ export async function closeAllNonceBitmaps(
       .rpc();
   }
   return bitmaps.length;
+}
+
+/** Wait for `sig` to reach confirmed commitment and fetch the transaction; fail if it is not fetchable then. */
+export async function confirmedTransaction(
+  connection: Connection,
+  sig: string
+): Promise<anchor.web3.VersionedTransactionResponse> {
+  await connection.confirmTransaction(sig, "confirmed");
+  const tx = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+  assert.ok(tx, `transaction ${sig} is fetchable once confirmed`);
+  return tx!;
 }
 
 /** Resolve once the confirmed slot is past `targetSlot`; fail after `timeoutMs`. */

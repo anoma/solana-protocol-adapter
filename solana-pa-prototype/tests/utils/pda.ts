@@ -1,11 +1,13 @@
 import { AccountMeta, PublicKey } from "@solana/web3.js";
 import {
   CONFIG_SEED,
+  ESCROW_SEED,
   NONCE_BITMAP_SEED,
   NONCES_PER_WORD,
   NULLIFIER_SEED,
   PA_STATE_SEED,
   ROOT_MARKER_SEED,
+  TX_DATA_SEED,
 } from "./constants";
 
 const BPF_LOADER_UPGRADEABLE = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
@@ -19,6 +21,11 @@ export function derivePaStatePda(paProgramId: PublicKey): [PublicKey, number] {
 /** The upgradeable loader's program-data account of a program. */
 export function deriveProgramDataPda(programId: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([programId.toBuffer()], BPF_LOADER_UPGRADEABLE)[0];
+}
+
+/** A TxData upload account: one per (authority, upload id), the id as 8 little-endian bytes. */
+export function deriveTxDataPda(paProgramId: PublicKey, authority: PublicKey, uploadIdLe: Buffer): PublicKey {
+  return PublicKey.findProgramAddressSync([TX_DATA_SEED, authority.toBuffer(), uploadIdLe], paProgramId)[0];
 }
 
 export function deriveNullifierPda(
@@ -63,6 +70,11 @@ export function deriveNullifierAccounts(
 
 export function deriveConfigPda(forwarderProgramId: PublicKey): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([CONFIG_SEED], forwarderProgramId);
+}
+
+/** A mint's escrow authority. */
+export function deriveEscrowPda(forwarderProgramId: PublicKey, mint: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync([ESCROW_SEED, mint.toBuffer()], forwarderProgramId)[0];
 }
 
 /** The 256-nonce word a nonce belongs to. */

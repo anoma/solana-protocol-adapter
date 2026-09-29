@@ -3,7 +3,7 @@
 // these, so a value they misread would be sent to a live cluster.
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { requireEnv, requireHexBytes, requirePubkey, requireRawAmount } from "../scripts/cli-utils";
+import { parsePubkey, requireEnv, requireHexBytes, requirePubkey, requireRawAmount } from "../scripts/cli-utils";
 
 const VAR = "CLI_UTILS_TEST_VALUE";
 
@@ -45,6 +45,12 @@ describe("operator script arguments (scripts/cli-utils.ts)", () => {
     const key = Keypair.generate().publicKey;
     assert.ok(withEnv(key.toBase58(), () => requirePubkey(VAR, "")).equals(key));
     assert.throws(() => withEnv("not-a-key", () => requirePubkey(VAR, "")), `${VAR} is not a valid pubkey`);
+  });
+
+  it("parsePubkey reads one element of a list variable and names the variable when it is not a pubkey", () => {
+    const key = Keypair.generate().publicKey;
+    assert.ok(parsePubkey("LIST", key.toBase58()).equals(key));
+    assert.throws(() => parsePubkey("LIST", "not-a-key"), `LIST is not a valid pubkey: "not-a-key"`);
   });
 
   it("requireRawAmount reads a non-negative integer exactly, beyond 2^53", () => {

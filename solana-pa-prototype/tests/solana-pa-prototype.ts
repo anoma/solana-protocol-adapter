@@ -35,8 +35,6 @@ import {
 } from "../scripts/verifier-utils";
 
 import {
-  PA_STATE_SEED,
-  TX_DATA_SEED,
   EMPTY_TREE_ROOT_INITIAL,
   EMPTY_KIND_TABLE_COMMITMENT,
   SOLANA_DEVNET_KIND_TABLE_COMMITMENT,
@@ -53,14 +51,19 @@ import {
   type Fixture,
   parseSelectorFromFixture,
   createdCommitmentsOf as commitmentsOf,
-  fundKeypair,
-  drainKeypairs,
   uploadTxData as uploadTxDataTo,
+  initTxData as initTxDataOf,
+  freshUploadId,
   predictRootMarkerPda as predictRootMarkerPdaOf,
   predictRootAfterAppend,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
+  derivePaStatePda,
   deriveProgramDataPda,
   deriveRootMarkerPda,
+  deriveTxDataPda,
+  NONCES_PER_WORD,
+  confirmedTransaction,
+  errorHaystack,
   EMERGENCY_COMMITTEE_LABEL,
   approvedTokenAccount,
   assertRejects,
@@ -89,29 +92,24 @@ import {
   setKindTableCommitment,
 } from "./utils";
 
-// Keypairs funded during tests, drained back to the provider wallet in
-// afterEach() so devnet SOL circulates across the test run.
-const fundedKeypairs: Keypair[] = [];
-
 // TxData accounts created during tests, closed in afterEach() to recover rent.
 const openTxDataAccounts: { uploadId: anchor.BN; txData: PublicKey; authority: Keypair }[] = [];
 
 let providerBalanceBefore = 0;
 let suiteStartBalance = 0;
 
-async function airdrop(provider: anchor.AnchorProvider, kp: Keypair, sol: number) {
-  await fundKeypair(provider, kp, sol);
-  fundedKeypairs.push(kp);
-}
-
 const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "protocol_adapter.json");
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
 
+// Keypairs funded during tests, drained back to the provider wallet in
+// afterEach() so devnet SOL circulates across the test run.
+const funder = makeFunder(provider);
+
 const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 
-const [paState] = PublicKey.findProgramAddressSync([PA_STATE_SEED], program.programId);
+const [paState] = derivePaStatePda(program.programId);
 
 const programData = deriveProgramDataPda(program.programId);
 
@@ -235,37 +233,14 @@ async function uploadTxData(
   return upload;
 }
 
-function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
-  const uploadId = new anchor.BN(Date.now());
-  const uploadIdLe = Buffer.alloc(8);
-  uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
-  return { uploadId, uploadIdLe };
-}
-
 async function initTxData(
   authority: Keypair,
   payloadSize: number,
   expiresSlotOverride?: anchor.BN,
 ): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
-  const { uploadId, uploadIdLe } = freshUploadId();
-  const [txData] = PublicKey.findProgramAddressSync(
-    [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-    program.programId
-  );
-  const expiresSlot = expiresSlotOverride ??
-    new anchor.BN((await provider.connection.getSlot("confirmed")) + 10_000);
-  await program.methods
-    .txdataInit(uploadId, payloadSize, expiresSlot)
-    .accountsPartial({
-      paState,
-      txData,
-      authority: authority.publicKey,
-      systemProgram: SystemProgram.programId,
-    })
-    .signers([authority])
-    .rpc();
-  openTxDataAccounts.push({ uploadId, txData, authority });
-  return { uploadId, uploadIdLe, txData, expiresSlot };
+  const init = await initTxDataOf(program, paState, authority, payloadSize, expiresSlotOverride);
+  openTxDataAccounts.push({ uploadId: init.uploadId, txData: init.txData, authority });
+  return init;
 }
 
 // Anchor assigns 6000 + enum_variant_index.
@@ -307,18 +282,6 @@ function assertPAError(e: any, errorName: string): void {
   );
 }
 
-// For Anchor framework constraint errors where the error is in log format
-// rather than a numeric program error code.
-function errorHaystack(e: any): string {
-  const parts: string[] = [];
-  if (e?.message) parts.push(e.message);
-  if (e?.error?.errorMessage) parts.push(e.error.errorMessage);
-  if (e?.error?.errorCode?.code) parts.push(e.error.errorCode.code);
-  const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-  parts.push(...logs);
-  return parts.join("\n");
-}
-
 /** Anchor's CPI event tag: the fixed 8-byte `EVENT_IX_TAG_LE`, the little-endian encoding of the u64 0x1d9acb512ea545e4. */
 const EVENT_IX_TAG_LE = Buffer.from([0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]);
 
@@ -347,21 +310,21 @@ function parseCpiEvents(tx: anchor.web3.VersionedTransactionResponse) {
 
 /** The settlement's CPI events, once the transaction is confirmed. */
 async function cpiEventsOf(sig: string) {
-  await provider.connection.confirmTransaction(sig, "confirmed");
-  const tx = await provider.connection.getTransaction(sig, {
-    commitment: "confirmed",
-    maxSupportedTransactionVersion: 0,
-  });
-  assert.ok(tx, `transaction ${sig} is fetchable once confirmed`);
-  return { tx: tx!, events: parseCpiEvents(tx!) };
+  const tx = await confirmedTransaction(provider.connection, sig);
+  return { tx, events: parseCpiEvents(tx) };
 }
 
+/**
+ * `settle_from_txdata` with the full CU budget and, unless `heapFrame` is
+ * false, the 256 KiB heap frame settlement needs.
+ */
 function settleFromTxDataBuilder(
   authority: PublicKey,
   uploadId: anchor.BN,
   txData: PublicKey,
   newRootMarker: PublicKey,
   remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+  heapFrame = true,
 ) {
   return program.methods
     .settleFromTxdata(uploadId)
@@ -379,19 +342,24 @@ function settleFromTxDataBuilder(
     .remainingAccounts(remainingAccounts)
     .preInstructions([
       ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-      ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
+      ...(heapFrame ? [ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })] : []),
     ]);
 }
 
-async function settleFixtureViaTxData(
+/**
+ * Upload `payload` under `authority` and settle it as a v0 transaction
+ * against the deployment's lookup table, the shape every submitter sends.
+ * `preInstructions` are prepended to the settlement's own. The produced-root
+ * marker is `newRootMarker`, or predicted from `createdCommitments`.
+ */
+async function uploadAndSettleV0(
+  authority: Keypair,
   payload: Buffer,
   remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
   options?: { newRootMarker?: PublicKey; createdCommitments?: Buffer[] },
+  preInstructions: anchor.web3.TransactionInstruction[] = [],
 ): Promise<string> {
-  const authority = Keypair.generate();
-  await airdrop(provider, authority, 2);
   const { uploadId, txData } = await uploadTxData(authority, payload);
-
   const newRootMarker =
     options?.newRootMarker ??
     (await predictRootMarkerPda(requireCommitments(options?.createdCommitments)));
@@ -402,7 +370,17 @@ async function settleFixtureViaTxData(
     newRootMarker,
     remainingAccounts,
   ).transaction();
-  return sendV0(provider, settle.instructions, [authority], settlementTable);
+  return sendV0(provider, [...preInstructions, ...settle.instructions], [authority], settlementTable);
+}
+
+async function settleFixtureViaTxData(
+  payload: Buffer,
+  remainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[],
+  options?: { newRootMarker?: PublicKey; createdCommitments?: Buffer[] },
+): Promise<string> {
+  const authority = Keypair.generate();
+  await funder.fund(authority, 2);
+  return uploadAndSettleV0(authority, payload, remainingAccounts, options);
 }
 
 // A settlement expected to succeed must predict its produced-root marker from
@@ -434,7 +412,7 @@ describe("protocol-adapter (AUTH-01: initialization authority)", () => {
     );
 
     const stranger = Keypair.generate();
-    await airdrop(provider, stranger, 2);
+    await funder.fund(stranger, 2);
 
     let caught: any = null;
     try {
@@ -486,29 +464,13 @@ describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
       additionalHistoricalRootMarkers?: PublicKey[];
     }
   ) {
-    await airdrop(provider, authority, 2);
-
-    const { uploadId, txData } = await uploadTxData(authority, payload);
-
-    const allRemainingAccounts = buildSettleRemainingAccounts(
-      options?.nullifierAccounts ?? remainingAccounts,
+    await funder.fund(authority, 2);
+    return uploadAndSettleV0(
+      authority,
+      payload,
+      buildSettleRemainingAccounts(options?.nullifierAccounts ?? remainingAccounts, options),
       options
     );
-
-    const buildSettle = (newRootMarker: PublicKey) =>
-      settleFromTxDataBuilder(
-        authority.publicKey,
-        uploadId,
-        txData,
-        newRootMarker,
-        allRemainingAccounts
-      ).signers([authority]);
-
-    const newRootMarker =
-      options?.newRootMarker ??
-      (await predictRootMarkerPda(requireCommitments(options?.createdCommitments)));
-    const settle = await buildSettle(newRootMarker).transaction();
-    return sendV0(provider, settle.instructions, [authority], settlementTable);
   }
 
   before(async () => {
@@ -737,7 +699,7 @@ describe("protocol-adapter (Re-initialization guard)", () => {
 describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
   it("rejects garbage transaction_data via settle", async () => {
     const payer = Keypair.generate();
-    await airdrop(provider, payer, 2);
+    await funder.fund(payer, 2);
 
     try {
       await program.methods
@@ -766,7 +728,7 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
 
   it("rejects empty transaction (zero actions) via settle", async () => {
     const payer = Keypair.generate();
-    await airdrop(provider, payer, 2);
+    await funder.fund(payer, 2);
 
     // The fixture's aggregated transaction with its instance's action list
     // emptied (fixture-gen's zero_action.json error variant, SEC-006
@@ -804,7 +766,7 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
     // to a fresh TxData and trying to settle must fail at nullifier creation
     // because those nullifier PDAs already exist.
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const tx = Buffer.from(fixture.tx_b64, "base64");
     const { uploadId, txData } = await uploadTxData(authority, tx);
@@ -844,7 +806,7 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
 describe("protocol-adapter (Settle error paths)", () => {
   it("rejects wrong verifier_router_program address", async () => {
     const payer = Keypair.generate();
-    await airdrop(provider, payer, 2);
+    await funder.fund(payer, 2);
 
     const fakeRouter = Keypair.generate().publicKey;
 
@@ -876,7 +838,7 @@ describe("protocol-adapter (Settle error paths)", () => {
     // Upload the fixture but pass zero nullifier accounts.
     // The program expects 1 nullifier PDA in remaining_accounts.
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
@@ -931,7 +893,7 @@ describe("protocol-adapter (Settle error paths)", () => {
     // after the nullifier slots) for the forwarder and fails with
     // UnregisteredForwarder when it can't find it.
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
     const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
@@ -990,33 +952,22 @@ describe("protocol-adapter (kind table commitment)", () => {
   // and fails there, which is what tells the two rejections apart.
   const resettlePrimaryFixture = async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
     const { uploadId, txData } = await uploadTxData(authority, Buffer.from(fixture.tx_b64, "base64"));
-    return program.methods
-      .settleFromTxdata(uploadId)
-      .accountsPartial({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-        newRootMarker: DUMMY_ROOT_MARKER,
-        verifierRouterProgram: VERIFIER_ROUTER_ID,
-        router: routerPda,
-        verifierEntry: verifierEntryPda,
-        verifierProgram: VERIFIER_PROGRAM_ID,
-      })
-      .remainingAccounts(buildSettleRemainingAccounts(deriveNullifierAccounts(fixture.consumed_nullifiers_b64)))
-      .preInstructions([
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-      ])
+    return settleFromTxDataBuilder(
+      authority.publicKey,
+      uploadId,
+      txData,
+      DUMMY_ROOT_MARKER,
+      buildSettleRemainingAccounts(deriveNullifierAccounts(fixture.consumed_nullifiers_b64)),
+    )
       .signers([authority])
       .rpc();
   };
 
   it("rejects set_kind_table_commitment from a non-authority signer", async () => {
     const stranger = Keypair.generate();
-    await airdrop(provider, stranger, 1);
+    await funder.fund(stranger, 1);
     await assertRejects(setKindTableCommitment(program, stranger.publicKey, randomRef()).signers([stranger]).rpc(), AUTHORITY_MISMATCH_PATTERN);
     assert.deepEqual((await program.account.paStateAccount.fetch(paState)).kindTableCommitment, empty, "the commitment is untouched");
   });
@@ -1058,7 +1009,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
   it("rejects emergency_stop from non-authority", async () => {
     const nonAuthority = Keypair.generate();
-    await airdrop(provider, nonAuthority, 1);
+    await funder.fund(nonAuthority, 1);
 
     try {
       await emergencyStop(program, nonAuthority.publicKey)
@@ -1080,7 +1031,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   it("rejects propose_authority from non-authority", async () => {
     const nonAuthority = Keypair.generate();
     const newAuthority = Keypair.generate();
-    await airdrop(provider, nonAuthority, 1);
+    await funder.fund(nonAuthority, 1);
 
     try {
       await program.methods
@@ -1107,7 +1058,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
     const currentAuthority = stateBefore.authority;
 
     const newAuthority = Keypair.generate();
-    await airdrop(provider, newAuthority, 1);
+    await funder.fund(newAuthority, 1);
 
     // Step 1: propose
     await program.methods
@@ -1171,7 +1122,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
     const originalAuthority = stateBefore.authority;
 
     const newAuthority = Keypair.generate();
-    await airdrop(provider, newAuthority, 1);
+    await funder.fund(newAuthority, 1);
 
     // Two-step transfer
     await program.methods
@@ -1240,7 +1191,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
     // Overwrite with a real candidate, complete transfer, then restore
     const realCandidate = Keypair.generate();
-    await airdrop(provider, realCandidate, 1);
+    await funder.fund(realCandidate, 1);
 
     await program.methods
       .proposeAuthority(realCandidate.publicKey)
@@ -1285,7 +1236,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
   it("accept_authority fails without a pending proposal", async () => {
     const random = Keypair.generate();
-    await airdrop(provider, random, 1);
+    await funder.fund(random, 1);
 
     try {
       await program.methods
@@ -1305,7 +1256,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   it("wrong signer cannot accept a pending proposal", async () => {
     const intended = Keypair.generate();
     const attacker = Keypair.generate();
-    await airdrop(provider, attacker, 1);
+    await funder.fund(attacker, 1);
 
     // Propose the intended authority
     await program.methods
@@ -1344,8 +1295,8 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   it("overwrite invalidates previous proposal", async () => {
     const firstCandidate = Keypair.generate();
     const secondCandidate = Keypair.generate();
-    await airdrop(provider, firstCandidate, 1);
-    await airdrop(provider, secondCandidate, 1);
+    await funder.fund(firstCandidate, 1);
+    await funder.fund(secondCandidate, 1);
 
     // Propose first candidate
     await program.methods
@@ -1392,7 +1343,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
   it("pending_authority is cleared after accept", async () => {
     const candidate = Keypair.generate();
-    await airdrop(provider, candidate, 1);
+    await funder.fund(candidate, 1);
 
     await program.methods
       .proposeAuthority(candidate.publicKey)
@@ -1446,7 +1397,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
   it("cancel_authority_transfer clears pending proposal", async () => {
     const candidate = Keypair.generate();
-    await airdrop(provider, candidate, 1);
+    await funder.fund(candidate, 1);
 
     await program.methods
       .proposeAuthority(candidate.publicKey)
@@ -1499,14 +1450,11 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 describe("protocol-adapter (TxData Expiration)", () => {
   it("rejects txdata_init with expires_slot too soon", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 1);
+    await funder.fund(authority, 1);
 
     const { uploadId, uploadIdLe } = freshUploadId();
 
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
+    const txData = deriveTxDataPda(program.programId, authority.publicKey, uploadIdLe);
 
     const slot = await provider.connection.getSlot("confirmed");
     // Set expiry too soon (only 50 slots from now, MIN is 100)
@@ -1531,14 +1479,11 @@ describe("protocol-adapter (TxData Expiration)", () => {
 
   it("rejects txdata_init with expires_slot too late", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 1);
+    await funder.fund(authority, 1);
 
     const { uploadId, uploadIdLe } = freshUploadId();
 
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
+    const txData = deriveTxDataPda(program.programId, authority.publicKey, uploadIdLe);
 
     const slot = await provider.connection.getSlot("confirmed");
     // Set expiry too late (MAX + 1000 slots from now)
@@ -1563,7 +1508,7 @@ describe("protocol-adapter (TxData Expiration)", () => {
 
   it("accepts txdata_init with valid expires_slot", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 1);
+    await funder.fund(authority, 1);
 
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + Math.floor((MIN_EXPIRY_SLOTS + MAX_EXPIRY_SLOTS) / 2));
@@ -1579,7 +1524,7 @@ describe("protocol-adapter (TxData Expiration)", () => {
 
   it("allows authority to close TxData anytime", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -1619,17 +1564,14 @@ describe("protocol-adapter (TxData Expiration)", () => {
     const authority = Keypair.generate();
     const attacker = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, attacker, 1),
+      funder.fund(authority, 2),
+      funder.fund(attacker, 1),
     ]);
 
     const { uploadId, uploadIdLe, txData: authorityTxData } = await initTxData(authority, 100);
 
     // Attacker derives THEIR OWN PDA (different address because attacker.pubkey != authority.pubkey)
-    const [attackerTxData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, attacker.publicKey.toBuffer(), uploadIdLe],
-      program.programId
-    );
+    const attackerTxData = deriveTxDataPda(program.programId, attacker.publicKey, uploadIdLe);
 
     // Attacker tries to close their own (non-existent) PDA
     try {
@@ -1662,8 +1604,8 @@ describe("protocol-adapter (TxData Expiration)", () => {
     const authority = Keypair.generate();
     const attacker = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, attacker, 1),
+      funder.fund(authority, 2),
+      funder.fund(attacker, 1),
     ]);
 
     const { uploadId, uploadIdLe, txData: authorityTxData } = await initTxData(authority, 100);
@@ -1694,7 +1636,7 @@ describe("protocol-adapter (TxData Expiration)", () => {
 
   it("extends TxData expiration deadline successfully", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const slot = await provider.connection.getSlot("confirmed");
     const initialExpiry = new anchor.BN(slot + 1000);
@@ -1722,7 +1664,7 @@ describe("protocol-adapter (TxData Expiration)", () => {
 
   it("rejects txdata_extend that doesn't increase expires_slot", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const slot = await provider.connection.getSlot("confirmed");
     const initialExpiry = new anchor.BN(slot + 10000);
@@ -1751,8 +1693,8 @@ describe("protocol-adapter (TxData Expiration)", () => {
     const authority = Keypair.generate();
     const cleaner = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, cleaner, 1),
+      funder.fund(authority, 2),
+      funder.fund(cleaner, 1),
     ]);
 
     const slot = await provider.connection.getSlot("confirmed");
@@ -1780,7 +1722,7 @@ describe("protocol-adapter (TxData authority and bounds checks)", () => {
 
   it("rejects txdata_write that exceeds payload capacity", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -1803,8 +1745,8 @@ describe("protocol-adapter (TxData authority and bounds checks)", () => {
     const authority = Keypair.generate();
     const wrongAuthority = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, wrongAuthority, 1),
+      funder.fund(authority, 2),
+      funder.fund(wrongAuthority, 1),
     ]);
 
     const { uploadId, txData } = await initTxData(authority, 100);
@@ -1835,8 +1777,8 @@ describe("protocol-adapter (TxData authority and bounds checks)", () => {
     const authority = Keypair.generate();
     const wrongAuthority = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, wrongAuthority, 2),
+      funder.fund(authority, 2),
+      funder.fund(wrongAuthority, 2),
     ]);
 
     const { uploadId, txData } = await initTxData(authority, 100);
@@ -1883,7 +1825,7 @@ describe("protocol-adapter (TxData authority and bounds checks)", () => {
   it("rejects txdata_close with wrong refund address", async () => {
     const authority = Keypair.generate();
     const otherPubkey = Keypair.generate().publicKey;
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -1913,8 +1855,8 @@ describe("protocol-adapter (TxData authority and bounds checks)", () => {
     const cleaner = Keypair.generate();
     const wrongRefund = Keypair.generate().publicKey;
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, cleaner, 1),
+      funder.fund(authority, 2),
+      funder.fund(cleaner, 1),
     ]);
 
     const slot = await provider.connection.getSlot("confirmed");
@@ -2014,7 +1956,7 @@ describe("protocol-adapter (update_expiry_config)", () => {
 
   it("rejects wrong authority", async () => {
     const nonAuthority = Keypair.generate();
-    await airdrop(provider, nonAuthority, 1);
+    await funder.fund(nonAuthority, 1);
 
     try {
       await program.methods
@@ -2079,7 +2021,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
 
   it("rejects txdata_write on expired TxData", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + EXPIRY_OFFSET);
@@ -2113,7 +2055,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
 
   it("rejects settle_from_txdata on expired TxData", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const tx = Buffer.from(fixture.tx_b64, "base64");
     const slot = await provider.connection.getSlot("confirmed");
@@ -2157,8 +2099,8 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
     const authority = Keypair.generate();
     const cleaner = Keypair.generate();
     await Promise.all([
-      airdrop(provider, authority, 2),
-      airdrop(provider, cleaner, 1),
+      funder.fund(authority, 2),
+      funder.fund(cleaner, 1),
     ]);
 
     const slot = await provider.connection.getSlot("confirmed");
@@ -2195,7 +2137,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
 
   it("rejects txdata_extend with expires_slot too soon", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const { uploadId, txData, expiresSlot } = await initTxData(authority, 100, new anchor.BN(
       (await provider.connection.getSlot("confirmed")) + EXPIRY_OFFSET
@@ -2227,7 +2169,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
 
   it("rejects txdata_extend with expires_slot too late", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(
       (await provider.connection.getSlot("confirmed")) + 1000
@@ -2299,30 +2241,14 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     const fx = loadFixture("batch_groth16_transfer_shape.json");
     const payload = Buffer.from(fx.tx_b64, "base64");
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
     const { uploadId, txData } = await uploadTxData(authority, payload);
     const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
 
     let caught: any = null;
     try {
-      await program.methods
-        .settleFromTxdata(uploadId)
-        .accountsPartial({
-          paState,
-          txData,
-          authority: authority.publicKey,
-          systemProgram: SystemProgram.programId,
-          newRootMarker: DUMMY_ROOT_MARKER,
-          verifierRouterProgram: VERIFIER_ROUTER_ID,
-          router: routerPda,
-          verifierEntry: verifierEntryPda,
-          verifierProgram: VERIFIER_PROGRAM_ID,
-        })
-        .remainingAccounts(nullifierAccounts)
-        .preInstructions([
-          // Full CU budget but NO requestHeapFrame: only the default heap.
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ])
+      // Full CU budget but NO requestHeapFrame: only the default heap.
+      await settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, nullifierAccounts, false)
         .signers([authority])
         .rpc();
     } catch (e: any) {
@@ -2737,7 +2663,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
 
   it("dev_set_schema_version rejects a non-authority signer", async () => {
     const intruder = Keypair.generate();
-    await airdrop(provider, intruder, 1);
+    await funder.fund(intruder, 1);
     const before = await program.account.paStateAccount.fetch(paState);
     try {
       await program.methods
@@ -2786,11 +2712,11 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       current = (await program.account.paStateAccount.fetch(paState)).schemaVersion;
 
       extendAuthority = Keypair.generate();
-      await airdrop(provider, extendAuthority, 2);
+      await funder.fund(extendAuthority, 2);
       ({ uploadId: extendUploadId, txData: extendTxData } = await initTxData(extendAuthority, 100));
 
       settleAuthority = Keypair.generate();
-      await airdrop(provider, settleAuthority, 2);
+      await funder.fund(settleAuthority, 2);
       const settleFixture = loadFixture("wrong_root.json");
       const settlePayload = Buffer.from(settleFixture.tx_b64, "base64");
       ({ uploadId: settleUploadId, txData: settleTxData } = await uploadTxData(settleAuthority, settlePayload));
@@ -2869,7 +2795,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
           // transaction size limit when passed inline.
           const payload = Buffer.from([0, 1, 2, 3]);
           const payer = Keypair.generate();
-          await airdrop(provider, payer, 2);
+          await funder.fund(payer, 2);
           return program.methods
             .settle(payload)
             .accountsPartial({
@@ -2893,24 +2819,13 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       {
         name: "settle_from_txdata",
         run: () =>
-          program.methods
-            .settleFromTxdata(settleUploadId)
-            .accountsPartial({
-              paState,
-              txData: settleTxData,
-              authority: settleAuthority.publicKey,
-              systemProgram: SystemProgram.programId,
-              newRootMarker: DUMMY_ROOT_MARKER,
-              verifierRouterProgram: VERIFIER_ROUTER_ID,
-              router: routerPda,
-              verifierEntry: verifierEntryPda,
-              verifierProgram: VERIFIER_PROGRAM_ID,
-            })
-            .remainingAccounts(settleRemainingAccounts)
-            .preInstructions([
-              ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-              ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-            ])
+          settleFromTxDataBuilder(
+            settleAuthority.publicKey,
+            settleUploadId,
+            settleTxData,
+            DUMMY_ROOT_MARKER,
+            settleRemainingAccounts,
+          )
             .signers([settleAuthority])
             .rpc(),
       },
@@ -3085,9 +3000,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   /**
    * Settle `fx` from a TxData upload with the forwarder's account segment
    * after the nullifier markers. `preInstructions` are prepended so an
-   * ed25519 instruction lands at index 0, where the wrap input points. The
-   * settlement is a v0 transaction against the deployment's lookup table,
-   * the shape every submitter sends.
+   * ed25519 instruction lands at index 0, where the wrap input points.
    */
   async function settleForwarderFixture(
     fx: Fixture,
@@ -3096,16 +3009,13 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   ): Promise<string> {
     const authority = Keypair.generate();
     await funder.fund(authority, 2);
-    const { uploadId, txData } = await uploadTxData(authority, Buffer.from(fx.tx_b64, "base64"));
-    const newRootMarker = await predictRootMarkerPda(commitmentsOf(fx));
-    const settle = await settleFromTxDataBuilder(
-      authority.publicKey,
-      uploadId,
-      txData,
-      newRootMarker,
-      [...deriveNullifierAccounts(fx.consumed_nullifiers_b64), ...forwarderAccounts]
-    ).transaction();
-    return sendV0(provider, [...preInstructions, ...settle.instructions], [authority], settlementTable);
+    return uploadAndSettleV0(
+      authority,
+      Buffer.from(fx.tx_b64, "base64"),
+      [...deriveNullifierAccounts(fx.consumed_nullifiers_b64), ...forwarderAccounts],
+      { createdCommitments: commitmentsOf(fx) },
+      preInstructions
+    );
   }
 
   const segmentHead: AccountMeta[] = [
@@ -3179,10 +3089,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("compiles the first-wrap settlement as a v0 message within the packet size", async () => {
     const authority = Keypair.generate();
     const { uploadId, uploadIdLe } = freshUploadId();
-    const [txData] = PublicKey.findProgramAddressSync(
-      [TX_DATA_SEED, authority.publicKey.toBuffer(), uploadIdLe],
-      program.programId,
-    );
+    const txData = deriveTxDataPda(program.programId, authority.publicKey, uploadIdLe);
     const nullifierAccounts = deriveNullifierAccounts(wrapFixture.consumed_nullifiers_b64);
     const settle = await settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, [
       ...nullifierAccounts,
@@ -3302,7 +3209,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     );
 
     const bitmap = await forwarderProgram.account.nonceBitmap.fetch(nonceBitmapPda);
-    const bit = Number(wrapNonce % 256n);
+    const bit = Number(wrapNonce % NONCES_PER_WORD);
     assert.ok(bitmap.bits[bit >> 3] & (1 << (bit & 7)), "the wrap's nonce is marked used");
   });
 
@@ -3391,7 +3298,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("rejects close_escrow while the adapter is running", async () => {
     const before = await balances(escrowAta, recipientAta);
     await assertRejects(
-      closeEscrow(forwarderProgram, configPda, emergencyCommittee.publicKey, paState, { mint, escrowPda, escrowAta, recipientAta })
+      closeEscrow(forwarderProgram, emergencyCommittee.publicKey, paState, { mint, escrowPda, escrowAta, recipientAta })
         .signers([emergencyCommittee])
         .rpc(),
       /ProtocolAdapterNotStopped/
@@ -3402,7 +3309,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("rejects close_nonce_bitmaps_batch while the adapter is running", async () => {
     assert.isNotEmpty(await forwarderProgram.account.nonceBitmap.all(), "the wraps above created nonce bitmaps");
     await assertRejects(
-      closeAllNonceBitmaps(forwarderProgram, configPda, emergencyCommittee.publicKey, paState, [emergencyCommittee]),
+      closeAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [emergencyCommittee]),
       /ProtocolAdapterNotStopped/
     );
   });
@@ -3442,7 +3349,7 @@ describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
 
   it("rejects settle when paused", async () => {
     const payer = Keypair.generate();
-    await airdrop(provider, payer, 2);
+    await funder.fund(payer, 2);
 
     // Use a small garbage payload — the paused check fires before deserialization,
     // so any payload suffices. The full fixture is too large for a single settle instruction.
@@ -3472,7 +3379,7 @@ describe("protocol-adapter (Emergency Stop E2E — LAST)", () => {
 
   it("rejects settle_from_txdata when paused", async () => {
     const authority = Keypair.generate();
-    await airdrop(provider, authority, 2);
+    await funder.fund(authority, 2);
 
     // Paused check fires before deserialization — minimal payload suffices
     const { uploadId, txData } = await uploadTxData(authority, Buffer.from([0, 1, 2, 3]));
@@ -3529,7 +3436,7 @@ describe("protocol-adapter (Close instructions)", () => {
 
   it("close_markers_batch rejects non-authority", async () => {
     const fakeAuthority = Keypair.generate();
-    await airdrop(provider, fakeAuthority, 1);
+    await funder.fund(fakeAuthority, 1);
 
     try {
       await closeMarkersBatch(program, fakeAuthority.publicKey, []).signers([fakeAuthority]).rpc();
@@ -3575,8 +3482,7 @@ afterEach(async () => {
   openTxDataAccounts.length = 0;
 
   // 2. Drain any remaining SOL from funded keypairs back to provider wallet.
-  const { recovered, drained } = await drainKeypairs(provider, fundedKeypairs);
-  fundedKeypairs.length = 0;
+  const { recovered, drained } = await funder.drainAll();
 
   const providerBalanceAfter = await provider.connection.getBalance(provider.wallet.publicKey);
   const netCost = providerBalanceBefore - providerBalanceAfter;

@@ -16,13 +16,12 @@
  */
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
 import { BlockTimeForwarder } from "../target/types/block_time_forwarder";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import { ensureSettlementLookupTable, settlementLookupKeys } from "../tests/utils/lookupTable";
 import { derivePaStatePda } from "../tests/utils/pda";
-import { requirePubkey } from "./cli-utils";
+import { parsePubkey, requirePubkey } from "./cli-utils";
 import { getVerifierEntryPda, verifierOfEntry } from "./verifier-utils";
 
 async function main() {
@@ -46,7 +45,7 @@ async function main() {
   const mints = (process.env.STF_TOKEN_MINTS ?? "")
     .split(",")
     .filter((s) => s.length > 0)
-    .map((s) => new PublicKey(s));
+    .map((s) => parsePubkey("STF_TOKEN_MINTS", s));
   const existing = process.env.PA_LOOKUP_TABLE
     ? requirePubkey("PA_LOOKUP_TABLE", "the deployment's settlement lookup table, as a base58 pubkey")
     : undefined;
