@@ -9,8 +9,6 @@
 //! - Only handles specific logic_ref (resource type)
 //! - User authorization via Ed25519 signature over action_tree_root
 
-#![allow(deprecated)] // Anchor program macro currently expands to AccountInfo::realloc.
-
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{get_stack_height, TRANSACTION_LEVEL_STACK_HEIGHT};
 use anchor_lang::solana_program::program::{invoke_signed, set_return_data};
@@ -750,24 +748,24 @@ pub struct MigrateEscrow<'info> {
 
     /// CHECK: The mint whose escrow moves; the handler requires both escrow
     /// accounts to hold it.
-    pub token_mint: AccountInfo<'info>,
+    pub token_mint: UncheckedAccount<'info>,
 
     /// CHECK: The previous build's escrow authority for this mint, pinned by
     /// its seeds; it signs the move and the close.
     #[account(seeds = [ESCROW_SEED, token_mint.key().as_ref()], bump)]
-    pub previous_escrow_authority: AccountInfo<'info>,
+    pub previous_escrow_authority: UncheckedAccount<'info>,
 
     /// CHECK: The handler requires it to hold the mint and belong to the previous escrow authority.
     #[account(mut)]
-    pub previous_escrow_ata: AccountInfo<'info>,
+    pub previous_escrow_ata: UncheckedAccount<'info>,
 
     /// CHECK: The handler requires it to hold the mint and belong to the escrow authority.
     #[account(mut)]
-    pub escrow_ata: AccountInfo<'info>,
+    pub escrow_ata: UncheckedAccount<'info>,
 
     /// CHECK: Verified by address constraint.
     #[account(address = SPL_TOKEN_PROGRAM_ID)]
-    pub token_program: AccountInfo<'info>,
+    pub token_program: UncheckedAccount<'info>,
 
     /// The program account proves `program_data` is this program's own
     /// ProgramData address rather than any account shaped like one.
@@ -823,7 +821,7 @@ pub struct ForwardEmergencyCall<'info> {
     pub config: Account<'info, Config>,
 
     /// CHECK: Checked by require_stopped_adapter in the handler.
-    pub pa_state: AccountInfo<'info>,
+    pub pa_state: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -838,7 +836,7 @@ pub struct SetEmergencyCaller<'info> {
     pub config: Account<'info, Config>,
 
     /// CHECK: Checked by require_stopped_adapter in the handler.
-    pub pa_state: AccountInfo<'info>,
+    pub pa_state: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -855,25 +853,25 @@ pub struct CloseEscrow<'info> {
 
     /// CHECK: The handler requires it to hold the mint and belong to the escrow authority (require_token_account).
     #[account(mut)]
-    pub escrow_ata: AccountInfo<'info>,
+    pub escrow_ata: UncheckedAccount<'info>,
 
     /// CHECK: The escrow authority, verified by address constraint; it signs the drain and the close.
     #[account(address = ESCROW_AUTHORITY @ ErrorCode::InvalidEscrowAuthority)]
-    pub escrow_authority: AccountInfo<'info>,
+    pub escrow_authority: UncheckedAccount<'info>,
 
     /// CHECK: Passed to the SPL Token transfer CPI.
     #[account(mut)]
-    pub recipient_ata: AccountInfo<'info>,
+    pub recipient_ata: UncheckedAccount<'info>,
 
     /// CHECK: The mint being drained; the handler requires escrow_ata to hold it.
-    pub token_mint: AccountInfo<'info>,
+    pub token_mint: UncheckedAccount<'info>,
 
     /// CHECK: Verified by address constraint.
     #[account(address = SPL_TOKEN_PROGRAM_ID)]
-    pub token_program: AccountInfo<'info>,
+    pub token_program: UncheckedAccount<'info>,
 
     /// CHECK: Checked by require_stopped_adapter in the handler.
-    pub pa_state: AccountInfo<'info>,
+    pub pa_state: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -891,7 +889,7 @@ pub struct CloseConfig<'info> {
     pub config: Account<'info, Config>,
 
     /// CHECK: Checked by require_stopped_adapter in the handler.
-    pub pa_state: AccountInfo<'info>,
+    pub pa_state: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -907,5 +905,5 @@ pub struct CloseNonceBitmaps<'info> {
     pub config: Account<'info, Config>,
 
     /// CHECK: Checked by require_stopped_adapter in the handler.
-    pub pa_state: AccountInfo<'info>,
+    pub pa_state: UncheckedAccount<'info>,
 }
