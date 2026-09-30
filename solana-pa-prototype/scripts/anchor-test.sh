@@ -82,7 +82,10 @@ fetch_devnet_clones
 
 # Spec files that start on a cluster running a program's previous build,
 # which they upgrade in place: spec file -> program name.
-declare -A PREVIOUS_BUILD_SPECS=([tests/forwarder-upgrade.ts]=spl_token_forwarder)
+declare -A PREVIOUS_BUILD_SPECS=(
+  [tests/adapter-upgrade.ts]=protocol_adapter
+  [tests/forwarder-upgrade.ts]=spl_token_forwarder
+)
 
 trap 'stop_validator' EXIT
 

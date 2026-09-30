@@ -418,6 +418,64 @@ pub mod protocol_adapter {
         Ok(())
     }
 
+    /// Deny a logic ref: no settlement consumes or creates a resource
+    /// carrying it again. Mirrors pa-evm's `denyLogicRef`: owner-only, the
+    /// zero ref and a ref already denied are rejected, and a denial cannot
+    /// be undone. The authority pays for the entry.
+    pub fn deny_logic_ref(ctx: Context<DenyLogicRef>, logic_ref: [u8; 32]) -> Result<()> {
+        require!(logic_ref != [0u8; 32], PAError::ZeroLogicRefNotAllowed);
+        let state = &mut ctx.accounts.pa_state;
+        require!(
+            !state.is_logic_ref_denied(&logic_ref),
+            PAError::LogicRefAlreadyDenied
+        );
+        resize_state(
+            &state.to_account_info(),
+            PAStateAccount::space(state.depth(), state.denied_logic_refs.len() + 1),
+            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+        state.denied_logic_refs.push(logic_ref);
+        emit_cpi!(LogicRefDeniedEvent { logic_ref });
+        Ok(())
+    }
+
+    /// Bring a state account in the previous schema version to this one:
+    /// the previous layout's fields and an empty denylist. The counterpart of
+    /// the call pa-evm's owner passes to `upgradeToAndCall`: the upgrade
+    /// authority runs it once, after upgrading the program in place and
+    /// before any other instruction, which all refuse the previous version.
+    /// It parses the previous layout rather than reinterpreting its bytes,
+    /// and pays for the account's growth.
+    pub fn migrate_state(ctx: Context<MigrateState>) -> Result<()> {
+        let info = ctx.accounts.pa_state.to_account_info();
+        require_keys_eq!(*info.owner, crate::ID, PAError::NotPreviousSchema);
+        let state = {
+            let data = info.try_borrow_data()?;
+            let body = data
+                .strip_prefix(PAStateAccount::DISCRIMINATOR)
+                .ok_or(PAError::NotPreviousSchema)?;
+            require!(
+                body.first() == Some(&PREVIOUS_SCHEMA_VERSION),
+                PAError::NotPreviousSchema
+            );
+            PAStateAccount::from(
+                PreviousPAState::deserialize(&mut &body[..])
+                    .map_err(|_| PAError::NotPreviousSchema)?,
+            )
+        };
+        resize_state(
+            &info,
+            state.current_space(),
+            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+        let mut data = info.try_borrow_mut_data()?;
+        data.fill(0);
+        state.try_serialize(&mut &mut data[..])?;
+        Ok(())
+    }
+
     /// Propose a new authority. The transfer is not effective until the
     /// proposed authority calls `accept_authority`.
     pub fn propose_authority(ctx: Context<ProposeAuthority>, new_authority: Pubkey) -> Result<()> {
@@ -537,7 +595,6 @@ fn maybe_grow_account<'info>(
     num_commitments: usize,
     payer: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
-    rent: &Rent,
 ) -> Result<()> {
     let final_next_index = state.next_index.saturating_add(num_commitments as u64);
     let required_depth = required_depth_for_leaves(final_next_index);
@@ -549,13 +606,30 @@ fn maybe_grow_account<'info>(
         return Ok(());
     }
 
-    let new_size = PAStateAccount::space_for_depth(target_depth);
-    let new_minimum_balance = rent.minimum_balance(new_size);
-    let current_balance = pa_state_info.lamports();
+    resize_state(
+        pa_state_info,
+        PAStateAccount::space(target_depth, state.denied_logic_refs.len()),
+        payer,
+        system_program,
+    )?;
+    msg!(
+        "Reallocated PAState: depth {} -> {}",
+        state.depth(),
+        target_depth
+    );
+    Ok(())
+}
 
-    // Transfer additional lamports if needed (before realloc)
-    if new_minimum_balance > current_balance {
-        let lamports_needed = new_minimum_balance - current_balance;
+/// Resize the state account to `size`, `payer` topping up its rent first.
+fn resize_state<'info>(
+    pa_state_info: &AccountInfo<'info>,
+    size: usize,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+) -> Result<()> {
+    let minimum_balance = Rent::get()?.minimum_balance(size);
+    let current_balance = pa_state_info.lamports();
+    if minimum_balance > current_balance {
         anchor_lang::system_program::transfer(
             CpiContext::new(
                 system_program.key(),
@@ -564,18 +638,10 @@ fn maybe_grow_account<'info>(
                     to: pa_state_info.clone(),
                 },
             ),
-            lamports_needed,
+            minimum_balance - current_balance,
         )?;
     }
-
-    // Resize the account data
-    pa_state_info.resize(new_size)?;
-
-    msg!(
-        "Reallocated PAState: depth {} -> {}",
-        state.depth(),
-        target_depth
-    );
+    pa_state_info.resize(size)?;
     Ok(())
 }
 
@@ -661,6 +727,16 @@ fn execute_settlement<'info>(
         instance.kind_table_commitment == arm_core::Digest::from_bytes(state.kind_table_commitment),
         PAError::KindTableCommitmentMismatch
     );
+    // pa-evm refuses every consumed and created resource carrying a denied
+    // logic ref.
+    for action in &instance.actions {
+        for resource in settle::action_resources(action) {
+            require!(
+                !state.is_logic_ref_denied(&resource.logic_ref.into()),
+                PAError::DeniedLogicRef
+            );
+        }
+    }
     instance
         .nf_duplication_check()
         .map_err(|_| error!(PAError::NullifierDuplication))?;
@@ -778,7 +854,6 @@ fn execute_settlement<'info>(
         commitments.len(),
         payer,
         system_program,
-        &rent,
     )?;
     for commitment in commitments {
         append_to_tree(state, commitment)?;
@@ -858,6 +933,54 @@ pub struct EmergencyStop<'info> {
     pub pa_state: Account<'info, PAStateAccount>,
 
     pub authority: Signer<'info>,
+}
+
+#[event_cpi]
+#[derive(Accounts)]
+pub struct DenyLogicRef<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    /// The authority, which pays for the denylist's growth.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateState<'info> {
+    /// The upgrade authority, which pays for the account's growth.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: The seeds pin the address; the handler requires this program
+    /// as owner and the previous schema's layout, which the typed account
+    /// cannot read.
+    #[account(mut, seeds = [PA_STATE_SEED], bump)]
+    pub pa_state: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+
+    /// The program account proves `program_data` is this program's own
+    /// ProgramData address rather than any account shaped like one.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ PAError::Unauthorized)]
+    pub program: Program<'info, crate::program::ProtocolAdapter>,
+
+    /// The loader records the upgrade authority here; it upgrades the program
+    /// and so migrates its state.
+    #[account(
+        constraint = program_data.upgrade_authority_address == Some(authority.key())
+            @ PAError::Unauthorized
+    )]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 #[event_cpi]
@@ -1181,11 +1304,16 @@ pub struct ApplicationPayloadEvent {
     pub blob: Vec<u8>,
 }
 
-/// Matches EVM PA's ActionExecuted event.
 /// Mirrors pa-evm: `event KindTableCommitmentUpdated(bytes32 kindTableCommitment);`
 #[event]
 pub struct KindTableCommitmentUpdatedEvent {
     pub kind_table_commitment: [u8; 32],
+}
+
+/// Mirrors pa-evm: `event LogicRefDenied(bytes32 indexed logicRef);`
+#[event]
+pub struct LogicRefDeniedEvent {
+    pub logic_ref: [u8; 32],
 }
 
 #[event]

@@ -35,6 +35,22 @@ export function initializeAdapter(
   });
 }
 
+/** `deny_logic_ref` by the adapter authority, which pays for the entry. */
+export function denyLogicRef(program: Program<ProtocolAdapter>, authority: PublicKey, logicRef: number[]) {
+  return program.methods
+    .denyLogicRef(logicRef)
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/**
+ * `migrate_state` by the program's upgrade authority: brings a state account
+ * in the previous schema version to this build's, once, after an in-place
+ * upgrade.
+ */
+export function migrateState(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  return program.methods.migrateState().accounts({ authority, programData: deriveProgramDataPda(program.programId) });
+}
+
 /** `emergency_stop` by `authority`. */
 export function emergencyStop(program: Program<ProtocolAdapter>, authority: PublicKey) {
   return program.methods

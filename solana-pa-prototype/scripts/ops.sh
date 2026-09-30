@@ -35,6 +35,12 @@ Commands:
   init                   Initialize PA state (idempotent)
   set-kind-table         Replace the PA's kind-table commitment with
                          PA_KIND_TABLE_COMMITMENT (authority wallet).
+  deny-logic-ref         Deny PA_DENIED_LOGIC_REF: no settlement consumes or
+                         creates a resource carrying it again. Cannot be
+                         undone (authority wallet).
+  migrate-state          After an in-place upgrade to a build with a new state
+                         layout, migrate PAState from the previous schema
+                         version. Idempotent (upgrade-authority wallet).
   forwarder <cmd>        SPL token forwarder operations: init, set-logic-ref,
                          close-config, set-emergency-caller, emergency-withdraw,
                          drain-escrow, teardown, migrate. Parameters are STF_*
@@ -617,6 +623,24 @@ cmd_set_kind_table() {
   run_ts scripts/set-kind-table.ts
 }
 
+cmd_deny_logic_ref() {
+  require_cmd npx
+
+  local pid
+  pid="$(get_program_id "protocol_adapter")"
+  require_deployed "$pid" "PA" "deploy pa"
+  run_ts scripts/deny-logic-ref.ts
+}
+
+cmd_migrate_state() {
+  require_cmd npx
+
+  local pid
+  pid="$(get_program_id "protocol_adapter")"
+  require_deployed "$pid" "PA" "deploy pa"
+  run_ts scripts/migrate-state.ts
+}
+
 cmd_forwarder() {
   require_cmd npx
 
@@ -955,7 +979,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|teardown|close-pdas|init|set-kind-table|forwarder|lookup-table|estop|status|balance|idl-publish)
+  deploy|upgrade|teardown|close-pdas|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|estop|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

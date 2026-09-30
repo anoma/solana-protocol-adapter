@@ -117,6 +117,16 @@ pub enum PAError {
     // State layout
     #[msg("PAState schema version is not the one this program binary reads; migrate the account first")]
     UnsupportedStateSchema,
+    #[msg("PAState is not in the previous schema version - it was migrated already")]
+    NotPreviousSchema,
+
+    // Logic-ref denylist
+    #[msg("Zero logic ref not allowed")]
+    ZeroLogicRefNotAllowed,
+    #[msg("Logic ref is already denied")]
+    LogicRefAlreadyDenied,
+    #[msg("A resource carries a denied logic ref")]
+    DeniedLogicRef,
 }
 
 impl From<SolanaArmError> for PAError {

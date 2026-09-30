@@ -67,10 +67,19 @@ To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster 
 `upgrade` replaces code only. The state account (`PAStateAccount`, PDA seed `pa_state`) keeps whatever bytes it had, so a binary whose account layout differs from the deployed one cannot read it. The adapter makes that failure explicit instead of accidental:
 
 - Byte 8 of the account data (the first byte after Anchor's discriminator) is the **schema version**, written by `initialize` from `SCHEMA_VERSION` (programs/solana-pa-prototype/src/state.rs, exported in the IDL). It is a layout number and changes only when the layout does.
-- Every instruction that reads the state account refuses it when byte 8 is not the binary's own version. `txdata_write`, `txdata_close`, and `txdata_close_expired` never load `PAStateAccount`, so they keep working against a foreign version regardless of migration status, letting uploaders reclaim rent mid-migration. An upgrade to a layout-changing binary therefore stops the rest of the adapter cold until the account is migrated; nothing misreads old bytes.
-- The refusal surfaces as one of two errors depending on how the layout changed. When the old account still deserializes under the new binary's layout — a version-byte mismatch only — the error is `UnsupportedStateSchema`. When the layout change itself makes the account undeserializable (for example a newer binary reading a shorter, older account), Anchor's `AccountDidNotDeserialize` surfaces first, because account deserialization runs before constraints. Either way the instruction is refused before it runs.
+- Every instruction that reads the state account refuses it when byte 8 is not the binary's own version, `txdata_init` included. `txdata_write`, `txdata_close`, and `txdata_close_expired` never load `PAStateAccount`, so they keep working against a foreign version regardless of migration status, letting uploaders reclaim rent mid-migration. An upgrade to a layout-changing binary therefore stops the rest of the adapter cold until the account is migrated; nothing misreads old bytes.
+- The refusal surfaces as one of two errors depending on the account's bytes. When the old account still deserializes under the new binary's layout — a version-byte mismatch only — the error is `UnsupportedStateSchema`. When it does not (a re-serialization shorter than an earlier one leaves stale bytes past its end, where a newer layout reads its appended fields), Anchor's `AccountDidNotDeserialize` surfaces first, because account deserialization runs before constraints. Either way the instruction is refused before it runs.
 
-A release that changes the layout must ship the migration with it, and the procedure is: upgrade the binary, then run its `migrate_state` instruction once, signed by the PA authority and the upgrade authority, before any other instruction. That instruction reads the account as raw bytes, requires the previous version at byte 8, reallocates the account to the new size, rewrites it in the new layout with whatever new parameters the layout needs, and sets the new version. Because the account is not readable through the typed layout at that point, `migrate_state` declares it as an unchecked account and re-derives or receives the PDA bump instead of reading `bump` from the account. The operator running it pays the rent difference. Layout changes append fields after the existing ones so that the version byte and every earlier field keep their offsets. The V2 binary ships no `migrate_state` because it is deployed fresh; the first layout change after it must add one.
+A release that changes the layout ships the migration with it, the counterpart of the call pa-evm's owner passes to `upgradeToAndCall`. The procedure is: upgrade the binary, then run its `migrate_state` once, signed by the upgrade authority, before any other instruction:
+
+```sh
+./scripts/dev.sh upgrade pa --cluster <c>          # upgrade-authority wallet
+./scripts/dev.sh migrate-state --cluster <c>       # upgrade-authority wallet; idempotent
+```
+
+`migrate_state` declares the account unchecked (the typed layout cannot read it), requires this program as owner and the previous version at byte 8, parses the previous layout (never reinterpreting its bytes: a shorter re-serialization leaves stale bytes past its end), reallocates the account to the new size, zeroes it and writes the new layout with the new version. The upgrade authority pays the rent difference. Layout changes append fields after the existing ones so that the version byte and every earlier field keep their offsets.
+
+Schema version 2 appends the logic-ref denylist (below); its `migrate_state` migrates from version 1, the layout of the build deployed on devnet. `tests/adapter-upgrade.ts` runs the whole path from that build (`tests/fixtures/previous/protocol_adapter.so`): settle through it, upgrade in place, migrate through `migrate-state`, settle again.
 
 This covers the state account only. A change to the commitment tree itself (hash, arity, leaf encoding) or to the marker PDA seeds invalidates the existing tree and marker addresses, and no in-place migration recovers that: it is a fresh deployment plus a bulk copy of roots and nullifiers, the same limit the EVM adapter has.
 
@@ -110,6 +119,16 @@ PA_LOOKUP_TABLE=<address> STF_TOKEN_MINTS=<mint>,<mint> \
 The command derives the key set from the deployed programs and the PAState's pinned router and selector, so it runs after `deploy pa`. The signing wallet is the table's authority and stays so (the table is not frozen) because supporting a new mint means extending it. A table entry need not exist on chain: the forwarder's keys go in before the forwarder is deployed, and a mint's escrow ATA before `forwarder init` creates it. Extending is idempotent; a rerun adds only what is missing.
 
 Record the address in the cluster's deployment record and ship it as `SETTLE_LOOKUP_TABLE` in anoma-pa-solana-client. A program-id rotation is a new deployment and gets a new table.
+
+## The logic-ref denylist
+
+The authority denies a logic ref for good, as pa-evm's owner does with `denyLogicRef`: from that slot on, no settlement consumes or creates a resource carrying it (`DeniedLogicRef`). It is the per-logic kill switch for a compromised resource logic, short of stopping the whole adapter.
+
+```sh
+PA_DENIED_LOGIC_REF=<hex, 32 bytes> ./scripts/dev.sh deny-logic-ref --cluster <c>   # authority wallet
+```
+
+The zero ref and a ref already denied are rejected; a denial cannot be undone. The denied refs are part of the state account (`denied_logic_refs`), which grows by 32 bytes per denial at the authority's expense, and each denial emits `LogicRefDeniedEvent`.
 
 ## The kind table
 
