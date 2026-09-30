@@ -2524,6 +2524,7 @@ dependencies = [
  "k256",
  "passthrough-logic-methods",
  "protocol-adapter",
+ "rand_chacha 0.3.1",
  "risc0-zkvm",
  "serde",
  "serde_json",
@@ -7575,7 +7576,7 @@ dependencies = [
 [[package]]
 name = "transfer_library"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/anoma/anomapay-solana-resource?rev=963d6cb574aa9bdecd167861acc20a3300712808#963d6cb574aa9bdecd167861acc20a3300712808"
+source = "git+https://github.com/anoma/anomapay-solana-resource?rev=f550cacad7dc176211db9e2990074c9e5df2e021#f550cacad7dc176211db9e2990074c9e5df2e021"
 dependencies = [
  "anoma-pa-solana-client",
  "anoma-rm-risc0",
@@ -7589,14 +7590,13 @@ dependencies = [
 [[package]]
 name = "transfer_witness"
 version = "2.0.0-rc.1"
-source = "git+https://github.com/anoma/anomapay-solana-resource?rev=963d6cb574aa9bdecd167861acc20a3300712808#963d6cb574aa9bdecd167861acc20a3300712808"
+source = "git+https://github.com/anoma/anomapay-solana-resource?rev=f550cacad7dc176211db9e2990074c9e5df2e021#f550cacad7dc176211db9e2990074c9e5df2e021"
 dependencies = [
  "anoma-pa-solana-client",
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
  "bincode",
  "k256",
- "rand 0.9.5",
  "serde",
 ]
 
