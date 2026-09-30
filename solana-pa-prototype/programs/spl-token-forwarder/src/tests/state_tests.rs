@@ -245,7 +245,6 @@ fn serialized_pa_state(lifecycle: PALifecycle, pending_authority: Option<Pubkey>
             Pubkey::new_unique(),
             Pubkey::new_unique(),
             [0x73, 0xc4, 0x57, 0xba],
-            [0u8; 32],
         )
     };
     let mut data = Vec::new();

@@ -113,6 +113,12 @@ impl PAStateAccount {
     /// account layout; unrelated to release names.
     pub const SCHEMA_VERSION: u8 = 1;
 
+    /// The commitment of the empty kind table, under which every resource
+    /// kind is derived via hash-to-curve: the table every deployment starts
+    /// on, as pa-evm's `_EMPTY_KIND_TABLE_COMMITMENT`.
+    pub const EMPTY_KIND_TABLE_COMMITMENT: [u8; 32] =
+        hex_literal::hex!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+
     /// discriminator(8) + schema_version(1) + bump(1) + authority(32) +
     /// verifier_router(32) + proof_selector(4) + kind_table_commitment(32) +
     /// pending_authority(1+32) + lifecycle(1) + root(32) + next_index(8) +
@@ -161,14 +167,13 @@ impl PAStateAccount {
         self.frontier[level] = digest.into();
     }
 
-    /// A running adapter with an empty commitment tree: the state
-    /// `initialize` writes.
+    /// A running adapter with an empty commitment tree on the empty kind
+    /// table: the state `initialize` writes.
     pub fn running(
         bump: u8,
         authority: Pubkey,
         verifier_router: Pubkey,
         proof_selector: [u8; 4],
-        kind_table_commitment: [u8; 32],
     ) -> Self {
         Self {
             schema_version: Self::SCHEMA_VERSION,
@@ -176,7 +181,7 @@ impl PAStateAccount {
             authority,
             verifier_router,
             proof_selector,
-            kind_table_commitment,
+            kind_table_commitment: Self::EMPTY_KIND_TABLE_COMMITMENT,
             pending_authority: None,
             lifecycle: PALifecycle::Running,
             root: EMPTY_TREE_ROOT_INITIAL.into(),

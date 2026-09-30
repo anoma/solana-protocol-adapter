@@ -8,10 +8,9 @@ export const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
   "hex"
 );
 
-// Commitment of the empty kind table (sha256 of zero bytes). Every fixture
-// but one commits to the empty table (fixture-gen's committed
-// kind_table.json), so the test deployment pins the same commitment at
-// initialize.
+// Commitment of the empty kind table (sha256 of zero bytes): the table
+// `initialize` starts every deployment on, and the one every fixture but one
+// commits to (fixture-gen's committed kind_table.json).
 export const EMPTY_KIND_TABLE_COMMITMENT = Buffer.from(
   "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "hex"

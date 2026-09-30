@@ -11,10 +11,10 @@ async function main() {
 
   const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 
-  // `initialize` pins the router, selector, and kind-table commitment this
-  // deployment will trust for the lifetime of the PAState account. There is
-  // no safe default: guessing wrong installs the wrong verifier or rejects
-  // every settlement. All three must be supplied explicitly.
+  // `initialize` pins the router and selector this deployment will trust for
+  // the lifetime of the PAState account. There is no safe default: guessing
+  // wrong installs the wrong verifier. Both must be supplied explicitly. The
+  // adapter starts on the empty kind table; set-kind-table installs another.
   const verifierRouter = requirePubkey(
     "PA_VERIFIER_ROUTER",
     "the RISC0 verifier router program ID this deployment must trust, as a base58 pubkey.\n" +
@@ -26,14 +26,6 @@ async function main() {
     "the 4-byte Groth16 verifier selector (hex, e.g. 0xdeadbeef) registered with the verifier router " +
       "for the circuit this deployment must accept.\n" +
       "   This script will not guess a default — initializing with the wrong selector installs the wrong verifier."
-  );
-  const kindTableCommitment = requireHexBytes(
-    "PA_KIND_TABLE_COMMITMENT",
-    32,
-    "the sha256 commitment (hex, 32 bytes) of the kind table every settled aggregation instance must carry.\n" +
-      "   This script will not guess a default — initializing with the wrong commitment rejects every settlement.\n" +
-      "   For the empty table (fixture-gen's committed kind_table.json):\n" +
-      "   e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   );
 
   const [paState] = derivePaStatePda(program.programId);
@@ -48,11 +40,8 @@ async function main() {
   console.log(`  PAState PDA: ${paState.toBase58()}`);
   console.log(`  Verifier router: ${verifierRouter.toBase58()}`);
   console.log(`  Proof selector: 0x${Buffer.from(proofSelector).toString("hex")}`);
-  console.log(
-    `  Kind table commitment: ${Buffer.from(kindTableCommitment).toString("hex")}`
-  );
 
-  await initializeAdapter(program, provider.wallet.publicKey, verifierRouter, proofSelector, kindTableCommitment).rpc();
+  await initializeAdapter(program, provider.wallet.publicKey, verifierRouter, proofSelector).rpc();
 
   console.log("✅ PA initialized");
 }

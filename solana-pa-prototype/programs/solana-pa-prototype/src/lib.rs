@@ -106,21 +106,28 @@ pub mod protocol_adapter {
     ///
     /// Takes no remaining accounts. The empty-tree root equals `PADDING_LEAF`,
     /// which `is_root_valid` accepts unconditionally, so transactions built
-    /// against the initial tree stay valid without a genesis marker.
+    /// against the initial tree stay valid without a genesis marker. Like
+    /// pa-evm's initializer, it starts on the empty kind table and announces
+    /// it; `set_kind_table_commitment` installs any other table.
     pub fn initialize<'info>(
         ctx: Context<'_, '_, '_, 'info, Initialize<'info>>,
         verifier_router: Pubkey,
         proof_selector: [u8; 4],
-        kind_table_commitment: [u8; 32],
     ) -> Result<()> {
-        let state = &mut ctx.accounts.pa_state;
-        state.set_inner(PAStateAccount::running(
+        ctx.accounts.pa_state.set_inner(PAStateAccount::running(
             ctx.bumps.pa_state,
             ctx.accounts.payer.key(),
             verifier_router,
             proof_selector,
-            kind_table_commitment,
         ));
+
+        events::EventCpi {
+            authority: ctx.accounts.event_authority.to_account_info(),
+            bump: ctx.bumps.event_authority,
+        }
+        .emit(&KindTableCommitmentUpdatedEvent {
+            kind_table_commitment: PAStateAccount::EMPTY_KIND_TABLE_COMMITMENT,
+        })?;
 
         msg!("PAState initialized with empty commitment tree");
         Ok(())
@@ -820,6 +827,13 @@ pub struct Initialize<'info> {
             @ PAError::Unauthorized
     )]
     pub program_data: Account<'info, ProgramData>,
+
+    /// The event authority `#[event_cpi]` would add; the macro cannot be
+    /// used here because its own `program` field collides with the typed
+    /// `program` above, which is the same account.
+    /// CHECK: The seeds pin it to this program's event authority PDA.
+    #[account(seeds = [b"__event_authority"], bump)]
+    pub event_authority: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
