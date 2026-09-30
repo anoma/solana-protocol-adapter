@@ -210,6 +210,7 @@ require_commands() {
   require_cmd solana-test-validator
   require_cmd cargo
   require_cmd node
+  require_cmd jq
   require_cmd yarn
   require_cmd curl
 }
@@ -536,17 +537,8 @@ fetch_devnet_clones() {
   for id in "${DEVNET_CLONE_PROGRAMS[@]}"; do
     solana program dump --url devnet "$id" "${DEVNET_CLONE_DIR}/${id}.so"
     solana program show --url devnet "$id" --output json |
-      node -e '
-        let raw = "";
-        process.stdin.on("data", (d) => (raw += d)).on("end", () => {
-          const { authority } = JSON.parse(raw);
-          if (!authority) {
-            console.error(`devnet program ${process.argv[1]} reports no upgrade authority`);
-            process.exit(1);
-          }
-          process.stdout.write(authority);
-        });
-      ' "$id" >"${DEVNET_CLONE_DIR}/${id}.authority"
+      jq -j --arg id "$id" '.authority // error("devnet program \($id) reports no upgrade authority")' \
+        >"${DEVNET_CLONE_DIR}/${id}.authority"
   done
   for addr in "${DEVNET_CLONE_ACCOUNTS[@]}"; do
     solana account --url devnet "$addr" --output json --output-file "${DEVNET_CLONE_DIR}/${addr}.json" >/dev/null
@@ -562,7 +554,7 @@ workspace_program_args() {
   for kp in "${PROGRAM_KEYPAIRS[@]}"; do
     so="target/deploy/$(basename "$kp" -keypair.json).so"
     if [[ ! -f "$so" ]]; then
-      echo "❌ ${so} is missing; build the programs first." >&2
+      echo "❌ ${so} is missing; build the programs first ('./scripts/anchor-test.sh build', or the default phase)." >&2
       exit 1
     fi
     WORKSPACE_PROGRAM_ARGS+=(--upgradeable-program "$kp" "$so" "$ANCHOR_WALLET_PATH")
@@ -622,7 +614,6 @@ start_validator() {
   }
   add_genesis_accounts tests/fixtures/verifier-entries verifier-entry-
 
-  local started_at="$EPOCHREALTIME"
   solana-test-validator \
     --reset \
     --ledger "$VALIDATOR_LEDGER" \
@@ -641,7 +632,7 @@ start_validator() {
     tail -n 50 "$VALIDATOR_LOG"
     return 1
   fi
-  echo "Validator ready (pid ${VALIDATOR_PID}) in $(awk -v a="$started_at" -v b="$EPOCHREALTIME" 'BEGIN { printf "%.2f", b - a }')s"
+  echo "Validator ready (pid ${VALIDATOR_PID})"
 }
 
 # Stop the validator started by start_validator and reap it. It exits 143

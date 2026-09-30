@@ -722,12 +722,10 @@ cmd_status() {
 
   # PAState PDA
   if [[ -f "target/deploy/protocol_adapter-keypair.json" ]]; then
-    local pa_pid pa_state pa_state_addr
+    local pa_pid pa_state_addr out
     pa_pid="$(get_program_id "protocol_adapter")"
-    pa_state="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" | awk 'NR == 1')"
-    if [[ -n "$pa_state" ]]; then
-      pa_state_addr="$(echo "$pa_state" | awk '{print $1}')"
-      local out
+    pa_state_addr="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" | awk 'NR == 1 { print $1 }')"
+    if [[ -n "$pa_state_addr" ]]; then
       if out="$(solana account "$pa_state_addr" --url "$RPC_URL" 2>&1)"; then
         echo "PAState PDA: ✅ initialized — ${pa_state_addr}"
       elif [[ "$out" == "Error: AccountNotFound: pubkey=${pa_state_addr}" ]]; then
@@ -914,7 +912,7 @@ case "$COMMAND" in
     # copied from devnet and the synthetic verifier-entry account fixtures
     # — a bare validator cannot settle anything.
     require_cmd solana
-    require_cmd node
+    require_cmd jq
     fetch_devnet_clones
     start_validator
     trap 'stop_validator' EXIT INT TERM

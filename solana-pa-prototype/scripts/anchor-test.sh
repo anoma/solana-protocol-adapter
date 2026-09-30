@@ -54,21 +54,13 @@ echo "==> Test mode: ${PA_TEST_MODE} (phase: ${PHASE})"
 require_commands
 ensure_wallet
 
-if [[ "$PHASE" != "test" ]]; then
+if [[ "$PHASE" == "test" ]]; then
+  echo "==> (1/3) Syncing program IDs (using prebuilt artifacts)"
+  sync_program_ids
+else
   echo "==> (1/3) Syncing program IDs and building"
   sync_program_ids
   build_programs_dev
-else
-  echo "==> (1/3) Syncing program IDs (using prebuilt artifacts)"
-  sync_program_ids
-  for keypair in "${PROGRAM_KEYPAIRS[@]}"; do
-    binary="target/deploy/$(basename "$keypair" -keypair.json).so"
-    if [[ ! -f "$binary" ]]; then
-      echo "❌ phase 'test' needs prebuilt artifacts, but ${binary} is missing." >&2
-      echo "   Run './scripts/anchor-test.sh build' first (or use the default phase)." >&2
-      exit 1
-    fi
-  done
 fi
 
 if [[ "$PHASE" == "build" ]]; then

@@ -878,18 +878,20 @@ fn first_created_nonce(consumed_nf: Digest) -> Result<[u8; 32]> {
         .map_err(|e| anyhow!("derive created nonce: {e:?}"))
 }
 
-/// A deterministic passthrough-logic ephemeral resource with the given
-/// nonce, its nullifier under the default nullifier key, and the resource its
-/// action creates: the same resource under `first_created_nonce`.
+/// The `index`-th passthrough-logic ephemeral resource of the fixture
+/// `fixture_name` (nonce from `fixture_nonce`), its nullifier under the
+/// default nullifier key, and the resource its action creates: the same
+/// resource under `first_created_nonce`.
 fn deterministic_ephemeral_resource(
-    nonce: [u8; 32],
+    fixture_name: &str,
+    index: u32,
 ) -> Result<(Resource, NullifierKey, Digest, Resource)> {
     let nf_key = NullifierKey::default();
     let consumed_resource = Resource {
         logic_ref: Digest::new(PASSTHROUGH_LOGIC_GUEST_ID),
         quantity: 1,
         is_ephemeral: true,
-        nonce,
+        nonce: fixture_nonce(fixture_name, index),
         nk_commitment: nf_key.commit(),
         ..Default::default()
     };
@@ -1084,7 +1086,7 @@ async fn generate_transfer_shape_transaction(
     let mut rcvs = Vec::with_capacity(TRANSFER_SHAPE_ACTIONS);
     for i in 0..TRANSFER_SHAPE_ACTIONS {
         let (consumed_resource, nf_key, _, created_resource) =
-            deterministic_ephemeral_resource(fixture_nonce(fixture_name, i as u32))?;
+            deterministic_ephemeral_resource(fixture_name, i as u32)?;
 
         // Distinct rcv per action: identical rcvs (with identical kinds and
         // quantities) would collapse the actions' delta points onto one
@@ -1146,7 +1148,7 @@ async fn generate_test_transaction_with_external_payload(
     multi_external_call: bool,
 ) -> Result<Transaction> {
     let (consumed_resource, nf_key, _, created_resource) =
-        deterministic_ephemeral_resource(fixture_nonce(fixture_name, 0))?;
+        deterministic_ephemeral_resource(fixture_name, 0)?;
     // The consumed resource is ephemeral, so it needs no inclusion proof.
     let compliance_witness = single_action_compliance_witness(
         consumed_resource,
@@ -1435,7 +1437,7 @@ fn build_historical_root_committer_witness(
     committer_name: &str,
 ) -> Result<(ComplianceWitness, Resource, NullifierKey)> {
     let (consumed_resource, nf_key, _, mut created_resource) =
-        deterministic_ephemeral_resource(fixture_nonce(committer_name, 0))?;
+        deterministic_ephemeral_resource(committer_name, 0)?;
     created_resource.is_ephemeral = false;
 
     let compliance_witness = single_action_compliance_witness(
@@ -2334,8 +2336,7 @@ mod tests {
     }
 
     fn fixture_nullifier(fixture_name: &str, index: u32) -> Digest {
-        let (_, _, nullifier, _) =
-            deterministic_ephemeral_resource(fixture_nonce(fixture_name, index)).unwrap();
+        let (_, _, nullifier, _) = deterministic_ephemeral_resource(fixture_name, index).unwrap();
         nullifier
     }
 
@@ -2381,7 +2382,7 @@ mod tests {
     fn build_valid_tx_with_delta_proof(fixture_name: &str) -> Transaction {
         init_test_kind_table();
         let (consumed, nf_key, consumed_nf, created) =
-            deterministic_ephemeral_resource(fixture_nonce(fixture_name, 0)).unwrap();
+            deterministic_ephemeral_resource(fixture_name, 0).unwrap();
         let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
         let created_cm = created.commitment();
 
