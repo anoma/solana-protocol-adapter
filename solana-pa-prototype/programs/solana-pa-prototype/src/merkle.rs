@@ -9,8 +9,8 @@ use solana_sha256_hasher::hashv;
 use crate::error::PAError;
 use crate::state::PAStateAccount;
 
-/// Initial tree depth for new commitment trees (capacity = 2 leaves).
-/// Matches EVM reference implementation which starts at depth 1 and grows.
+/// Initial tree depth for new commitment trees (capacity = 2 leaves). pa-evm
+/// starts at depth 0 (capacity 1); both grow by doubling.
 pub const INITIAL_TREE_DEPTH: usize = 1;
 
 /// Maximum tree depth for the commitment tree.
@@ -177,7 +177,7 @@ pub const ZEROS: [Digest; MAX_TREE_DEPTH] = [
         0x63e2a1be, 0xf7745950, 0x86e31bbd, 0x77d6a6b6, 0x42307886, 0xa745dc5d, 0x3b415a1b,
         0xe1ba9d12,
     ]),
-    // Level 31 (empty tree root): 254f102fd2a0b5db3926704ac4f559a767f60854fc157b2de5d5853da9b8976a
+    // Level 31: 254f102fd2a0b5db3926704ac4f559a767f60854fc157b2de5d5853da9b8976a
     Digest::new([
         0x2f104f25, 0xdbb5a0d2, 0x4a702639, 0xa759f5c4, 0x5408f667, 0x2d7b15fc, 0x3d85d5e5,
         0x6a97b8a9,

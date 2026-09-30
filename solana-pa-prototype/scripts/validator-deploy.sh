@@ -52,8 +52,9 @@ VALIDATOR_PID=""
 #   target        ops.sh deploy target; "-" marks a localnet-only program
 #                 (integration-suite support, never deployed to a cluster)
 #   sol           SOL a cluster deploy of it needs: rent for its binary
-#                 (PA 659K ~4.7, BTF 177K ~1.3, STF 337K ~2.4) plus fee
-#                 headroom; "-" for localnet-only programs
+#                 (production builds measured at PA 532K ~3.7, BTF 73K ~0.5,
+#                 STF 339K ~2.4) plus fee headroom; "-" for localnet-only
+#                 programs
 #   dev_features  Cargo features of the development build ("-": none)
 #   dev_only_ix   the instructions those features add, which the production
 #                 build's IDL must lack (build_programs_release checks it)
@@ -347,10 +348,11 @@ ensure_node_modules() {
   fi
 }
 
-# Packages whose commit hash must match across every Cargo.lock in the project.
-# Each entry is a workspace dep that appears in all three lockfiles (workspace,
-# fixture-gen, guest). Skew silently produces proofs that don't verify on chain
-# (arm-risc0) or compile errors that look like unrelated bugs (anoma-pa-solana-client).
+# Packages whose locked version must match across every Cargo.lock that
+# contains them: the version for a crates.io package, the commit for a git
+# one. Skew silently produces proofs that don't verify on chain (arm-risc0) or
+# compile errors that look like unrelated bugs (anoma-pa-solana-client, which
+# the guest lockfile does not contain).
 LOCK_SYNC_PACKAGES=(anoma-rm-core anoma-pa-solana-client)
 
 # Every Cargo.lock that participates in the build. New independent workspaces
@@ -362,8 +364,9 @@ LOCK_FILES=(
   tools/fixture-gen/passthrough-logic/methods/guest/Cargo.lock
 )
 
-# Print the locked commit of <pkg> in <lockfile>, or empty string if absent.
-lock_commit_for() {
+# Print the locked pin of <pkg> in <lockfile>: "<version>" for a crates.io
+# package, "git <commit>" for a git one; nothing if the lockfile lacks it.
+lock_pin_for() {
   local lockfile="$1"
   local pkg="$2"
   if [[ ! -f "$lockfile" ]]; then
@@ -371,19 +374,25 @@ lock_commit_for() {
   fi
   # A lockfile without $pkg is a legitimate case: different lockfiles have
   # different dep sets (the guest lockfile lacks workspace-only deps like
-  # anoma-pa-solana-client). It, and a package with no git source, print
-  # nothing.
+  # anoma-pa-solana-client).
   local block
   if ! block="$(grep -A2 "^name = \"${pkg}\"$" "$lockfile")"; then
     return 0
   fi
   if [[ "$block" =~ source\ =\ \"git\+[^\"#]*#([a-f0-9]+)\" ]]; then
+    echo "git ${BASH_REMATCH[1]}"
+  elif [[ "$block" =~ source\ =\ \"registry\+ && "$block" =~ version\ =\ \"([^\"]+)\" ]]; then
     echo "${BASH_REMATCH[1]}"
+  else
+    echo "❌ ${lockfile}: cannot read the locked version of ${pkg}:" >&2
+    echo "$block" >&2
+    return 1
   fi
 }
 
-# Verify every package in LOCK_SYNC_PACKAGES resolves to the same commit
-# across every present lockfile. Exits non-zero if any skew is detected.
+# Verify every package in LOCK_SYNC_PACKAGES resolves to the same pin across
+# every present lockfile that contains it. Exits non-zero if any skew is
+# detected.
 ensure_lockfile_sync() {
   local pkg lockfile commit ref_commit ref_file mismatch=0
   for pkg in "${LOCK_SYNC_PACKAGES[@]}"; do
@@ -392,7 +401,7 @@ ensure_lockfile_sync() {
     for lockfile in "${LOCK_FILES[@]}"; do
       local full="$PROJECT_DIR/$lockfile"
       [[ -f "$full" ]] || continue
-      commit="$(lock_commit_for "$full" "$pkg")"
+      commit="$(lock_pin_for "$full" "$pkg")" || return 1
       [[ -n "$commit" ]] || continue
       if [[ -z "$ref_commit" ]]; then
         ref_commit="$commit"
@@ -402,8 +411,8 @@ ensure_lockfile_sync() {
           echo "❌ Cargo.lock skew detected:" >&2
         fi
         echo "  ${pkg}:" >&2
-        echo "    ${ref_file}: ${ref_commit:0:12}" >&2
-        echo "    ${lockfile}: ${commit:0:12}" >&2
+        echo "    ${ref_file}: ${ref_commit}" >&2
+        echo "    ${lockfile}: ${commit}" >&2
         mismatch=1
         ref_commit="$commit"
         ref_file="$lockfile"

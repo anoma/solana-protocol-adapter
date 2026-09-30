@@ -81,7 +81,7 @@ pub fn build_account_metas(segment: &[AccountInfo<'_>]) -> Vec<AccountMeta> {
         .collect()
 }
 
-/// Anchor discriminator for BlockTimeForwarder::forward_call (sha256("global:forward_call")[..8])
+/// Anchor discriminator of every forwarder's `forward_call` (sha256("global:forward_call")[..8])
 pub const FORWARD_CALL_DISCRIMINATOR: [u8; 8] = hex_literal::hex!("9faae00afd696cde");
 
 /// Build instruction data for a forwarder's forward_call instruction.

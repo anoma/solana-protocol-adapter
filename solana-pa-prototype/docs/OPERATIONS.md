@@ -1,8 +1,8 @@
 # Operating a Protocol Adapter Deployment
 
-This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, run it, stop it in an emergency, and retire it permanently. The one fact that shapes everything here: **Solana programs are upgradeable, so "stopped forever" is not enforced by the chain — it is enforced by how you handle the upgrade authority.** The EVM Protocol Adapter gets finality for free because its contract is immutable — its `emergencyStop()` has no unpause, no key can resurrect a stopped instance, and its only operational document is a deploy/release checklist. On Solana the equivalent finality is an operator action (burning the upgrade authority), it must come last, and the stop/retire half of the lifecycle below is the part EVM immutability does automatically.
+This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, upgrade it, run it, stop it in an emergency, and retire it permanently. The one fact that shapes everything here: **the adapter is upgradeable, so "stopped forever" is not enforced by the chain — it is enforced by custody of the upgrade authority.** The same holds for pa-evm V2, a UUPS proxy its owner upgrades in place (`upgradeToAndCall`) and pauses and unpauses (`pause()`, `unpause()`). The Solana adapter's stop is stricter than pa-evm's pause: `emergency_stop` has no inverse instruction, so only an upgrade could undo it, and burning the upgrade authority, the last Sunsetting step, makes it permanent. (That difference from pa-evm V2 is tracked in anoma/dos-pm#86.)
 
-All commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically. Every command takes `--cluster <localnet|devnet|mainnet>`; see `scripts/ops.sh` for all flags.
+Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically; cluster operations take `--cluster <localnet|devnet|mainnet>` (see `scripts/ops.sh` for all flags). Commands shown as `solana`, `npx` or `solana-verify` run directly.
 
 ## The owner
 
@@ -11,11 +11,13 @@ A deployment has one owner: each program's upgrade authority, which the BPF load
 Ownership moves with the upgrade authority, and is given up with it:
 
 ```sh
-solana program set-upgrade-authority <program id> --new-upgrade-authority <new key>   # moves ownership, at once
-solana program set-upgrade-authority <program id> --final                             # renounces it for good
+solana program set-upgrade-authority <program id> --new-upgrade-authority <new authority keypair> \
+  --upgrade-authority <current authority keypair> --url <rpc>                              # moves ownership, at once
+solana program set-upgrade-authority <program id> --final \
+  --upgrade-authority <current authority keypair> --url <rpc>                              # renounces it for good
 ```
 
-No program instruction or event is involved; the loader's ProgramData account is where the current owner is read. A final program can never be upgraded, initialized again, stopped or reconfigured.
+The new authority must sign unless `--skip-new-upgrade-authority-signer-check` is passed (for a key that cannot sign, such as a multisig vault). No program instruction or event is involved; the loader's ProgramData account is where the current owner is read. A final program can never be upgraded, initialized again, stopped or reconfigured.
 
 The owner can replace the program binary, which means it could deploy code that undoes a stop: a stop is only as permanent as upgrade-authority custody. Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
 
@@ -74,11 +76,11 @@ A release that changes the layout ships the migration with it, the counterpart o
 ./scripts/dev.sh migrate-state --cluster <c>       # upgrade-authority wallet; idempotent
 ```
 
-`migrate_state` declares the account unchecked (the typed layout cannot read it), requires this program as owner and the previous version at byte 8, parses the previous layout (never reinterpreting its bytes: a shorter re-serialization leaves stale bytes past its end), reallocates the account to the new size, zeroes it and writes the new layout with the new version. The upgrade authority pays the rent difference. Layout changes append fields after the existing ones so that the version byte and every earlier field keep their offsets.
+`migrate_state` declares the account unchecked (the typed layout cannot read it), requires this program as owner and the previous version at byte 8, parses the previous layout (never reinterpreting its bytes: a shorter re-serialization leaves stale bytes past its end), reallocates the account to the new size, zeroes it and writes the new layout with the new version. The upgrade authority pays the rent difference. Only the version byte has a fixed offset (byte 8); a new layout may add, remove or reorder the other fields, which is why `migrate_state` parses the previous layout instead of reading it in place.
 
-Schema version 2 appends the logic-ref denylist (below); its `migrate_state` migrates from version 1, the layout of the build deployed on devnet. `tests/adapter-upgrade.ts` runs the whole path from that build (`tests/fixtures/previous/protocol_adapter.so`): settle through it, upgrade in place, migrate through `migrate-state`, settle again.
+Schema version 2 drops the stored authority and pending authority (the owner is the upgrade authority) and appends the logic-ref denylist (below); its `migrate_state` migrates from version 1, the layout of the build deployed on devnet. `tests/adapter-upgrade.ts` runs the whole path from that build (`tests/fixtures/previous/protocol_adapter.so`): settle through it, upgrade in place, migrate through `migrate-state`, settle again.
 
-This covers the state account only. A change to the commitment tree itself (hash, arity, leaf encoding) or to the marker PDA seeds invalidates the existing tree and marker addresses, and no in-place migration recovers that: it is a fresh deployment plus a bulk copy of roots and nullifiers, the same limit the EVM adapter has.
+This covers the state account only. A change to the commitment tree itself (hash, arity, leaf encoding) or to the marker PDA seeds invalidates the existing tree and marker addresses, and no in-place migration recovers that: it is a fresh deployment plus a bulk copy of roots and nullifiers.
 
 The development build's `dev_set_schema_version` instruction exists only to test the refusal; the release build asserts it is absent, alongside `close_markers_batch`.
 
@@ -91,7 +93,7 @@ The deployed PA should be the deterministic `solana-verify` Docker build, so the
 ./scripts/dev.sh upgrade pa --cluster devnet --prebuilt   # ship that exact artifact
 ```
 
-`verify-build` needs solana-verify 0.5.2 (`cargo install solana-verify --version 0.5.2 --locked`). It builds with the pinned image (`[workspace.metadata.cli]` in `Cargo.toml` selects it — keep it in lockstep with `flake.nix`) for SBPF v3, the architecture every build of these programs targets, and fails loudly if the deployed program doesn't match. **A normal build overwrites the artifact with non-matching bytes** — after any `anchor-test` or `build-*`, rerun `verify-build` before an upgrade you intend to keep verified. Validate the artifact behaviorally before shipping: `dev.sh validator` (backgrounded), `dev.sh deploy --cluster localnet --prebuilt`, `dev.sh anchor-test --cluster localnet --prebuilt`.
+`verify-build` needs solana-verify 0.5.2 (`cargo install solana-verify --version 0.5.2 --locked`). It builds with the pinned image (`[workspace.metadata.cli]` in `Cargo.toml` selects it — keep it in lockstep with `flake.nix`) for SBPF v3, the architecture every build of these programs targets, and fails loudly if the deployed program doesn't match. **A normal build overwrites the artifact with non-matching bytes** — after any `anchor-build`, `release-build`, `anchor-test`, `idl-publish`, or `deploy`/`upgrade` without `--prebuilt`, rerun `verify-build` before an upgrade you intend to keep verified. `verify-build` builds only the PA. To validate the artifact behaviorally before shipping, with every program's production binary in `target/deploy` (`release-build`, then `verify-build`) and the `PA_*` and `STF_*` initialization variables exported: `dev.sh validator` (backgrounded), `dev.sh deploy --cluster localnet --prebuilt`, `dev.sh anchor-test --cluster localnet --prebuilt`.
 
 The deployment is then reproduced and checked with:
 
@@ -105,7 +107,7 @@ solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
 
 ## The settlement lookup table
 
-Every settlement carries about fifteen accounts that never change for a deployment: PAState, the verifier router and its entry, the verifier program, the event authority, the two forwarders and the SPL forwarder's config and escrow authority, the sysvars, the SPL token program, and each supported mint's escrow ATA. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps the first-wrap settlement (ed25519 authorization, inline bitmap init, settle) well inside the 1,232-byte packet.
+Every settlement carries accounts that never change for a deployment: fourteen fixed ones (PAState, the system program, the verifier router, its router PDA and verifier entry, the verifier program, the event authority, the instructions and clock sysvars, the two forwarders, the SPL forwarder's config and escrow authority, and the SPL token program) plus each supported mint's escrow ATA. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps the first-wrap settlement (ed25519 authorization, inline bitmap init, settle) well inside the 1,232-byte packet.
 
 ```sh
 ./scripts/dev.sh lookup-table --cluster devnet                      # create
@@ -156,13 +158,13 @@ What a stop does **not** do: it does not prevent the upgrade-authority holder fr
 
 ### The second kill switch: the verifier
 
-Settlement also depends on RISC0's verifier router (the program pinned at `initialize`). The router keeps its own per-verifier emergency stop, checked inside the router during the verification call — the PA does not check it and cannot: a failed cross-program invocation aborts the whole transaction, so the PA never sees the error to translate it. This mirrors the EVM PA, whose `isEmergencyStopped()` reports true if either its own pause or the RISC0 verifier's pause is set.
+Settlement also depends on RISC0's verifier router (the program pinned at `initialize`). The router keeps its own per-verifier emergency stop, checked inside the router during the verification call — the PA does not check it and cannot: a failed cross-program invocation aborts the whole transaction, so the PA never sees the error to translate it. pa-evm V2 likewise keeps the two apart: `paused()` reports its own pause and `riscZeroVerifierPaused()` the verifier's; `execute` checks only its own, and a paused verifier fails inside the router call.
 
 Diagnosis is by transaction logs: a router-side stop shows the router program's own `SelectorDeactivated` error in the failed transaction's logs, clearly distinct from a proof failure. Whether anyone outside this project can trip that switch depends on who owns the router deployment — the current owner is in the cluster's deployment record.
 
 ## Recovery
 
-Recovery from a stopped PA is migration to a new deployment. There is no in-protocol recovery mechanism; the EVM PA makes the same choice.
+The Solana adapter has no instruction that resumes a stopped PA. pa-evm V2 differs: its owner resumes a paused adapter with `unpause()`, after an in-place `upgradeToAndCall` if the code needed fixing (anoma/dos-pm#86 tracks the difference). Here, recovery from a stopped PA is migration to a new deployment.
 
 Concretely, migration means: deploy a fresh PA under a new program ID (new keypair), initialize it, and have applications re-establish their state against the new deployment's empty commitment tree. The stopped deployment's tree, markers, and history remain on chain and readable forever, so nothing about the old state is lost as evidence — but resources committed to the old tree cannot be settled anywhere, and value they represent must be recovered at the application layer (each application proves what it owned in the old tree and re-issues it in the new one, under whatever policy its owners decide).
 
@@ -217,6 +219,8 @@ The command is idempotent. Until a bitmap is migrated, wraps on its word fail wi
 
 ### Emergency committee
 
+The committee and its emergency caller carry over the EVM V1 forwarder's emergency mechanism; the EVM V2 forwarder has none (it relies on its owner's upgrades), and anoma/dos-pm#86 tracks whether this forwarder keeps, replaces or drops it. As built:
+
 Once the adapter is stopped (`estop`), the committee names an emergency caller, once, and that caller withdraws from escrow directly without going through the adapter:
 
 ```sh
@@ -229,17 +233,17 @@ STF_TOKEN_MINT=<mint> STF_RECIPIENT=<owner> STF_AMOUNT=<raw units> \
 
 ### Retiring the forwarder
 
-Once the adapter is stopped, `STF_TOKEN_MINT=<mint> ./scripts/dev.sh forwarder teardown --cluster <c>` (committee wallet) closes every nonce bitmap, drains and closes that mint's escrow to the committee, and closes the config, reclaiming their rent. Run it once per mint that has an escrow, then close the program with `teardown stf`.
+Once the adapter is stopped, `STF_TOKEN_MINT=<mint> ./scripts/dev.sh forwarder teardown --cluster <c>` (committee wallet) closes every nonce bitmap, drains and closes that mint's escrow to the committee, and closes the config, reclaiming their rent. Run it once per mint that has an escrow, then close the program with `teardown stf` (which first attempts `close-pdas` on the adapter, as every `teardown` does).
 
 ## Sunsetting
 
 Permanent retirement, in order. The order matters because `initialize` requires a live upgrade authority: once the authority is gone, that program ID can never host a PA again — which is the point, but only as the final step.
 
 1. **Stop settlement.** `./scripts/dev.sh estop --cluster <c> --yes`.
-2. **Reclaim marker rent — development builds only.** `./scripts/dev.sh close-pdas --cluster <c>` closes nullifier and root markers via `close_markers_batch`, which requires the Stopped state and exists only in `--dev-teardown` builds. Production builds abandon marker rent by design; there is deliberately no production path that deletes replay-protection markers. The command validates the instruction against the locally built IDL, so run a development build first (`./scripts/dev.sh run "./scripts/ops.sh build-dev"`) if the last build was a production one — observed during the first devnet retirement.
+2. **Reclaim marker rent — development builds only.** `./scripts/dev.sh close-pdas --cluster <c>` closes nullifier and root markers via `close_markers_batch`, which requires the Stopped state and exists only in `--dev-teardown` builds. Production builds abandon marker rent by design; there is deliberately no production path that deletes replay-protection markers. The command validates the instruction against the locally built IDL, so run a development build first (`./scripts/dev.sh run "./scripts/ops.sh build-dev"`) if the last build was a production one.
 3. **End the program.** Two mutually exclusive options:
-   - `solana program close <PROGRAM_ID> --bypass-warning` — reclaims the program account's rent and burns the program ID permanently (`./scripts/dev.sh teardown --cluster <c>` does steps 2 and 3 together), or
-   - `solana program set-upgrade-authority <PROGRAM_ID> --final` — keeps the stopped program on chain forever but makes it immutable: no future upgrade can undo the stop, and the state remains readable at its original addresses.
+   - `solana program close <PROGRAM_ID> --bypass-warning --keypair <upgrade authority keypair> --url <rpc>` — reclaims the program account's rent and burns the program ID permanently (`./scripts/dev.sh teardown --cluster <c>` does steps 2 and 3 together), or
+   - `solana program set-upgrade-authority <PROGRAM_ID> --final --upgrade-authority <upgrade authority keypair> --url <rpc>` — keeps the stopped program on chain forever but makes it immutable: no future upgrade can undo the stop, and the state remains readable at its original addresses.
 
 For a beta deployment on devnet, closing the program (reclaiming rent) is the normal end. Immutability-by-burned-authority is the shape a mainnet retirement would take when the historical state should stay served at its known addresses.
 

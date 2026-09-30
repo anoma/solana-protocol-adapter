@@ -2,7 +2,7 @@
 
 This document is the contract for software that talks to the Protocol Adapter (PA) on chain: services that build and submit transactions, indexers that reconstruct state from its events, explorers, and client bindings. It covers the four things the README's client walkthrough does not: the exact wire format of a transaction, the transaction-data upload account's semantics, the full event set with emission rules, and the root-marker model.
 
-Call-level mechanics — instruction call sequences, account lists, PDA derivations, the `remaining_accounts` layout, and external-call encoding — are in the repo README under "Building a Client" and are not repeated here. Canonical TypeScript derivations live in `client/constants.ts` and `client/pda.ts`, and the instruction builders the operator scripts and tests share in `client/instructions.ts`. Where this document names source files, they are under `programs/solana-pa-prototype/src/`.
+Call-level mechanics — instruction call sequences, account lists, PDA derivations, and the `remaining_accounts` layout — are in the repo README under "Building a Client" and are not repeated here. Canonical TypeScript derivations live in `client/constants.ts` and `client/pda.ts`, and the instruction builders the operator scripts and tests share in `client/instructions.ts`. Where this document names source files, they are under `programs/solana-pa-prototype/src/`.
 
 ## Two submission paths
 
@@ -16,17 +16,17 @@ Both paths verify the same things and emit the same events. Settlement is reject
 There are two serialization layers; do not confuse them:
 
 1. **The instruction layer is Anchor's:** an 8-byte instruction discriminator followed by Borsh-serialized arguments. Any Anchor client handles this automatically.
-2. **The `transaction_data` bytes inside that argument are bincode, not Borsh.** The PA deserializes them with `bincode::deserialize` into the `Transaction` type from the `anoma-rm-core` crate (`github.com/anoma/arm-risc0`, at the branch and commit pinned in this repo's `Cargo.toml` and `Cargo.lock`). Producers must serialize with bincode from that same crate version; the encoding must match byte-for-byte.
+2. **The `transaction_data` bytes inside that argument are bincode, not Borsh.** The PA deserializes them with `bincode::deserialize` into the `Transaction` type from the `anoma-rm-core` crate (crates.io; source `github.com/anoma/arm-risc0`), at the exact version pinned in `programs/solana-pa-prototype/Cargo.toml` and `Cargo.lock`. Producers must serialize with bincode from that same crate version; the encoding must match byte-for-byte.
 
 Borsh appears elsewhere in the PA (account state, event bodies, instruction arguments) but never for the transaction payload itself.
 
-Working examples: the `tests/fixtures/batch_groth16*.json` fixtures carry complete settlement-ready transactions as base64 in their `tx_b64` field. The other fixtures are deliberately failing variants (missing aggregation proof, garbage proof, wrong root, forwarder failures) — useful as negative examples, not as templates.
+Working examples: the `tests/fixtures/batch_groth16*.json` fixtures other than `batch_groth16_mismatch.json` carry complete settlement-ready transactions as base64 in their `tx_b64` field. The other fixtures (including `batch_groth16_mismatch.json`) are deliberately failing variants (missing aggregation, garbage proof, wrong root, forwarder output mismatch and failures) — useful as negative examples, not as templates.
 
-A transaction must carry an aggregation proof (`aggregation_proof` set), and the 4-byte selector in that proof's seal must equal the `proof_selector` this deployment pinned at initialization — see "Deployment parameters" below.
+A transaction must carry an aggregation (`aggregation` set, `actions` absent), and the 4-byte selector in `aggregation.proof`'s seal must equal the `proof_selector` this deployment pinned at initialization — see "Deployment parameters" below.
 
 ### External call encoding
 
-External calls ride inside the transaction itself, in `LogicVerifierInputs.app_data.external_payload`. Each call is a `SolanaExternalCall` (defined in `types.rs`):
+External calls ride inside the proof-backed aggregation instance, in each consumed or created resource's `app_data.external_payload` (`aggregation.instance.actions[i].consumed_publics[j]` / `created_publics[j]`); a resource's calls run when the settlement reaches that resource. Each call is a `SolanaExternalCall` (defined in `types.rs`):
 
 ```rust
 pub struct SolanaExternalCall {
@@ -78,7 +78,7 @@ A root is valid for settlement exactly when a marker account exists: a PDA of `[
 For transaction builders:
 
 - A transaction consuming resources proven against an older root must include that root's marker account (read-only) in the settlement's `remaining_accounts`, after the nullifier-marker slots and forwarder segments — those leading positions are consumed positionally (see the README's layout), while the validity check itself scans the whole list. Omitting the marker fails the settlement with `NonExistingRoot`.
-- Every settlement must pass the **new** root's marker address as the named `new_root_marker` account (writable) of `settle` / `settle_from_txdata`; it is not part of `remaining_accounts`. Compute the new root by applying the transaction's commitments to the current tree. If the address does not match the post-settlement root, settlement rejects with `RootPdaMismatch`. The PA creates the marker at that address, permanently: every past root stays valid, so a builder can target a root while other settlements advance the tree.
+- A settlement that creates commitments must pass the **new** root's marker address as the optional `new_root_marker` account (writable) of `settle` / `settle_from_txdata`; it is not part of `remaining_accounts`. Compute the new root by applying the transaction's commitments to the current tree. If the address does not match the post-settlement root, settlement rejects with `RootPdaMismatch`. A settlement that creates nothing produces no root and must omit `new_root_marker`; passing one fails with `RootPdaMismatch`. The PA creates the marker at that address, permanently: every past root stays valid, so a builder can target a root while other settlements advance the tree.
 
 Production binaries contain no instruction that deletes markers. (Development builds carry a teardown instruction, compiled out of production builds — a build-discipline boundary, not a chain guarantee; `dev.sh release-build` verifies its absence.)
 
@@ -91,4 +91,4 @@ Production binaries contain no instruction that deletes markers. (Development bu
 
 Program IDs, the router addresses for the current devnet deployment, and key custody are in `docs/DEVNET_DEPLOYMENT.md`. Operator procedures (deploy, emergency stop, retirement) are in `docs/OPERATIONS.md`; the fact integrators care about: a stopped deployment rejects settlement and has no resume instruction — recovery is a new deployment with a fresh, empty tree.
 
-The state account (`PAStateAccount`, PDA seed `pa_state`) carries its layout number at byte 8 of the account data, immediately after the Anchor discriminator. A client that decodes the account directly rather than through the published IDL must check that byte against the layout it was written for before reading further fields; the deployed program refuses every instruction that reads the account whose version is not its own, so a mismatch a client sees is a deployment mid-migration, not corrupt data.
+The state account (`PAStateAccount`, PDA seed `pa_state`) carries its layout number at byte 8 of the account data, immediately after the Anchor discriminator. A client that decodes the account directly rather than through the published IDL must check that byte against the layout it was written for before reading further fields; every instruction that reads the account refuses a version other than the program's own, except `migrate_state`, which accepts only the previous version and rewrites it into the current layout; so a mismatch a client sees is a deployment mid-migration, not corrupt data.

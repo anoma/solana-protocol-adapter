@@ -7,66 +7,11 @@ use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
 
 /// PA lifecycle: Running → Stopped (one-way, irreversible).
-///
 /// Serialized as a single byte (0=Running, 1=Stopped).
-/// Manual AnchorSerialize/AnchorDeserialize impl avoids the borsh 0.10/1.x
-/// ambiguity that Anchor 0.31's derive macros trigger.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
+#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PALifecycle {
-    Running = 0,
-    Stopped = 1,
-}
-
-impl anchor_lang::AnchorSerialize for PALifecycle {
-    fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        writer.write_all(&[*self as u8])
-    }
-}
-
-impl anchor_lang::AnchorDeserialize for PALifecycle {
-    fn deserialize_reader<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let mut byte = [0u8; 1];
-        reader.read_exact(&mut byte)?;
-        match byte[0] {
-            0 => Ok(PALifecycle::Running),
-            1 => Ok(PALifecycle::Stopped),
-            _ => Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "invalid PALifecycle variant",
-            )),
-        }
-    }
-}
-
-#[cfg(feature = "idl-build")]
-impl anchor_lang::IdlBuild for PALifecycle {
-    fn create_type() -> Option<anchor_lang::idl::types::IdlTypeDef> {
-        Some(anchor_lang::idl::types::IdlTypeDef {
-            name: "PALifecycle".into(),
-            docs: vec!["PA lifecycle: Running (0) or Stopped (1).".into()],
-            serialization: anchor_lang::idl::types::IdlSerialization::default(),
-            repr: None,
-            generics: vec![],
-            ty: anchor_lang::idl::types::IdlTypeDefTy::Enum {
-                variants: vec![
-                    anchor_lang::idl::types::IdlEnumVariant {
-                        name: "Running".into(),
-                        fields: None,
-                    },
-                    anchor_lang::idl::types::IdlEnumVariant {
-                        name: "Stopped".into(),
-                        fields: None,
-                    },
-                ],
-            },
-        })
-    }
-}
-
-impl Space for PALifecycle {
-    /// The one byte `serialize` writes.
-    const INIT_SPACE: usize = 1;
+    Running,
+    Stopped,
 }
 
 /// The layout number of `PAStateAccount` this binary reads and writes.
@@ -95,20 +40,22 @@ pub struct PAStateAccount {
     /// every layout: a later binary that changes the layout reads this byte
     /// through an unchecked account to decide whether it may migrate. Every
     /// instruction that reads this account — all but `initialize`, which
-    /// creates it, and the development-only `dev_set_schema_version` —
-    /// refuses an account whose version is not `SCHEMA_VERSION`. Layout
-    /// changes append fields and bump the constant; they never reorder or
-    /// remove fields ahead of the frontier.
+    /// creates it, `migrate_state`, which requires the previous version, and
+    /// the development-only `dev_set_schema_version` — refuses an account
+    /// whose version is not `SCHEMA_VERSION`. A layout change bumps the
+    /// constant and may add, remove or reorder the other fields:
+    /// `migrate_state` parses the previous layout explicitly.
     pub schema_version: u8,
     pub bump: u8,
     /// Verifier router program ID, set at initialization.
-    /// Mirrors EVM's immutable `_TRUSTED_RISC_ZERO_VERIFIER_ROUTER`.
+    /// Mirrors pa-evm's immutable `RISC_ZERO_VERIFIER_ROUTER`.
     pub verifier_router: Pubkey,
     /// Expected proof selector (4 bytes), set at initialization.
     /// Validated before sending proofs to the verifier router.
     pub proof_selector: [u8; 4],
-    /// Kind-table commitment every settled aggregation instance must carry,
-    /// set at initialization. The aggregation circuit binds each transaction
+    /// Kind-table commitment every settled aggregation instance must carry:
+    /// the empty table's at initialization, replaced by
+    /// `set_kind_table_commitment`. The aggregation circuit binds each transaction
     /// to one kind table; this pin decides which table this deployment
     /// accepts (sha256 of the concatenated entries; the empty table hashes
     /// to sha256 of zero bytes).
