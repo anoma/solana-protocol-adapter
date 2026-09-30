@@ -24,6 +24,11 @@
  *                                     close STF_TOKEN_MINT's escrow to the
  *                                     committee, close the config. Requires
  *                                     the adapter to be stopped.
+ *   migrate               (upgrade    After upgrading the program in place
+ *                          authority) from its previous build: migrate the
+ *                                     config, every nonce bitmap still in the
+ *                                     previous layout, and each
+ *                                     STF_TOKEN_MINTS escrow. Idempotent.
  *
  * The program enforces who may do what and when; a refused command fails
  * with the program's error (UnauthorizedCaller, ProtocolAdapterNotStopped,
@@ -39,11 +44,13 @@
  *   STF_RECIPIENT           base58 owner of the receiving token account
  *                           (emergency-withdraw, drain-escrow)
  *   STF_AMOUNT              raw token units (emergency-withdraw)
+ *   STF_TOKEN_MINTS         comma-separated base58 mints whose previous-build
+ *                           escrow to move (migrate)
  */
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
-import { getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
+import { getAssociatedTokenAddressSync, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
@@ -53,11 +60,15 @@ import {
   emergencyWithdraw,
   escrowAccounts,
   initializeForwarder,
+  migrateConfig,
+  migrateEscrow,
+  migrateNonceBitmap,
   setEmergencyCaller,
   setLogicRef,
 } from "../client/instructions";
-import { deriveConfigPda, derivePaStatePda } from "../client/pda";
-import { fail, requireHexBytes, requirePubkey, requireRawAmount } from "./cli-utils";
+import { NONCE_BITMAP_SEED, PREVIOUS_CONFIG_SIZE, PREVIOUS_NONCE_BITMAP_SIZE } from "../client/constants";
+import { deriveConfigPda, derivePaStatePda, derivePreviousEscrowAuthority } from "../client/pda";
+import { fail, pubkeyList, requireHexBytes, requirePubkey, requireRawAmount } from "./cli-utils";
 
 const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
@@ -197,6 +208,99 @@ async function teardown() {
   await closeConfigCommand();
 }
 
+/**
+ * The (user, word index) a previous-layout bitmap belongs to: a bitmap
+ * stores only its bits, and its address is a PDA of those two, so they are
+ * read from the init_nonce_bitmap instruction that created it, its oldest
+ * transaction.
+ */
+const instructionCoder = new anchor.BorshInstructionCoder(forwarder.idl);
+
+async function bitmapOwner(bitmap: PublicKey): Promise<{ user: PublicKey; wordIndex: bigint }> {
+  let oldest: string | undefined;
+  for (let before: string | undefined; ;) {
+    const page = await connection.getSignaturesForAddress(bitmap, { before, limit: 1000 }, "confirmed");
+    if (page.length === 0) break;
+    oldest = page[page.length - 1].signature;
+    before = oldest;
+  }
+  if (!oldest) throw new Error(`nonce bitmap ${bitmap.toBase58()} has no transactions`);
+  const tx = await connection.getTransaction(oldest, {
+    commitment: "confirmed",
+    maxSupportedTransactionVersion: 0,
+  });
+  if (!tx) throw new Error(`transaction ${oldest} that created ${bitmap.toBase58()} is not available`);
+  const keys = tx.transaction.message.getAccountKeys({ accountKeysFromLookups: tx.meta?.loadedAddresses });
+  const instructions: { programIdIndex: number; accountKeyIndexes: number[]; data: string }[] = [
+    ...tx.transaction.message.compiledInstructions.map((ix) => ({
+      programIdIndex: ix.programIdIndex,
+      accountKeyIndexes: ix.accountKeyIndexes,
+      data: anchor.utils.bytes.bs58.encode(ix.data),
+    })),
+    ...(tx.meta?.innerInstructions ?? []).flatMap((inner) =>
+      inner.instructions.map((ix) => ({
+        programIdIndex: ix.programIdIndex,
+        accountKeyIndexes: ix.accounts,
+        data: ix.data,
+      })),
+    ),
+  ];
+  for (const ix of instructions) {
+    if (!keys.get(ix.programIdIndex)!.equals(forwarder.programId)) continue;
+    const decoded = instructionCoder.decode(ix.data, "base58");
+    if (decoded?.name !== "initNonceBitmap") continue;
+    const { user, wordIndex } = decoded.data as { user: PublicKey; wordIndex: anchor.BN };
+    const [derived] = PublicKey.findProgramAddressSync(
+      [NONCE_BITMAP_SEED, user.toBuffer(), wordIndex.toArrayLike(Buffer, "le", 8)],
+      forwarder.programId,
+    );
+    if (derived.equals(bitmap)) return { user, wordIndex: BigInt(wordIndex.toString()) };
+  }
+  throw new Error(`transaction ${oldest}, the oldest touching ${bitmap.toBase58()}, has no init_nonce_bitmap for it`);
+}
+
+async function migrate() {
+  const mints = pubkeyList("STF_TOKEN_MINTS");
+
+  const config = await connection.getAccountInfo(configPda);
+  if (!config) fail(`forwarder config ${configPda.toBase58()} does not exist`);
+  if (config.data.length === PREVIOUS_CONFIG_SIZE) {
+    await migrateConfig(forwarder, wallet.publicKey).rpc();
+    console.log(`✅ Migrated config ${configPda.toBase58()}`);
+  } else {
+    console.log(`Config ${configPda.toBase58()} is already in this build's layout`);
+  }
+
+  const previousBitmaps = await connection.getProgramAccounts(forwarder.programId, {
+    filters: [{ dataSize: PREVIOUS_NONCE_BITMAP_SIZE }, { memcmp: forwarder.coder.accounts.memcmp("nonceBitmap") }],
+  });
+  for (const { pubkey } of previousBitmaps) {
+    const { user, wordIndex } = await bitmapOwner(pubkey);
+    await migrateNonceBitmap(forwarder, wallet.publicKey, user, wordIndex).rpc();
+    console.log(`✅ Migrated nonce bitmap ${pubkey.toBase58()} (user ${user.toBase58()}, word ${wordIndex})`);
+  }
+  console.log(`${previousBitmaps.length} nonce bitmap(s) were in the previous layout`);
+
+  for (const mint of mints) {
+    const previousEscrowAta = getAssociatedTokenAddressSync(
+      mint,
+      derivePreviousEscrowAuthority(forwarder.programId, mint),
+      true,
+    );
+    if ((await connection.getAccountInfo(previousEscrowAta)) === null) {
+      console.log(`${mint.toBase58()} has no previous-build escrow ${previousEscrowAta.toBase58()}`);
+      continue;
+    }
+    const { escrowAuthority } = escrowAccounts(forwarder.programId, mint);
+    await getOrCreateAssociatedTokenAccount(connection, wallet.payer, mint, escrowAuthority, true);
+    const { value } = await connection.getTokenAccountBalance(previousEscrowAta);
+    await migrateEscrow(forwarder, wallet.publicKey, mint).rpc();
+    console.log(
+      `✅ Moved ${value.uiAmountString} of ${mint.toBase58()} to the escrow authority; closed ${previousEscrowAta.toBase58()}`,
+    );
+  }
+}
+
 const COMMANDS: Record<string, () => Promise<void>> = {
   init,
   "set-logic-ref": setLogicRefCommand,
@@ -205,6 +309,7 @@ const COMMANDS: Record<string, () => Promise<void>> = {
   "emergency-withdraw": withdraw,
   "drain-escrow": drainEscrow,
   teardown,
+  migrate,
 };
 
 const command = process.argv[2];

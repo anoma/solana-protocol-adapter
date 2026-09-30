@@ -44,6 +44,8 @@ export const ESCROW_SEED = idlBytes(forwarderIdl, "ESCROW_SEED");
 export const NONCE_BITMAP_SEED = idlBytes(forwarderIdl, "NONCE_BITMAP_SEED");
 export const NONCES_PER_WORD = BigInt(idlNumber(forwarderIdl, "NONCES_PER_WORD"));
 export const OP_UNWRAP = idlNumber(forwarderIdl, "OP_UNWRAP");
+export const PREVIOUS_CONFIG_SIZE = idlNumber(forwarderIdl, "PREVIOUS_CONFIG_SIZE");
+export const PREVIOUS_NONCE_BITMAP_SIZE = idlNumber(forwarderIdl, "PREVIOUS_NONCE_BITMAP_SIZE");
 
 // Block-time forwarder
 export const RESULT_LT = idlNumber(blockTimeForwarderIdl, "RESULT_LT");

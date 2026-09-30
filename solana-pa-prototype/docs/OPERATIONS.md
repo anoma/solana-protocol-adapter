@@ -181,6 +181,23 @@ STF_LOGIC_REF=<new 32-byte hex verifying key> ./scripts/dev.sh forwarder set-log
 
 Escrow, nonce bitmaps and the committee are untouched. As on EVM, where the rotation emits only the proxy's `Upgraded` and `Initialized`, the instruction emits no event of its own; read the new ref from the config account. Resources wrapped under the previous ref leave through the new one once the adapter's kind table lists the previous version as an alias of the new one (anoma/risc0-kind-tables ADR-0008, rule R2): a transaction converts each into a resource under the new ref, which then unwraps. Until that table's commitment is installed (`set-kind-table`), they stay in escrow and can neither unwrap nor convert. The emergency path below is for a stopped adapter only.
 
+### Upgrading the forwarder
+
+The forwarder is upgraded in place, as the EVM forwarder's proxy is upgraded through `upgradeToAndCall`: the program id, the config, the escrow and the nonce bitmaps stay. A release that changes an account layout ships `migrate_*` instructions, the counterpart of the call the EVM owner passes to `upgradeToAndCall`, which the upgrade authority runs once, right after the upgrade:
+
+```sh
+./scripts/dev.sh upgrade stf --cluster <c>                                          # upgrade-authority wallet
+STF_TOKEN_MINTS=<mint>[,<mint>...] ./scripts/dev.sh forwarder migrate --cluster <c>  # upgrade-authority wallet
+```
+
+This build's migrations bring the previous build's accounts to its layout:
+
+- The config drops the bump the previous build stored after its fields; this build derives the config address at compile time.
+- Each nonce bitmap keeps its bits and gains its canonical bump. The command finds every bitmap still in the previous layout by itself, reading its user and word from the `init_nonce_bitmap` that created it.
+- Each listed mint's escrow moves from that mint's own authority (`["escrow", mint]`) to the one escrow authority, and the previous escrow account closes. The mints must be listed: escrow token accounts belong to the token program, not the forwarder, so the forwarder cannot enumerate them.
+
+The command is idempotent. Until a bitmap is migrated, wraps on its word fail with `NonceBitmapMissing`; until a mint's escrow is migrated, its unwraps fail for lack of funds in the new escrow. Nothing misreads the old bytes. `tests/forwarder-upgrade.ts` runs this path from the previous build (`tests/fixtures/previous/spl_token_forwarder.so`).
+
 ### Emergency committee
 
 Once the adapter is stopped (`estop`), the committee names an emergency caller, once, and that caller withdraws from escrow directly without going through the adapter:
