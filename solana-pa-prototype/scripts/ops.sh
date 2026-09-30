@@ -68,9 +68,12 @@ Commands:
   idl-publish            Publish the PA's production IDL on chain (init or
                          upgrade the Anchor IDL account; signer must be the
                          upgrade authority)
-  test [--cluster <c>]   No cluster (or localnet): full deterministic local
-                         integration flow. devnet/mainnet: cluster-safe test
-                         subset against the programs deployed there.
+  test [--cluster <c>] [spec file...]
+                         No cluster (or localnet): full deterministic local
+                         integration flow, each spec file on its own fresh
+                         validator. devnet/mainnet: cluster-safe test subset
+                         against the programs deployed there. Spec files
+                         (paths under tests/) restrict the run to them.
   build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
   build-release          Build the production binaries, no deploy (verifies
                          close_markers_batch is absent from the IDL)
@@ -80,9 +83,9 @@ Commands:
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
   validator              Start the local test validator (RISC0 verifier stack
-                         cloned from devnet, marker fixtures preloaded)
-  validator-deploy       Sync IDs, build, start the validator, deploy all
-                         programs, and keep the validator running
+                         copied from devnet, marker fixtures preloaded)
+  validator-deploy       Sync IDs, build, start the validator with all
+                         programs loaded at genesis, and keep it running
 
 Flags:
   --cluster <c>    Target cluster (required except test/build-dev/build-release)
@@ -95,8 +98,6 @@ Flags:
                    (close_markers_batch enabled). Refused on mainnet.
   --prebuilt       deploy/upgrade: ship the existing target/deploy artifacts
                    without rebuilding (for verify-build output)
-  --grep <re>      test (devnet/mainnet): run the describe blocks matching
-                   this regex instead of the cluster-safe allowlist
   --mode <m>       test: real (default) runs the suite against Groth16
                    fixtures and the devnet-cloned verifier; mock runs it
                    against mock fixtures and the localnet mock verifier.
@@ -133,9 +134,9 @@ RPC_OVERRIDE=""
 NO_IDL=false
 DEV_TEARDOWN=false
 PREBUILT=false
-TEST_GREP=""
 ASSUME_YES=false
 TEST_MODE="real"
+SPEC_FILES=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -166,11 +167,6 @@ while [[ $# -gt 0 ]]; do
       PREBUILT=true
       shift
       ;;
-    --grep)
-      [[ $# -ge 2 ]] || { echo "❌ --grep requires a value" >&2; exit 1; }
-      TEST_GREP="$2"
-      shift 2
-      ;;
     --mode)
       [[ $# -ge 2 ]] || { echo "❌ --mode requires a value" >&2; exit 1; }
       TEST_MODE="$2"
@@ -188,6 +184,8 @@ while [[ $# -gt 0 ]]; do
     *)
       if [[ -z "$COMMAND" ]]; then
         COMMAND="$1"
+      elif [[ "$COMMAND" == "test" ]]; then
+        SPEC_FILES+=("$1")
       elif [[ -z "$TARGET" ]]; then
         TARGET="$1"
       else
@@ -288,9 +286,18 @@ get_program_id() {
   solana-keygen pubkey "target/deploy/${name}-keypair.json"
 }
 
+# True when <program_id> is a program on the cluster, false when no account
+# exists there; any other failure (an unreachable RPC) exits.
 is_deployed() {
-  local program_id="$1"
-  solana program show "$program_id" --url "$RPC_URL" >/dev/null 2>&1
+  local program_id="$1" out
+  if out="$(solana program show "$program_id" --url "$RPC_URL" 2>&1)"; then
+    return 0
+  fi
+  if [[ "$out" == "Error: Unable to find the account ${program_id}" ]]; then
+    return 1
+  fi
+  echo "❌ solana program show ${program_id} failed: ${out}" >&2
+  exit 1
 }
 
 # Exit unless program <pid> (called <label> in the message) is deployed on
@@ -715,15 +722,17 @@ cmd_status() {
 
   # PAState PDA
   if [[ -f "target/deploy/protocol_adapter-keypair.json" ]]; then
-    local pa_pid pa_state pa_state_addr
+    local pa_pid pa_state_addr out
     pa_pid="$(get_program_id "protocol_adapter")"
-    pa_state="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" 2>/dev/null | head -1 || true)"
-    if [[ -n "$pa_state" ]]; then
-      pa_state_addr="$(echo "$pa_state" | awk '{print $1}')"
-      if solana account "$pa_state_addr" --url "$RPC_URL" >/dev/null 2>&1; then
+    pa_state_addr="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" | awk 'NR == 1 { print $1 }')"
+    if [[ -n "$pa_state_addr" ]]; then
+      if out="$(solana account "$pa_state_addr" --url "$RPC_URL" 2>&1)"; then
         echo "PAState PDA: ✅ initialized — ${pa_state_addr}"
-      else
+      elif [[ "$out" == "Error: AccountNotFound: pubkey=${pa_state_addr}" ]]; then
         echo "PAState PDA: not initialized — ${pa_state_addr}"
+      else
+        echo "❌ solana account ${pa_state_addr} failed: ${out}" >&2
+        exit 1
       fi
     fi
   fi
@@ -834,29 +843,29 @@ cmd_test() {
 
   ensure_node_modules
 
-  # Cluster-safe test describe blocks (explicit allowlist), anchored to the
-  # "protocol-adapter (<name>)" describe title so a test title that happens to
-  # contain one of these names (the dev_set_schema_version block names its
-  # tests after the instructions it guards) cannot pull its block in.
-  # Tests that require test-forwarder or permanently mutate state are excluded.
-  local grep_pattern
-  grep_pattern=$(cat <<'GREP'
-protocol-adapter \((Groth16 batch aggregation E2E|Re-initialization guard|Direct settle & duplicate nullifier|Settle error paths|Issue #6: Emergency Stop|TxData Expiration|TxData authority and bounds checks|update_expiry_config|TxData expiration enforcement|Settlement error paths — fixture variants|Tree growth and multi-settlement)\)
-GREP
+  # Cluster-safe spec files (explicit allowlist): none needs the test
+  # forwarder, stops the adapter, or leaves state another file's tests
+  # cannot run on. Spec files given on the command line replace the list.
+  # One mocha process runs them against the cluster's single deployment, in
+  # list order: settle.ts asserts the primary fixture unsettled before
+  # direct-settle.ts settles it.
+  local specs=(
+    tests/settle.ts
+    tests/direct-settle.ts
+    tests/authority.ts
+    tests/txdata-lifecycle.ts
+    tests/txdata-expiry-config.ts
+    tests/txdata-expiration.ts
+    tests/tree-growth.ts
   )
-
-  # --grep replaces the allowlist for a deliberate run of one block against a
-  # cluster (for example a settlement block excluded from the routine set).
-  if [[ -n "$TEST_GREP" ]]; then
-    grep_pattern="$TEST_GREP"
+  if [[ ${#SPEC_FILES[@]} -gt 0 ]]; then
+    specs=("${SPEC_FILES[@]}")
   fi
 
-  echo "Running cluster integration tests (${CLUSTER}) matching: ${grep_pattern}"
+  echo "Running cluster integration tests (${CLUSTER}): ${specs[*]}"
   ANCHOR_PROVIDER_URL="$RPC_URL" \
   ANCHOR_WALLET="$WALLET" \
-    yarn run ts-mocha -p ./tsconfig.json -t 1000000 \
-      --grep "$grep_pattern" \
-      'tests/**/*.ts'
+    yarn run ts-mocha -p ./tsconfig.json -t 1000000 "${specs[@]}"
 
   echo ""
   echo "✅ Cluster tests passed (${CLUSTER})"
@@ -899,26 +908,30 @@ case "$COMMAND" in
     ;;
   validator)
     require_cmd solana-test-validator
-    # start_validator (validator-deploy.sh) clones the RISC0 verifier stack
-    # from devnet and preloads the synthetic verifier-entry account fixtures
+    # start_validator (validator-deploy.sh) preloads the RISC0 verifier stack
+    # copied from devnet and the synthetic verifier-entry account fixtures
     # — a bare validator cannot settle anything.
+    require_cmd solana
+    require_cmd jq
+    fetch_devnet_clones
     start_validator
     trap 'stop_validator' EXIT INT TERM
     echo "Validator running (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
     tail -f "$VALIDATOR_LOG"
     ;;
   validator-deploy)
-    # Full local stack, kept running: sync IDs, build, start the validator,
-    # deploy all programs, then hold the validator up for external clients
-    # (harnesses, manual testing). Ctrl-C tears the validator down.
+    # Full local stack, kept running: sync IDs, build, start the validator
+    # with every program loaded at genesis, then hold it up for external
+    # clients (harnesses, manual testing). Ctrl-C tears the validator down.
     require_commands
     ensure_wallet
     ensure_lockfile_sync
     sync_program_ids
     build_programs_dev
-    start_validator
+    fetch_devnet_clones
+    workspace_program_args
+    start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
     trap 'stop_validator' EXIT INT TERM
-    deploy_programs
     echo "Validator running with programs deployed (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
     tail -f "$VALIDATOR_LOG"
     ;;
@@ -928,10 +941,11 @@ case "$COMMAND" in
     # on localnet) — the validation path for verify-build artifacts, which
     # the full flow would rebuild and clobber.
     if [[ "$PREBUILT" != "true" && ( -z "$CLUSTER" || "$CLUSTER" == "localnet" ) ]]; then
-      # Full deterministic local flow: sync IDs, build, start a validator,
-      # deploy, run the whole suite. Guard against Cargo.lock skew first.
+      # Full deterministic local flow: sync IDs, build, then each spec file
+      # (all, or the ones given) on its own fresh validator with the programs
+      # loaded at genesis. Guard against Cargo.lock skew first.
       ensure_lockfile_sync
-      PA_TEST_MODE="$TEST_MODE" exec "${SCRIPT_DIR}/anchor-test.sh"
+      PA_TEST_MODE="$TEST_MODE" exec "${SCRIPT_DIR}/anchor-test.sh" all "${SPEC_FILES[@]}"
     fi
     # Everything below is the cluster-subset path, where the mock verifier
     # is never deployed.

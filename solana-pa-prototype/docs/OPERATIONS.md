@@ -13,7 +13,7 @@ A deployment has two independent authorities:
 | PA authority | `PAStateAccount.authority` | `emergency_stop`, `update_expiry_config`, authority transfer | `propose_authority` + `accept_authority` (two-step, on chain) |
 | Upgrade authority | BPF loader's ProgramData account | replacing the program binary; signing `initialize`; final immutability | `solana program set-upgrade-authority` |
 
-They start as the same key: `initialize` requires its payer to be the program's upgrade authority, and records that payer as the initial PA authority (`programs/solana-pa-prototype/src/lib.rs`, the `Initialize` accounts constraint and handler). After initialization no instruction ever compares them, so they can be split freely — the integration suite exercises operation with them split (`tests/solana-pa-prototype.ts`, the authority transfer tests).
+They start as the same key: `initialize` requires its payer to be the program's upgrade authority, and records that payer as the initial PA authority (`programs/solana-pa-prototype/src/lib.rs`, the `Initialize` accounts constraint and handler). After initialization no instruction ever compares them, so they can be split freely — the integration suite exercises operation with them split (`tests/authority.ts`, the authority transfer tests).
 
 Two consequences to keep in mind:
 

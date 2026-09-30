@@ -17,7 +17,7 @@ import {
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { getRouterPda, getVerifierEntryPda } from "../../scripts/verifier-utils";
-import { confirmedTransaction, escrowAccounts, waitForSlotPast } from "./helpers";
+import { escrowAccounts } from "./helpers";
 import { deriveConfigPda, deriveEventAuthorityPda, derivePaStatePda } from "./pda";
 
 /** What fixes a deployment's settlement key set. */
@@ -72,9 +72,10 @@ async function fetchLookupTable(connection: Connection, address: PublicKey): Pro
 
 /**
  * Create a table holding `keys`, or extend `existing` with the keys it lacks;
- * `payer` pays and is the authority. Returns the usable table: one extended
- * in slot N is usable from slot N+1, so this waits for that slot to pass.
- * `signature` is set only when a transaction was sent.
+ * `payer` pays and is the authority. Returns the usable table, so this waits
+ * for the transaction to be finalized: until the slot that extended the
+ * table is finalized, a v0 transaction naming the new keys passes simulation
+ * but does not land. `signature` is set only when a transaction was sent.
  */
 export async function ensureSettlementLookupTable(
   connection: Connection,
@@ -115,7 +116,7 @@ export async function ensureSettlementLookupTable(
     signature = await sendAndConfirmTransaction(connection, new Transaction().add(...instructions), [payer], {
       commitment: "confirmed",
     });
-    await waitForSlotPast(connection, (await confirmedTransaction(connection, signature)).slot);
+    await connection.confirmTransaction(signature, "finalized");
   }
   return { table: await fetchLookupTable(connection, address), added, signature };
 }

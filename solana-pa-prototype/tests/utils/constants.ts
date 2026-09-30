@@ -40,11 +40,6 @@ export const NONCES_PER_WORD = 256n;
 // forward_call operation code of an unwrap (programs/spl-token-forwarder/src/lib.rs)
 export const OP_UNWRAP = 1;
 
-// Deterministic keypair labels shared across the forwarder test files: 01
-// initializes the config with this committee, zz and zzz act as it.
-export const EMERGENCY_COMMITTEE_LABEL = "emergency_committee_seed";
-export const EMERGENCY_CALLER_LABEL = "emergency_caller_seed";
-
 // Anchor constraint error patterns for assertion matching
 export const AUTHORITY_MISMATCH_PATTERN = /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i;
 export const SEED_MISMATCH_PATTERN = /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint|Unauthorized/i;

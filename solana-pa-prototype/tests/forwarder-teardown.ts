@@ -1,38 +1,38 @@
 /**
- * SPL token forwarder teardown: the committee reclaims rent from nonce
- * bitmaps, escrows and finally the config. Runs last — nothing survives it.
+ * SPL token forwarder teardown on a stopped adapter: the committee reclaims
+ * rent from nonce bitmaps, escrows and finally the config. The before hook
+ * initializes the adapter and the forwarder config, creates a nonce bitmap
+ * (init_nonce_bitmap is permissionless) and an escrow, then stops the adapter.
  */
 import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { getAccount, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { assert } from "chai";
-import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
-  EMERGENCY_COMMITTEE_LABEL,
   assertRejects,
   closeAllNonceBitmaps,
   closeEscrow,
   createFundedEscrow,
   deriveConfigPda,
-  derivePaStatePda,
+  deriveNonceBitmapPda,
   makeFunder,
-  seededKeypair,
+  randomRef,
   closeConfig,
 } from "./utils";
+import {
+  ensureAdapterInitialized,
+  forwarderProgram,
+  initForwarderConfig,
+  paState,
+  provider,
+  stopAdapter,
+} from "./utils/adapterSuite";
 
-describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
-  const provider = anchor.AnchorProvider.env();
-  anchor.setProvider(provider);
-
-  const paProgram = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
-  const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
+describe("forwarder teardown (reclaims forwarder rent)", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
-  const [paState] = derivePaStatePda(paProgram.programId);
   const funder = makeFunder(provider);
 
-  const emergencyCommittee = seededKeypair(EMERGENCY_COMMITTEE_LABEL);
+  const emergencyCommittee = Keypair.generate();
   const impostor = Keypair.generate();
 
   let escrow: { mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey };
@@ -41,16 +41,26 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
   before(async () => {
     await funder.fund(emergencyCommittee, 5);
     await funder.fund(impostor, 1);
-    assert.ok(
-      await provider.connection.getAccountInfo(configPda),
-      "01-spl-token-forwarder.ts must have initialized the forwarder config"
-    );
+
+    await ensureAdapterInitialized();
+    await initForwarderConfig(randomRef(), emergencyCommittee.publicKey);
+    const bitmapUser = Keypair.generate().publicKey;
+    await forwarderProgram.methods
+      .initNonceBitmap(bitmapUser, new anchor.BN(0))
+      .accountsPartial({
+        payer: provider.wallet.publicKey,
+        nonceBitmap: deriveNonceBitmapPda(forwarderProgram.programId, bitmapUser, 0n)[0],
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
 
     const funded = await createFundedEscrow(provider, forwarderProgram.programId, emergencyCommittee, ESCROW_FUNDING);
     const recipientAta = (
       await getOrCreateAssociatedTokenAccount(provider.connection, emergencyCommittee, funded.mint, emergencyCommittee.publicKey)
     ).address;
     escrow = { ...funded, recipientAta };
+
+    await stopAdapter();
   });
 
   const closeEscrowAs = (authority: Keypair, accounts = escrow) =>
@@ -78,12 +88,12 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
       /InvalidNonceBitmapPda/
     ));
 
-  it("closes the nonce bitmaps the wrap tests created and refunds their rent", async () => {
+  it("closes every nonce bitmap and refunds their rent", async () => {
     const committeeBefore = await provider.connection.getBalance(emergencyCommittee.publicKey);
 
     const closed = await closeAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [emergencyCommittee]);
 
-    assert.isAbove(closed, 0, "the adapter suite's wrap must have created at least one nonce bitmap");
+    assert.isAbove(closed, 0, "the before hook created a nonce bitmap to close");
     assert.isEmpty(await forwarderProgram.account.nonceBitmap.all(), "every nonce bitmap is closed");
     assert.isAbove(
       await provider.connection.getBalance(emergencyCommittee.publicKey),
