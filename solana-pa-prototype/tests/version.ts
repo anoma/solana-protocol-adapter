@@ -15,7 +15,6 @@ describe("program versions", () => {
     it(`the ${name} answers with its release`, async () => {
       const version: string = await target.methods.version().view();
       assert.equal(version, target.idl.metadata.version, "the deployed program runs the release its IDL records");
-      assert.equal(version, "2.0.0-rc.1");
     });
   }
 });

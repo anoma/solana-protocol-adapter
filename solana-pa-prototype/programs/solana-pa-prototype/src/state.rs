@@ -270,10 +270,6 @@ pub const PROGRAM_DATA: Pubkey = Pubkey::new_from_array(
     .0,
 );
 
-/// The release this build is, as pa-evm's `VERSION`: the deployed program
-/// answers the `version` instruction with it.
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
 /// Chunked transaction upload buffer.
 #[account]
 #[derive(InitSpace)]

@@ -19,7 +19,6 @@ No program instruction or event is involved; the loader's ProgramData account is
 
 The owner can replace the program binary, which means it could deploy code that undoes a stop: a stop is only as permanent as upgrade-authority custody. Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
 
-
 ## Deploy and initialize
 
 Prerequisites:
@@ -120,20 +119,20 @@ Record the address in the cluster's deployment record and ship it as `SETTLE_LOO
 
 ## The logic-ref denylist
 
-The authority denies a logic ref for good, as pa-evm's owner does with `denyLogicRef`: from that slot on, no settlement consumes or creates a resource carrying it (`DeniedLogicRef`). It is the per-logic kill switch for a compromised resource logic, short of stopping the whole adapter.
+The owner denies a logic ref for good, as pa-evm's owner does with `denyLogicRef`: from that slot on, no settlement consumes or creates a resource carrying it (`DeniedLogicRef`). It is the per-logic kill switch for a compromised resource logic, short of stopping the whole adapter.
 
 ```sh
-PA_DENIED_LOGIC_REF=<hex, 32 bytes> ./scripts/dev.sh deny-logic-ref --cluster <c>   # authority wallet
+PA_DENIED_LOGIC_REF=<hex, 32 bytes> ./scripts/dev.sh deny-logic-ref --cluster <c>   # upgrade-authority wallet
 ```
 
-The zero ref and a ref already denied are rejected; a denial cannot be undone. The denied refs are part of the state account (`denied_logic_refs`), which grows by 32 bytes per denial at the authority's expense, and each denial emits `LogicRefDeniedEvent`.
+The zero ref and a ref already denied are rejected; a denial cannot be undone. The denied refs are part of the state account (`denied_logic_refs`), which grows by 32 bytes per denial at the owner's expense, and each denial emits `LogicRefDeniedEvent`.
 
 ## The kind table
 
-The PA stores the sha256 commitment of the kind table every settled aggregation instance must carry, and rejects a transaction proven against any other table. `initialize` installs the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`) and emits `KindTableCommitmentUpdatedEvent` with it, as pa-evm's initializer does; the authority replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
+The PA stores the sha256 commitment of the kind table every settled aggregation instance must carry, and rejects a transaction proven against any other table. `initialize` installs the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`) and emits `KindTableCommitmentUpdatedEvent` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
 
 ```sh
-PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # authority wallet
+PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # upgrade-authority wallet
 ```
 
 The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the new value, as pa-evm's `KindTableCommitmentUpdated` does. From that slot on, transactions proven against the previous table are rejected (`KindTableCommitmentMismatch`), so provers must load the new table before it is installed. The generated Solana tables and their commitments come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
@@ -151,7 +150,7 @@ The command must be signed by the upgrade authority. It flips the lifecycle flag
 
 What stops: `settle` and `settle_from_txdata` reject every transaction with `PAError::Stopped`. Those are the only two instructions gated on the lifecycle flag.
 
-What keeps working: everything else. All accounts (PAState, the commitment tree, nullifier and root markers) remain on chain and readable forever. Transaction-data upload accounts can still be closed and their rent reclaimed by their owners. Authority transfer and expiry configuration still function.
+What keeps working: everything else. All accounts (PAState, the commitment tree, nullifier and root markers) remain on chain and readable forever. Transaction-data upload accounts can still be closed and their rent reclaimed by their owners. Expiry configuration, and moving the upgrade authority (`solana program set-upgrade-authority`), still function.
 
 What a stop does **not** do: it does not prevent the upgrade-authority holder from deploying a modified binary. If the stop is meant to be permanent, finish the job with the Sunsetting steps below.
 

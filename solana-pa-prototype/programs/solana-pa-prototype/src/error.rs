@@ -83,7 +83,7 @@ pub enum PAError {
     // Protocol state errors
     #[msg("Protocol adapter is stopped")]
     Stopped,
-    #[msg("Unauthorized: the signer is not the program's upgrade authority")]
+    #[msg("Unauthorized: the signer does not hold the authority this instruction requires")]
     Unauthorized,
     #[msg("Protocol adapter is already stopped")]
     AlreadyStopped,

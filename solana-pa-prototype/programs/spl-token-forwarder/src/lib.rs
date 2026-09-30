@@ -143,7 +143,7 @@ pub mod spl_token_forwarder {
     /// read from the deployed program (by simulation), it names the code an
     /// address runs, which an in-place upgrade changes.
     pub fn version(_ctx: Context<Version>) -> Result<String> {
-        Ok(VERSION.to_string())
+        Ok(env!("CARGO_PKG_VERSION").to_string())
     }
 
     /// Bring the config the previous build created to this build's layout:

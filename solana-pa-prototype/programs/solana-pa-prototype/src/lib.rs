@@ -494,7 +494,7 @@ pub mod protocol_adapter {
     /// deployed program (by simulation), it names the code an address runs,
     /// which an in-place upgrade changes.
     pub fn version(_ctx: Context<Version>) -> Result<String> {
-        Ok(VERSION.to_string())
+        Ok(env!("CARGO_PKG_VERSION").to_string())
     }
 
     /// Close marker PDAs and reclaim their rent. Development tooling only.
