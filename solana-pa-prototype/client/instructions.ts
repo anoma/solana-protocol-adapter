@@ -138,8 +138,9 @@ export function initializeForwarder(
   logicRef: number[],
   committee: PublicKey,
   authority: PublicKey,
+  programData: PublicKey = deriveProgramDataPda(forwarder.programId),
 ) {
-  return forwarder.methods.initialize(adapterProgramId, logicRef, committee).accounts({ authority });
+  return forwarder.methods.initialize(adapterProgramId, logicRef, committee).accounts({ authority, programData });
 }
 
 /**

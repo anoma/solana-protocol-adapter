@@ -165,7 +165,7 @@ export STF_TOKEN_MINT=<base58 mint>          # optional: also creates the mint's
 ./scripts/dev.sh deploy stf --cluster devnet  # or: forwarder init, for an already deployed program
 ```
 
-The config pins the adapter program id, the logic ref, and the committee. A wrap is only executed when the adapter forwards it for a resource carrying that logic ref. One escrow authority, a PDA of the forwarder, owns every mint's escrow: the associated token account of the authority and the mint, as the EVM forwarder holds every token at its own address. `forwarder init` with `STF_TOKEN_MINT` creates a mint's escrow account, and the same command adds further mints later. Add each new mint's escrow account to the settlement lookup table as well (`lookup-table` with `STF_TOKEN_MINTS`).
+The program's upgrade authority initializes the config, as the EVM proxy runs its initializer at deployment; no other signer can. The config pins the adapter program id, the logic ref, and the committee. A wrap is only executed when the adapter forwards it for a resource carrying that logic ref. One escrow authority, a PDA of the forwarder, owns every mint's escrow: the associated token account of the authority and the mint, as the EVM forwarder holds every token at its own address. `forwarder init` with `STF_TOKEN_MINT` creates a mint's escrow account, and the same command adds further mints later. Add each new mint's escrow account to the settlement lookup table as well (`lookup-table` with `STF_TOKEN_MINTS`).
 
 ### Nonce bitmaps
 
