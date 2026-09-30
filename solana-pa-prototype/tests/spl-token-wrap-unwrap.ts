@@ -18,7 +18,6 @@ import { assert } from "chai";
 import {
   escrowAccounts,
   escrowTransferAccounts,
-  setLogicRef,
   closeAllNonceBitmaps,
   closeConfig,
   closeEscrow,
@@ -32,7 +31,6 @@ import { deriveConfigPda, deriveNonceBitmapPda, nonceWordIndex } from "../client
 import { SOLANA_DEVNET_KIND_TABLE_COMMITMENT } from "./utils/constants";
 import { requireFixture, createdCommitmentsOf as commitmentsOf, wrapAuthorizationIx } from "./utils/fixtures";
 import {
-  randomRef,
   approvedTokenAccount,
   compileV0,
   makeFunder,
@@ -241,33 +239,6 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
         program: forwarderProgram,
         error: "NonceBitmapMissing",
       },
-    );
-  });
-
-  // Mirrors ForwarderBase.t.sol: test_forwardCall_reverts_if_the_logic_ref_is_wrong,
-  // after a rotation. Once the upgrade authority rotates the config to
-  // another ref, a wrap proven under the previous one is rejected before
-  // any of its input is read; rotating back re-authorizes it.
-  it("rejects a wrap proven under a logic ref the config no longer authorizes", async () => {
-    const rotate = (ref: number[]) => setLogicRef(forwarderProgram, provider.wallet.publicKey, ref).rpc();
-    const fixtureRef = Array.from(Buffer.from(wrap.logic_ref_b64, "base64"));
-
-    await rotate(randomRef());
-    try {
-      await assertFails(
-        settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(user.publicKey, wrapFixture)]),
-        {
-          program: forwarderProgram,
-          error: "UnauthorizedLogicRef",
-        },
-      );
-    } finally {
-      await rotate(fixtureRef);
-    }
-    assert.deepEqual(
-      (await forwarderProgram.account.config.fetch(configPda)).logicRef,
-      fixtureRef,
-      "the fixture's ref is authorized again",
     );
   });
 

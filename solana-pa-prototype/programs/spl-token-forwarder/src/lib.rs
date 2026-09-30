@@ -58,6 +58,12 @@ pub struct EmergencyWithdraw {
     pub caller: Pubkey,
 }
 
+/// Mirrors OpenZeppelin Initializable: `event Initialized(uint64 version);`
+#[event]
+pub struct Initialized {
+    pub version: u64,
+}
+
 /// Operation codes, the first byte of a `forward_call` input.
 pub const OP_WRAP: u8 = 0;
 #[constant]
@@ -102,40 +108,62 @@ pub mod spl_token_forwarder {
         config.logic_ref = logic_ref;
         config.emergency_committee = emergency_committee;
         config.emergency_caller = Pubkey::default();
+        config.version = CONFIG_VERSION;
+        emit!(Initialized {
+            version: CONFIG_VERSION
+        });
         Ok(())
     }
 
-    /// Rotate the logic ref in place. Mirrors the EVM forwarder's rotation on
-    /// the upgradeable base (`ERC20ForwarderV2.reinitialize`): the owner who
-    /// authorizes upgrades writes the new ref into the existing storage, and
-    /// escrow, nonce bitmaps and the committee are untouched. That owner is
-    /// the upgrade authority the loader records for this program. Like the
-    /// EVM rotation, which emits only the proxy's `Upgraded` and
-    /// `Initialized`, it emits no event of its own; the config holds the ref.
+    /// Rotate the logic ref, once per build that raises CONFIG_VERSION.
+    /// Mirrors the EVM forwarder's rotation: the owner upgrades the proxy to
+    /// an implementation whose `reinitializer(n)` writes the new ref
+    /// (`upgradeToAndCall`), and escrow, nonces and the committee stay. Here
+    /// the upgrade authority upgrades the program in place and then calls
+    /// this; it runs only while the config's version is below this build's.
     /// Resources under the previous ref leave through the new one once the
     /// kind table lists the previous version as its alias: a transaction
     /// converts them, and the new resource unwraps.
-    pub fn set_logic_ref(ctx: Context<SetLogicRef>, new_logic_ref: [u8; 32]) -> Result<()> {
-        require!(new_logic_ref != [0u8; 32], ErrorCode::ZeroAddressNotAllowed);
-        ctx.accounts.config.logic_ref = new_logic_ref;
+    pub fn reinitialize(ctx: Context<Reinitialize>, logic_ref: [u8; 32]) -> Result<()> {
+        let config = &mut ctx.accounts.config;
+        require!(
+            config.version < CONFIG_VERSION,
+            ErrorCode::InvalidInitialization
+        );
+        require!(logic_ref != [0u8; 32], ErrorCode::ZeroAddressNotAllowed);
+        config.logic_ref = logic_ref;
+        config.version = CONFIG_VERSION;
+        emit!(Initialized {
+            version: CONFIG_VERSION
+        });
         Ok(())
     }
 
-    /// Bring the config the previous build created to this build's layout
-    /// by dropping the bump it stored after the fields; the freed rent goes
-    /// to the owner. The migrations are the counterpart of the call the EVM
-    /// owner passes to `upgradeToAndCall`: the upgrade authority runs them
-    /// once, after upgrading the program in place.
+    /// Bring the config the previous build created to this build's layout:
+    /// the bump it stored after the fields gives way to the version, 1, the
+    /// previous build having initialized it once and never reinitialized it;
+    /// the owner pays the added bytes' rent. The migrations are the
+    /// counterpart of the call the EVM owner passes to `upgradeToAndCall`:
+    /// the upgrade authority runs them once, after upgrading the program in
+    /// place.
     pub fn migrate_config(ctx: Context<MigrateConfig>) -> Result<()> {
-        let config = ctx.accounts.config.to_account_info();
+        let config = &ctx.accounts.config;
         require!(
-            config.data_len() as u64 == PREVIOUS_CONFIG_SIZE,
+            config.owner == ctx.program_id
+                && config.data_len() as u64 == PREVIOUS_CONFIG_SIZE
+                && config.try_borrow_data()?.starts_with(Config::DISCRIMINATOR),
             ErrorCode::NotPreviousLayout
         );
-        config.resize(Config::ACCOUNT_SIZE)?;
-        let surplus = config.lamports() - Rent::get()?.minimum_balance(Config::ACCOUNT_SIZE);
-        **config.try_borrow_mut_lamports()? -= surplus;
-        **ctx.accounts.authority.try_borrow_mut_lamports()? += surplus;
+        grow(
+            config,
+            &ctx.accounts.authority,
+            &ctx.accounts.system_program,
+            Config::ACCOUNT_SIZE,
+        )?;
+        let mut data = config.try_borrow_mut_data()?;
+        let mut migrated = Config::try_deserialize_unchecked(&mut &data[..])?;
+        migrated.version = 1;
+        migrated.try_serialize(&mut &mut data[..])?;
         Ok(())
     }
 
@@ -156,22 +184,12 @@ pub mod spl_token_forwarder {
                     .starts_with(NonceBitmap::DISCRIMINATOR),
             ErrorCode::NotPreviousLayout
         );
-        let shortfall = Rent::get()?
-            .minimum_balance(NonceBitmap::ACCOUNT_SIZE)
-            .saturating_sub(bitmap.lamports());
-        if shortfall > 0 {
-            anchor_lang::system_program::transfer(
-                CpiContext::new(
-                    ctx.accounts.system_program.key(),
-                    anchor_lang::system_program::Transfer {
-                        from: ctx.accounts.authority.to_account_info(),
-                        to: bitmap.to_account_info(),
-                    },
-                ),
-                shortfall,
-            )?;
-        }
-        bitmap.resize(NonceBitmap::ACCOUNT_SIZE)?;
+        grow(
+            bitmap,
+            &ctx.accounts.authority,
+            &ctx.accounts.system_program,
+            NonceBitmap::ACCOUNT_SIZE,
+        )?;
         bitmap.try_borrow_mut_data()?[NonceBitmap::ACCOUNT_SIZE - 1] = ctx.bumps.nonce_bitmap;
         Ok(())
     }
@@ -409,6 +427,33 @@ pub mod spl_token_forwarder {
         }
         Ok(())
     }
+}
+
+/// Grow a migrated account to `size`, the upgrade authority paying any rent
+/// shortfall.
+fn grow<'info>(
+    account: &AccountInfo<'info>,
+    payer: &Signer<'info>,
+    system_program: &Program<'info, System>,
+    size: usize,
+) -> Result<()> {
+    let shortfall = Rent::get()?
+        .minimum_balance(size)
+        .saturating_sub(account.lamports());
+    if shortfall > 0 {
+        anchor_lang::system_program::transfer(
+            CpiContext::new(
+                system_program.key(),
+                anchor_lang::system_program::Transfer {
+                    from: payer.to_account_info(),
+                    to: account.clone(),
+                },
+            ),
+            shortfall,
+        )?;
+    }
+    account.resize(size)?;
+    Ok(())
 }
 
 fn token_account_amount(token_account: &AccountInfo) -> Result<u64> {
@@ -697,7 +742,7 @@ pub struct Initialize<'info> {
 }
 
 #[derive(Accounts)]
-pub struct SetLogicRef<'info> {
+pub struct Reinitialize<'info> {
     pub authority: Signer<'info>,
 
     #[account(mut, address = CONFIG_PDA)]
@@ -718,8 +763,10 @@ pub struct MigrateConfig<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
+    /// CHECK: Pinned to the config address; the handler requires the
+    /// previous build's config layout, owned by this program.
     #[account(mut, address = CONFIG_PDA)]
-    pub config: Account<'info, Config>,
+    pub config: UncheckedAccount<'info>,
 
     /// The program account proves `program_data` is this program's own
     /// ProgramData address rather than any account shaped like one.
@@ -729,6 +776,8 @@ pub struct MigrateConfig<'info> {
     /// The loader records the upgrade authority here; it is the forwarder's owner.
     #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::UnauthorizedCaller)]
     pub program_data: Account<'info, ProgramData>,
+
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]

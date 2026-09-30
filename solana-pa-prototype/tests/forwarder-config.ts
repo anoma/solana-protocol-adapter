@@ -1,17 +1,16 @@
 /**
- * SPL token forwarder config: logic-ref rotation and the guards a direct
- * caller hits. The before hook initializes the config. Everything
+ * SPL token forwarder config: who may reinitialize it, and the guards a
+ * direct caller hits. The before hook initializes the config. Everything
  * forward_call does past its caller check needs the adapter as the CPI
  * caller, so those behaviours are tested through settlement
  * (spl-token-wrap-unwrap.ts); the emergency flow is forwarder-emergency.ts.
  */
-import * as anchor from "@anchor-lang/core";
 import { Keypair, PublicKey, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import { encodeUnwrapInput, setLogicRef, setEmergencyCaller } from "../client/instructions";
+import { encodeUnwrapInput, reinitializeForwarder, setEmergencyCaller } from "../client/instructions";
 import { OP_UNWRAP } from "../client/constants";
 import { deriveConfigPda, deriveProgramDataPda } from "../client/pda";
-import { confirmedTransaction, makeFunder, randomRef, assertFails } from "./utils/helpers";
+import { makeFunder, randomRef, assertFails } from "./utils/helpers";
 import { forwarderProgram, initForwarderConfig, paState, program as paProgram, provider } from "./utils/adapterSuite";
 
 describe("forwarder config (logic ref and direct-call guards)", () => {
@@ -21,25 +20,16 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
 
   before(() => initForwarderConfig(logicRef, Keypair.generate().publicKey));
 
-  describe("set_logic_ref", () => {
-    // Mirrors the EVM forwarder's rotation on the upgradeable base
-    // (ERC20ForwarderV2.reinitialize): the owner who authorizes upgrades
-    // writes the new logic ref into the existing storage, and custody and
-    // nonces are untouched. That owner is the upgrade authority the loader
-    // records for this program.
-    const rotate = (ref: number[], programData?: PublicKey) =>
-      setLogicRef(forwarderProgram, provider.wallet.publicKey, ref, programData).rpc();
-
-    it("rejects a zero logic ref", () =>
-      assertFails(rotate(Array(32).fill(0)), { program: forwarderProgram, error: "ZeroAddressNotAllowed" }));
+  describe("reinitialize", () => {
+    const reinitialize = (ref: number[], programData?: PublicKey) =>
+      reinitializeForwarder(forwarderProgram, provider.wallet.publicKey, ref, programData).rpc();
 
     it("rejects a signer that is not the program's upgrade authority", async () => {
       const impostor = await funder.fresh(1);
-      await assertFails(setLogicRef(forwarderProgram, impostor.publicKey, randomRef()).signers([impostor]).rpc(), {
-        program: forwarderProgram,
-        error: "UnauthorizedCaller",
-        account: "program_data",
-      });
+      await assertFails(
+        reinitializeForwarder(forwarderProgram, impostor.publicKey, randomRef()).signers([impostor]).rpc(),
+        { program: forwarderProgram, error: "UnauthorizedCaller", account: "program_data" },
+      );
       assert.deepEqual(
         (await forwarderProgram.account.config.fetch(configPda)).logicRef,
         logicRef,
@@ -51,33 +41,22 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
     // program constraint pins it to this program's own. Another program with
     // the same upgrade authority is the cheapest forgery.
     it("rejects the upgrade authority of another program's ProgramData", () =>
-      assertFails(rotate(randomRef(), deriveProgramDataPda(paProgram.programId)), {
+      assertFails(reinitialize(randomRef(), deriveProgramDataPda(paProgram.programId)), {
         program: forwarderProgram,
         error: "UnauthorizedCaller",
         account: "program",
       }));
 
-    it("rotates the logic ref in place and leaves the rest of the config untouched", async () => {
-      const before = await forwarderProgram.account.config.fetch(configPda);
-      const rotated = randomRef();
-
-      const sig = await rotate(rotated);
-      const after = await forwarderProgram.account.config.fetch(configPda);
-      assert.deepEqual(after.logicRef, rotated, "the new logic ref is stored");
-      assert.ok(after.protocolAdapter.equals(before.protocolAdapter), "the adapter is untouched");
-      assert.ok(after.emergencyCommittee.equals(before.emergencyCommittee), "the committee is untouched");
-      assert.ok(after.emergencyCaller.equals(before.emergencyCaller), "the emergency caller is untouched");
-
-      const tx = await confirmedTransaction(provider.connection, sig);
-      const parser = new anchor.EventParser(forwarderProgram.programId, forwarderProgram.coder);
-      const events = [...parser.parseLogs(tx.meta!.logMessages!)];
-      // pa-evm's rotation (ERC20ForwarderV2.reinitialize behind upgradeToAndCall)
-      // emits only the proxy's Upgraded and Initialized events, nothing naming
-      // the logic ref; the config account is where the new ref is read.
+    // Mirrors OpenZeppelin's reinitializer(n): InvalidInitialization once the
+    // version is n. A config this build initialized is at its version, so
+    // rotating it takes a build that raises CONFIG_VERSION
+    // (forwarder-upgrade.ts rotates one).
+    it("rejects a config already at this build's version", async () => {
+      await assertFails(reinitialize(randomRef()), { program: forwarderProgram, error: "InvalidInitialization" });
       assert.deepEqual(
-        events.map((e) => e.name),
-        [],
-        "the rotation emits no forwarder event",
+        (await forwarderProgram.account.config.fetch(configPda)).logicRef,
+        logicRef,
+        "the config is untouched",
       );
     });
   });

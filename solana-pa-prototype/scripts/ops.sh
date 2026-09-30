@@ -41,7 +41,7 @@ Commands:
   migrate-state          After an in-place upgrade to a build with a new state
                          layout, migrate PAState from the previous schema
                          version. Idempotent (upgrade-authority wallet).
-  forwarder <cmd>        SPL token forwarder operations: init, set-logic-ref,
+  forwarder <cmd>        SPL token forwarder operations: init, reinitialize,
                          close-config, set-emergency-caller, emergency-withdraw,
                          drain-escrow, teardown, migrate. Parameters are STF_*
                          environment variables; see scripts/forwarder.ts.

@@ -6,9 +6,11 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { spawnSync } from "child_process";
 import { assert } from "chai";
+import * as anchor from "@anchor-lang/core";
+import { CONFIG_VERSION } from "../client/constants";
 import { initializeForwarder } from "../client/instructions";
 import { deriveConfigPda, deriveProgramDataPda } from "../client/pda";
-import { makeFunder, randomRef, assertFails } from "./utils/helpers";
+import { confirmedTransaction, makeFunder, randomRef, assertFails } from "./utils/helpers";
 import { forwarderProgram, program as paProgram, provider } from "./utils/adapterSuite";
 
 describe("forwarder initialize", () => {
@@ -69,14 +71,25 @@ describe("forwarder initialize", () => {
 
   // Mirrors ForwarderBase.t.sol getProtocolAdapter/getLogicRef and
   // EmergencyMigratableForwarderBase.t.sol emergencyCaller-is-zero-before-set.
-  it("stores the adapter, logic ref and committee, with no emergency caller", async () => {
-    await initialize(paProgram.programId, logicRef, emergencyCommittee.publicKey);
+  // Mirrors OpenZeppelin's initializer: the config records the version it
+  // was initialized at, this build's, and announces it.
+  it("stores the adapter, logic ref and committee, with no emergency caller, at this build's version", async () => {
+    const sig = await initialize(paProgram.programId, logicRef, emergencyCommittee.publicKey);
 
     const config = await forwarderProgram.account.config.fetch(configPda);
     assert.ok(config.protocolAdapter.equals(paProgram.programId));
     assert.deepEqual(config.logicRef, logicRef);
     assert.ok(config.emergencyCommittee.equals(emergencyCommittee.publicKey));
     assert.ok(config.emergencyCaller.equals(PublicKey.default));
+    assert.equal(config.version.toNumber(), CONFIG_VERSION, "the config is at this build's version");
+
+    const tx = await confirmedTransaction(provider.connection, sig);
+    const parser = new anchor.EventParser(forwarderProgram.programId, forwarderProgram.coder);
+    const events = [...parser.parseLogs(tx.meta!.logMessages!)];
+    assert.deepEqual(
+      events.map((e) => [e.name, e.data.version.toNumber()]),
+      [["initialized", CONFIG_VERSION]],
+    );
   });
 
   // The operator's init is idempotent only for the config it would create.
