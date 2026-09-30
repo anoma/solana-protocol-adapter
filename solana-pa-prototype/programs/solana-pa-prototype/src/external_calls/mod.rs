@@ -5,18 +5,15 @@
 mod cpi;
 
 #[cfg(not(test))]
-pub use cpi::execute_external_calls;
+pub use cpi::ForwarderSegments;
 
 use crate::error::PAError;
-use crate::settle::action_resources;
 use crate::types::SolanaExternalCall;
 use anchor_lang::prelude::AccountInfo;
 use anchor_lang::solana_program::instruction::AccountMeta;
-use arm_core::aggregation_instance::AggregationInstance;
-use arm_core::logic_instance::ExpirableBlob;
+use arm_core::logic_instance::{AppData, ExpirableBlob};
 use arm_core::utils::bytes_to_words;
 use arm_core::utils::words_to_bytes;
-use arm_core::Digest;
 
 /// Encode a SolanaExternalCall into an ExpirableBlob (word-array format).
 /// The on-chain program only decodes; this is used by tests and fixture-gen.
@@ -54,31 +51,13 @@ pub fn verify_output(expected: &[u8], actual: &[u8]) -> Result<(), PAError> {
     Ok(())
 }
 
-/// Extract external calls from the aggregation instance, in instance order:
-/// actions in sequence, consumed resources before created resources within
-/// each action.
-///
-/// The instance is the single authority over effect order — its serialization
-/// is what the journal digest (and therefore the Groth16 proof) commits to,
-/// so no independently ordered wire structure can reorder effects.
-pub fn extract_external_calls(
-    instance: &AggregationInstance,
-) -> Result<Vec<(Digest, SolanaExternalCall)>, PAError> {
-    let total: usize = instance
-        .actions
+/// A resource's external calls, decoded in the order its app data lists them.
+pub fn decode_external_calls(app_data: &AppData) -> Result<Vec<SolanaExternalCall>, PAError> {
+    app_data
+        .external_payload
         .iter()
-        .flat_map(action_resources)
-        .map(|resource| resource.app_data.external_payload.len())
-        .sum();
-    let mut calls = Vec::with_capacity(total);
-
-    for resource in instance.actions.iter().flat_map(action_resources) {
-        for blob in &resource.app_data.external_payload {
-            calls.push((resource.logic_ref, decode_external_call(blob)?));
-        }
-    }
-
-    Ok(calls)
+        .map(decode_external_call)
+        .collect()
 }
 
 /// Build the account metas for a forwarder CPI from its segment.

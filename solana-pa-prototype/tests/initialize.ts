@@ -6,6 +6,7 @@
  */
 import { assert } from "chai";
 import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
+import { EMPTY_TREE_ROOT_INITIAL } from "./utils/constants";
 import { assertFails } from "./utils/helpers";
 import {
   buildInitialize,
@@ -49,7 +50,7 @@ describe("protocol-adapter (initialize)", () => {
     assert.isFalse(await paStateExists(), "PAState must remain uninitialized after the rejected call");
   });
 
-  it("stores the empty kind table and emits KindTableCommitmentUpdated", async () => {
+  it("stores the empty kind table and emits the initial root and the kind table, as pa-evm's initializer does", async () => {
     assert.isFalse(await paStateExists(), "this test initializes the adapter, so it must start uninitialized");
 
     const sig = await buildInitialize(provider.wallet.publicKey).rpc();
@@ -60,11 +61,16 @@ describe("protocol-adapter (initialize)", () => {
       EMPTY_KIND_TABLE_COMMITMENT,
       "initialize must store the empty kind table's commitment",
     );
+    // pa-evm's initializer adds the empty tree's root (CommitmentTreeRootAdded)
+    // and then installs the empty kind table (KindTableCommitmentUpdated).
     const { events } = await cpiEventsOf(sig);
     assert.deepEqual(
-      events.map((e) => [e.name, Buffer.from(e.data.kindTableCommitment).toString("hex")]),
-      [["kindTableCommitmentUpdatedEvent", EMPTY_KIND_TABLE_COMMITMENT.toString("hex")]],
-      "initialize must emit exactly one KindTableCommitmentUpdated carrying the empty kind table, as pa-evm's initializer does",
+      events.map((e) => [e.name, Buffer.from(e.data.root ?? e.data.kindTableCommitment).toString("hex")]),
+      [
+        ["commitmentTreeRootAddedEvent", EMPTY_TREE_ROOT_INITIAL.toString("hex")],
+        ["kindTableCommitmentUpdatedEvent", EMPTY_KIND_TABLE_COMMITMENT.toString("hex")],
+      ],
+      "initialize must emit the initial root and then the empty kind table",
     );
   });
 });

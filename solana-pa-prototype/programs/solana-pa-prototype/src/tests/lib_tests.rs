@@ -67,3 +67,20 @@ mod txdata_expiry_bounds_tests {
         assert_eq!(max_expires, u64::MAX);
     }
 }
+
+mod settle_order_tests {
+    use crate::settle::action_resources;
+    use crate::tests::utils::instance_with_consumed_and_created_payloads;
+
+    /// The settlement visits an action's consumed resources before its
+    /// created ones, as pa-evm's `_processAction` does: nullifiers, forwarder
+    /// calls and payload events follow that order.
+    #[test]
+    fn action_resources_visits_consumed_before_created() {
+        let instance = instance_with_consumed_and_created_payloads(vec![], vec![]);
+        let roles: Vec<bool> = action_resources(&instance.actions[0])
+            .map(|resource| resource.is_consumed)
+            .collect();
+        assert_eq!(roles, vec![true, false]);
+    }
+}

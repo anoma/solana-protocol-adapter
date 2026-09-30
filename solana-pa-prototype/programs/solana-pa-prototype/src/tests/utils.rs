@@ -135,13 +135,8 @@ pub fn create_minimal_transaction() -> Transaction {
     }
 }
 
-/// Attaches external payloads to the consumed resource of a minimal instance.
-pub fn instance_with_external_payload(payloads: Vec<ExpirableBlob>) -> AggregationInstance {
-    instance_with_consumed_and_created_payloads(payloads, vec![])
-}
-
 /// One action whose consumed and created resources each carry their own
-/// external payloads, for order-sensitive extraction tests.
+/// external payloads, for order-sensitive tests.
 pub fn instance_with_consumed_and_created_payloads(
     consumed_payloads: Vec<ExpirableBlob>,
     created_payloads: Vec<ExpirableBlob>,

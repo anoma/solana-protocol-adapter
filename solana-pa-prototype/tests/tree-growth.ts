@@ -48,6 +48,23 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
 
     const { events } = await cpiEventsOf(v2TxSig);
 
+    // pa-evm's order: each resource's forwarder calls (after its nullifier or
+    // commitment is recorded) and payload events, the action's
+    // ActionExecuted, then the transaction's new root and TransactionExecuted.
+    // The consumed resource carries the block-time forwarder call; neither
+    // resource carries an event-emitted payload.
+    assert.deepEqual(
+      events.map((e) => e.name),
+      ["forwarderCallExecutedEvent", "actionExecutedEvent", "commitmentTreeRootAddedEvent", "transactionExecutedEvent"],
+      "the settlement's events follow pa-evm's order",
+    );
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.deepEqual(
+      Array.from(events[2].data.root),
+      Array.from(state.root),
+      "CommitmentTreeRootAdded carries the root the settlement produced",
+    );
+
     const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
     assert.isAtLeast(actionEvents.length, 1, "Should emit actionExecutedEvent");
     assert.ok(
@@ -173,7 +190,13 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
       await provider.connection.getAccountInfo(nullifierMarker.pubkey),
       "the consumed resource's nullifier is recorded",
     );
-    const txEvents = (await cpiEventsOf(sig)).events.filter((e) => e.name === "transactionExecutedEvent");
+    const { events } = await cpiEventsOf(sig);
+    const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
     assert.deepEqual(txEvents[0].data.isConsumed, [true], "the transaction's one tag is a consumed resource");
+    assert.notInclude(
+      events.map((e) => e.name),
+      "commitmentTreeRootAddedEvent",
+      "no root is added, as pa-evm adds none when a transaction creates nothing",
+    );
   });
 });

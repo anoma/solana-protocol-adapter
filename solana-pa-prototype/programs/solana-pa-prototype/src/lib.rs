@@ -102,7 +102,7 @@ use arm_core::aggregation_instance::AggregationInstance;
 use arm_core::transaction::{Delta, Transaction};
 pub use error::PAError;
 use groth16::prepare_proof_for_verification;
-use merkle::{append_to_tree, required_depth_for_leaves, MAX_TREE_DEPTH};
+use merkle::{append_to_tree, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, MAX_TREE_DEPTH};
 use state::*;
 
 #[program]
@@ -128,10 +128,15 @@ pub mod protocol_adapter {
             proof_selector,
         ));
 
-        events::EventCpi {
+        // pa-evm's initializer adds the empty tree's root, then installs the
+        // empty kind table.
+        let events = events::EventCpi {
             authority: ctx.accounts.event_authority.to_account_info(),
-        }
-        .emit(&KindTableCommitmentUpdatedEvent {
+        };
+        events.emit(&CommitmentTreeRootAddedEvent {
+            root: EMPTY_TREE_ROOT_INITIAL.into(),
+        })?;
+        events.emit(&KindTableCommitmentUpdatedEvent {
             kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
         })?;
 
@@ -161,19 +166,21 @@ pub mod protocol_adapter {
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
-            &pa_state_info,
             &tx,
-            ctx.remaining_accounts,
-            &payer,
-            &ctx.accounts.system_program.to_account_info(),
-            ctx.accounts.new_root_marker.as_deref(),
-            VerifierAccounts {
-                router_program_id: ctx.accounts.verifier_router_program.key(),
-                router: ctx.accounts.router.to_account_info(),
-                verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
-                verifier_program: ctx.accounts.verifier_program.to_account_info(),
+            SettlementAccounts {
+                pa_state: pa_state_info,
+                payer,
+                system_program: ctx.accounts.system_program.to_account_info(),
+                new_root_marker: ctx.accounts.new_root_marker.as_deref(),
+                remaining: ctx.remaining_accounts,
+                verifier: VerifierAccounts {
+                    router_program_id: ctx.accounts.verifier_router_program.key(),
+                    router: ctx.accounts.router.to_account_info(),
+                    verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
+                    verifier_program: ctx.accounts.verifier_program.to_account_info(),
+                },
+                events,
             },
-            &events,
         )?;
 
         msg!("Settlement complete");
@@ -343,19 +350,21 @@ pub mod protocol_adapter {
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
-            &pa_state_info,
             &tx,
-            ctx.remaining_accounts,
-            &payer,
-            &ctx.accounts.system_program.to_account_info(),
-            ctx.accounts.new_root_marker.as_deref(),
-            VerifierAccounts {
-                router_program_id: ctx.accounts.verifier_router_program.key(),
-                router: ctx.accounts.router.to_account_info(),
-                verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
-                verifier_program: ctx.accounts.verifier_program.to_account_info(),
+            SettlementAccounts {
+                pa_state: pa_state_info,
+                payer,
+                system_program: ctx.accounts.system_program.to_account_info(),
+                new_root_marker: ctx.accounts.new_root_marker.as_deref(),
+                remaining: ctx.remaining_accounts,
+                verifier: VerifierAccounts {
+                    router_program_id: ctx.accounts.verifier_router_program.key(),
+                    router: ctx.accounts.router.to_account_info(),
+                    verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
+                    verifier_program: ctx.accounts.verifier_program.to_account_info(),
+                },
+                events,
             },
-            &events,
         )?;
 
         msg!("Settlement from TxData complete");
@@ -667,33 +676,44 @@ fn validate_consumed_roots(
     Ok(())
 }
 
-/// Shared settlement logic for both settle and settle_from_txdata.
+/// The accounts a settlement acts on.
 ///
-/// `remaining_accounts` layout:
-///   [0..nullifier_count]  — nullifier marker PDAs (created by this function)
-///   [nullifier_count..N]  — external call forwarder segments (program + CPI accounts)
+/// `remaining` layout:
+///   [0..nullifier_count]  — nullifier marker PDAs (created by the settlement)
+///   [nullifier_count..N]  — external call forwarder segments (program + CPI accounts),
+///                           in the order the resources' calls run
 ///
 /// Historical root marker PDAs are found by key scan, so they may appear at any index.
-/// The marker for the root this settlement produces is a separate named account
-/// (`new_root_marker`), not part of `remaining_accounts`; a settlement that creates
-/// nothing produces no root and takes no marker.
-///
-/// The account parameters are individually threaded (rather than grouped into a
-/// struct) because each is used independently and at a different point in the
-/// function body; grouping would not reduce the real complexity, only relocate it.
-#[allow(clippy::too_many_arguments)]
-fn execute_settlement<'info>(
-    state: &mut PAStateAccount,
-    pa_state_info: &AccountInfo<'info>,
-    tx: &Transaction,
-    remaining_accounts: &[AccountInfo<'info>],
-    payer: &AccountInfo<'info>,
-    system_program: &AccountInfo<'info>,
-    new_root_marker: Option<&AccountInfo<'info>>,
+/// The marker for the root the settlement produces is `new_root_marker`, not part of
+/// `remaining`; a settlement that creates nothing produces no root and takes no marker.
+struct SettlementAccounts<'a, 'info> {
+    pa_state: AccountInfo<'info>,
+    payer: AccountInfo<'info>,
+    system_program: AccountInfo<'info>,
+    new_root_marker: Option<&'a AccountInfo<'info>>,
+    remaining: &'a [AccountInfo<'info>],
     verifier: VerifierAccounts<'info>,
-    events: &events::EventCpi<'info>,
+    events: events::EventCpi<'info>,
+}
+
+/// Shared settlement logic for both settle and settle_from_txdata, in
+/// pa-evm's `_execute` order. For each action: each consumed resource's
+/// nullifier is recorded, then its forwarder calls run and its payload events
+/// are emitted; each created resource's commitment is appended, then its calls
+/// run and its events are emitted; then the action's ActionExecuted. After
+/// the actions the proofs are verified, the produced root (if any) is
+/// recorded with CommitmentTreeRootAdded, and TransactionExecuted closes the
+/// settlement. The checks that need no state change (the instance's shape,
+/// keys, kind table, denylist, duplicate nullifiers and consumed roots) run
+/// first: roots are checked against the tree as it stood before the
+/// transaction, as pa-evm's root set does not change until the end.
+fn execute_settlement(
+    state: &mut PAStateAccount,
+    tx: &Transaction,
+    accounts: SettlementAccounts<'_, '_>,
 ) -> Result<()> {
-    let pa_state_key = pa_state_info.key;
+    let pa_state_key = accounts.pa_state.key;
+    let events = &accounts.events;
 
     // The instance is the only proof-backed source of settlement data;
     // `require_aggregation` also rejects the ambiguous shape carrying both
@@ -741,20 +761,83 @@ fn execute_settlement<'info>(
         .nf_duplication_check()
         .map_err(|_| error!(PAError::NullifierDuplication))?;
 
-    validate_consumed_roots(instance, state, pa_state_key, remaining_accounts)?;
+    validate_consumed_roots(instance, state, pa_state_key, accounts.remaining)?;
 
-    let nullifiers = settle::extract_nullifiers(instance);
+    let nullifier_count = settle::extract_nullifiers(instance).len();
+    let (nullifier_markers, _) = accounts
+        .remaining
+        .split_at_checked(nullifier_count)
+        .ok_or(PAError::InvalidTransactionData)?;
+    let mut nullifier_markers = nullifier_markers.iter();
+    #[cfg(not(test))]
+    let mut forwarder_segments =
+        external_calls::ForwarderSegments::new(accounts.remaining, nullifier_count)?;
+
+    let created_count = settle::extract_commitments(instance).len();
+    maybe_grow_account(
+        &accounts.pa_state,
+        state,
+        created_count,
+        &accounts.payer,
+        &accounts.system_program,
+    )?;
+
+    let ml = marker_lamports(&Rent::get()?);
+    let total_tag_count = settle::total_resource_count(instance);
+    let mut all_tags: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
+    let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
+    let mut all_is_consumed: Vec<bool> = Vec::with_capacity(total_tag_count);
+
+    for action in &instance.actions {
+        for resource in settle::action_resources(action) {
+            if resource.is_consumed {
+                let marker = nullifier_markers
+                    .next()
+                    .ok_or(PAError::InvalidTransactionData)?;
+                nullifier::check_and_create_nullifier_marker(
+                    &crate::ID,
+                    pa_state_key,
+                    &resource.tag.into(),
+                    &accounts.payer,
+                    marker,
+                    &accounts.system_program,
+                    ml,
+                )?;
+            } else {
+                append_to_tree(state, resource.tag)?;
+            }
+
+            #[cfg(not(test))]
+            for event in forwarder_segments
+                .execute(&resource.logic_ref, resource.app_data)
+                .map_err(anchor_lang::error::Error::from)?
+            {
+                events.emit(&event)?;
+            }
+            emit_app_data_events(events, &resource.tag, resource.app_data)?;
+
+            all_tags.push(resource.tag.into());
+            all_logic_refs.push(resource.logic_ref.into());
+            all_is_consumed.push(resource.is_consumed);
+        }
+
+        events.emit(&ActionExecutedEvent {
+            action_tree_root: action.action_tree_root.into(),
+            action_tag_count: settle::action_resource_count(action) as u32,
+        })?;
+    }
 
     let prepared = prepare_proof_for_verification(aggregation, state.proof_selector)
         .map_err(|e| -> anchor_lang::error::Error { e.into() })?;
 
     msg!("Verifying aggregated proof via verifier_router");
     {
+        let verifier = &accounts.verifier;
         let cpi_accounts = verifier_router::cpi::accounts::Verify {
             router: verifier.router.clone(),
             verifier_entry: verifier.verifier_entry.clone(),
             verifier_program: verifier.verifier_program.clone(),
-            system_program: system_program.clone(),
+            system_program: accounts.system_program.clone(),
         };
         let cpi_ctx = CpiContext::new(verifier.router_program_id, cpi_accounts);
         verifier_router::cpi::verify(
@@ -769,114 +852,37 @@ fn execute_settlement<'info>(
     arm_solana::delta::verify_delta_proof_with_instance(delta_proof, instance)
         .map_err(PAError::from)?;
 
-    // Events enable off-chain indexers to reconstruct action/transaction data.
-    // Order is the instance order the proof commits to: actions in sequence,
-    // consumed resources before created resources within each action.
-    let total_tag_count = settle::total_resource_count(instance);
-    let mut all_tags: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
-    let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
-    let mut all_is_consumed: Vec<bool> = Vec::with_capacity(total_tag_count);
-
-    for action in &instance.actions {
-        for resource in settle::action_resources(action) {
-            emit_app_data_events(events, &resource.tag, resource.app_data)?;
-            all_tags.push(resource.tag.into());
-            all_logic_refs.push(resource.logic_ref.into());
-            all_is_consumed.push(resource.is_consumed);
-        }
-
-        events.emit(&ActionExecutedEvent {
-            action_tree_root: action.action_tree_root.into(),
-            action_tag_count: settle::action_resource_count(action) as u32,
-        })?;
+    // A transaction that creates nothing leaves the tree, and so its latest
+    // root, untouched: there is no new root to record, as pa-evm adds no root
+    // when none was produced. Every settlement that appends commitments
+    // retains its resulting root so that concurrently constructed
+    // transactions stay valid as the tree advances; Solana cannot create an
+    // undeclared account, so the marker is required then.
+    if created_count == 0 {
+        require!(accounts.new_root_marker.is_none(), PAError::RootPdaMismatch);
+    } else {
+        let new_root = state.root;
+        let new_root_marker = accounts.new_root_marker.ok_or(PAError::RootPdaMismatch)?;
+        root::create_root_marker(
+            &crate::ID,
+            pa_state_key,
+            &new_root,
+            &accounts.payer,
+            new_root_marker,
+            &accounts.system_program,
+            ml,
+        )?;
+        events.emit(&CommitmentTreeRootAddedEvent { root: new_root })?;
     }
 
-    // Runs before nullifier and commitment state changes so that a forwarder
-    // cannot observe them. Solana reverts every account write when the
-    // instruction returns Err, so partial state on failure is impossible
-    // regardless of ordering — that is not what this ordering protects. The
-    // forwarder is chosen by the proof and runs while the transaction is still
-    // in flight, and it can read any account it is handed; running it first
-    // bounds what this settlement has written by the time it executes.
-    #[cfg(not(test))]
-    for event in
-        external_calls::execute_external_calls(instance, remaining_accounts, nullifiers.len())
-            .map_err(anchor_lang::error::Error::from)?
-    {
-        events.emit(&event)?;
-    }
-
-    // Emit TransactionExecuted event (EVM parity). `is_consumed` states each
-    // tag's role explicitly — consumed and created resources are grouped per
-    // action rather than alternating, so parity cannot infer it.
+    // `is_consumed` states each tag's role explicitly — consumed and created
+    // resources are grouped per action rather than alternating, so parity
+    // cannot infer it.
     events.emit(&TransactionExecutedEvent {
         tags: all_tags,
         logic_refs: all_logic_refs,
         is_consumed: all_is_consumed,
     })?;
-
-    let rent = Rent::get()?;
-    let ml = marker_lamports(&rent);
-
-    if !nullifiers.is_empty() {
-        require!(
-            remaining_accounts.len() >= nullifiers.len(),
-            PAError::InvalidTransactionData
-        );
-
-        for (i, nullifier) in nullifiers.iter().enumerate() {
-            let marker = &remaining_accounts[i];
-            let nullifier_bytes: [u8; 32] = (*nullifier).into();
-            nullifier::check_and_create_nullifier_marker(
-                &crate::ID,
-                pa_state_key,
-                &nullifier_bytes,
-                payer,
-                marker,
-                system_program,
-                ml,
-            )?;
-        }
-        msg!("Created {} nullifier PDAs", nullifiers.len());
-    }
-
-    let commitments = settle::extract_commitments(instance);
-    // A transaction that creates nothing leaves the tree, and so its latest
-    // root, untouched: there is no new root to record, as the EVM adapter
-    // adds no root when none was produced.
-    if commitments.is_empty() {
-        require!(new_root_marker.is_none(), PAError::RootPdaMismatch);
-        return Ok(());
-    }
-    maybe_grow_account(
-        pa_state_info,
-        state,
-        commitments.len(),
-        payer,
-        system_program,
-    )?;
-    for commitment in commitments {
-        append_to_tree(state, commitment)?;
-    }
-
-    let new_root = state.root;
-
-    // Every settlement that appends commitments must retain its resulting root
-    // so that concurrently constructed transactions remain valid after the tree
-    // advances. Solana cannot create an undeclared account, so the marker is
-    // required and a settlement that omits it is rejected.
-    let new_root_marker = new_root_marker.ok_or(PAError::RootPdaMismatch)?;
-    root::create_root_marker(
-        &crate::ID,
-        pa_state_key,
-        &new_root,
-        payer,
-        new_root_marker,
-        system_program,
-        ml,
-    )?;
-    msg!("Created root marker for new root");
-
     Ok(())
 }
 
@@ -1308,6 +1314,14 @@ pub struct ApplicationPayloadEvent {
 #[event]
 pub struct KindTableCommitmentUpdatedEvent {
     pub kind_table_commitment: [u8; 32],
+}
+
+/// Mirrors pa-evm: `event CommitmentTreeRootAdded(bytes32 root);`: the
+/// empty tree's root at initialization, then the root each settlement that
+/// appends commitments produces.
+#[event]
+pub struct CommitmentTreeRootAddedEvent {
+    pub root: [u8; 32],
 }
 
 /// Mirrors pa-evm: `event LogicRefDenied(bytes32 indexed logicRef);`
