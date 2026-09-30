@@ -51,9 +51,9 @@ pub fn create_root_marker<'info>(
     // Verify the provided account matches expected PDA
     require_keys_eq!(expected_key, *marker.key, PAError::RootPdaMismatch);
 
-    // A repeated produced root is unreachable in normal operation: every
-    // settlement appends at least one commitment and next_index strictly
-    // increases. Reaching this means a hash collision or a tree-accounting bug,
+    // A repeated produced root is unreachable in normal operation: a root is
+    // recorded only by a settlement that appends commitments, and next_index
+    // strictly increases. Reaching this means a hash collision or a tree-accounting bug,
     // both of which must surface rather than pass quietly.
     if marker.owner == program_id {
         return err!(PAError::RootMarkerAlreadyExists);

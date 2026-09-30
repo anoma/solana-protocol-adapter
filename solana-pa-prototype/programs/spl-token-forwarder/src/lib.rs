@@ -632,6 +632,13 @@ fn execute_wrap<'info>(ctx: &Context<'info, ForwardCall<'info>>, input: &[u8]) -
 
 fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let unwrap = UnwrapInput::try_from_bytes(input)?;
+    // Released to the escrow authority, the tokens would never leave custody
+    // while the resource is spent; the EVM forwarder reverts an unwrap to
+    // itself (its balance does not grow by the amount).
+    require!(
+        unwrap.recipient != ESCROW_AUTHORITY,
+        ErrorCode::UnwrapToEscrow
+    );
 
     let [escrow_ata, recipient_ata, escrow_authority, token_program, ..] = ctx.remaining_accounts
     else {

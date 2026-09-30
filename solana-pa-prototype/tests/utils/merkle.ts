@@ -66,7 +66,9 @@ function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
 
 /**
  * The marker PDA of the root the adapter will hold after appending
- * `createdCommitments`: the produced root is only known after the append,
+ * `createdCommitments`, or null when there are none: a settlement that
+ * creates nothing produces no root and takes no marker. The produced root is
+ * only known after the append,
  * so a submitter fetches the tree state and replays the append locally
  * (merkle.rs `append_to_tree`, including the expand-after-fill growth step).
  * A wrong prediction cannot settle: the program rejects it with
@@ -76,7 +78,8 @@ export async function predictRootMarkerPda(
   program: Program<ProtocolAdapter>,
   paState: PublicKey,
   createdCommitments: Buffer[],
-): Promise<PublicKey> {
+): Promise<PublicKey | null> {
+  if (createdCommitments.length === 0) return null;
   const root = await predictRootAfterAppend(program, paState, createdCommitments);
   return deriveRootMarkerPda(paState, root, program.programId);
 }

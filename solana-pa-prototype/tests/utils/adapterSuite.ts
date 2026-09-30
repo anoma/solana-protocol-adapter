@@ -105,16 +105,15 @@ export function deriveRootPda(root: Buffer): PublicKey {
   return deriveRootMarkerPda(paState, root, program.programId);
 }
 
-// `newRootMarker` is a required named account, so every settle/settleFromTxdata
-// call needs a value even when the test expects settlement to fail before the
-// account is ever read. `initialize` never creates a root marker for the
+// Tests that expect settlement to fail before `newRootMarker` is read still
+// pass a marker, as a settlement that creates resources must. `initialize` never creates a root marker for the
 // empty-tree root — `is_root_valid` accepts it directly, without a marker —
 // so this PDA never exists on-chain. It's used purely as a syntactically
 // valid placeholder address; its value is irrelevant for those tests since
 // the instruction fails earlier.
 export const DUMMY_ROOT_MARKER = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);
 
-export function predictRootMarkerPda(createdCommitments: Buffer[]): Promise<PublicKey> {
+export function predictRootMarkerPda(createdCommitments: Buffer[]): Promise<PublicKey | null> {
   return predictRootMarkerPdaOf(program, paState, createdCommitments);
 }
 
@@ -245,7 +244,7 @@ export function settleFromTxDataBuilder(
   authority: PublicKey,
   uploadId: anchor.BN,
   txData: PublicKey,
-  newRootMarker: PublicKey,
+  newRootMarker: PublicKey | null,
   remainingAccounts: AccountMeta[],
   heapFrame = true,
 ) {
@@ -397,7 +396,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
     authority: Keypair,
     payload: Buffer,
     remainingAccounts: AccountMeta[],
-    options?: { newRootMarker?: PublicKey; createdCommitments?: Buffer[] },
+    options?: { newRootMarker?: PublicKey | null; createdCommitments?: Buffer[] },
     preInstructions: anchor.web3.TransactionInstruction[] = [],
   ): Promise<string> {
     const { uploadId, txData } = await uploadTxData(authority, payload);
@@ -425,7 +424,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
   async function settleFixtureViaTxData(
     payload: Buffer,
     remainingAccounts: AccountMeta[],
-    options?: { newRootMarker?: PublicKey; createdCommitments?: Buffer[] },
+    options?: { newRootMarker?: PublicKey | null; createdCommitments?: Buffer[] },
   ): Promise<string> {
     return uploadAndSettleV0(await funder.fresh(2), payload, remainingAccounts, options);
   }

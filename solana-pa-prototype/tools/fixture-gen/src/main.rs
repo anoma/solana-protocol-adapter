@@ -313,7 +313,10 @@ struct SplTokenWrapMetadata {
 struct SplTokenUnwrapMetadata {
     mint_seed_label: &'static str,
     amount: u64,
-    recipient_seed_label: &'static str,
+    /// The seeded recipient, or none when the unwrap releases to the
+    /// forwarder's escrow authority.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recipient_seed_label: Option<&'static str>,
     logic_ref_b64: String,
 }
 
@@ -414,6 +417,12 @@ enum ShapeCommand {
         #[command(flatten)]
         generate: GenerateArgs,
     },
+    /// One action that consumes a zero-quantity ephemeral resource and
+    /// creates nothing: a settlement that appends no commitment.
+    ConsumeOnly {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
     /// Three single-unit actions with event-emitted payload blobs and no
     /// external calls: the captured mainnet transfer's shape.
     TransferShape {
@@ -436,6 +445,11 @@ enum ShapeCommand {
         /// commitments are the tree the unwrap proves membership in.
         #[arg(long, value_name = "FIXTURE")]
         wrap: PathBuf,
+        /// Release the tokens to the forwarder's own escrow authority: the
+        /// unwrap the forwarder refuses, as the EVM forwarder reverts an
+        /// unwrap to itself.
+        #[arg(long)]
+        to_escrow: bool,
         #[command(flatten)]
         generate: GenerateArgs,
     },
@@ -570,24 +584,31 @@ fn encode_mock_seal(
     mock_seal_bytes(derived_claim)
 }
 
-/// Flip one bit of the aggregation instance's first created commitment.
-/// The transaction still decodes and settles structurally, but the journal
-/// digest the PA recomputes from the mutated instance no longer matches the
-/// proof, so verification must fail.
-fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> {
+/// Flip one bit of a tag of the aggregation instance's first action: its
+/// first created commitment, or its first consumed nullifier when it creates
+/// nothing. The transaction still decodes and settles structurally, but the
+/// journal digest the PA recomputes from the mutated instance no longer
+/// matches the proof, so verification must fail.
+fn mutate_tag_keep_structure(tx: &mut Transaction) -> Result<()> {
     let instance = &mut require_aggregation_mut(tx)?.instance;
     let action = instance
         .actions
         .get_mut(0)
         .ok_or_else(|| anyhow!("aggregation instance has no actions"))?;
-    let created = action
-        .created_publics
-        .get_mut(0)
-        .ok_or_else(|| anyhow!("aggregation instance has no created resources"))?;
+    let tag = match action.created_publics.first_mut() {
+        Some(created) => &mut created.resource_commitment,
+        None => {
+            &mut action
+                .consumed_publics
+                .first_mut()
+                .ok_or_else(|| anyhow!("the first action has no resources"))?
+                .resource_nullifier
+        }
+    };
 
-    let mut bytes = <[u8; 32]>::from(created.resource_commitment);
+    let mut bytes = <[u8; 32]>::from(*tag);
     bytes[0] ^= 1;
-    created.resource_commitment = Digest::from_bytes(bytes);
+    *tag = Digest::from_bytes(bytes);
     Ok(())
 }
 
@@ -902,6 +923,7 @@ async fn generate_anomapay_unwrap_transaction(
     prover: &Prover,
     wrap_fixture_name: &str,
     leaves: &[Digest],
+    to_escrow: bool,
 ) -> Result<(Transaction, SplForwarderMetadata)> {
     let (actors, owner, wrap) = seeded_wrap(wrap_fixture_name)?;
     let consumed_cm = wrap.created.commitment();
@@ -923,11 +945,16 @@ async fn generate_anomapay_unwrap_transaction(
         hex::encode(root.as_bytes())
     );
 
+    let recipient = if to_escrow {
+        spl_token_forwarder::ESCROW_AUTHORITY.to_bytes()
+    } else {
+        actors.recipient
+    };
     let unwrap = action::unwrap(
         actors.label.clone(),
         wrap.created,
         owner.keys.clone(),
-        actors.recipient,
+        recipient,
     )
     .map_err(|e| anyhow!("build the unwrap's resources: {e:?}"))?;
     let action_tree_root = unwrap
@@ -944,7 +971,7 @@ async fn generate_anomapay_unwrap_transaction(
     let metadata = SplForwarderMetadata::Unwrap(SplTokenUnwrapMetadata {
         mint_seed_label: MINT_SEED_LABEL,
         amount: ANOMAPAY_AMOUNT,
-        recipient_seed_label: RECIPIENT_SEED_LABEL,
+        recipient_seed_label: (!to_escrow).then_some(RECIPIENT_SEED_LABEL),
         logic_ref_b64: token_transfer_logic_ref_b64(),
     });
     Ok((tx, metadata))
@@ -1331,6 +1358,72 @@ async fn generate_test_transaction_with_external_payload(
     prove_single_action_transaction(prover, compliance_witness, consumed_app_data).await
 }
 
+/// A one-action transaction that consumes a zero-quantity ephemeral
+/// passthrough resource and creates nothing, so its settlement appends no
+/// commitment. The zero quantity keeps the action balanced with no created
+/// resource to offset it.
+async fn generate_consume_only_transaction(
+    prover: &Prover,
+    fixture_name: &str,
+) -> Result<Transaction> {
+    let (mut consumed, nf_key, _, _) = deterministic_ephemeral_resource(fixture_name, 0)?;
+    consumed.quantity = 0;
+    let consumed_nf = consumed
+        .nullifier(&nf_key)
+        .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
+    let compliance_witness = ComplianceWitness::from_parts(
+        vec![ConsumedResourceWitness {
+            resource: consumed,
+            cm_merkle_path: MerklePath::empty(),
+            nf_key,
+        }],
+        vec![],
+        INITIAL_ROOT,
+        &Scalar::ONE.to_bytes(),
+        kind_table().to_vec(),
+    );
+    let root = ActionTree::new(vec![consumed_nf])
+        .root()
+        .map_err(|e| anyhow!("compute action tree root: {e:?}"))?;
+    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
+    let consumed_instance = LogicInstance {
+        tag: consumed_nf,
+        is_consumed: true,
+        root,
+        app_data: AppData::default(),
+    };
+
+    let (compliance_unit, (proof, instance)) = run_job_pair(
+        prover.scheduling(),
+        async {
+            prove_compliance(prover, &compliance_witness)
+                .await
+                .context("prove compliance")
+        },
+        async {
+            prove_logic(
+                prover,
+                PASSTHROUGH_LOGIC_GUEST_ELF,
+                &passthrough_vk,
+                consumed_instance,
+            )
+            .await
+            .context("prove the consumed resource's logic")
+        },
+    )
+    .await?;
+    let action = arm::action::new(
+        compliance_unit,
+        vec![LogicVerifier {
+            proof,
+            instance,
+            verifying_key: passthrough_vk,
+        }],
+    )
+    .map_err(|e| anyhow!("build the action from its proofs: {e:?}"))?;
+    assemble_transaction(vec![action], std::slice::from_ref(&compliance_witness.rcv))
+}
+
 fn generate_error_variant_fixtures(
     tx: &Transaction,
     selector: &str,
@@ -1485,7 +1578,7 @@ fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
     eprintln!("  {} bytes", tx_bytes.len());
 
     let mut tx_tampered = tx.clone();
-    mutate_created_commitment_keep_structure(&mut tx_tampered)?;
+    mutate_tag_keep_structure(&mut tx_tampered)?;
     let tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
 
     let selector = extract_selector(tx).context("extract selector from proof")?;
@@ -1944,6 +2037,7 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
     | ShapeCommand::ForwarderFail { generate }
     | ShapeCommand::ForwarderSilent { generate }
     | ShapeCommand::ForwarderRelay { generate }
+    | ShapeCommand::ConsumeOnly { generate }
     | ShapeCommand::TransferShape { generate }
     | ShapeCommand::SplTokenWrap { generate, .. }
     | ShapeCommand::SplTokenUnwrap { generate, .. }) = &shape;
@@ -1969,6 +2063,9 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         ShapeCommand::OutputMismatch { .. } => eprintln!(
             "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
         ),
+        ShapeCommand::ConsumeOnly { .. } => {
+            eprintln!("mode: consume-only (one zero-quantity consumed resource, nothing created)")
+        }
         ShapeCommand::TransferShape { .. } => eprintln!(
             "mode: transfer-shape ({TRANSFER_SHAPE_ACTIONS} actions, event-emitted payloads, no external calls)"
         ),
@@ -2025,6 +2122,10 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             single_action(ForwarderMode::TestForwarderRelay).await?,
             None,
         ),
+        ShapeCommand::ConsumeOnly { .. } => (
+            generate_consume_only_transaction(&prover, name).await?,
+            None,
+        ),
         ShapeCommand::TransferShape { .. } => (
             generate_transfer_shape_transaction(&prover, name).await?,
             None,
@@ -2034,10 +2135,17 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
                 generate_anomapay_wrap_transaction(&prover, name, *wrap_nonce).await?;
             (tx, Some(metadata))
         }
-        ShapeCommand::SplTokenUnwrap { wrap, .. } => {
+        ShapeCommand::SplTokenUnwrap {
+            wrap, to_escrow, ..
+        } => {
             let leaves = created_commitments(&load_fixture_tx(wrap)?)?;
-            let (tx, metadata) =
-                generate_anomapay_unwrap_transaction(&prover, fixture_name(wrap)?, &leaves).await?;
+            let (tx, metadata) = generate_anomapay_unwrap_transaction(
+                &prover,
+                fixture_name(wrap)?,
+                &leaves,
+                *to_escrow,
+            )
+            .await?;
             (tx, Some(metadata))
         }
     };
@@ -2205,9 +2313,10 @@ mod tests {
 
         let mut leaves = synthetic_leaves(9);
         leaves.push(wrapped.commitment());
-        let (tx, _) = generate_anomapay_unwrap_transaction(&Prover::Local, wrap_name, &leaves)
-            .await
-            .unwrap();
+        let (tx, _) =
+            generate_anomapay_unwrap_transaction(&Prover::Local, wrap_name, &leaves, false)
+                .await
+                .unwrap();
         let action = &tx.actions.as_ref().unwrap()[0];
         assert_eq!(
             action.logic_verifier_inputs[0].tag,

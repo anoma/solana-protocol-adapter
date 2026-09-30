@@ -41,7 +41,7 @@ describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
 
   const user = seededKeypair(wrap.user_seed_label);
   const mintKeypair = seededKeypair(wrap.mint_seed_label);
-  const recipient = seededKeypair(unwrap.recipient_seed_label);
+  const recipient = seededKeypair(unwrap.recipient_seed_label!);
   const mint = mintKeypair.publicKey;
   const wrapAmount = BigInt(wrap.amount);
   const wrapNonce = BigInt(wrap.nonce);

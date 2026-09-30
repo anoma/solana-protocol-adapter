@@ -51,6 +51,7 @@ gen forwarder-fail "${MOCK_FLAG[@]}" "$OUT_DIR/batch_forwarder_fail.json"
 gen forwarder-silent "${MOCK_FLAG[@]}" "$OUT_DIR/batch_forwarder_silent.json"
 gen forwarder-relay "${MOCK_FLAG[@]}" "$OUT_DIR/batch_forwarder_relay.json"
 gen transfer-shape "${MOCK_FLAG[@]}" "$OUT_DIR/batch_groth16_transfer_shape.json"
+gen consume-only "${MOCK_FLAG[@]}" "$OUT_DIR/batch_groth16_consume_only.json"
 
 # The historical-root pair is proven over the tree [batch_groth16,
 # committer]: its spec file settles exactly those two first, so the
@@ -71,6 +72,9 @@ gen spl-token-wrap "${MOCK_FLAG[@]}" "$OUT_DIR/spl_token_wrap_replay.json"
 gen spl-token-unwrap "${MOCK_FLAG[@]}" \
   --wrap "$OUT_DIR/spl_token_wrap.json" \
   "$OUT_DIR/spl_token_unwrap.json"
+gen spl-token-unwrap "${MOCK_FLAG[@]}" --to-escrow \
+  --wrap "$OUT_DIR/spl_token_wrap.json" \
+  "$OUT_DIR/spl_token_unwrap_to_escrow.json"
 
 # A second wrap (forwarder nonce 2) proven against the solana-devnet kind
 # table from anoma/risc0-kind-tables (data/generated/staging), settled

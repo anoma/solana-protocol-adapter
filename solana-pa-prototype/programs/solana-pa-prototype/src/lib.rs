@@ -166,7 +166,7 @@ pub mod protocol_adapter {
             ctx.remaining_accounts,
             &payer,
             &ctx.accounts.system_program.to_account_info(),
-            &ctx.accounts.new_root_marker.to_account_info(),
+            ctx.accounts.new_root_marker.as_deref(),
             VerifierAccounts {
                 router_program_id: ctx.accounts.verifier_router_program.key(),
                 router: ctx.accounts.router.to_account_info(),
@@ -348,7 +348,7 @@ pub mod protocol_adapter {
             ctx.remaining_accounts,
             &payer,
             &ctx.accounts.system_program.to_account_info(),
-            &ctx.accounts.new_root_marker.to_account_info(),
+            ctx.accounts.new_root_marker.as_deref(),
             VerifierAccounts {
                 router_program_id: ctx.accounts.verifier_router_program.key(),
                 router: ctx.accounts.router.to_account_info(),
@@ -609,7 +609,8 @@ fn validate_consumed_roots(
 ///
 /// Historical root marker PDAs are found by key scan, so they may appear at any index.
 /// The marker for the root this settlement produces is a separate named account
-/// (`new_root_marker`), not part of `remaining_accounts`.
+/// (`new_root_marker`), not part of `remaining_accounts`; a settlement that creates
+/// nothing produces no root and takes no marker.
 ///
 /// The account parameters are individually threaded (rather than grouped into a
 /// struct) because each is used independently and at a different point in the
@@ -622,7 +623,7 @@ fn execute_settlement<'info>(
     remaining_accounts: &[AccountInfo<'info>],
     payer: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
-    new_root_marker: &AccountInfo<'info>,
+    new_root_marker: Option<&AccountInfo<'info>>,
     verifier: VerifierAccounts<'info>,
     events: &events::EventCpi<'info>,
 ) -> Result<()> {
@@ -764,6 +765,13 @@ fn execute_settlement<'info>(
     }
 
     let commitments = settle::extract_commitments(instance);
+    // A transaction that creates nothing leaves the tree, and so its latest
+    // root, untouched: there is no new root to record, as the EVM adapter
+    // adds no root when none was produced.
+    if commitments.is_empty() {
+        require!(new_root_marker.is_none(), PAError::RootPdaMismatch);
+        return Ok(());
+    }
     maybe_grow_account(
         pa_state_info,
         state,
@@ -778,10 +786,11 @@ fn execute_settlement<'info>(
 
     let new_root = state.root;
 
-    // Every state-changing settlement must retain its resulting root so that
-    // concurrently constructed transactions remain valid after the tree advances.
-    // Solana cannot create an undeclared account, so the marker is required and a
-    // settlement that omits it is rejected.
+    // Every settlement that appends commitments must retain its resulting root
+    // so that concurrently constructed transactions remain valid after the tree
+    // advances. Solana cannot create an undeclared account, so the marker is
+    // required and a settlement that omits it is rejected.
+    let new_root_marker = new_root_marker.ok_or(PAError::RootPdaMismatch)?;
     let (expected_pda, _) = root::derive_root_pda(&crate::ID, pa_state_key, &new_root);
     require_keys_eq!(expected_pda, *new_root_marker.key, PAError::RootPdaMismatch);
     root::create_root_marker(
@@ -931,9 +940,10 @@ pub struct Settle<'info> {
 
     /// CHECK: Validated at runtime against the root produced by this settlement.
     /// Cannot use a seeds constraint: the address depends on the resulting root,
-    /// which is only known after commitments are appended.
+    /// which is only known after commitments are appended. Absent when the
+    /// settlement creates nothing and so produces no root.
     #[account(mut)]
-    pub new_root_marker: UncheckedAccount<'info>,
+    pub new_root_marker: Option<UncheckedAccount<'info>>,
 
     /// CHECK: Validated against verifier_router stored in PAStateAccount.
     #[account(constraint = verifier_router_program.key() == pa_state.verifier_router @ PAError::VerifierRouterFailed)]
@@ -975,9 +985,10 @@ pub struct SettleFromTxData<'info> {
 
     /// CHECK: Validated at runtime against the root produced by this settlement.
     /// Cannot use a seeds constraint: the address depends on the resulting root,
-    /// which is only known after commitments are appended.
+    /// which is only known after commitments are appended. Absent when the
+    /// settlement creates nothing and so produces no root.
     #[account(mut)]
-    pub new_root_marker: UncheckedAccount<'info>,
+    pub new_root_marker: Option<UncheckedAccount<'info>>,
 
     /// CHECK: Validated against verifier_router stored in PAStateAccount.
     #[account(constraint = verifier_router_program.key() == pa_state.verifier_router @ PAError::VerifierRouterFailed)]
