@@ -77,8 +77,8 @@ case "${1:-}" in
     ;;
 
   release-build)
-    # Production build: no dev-teardown; verifies the dev-only instructions
-    # are absent from the generated IDL.
+    # Production build: no dev features; verifies each production IDL is the
+    # development IDL minus the declared dev-only instructions.
     run_in_project "./scripts/ops.sh build-release"
     ;;
 
@@ -150,12 +150,12 @@ case "${1:-}" in
     ;;
 
   clippy)
-    run_in_project "cargo clippy --workspace --all-targets -- -D warnings && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings"
+    run_in_project "./scripts/ops.sh clippy && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings"
     ;;
 
   coverage)
     echo "Building test binaries..."
-    BUILD_JSON=$(run_in_project "cargo test -p protocol-adapter -p block-time-forwarder -p spl-token-forwarder --no-run --message-format=json")
+    BUILD_JSON=$(run_in_project "cargo test --workspace --no-run --message-format=json")
     BINS=$(echo "$BUILD_JSON" | jq -r 'select(.executable != null and .profile.test == true) | .executable')
 
     if [[ -z "$BINS" ]]; then
@@ -241,14 +241,15 @@ PYEOF
     echo "  fmt          Check Rust formatting"
     echo "  clippy       Run clippy lints"
     echo "  anchor-build Build Anchor programs (development build, dev-teardown enabled)"
-    echo "  release-build Build the production binaries (no dev-teardown; verifies"
-    echo "               the dev-only instructions are absent from the IDL)"
+    echo "  release-build Build the production binaries (no dev features; verifies each"
+    echo "               IDL is the development IDL minus the declared dev-only instructions)"
     echo "  anchor-test [--cluster <c>] [--mode <real|mock>] [spec file...]"
     echo "               Local: full deterministic integration flow (default),"
     echo "               each spec file on its own fresh validator; spec files"
     echo "               (e.g. tests/settle.ts) restrict the run."
     echo "               devnet/mainnet: cluster-safe subset against deployed programs"
-    echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
+    echo "  gen-fixtures <shape> [options] OUT"
+    echo "               Generate one fixture (gen-fixtures --help lists the shapes)"
     echo "  regen-fixtures <real|mock>"
     echo "               Regenerate the complete fixture set for one proof mode"
     echo "               (sequential; real mode is hours of CPU proving)"
@@ -263,16 +264,16 @@ PYEOF
     echo ""
     echo "Cluster operations (all take --cluster <localnet|devnet|mainnet>;"
     echo "see ./scripts/ops.sh for all flags, wallet defaults, and required env):"
-    echo "  deploy [pa|btf|all]    First-time deploy (production build; --dev-teardown opts in)"
-    echo "  upgrade [pa|btf|all]   Rebuild + deploy over existing programs"
-    echo "  teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent"
+    echo "  deploy [${DEPLOY_TARGETS}|all]    First-time deploy (production build; --dev-teardown opts in)"
+    echo "  upgrade [${DEPLOY_TARGETS}|all]   Rebuild + deploy over existing programs"
+    echo "  teardown [${DEPLOY_TARGETS}|all]  PERMANENT: close programs, reclaim rent"
     echo "  close-pdas             Close all PA marker PDAs (needs a dev-teardown build)"
     echo "  init                   Initialize PA state (idempotent; needs PA_VERIFIER_ROUTER"
     echo "                         and PA_PROOF_SELECTOR)"
     echo "  set-kind-table         Replace the PA's kind-table commitment (PA_KIND_TABLE_COMMITMENT)"
     echo "  lookup-table           Create/extend the deployment's settlement lookup table"
     echo "  estop                  EMERGENCY STOP the PA (terminal; requires --yes)"
-    echo "  sync-ids               Sync declare_id!/Anchor.toml/test refs to the committed keypairs"
+    echo "  sync-ids               Sync declare_id!/Anchor.toml to the committed keypairs"
     echo "  status                 Show deployment status + wallet balance"
     echo "  balance                Show wallet address and balance"
     exit 1

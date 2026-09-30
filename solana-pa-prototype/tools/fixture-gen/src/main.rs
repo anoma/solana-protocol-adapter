@@ -23,6 +23,8 @@ use arm_gadgets::authority::{AuthoritySigningKey, AuthorityVerifyingKey};
 use arm_gadgets::encryption::{generate_public_key, SecretKey};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use futures::future::try_join_all;
 use heliax_ap_orchestrator_sdk::{
     AggregateProofResult, BaseProofResult, GpuAggregationProofPayload, GpuComplianceProofPayload,
     GpuLogicProofPayload, ProofPayload, ProofType as QueueProofType, QueueClient,
@@ -35,6 +37,7 @@ use solana_pa::verifier_router::types::{Proof, Seal};
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -151,6 +154,56 @@ async fn queue_aggregate_proof(client: &QueueClient, tx: Transaction) -> Result<
 enum Prover {
     Local,
     Queue(QueueClient),
+}
+
+/// How a prover runs independent proving jobs.
+#[derive(Clone, Copy)]
+enum JobScheduling {
+    /// All at once: the queue proves them on its own workers.
+    Concurrent,
+    /// One at a time: concurrent local proofs exhaust the machine's CPU and
+    /// memory.
+    Sequential,
+}
+
+impl Prover {
+    fn scheduling(&self) -> JobScheduling {
+        match self {
+            Prover::Queue(_) => JobScheduling::Concurrent,
+            Prover::Local => JobScheduling::Sequential,
+        }
+    }
+}
+
+/// Run independent jobs under `scheduling`, returning their results in input
+/// order. A job does no work until it is awaited, so `Sequential` starts
+/// each only after the previous one finished.
+async fn run_jobs<T>(
+    scheduling: JobScheduling,
+    jobs: impl IntoIterator<Item = impl Future<Output = Result<T>>>,
+) -> Result<Vec<T>> {
+    match scheduling {
+        JobScheduling::Concurrent => try_join_all(jobs).await,
+        JobScheduling::Sequential => {
+            let mut results = Vec::new();
+            for job in jobs {
+                results.push(job.await?);
+            }
+            Ok(results)
+        }
+    }
+}
+
+/// Run two independent jobs of different result types under `scheduling`.
+async fn run_job_pair<A, B>(
+    scheduling: JobScheduling,
+    first: impl Future<Output = Result<A>>,
+    second: impl Future<Output = Result<B>>,
+) -> Result<(A, B)> {
+    match scheduling {
+        JobScheduling::Concurrent => futures::try_join!(first, second),
+        JobScheduling::Sequential => Ok((first.await?, second.await?)),
+    }
 }
 
 /// Prove one compliance witness locally on CPU. Runs on tokio's blocking
@@ -298,63 +351,147 @@ struct Fixture {
 
 const FIXTURE_FORMAT: &str = "arm-risc0:Transaction(bincode)";
 
+/// Generate the Solana PA's test fixtures: proven, aggregated transactions
+/// the integration suite settles.
+#[derive(Parser)]
+#[command(name = "fixture-gen")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
 enum Command {
-    Generate(GenerateArgs),
-    Dump {
-        input: PathBuf,
-    },
+    #[command(flatten)]
+    Generate(ShapeCommand),
+    /// The historical-root pair: a committer settled right after
+    /// batch_groth16, and a consumer spending its resource through a real
+    /// Merkle path over the tree [batch_groth16, committer].
     HistoricalRoot {
-        batch_groth16_path: PathBuf,
+        /// The settled batch_groth16 fixture (leaf 0 of the tree).
+        batch_groth16: PathBuf,
+        /// Where to write the committer fixture.
         committer_out: PathBuf,
+        /// Where to write the consumer fixture.
         consumer_out: PathBuf,
-        prover_choice: Option<ProverChoice>,
-        mock: bool,
+        #[command(flatten)]
+        prover: ProverArgs,
     },
+    /// Print a fixture's transaction structure.
+    Dump { input: PathBuf },
 }
 
-struct GenerateArgs {
-    debug_assumptions: bool,
-    shape: GenerateShape,
-    error_variants_dir: Option<PathBuf>,
-    out_path: PathBuf,
-    prover_choice: Option<ProverChoice>,
-    mock: bool,
-    /// The kind table the fixture is proven against (`--kind-table`).
-    kind_table: PathBuf,
-}
-
-/// What kind of transaction the default `Generate` command builds.
-enum GenerateShape {
-    /// One action with an external forwarder call bound into its app data.
-    SingleAction {
-        forwarder_mode: ForwarderMode,
+/// One fixture shape per subcommand, each taking only its own options.
+#[derive(Subcommand)]
+enum ShapeCommand {
+    /// One action whose consumed resource calls the block-time forwarder.
+    Batch {
+        /// Append a second block-time-forwarder external call.
+        #[arg(long)]
         multi_external_call: bool,
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// The block-time-forwarder call with a wrong expected output, for the
+    /// ExternalCallOutputMismatch test.
+    OutputMismatch {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// The test forwarder with a failing instruction.
+    ForwarderFail {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// The test forwarder returning no data.
+    ForwarderSilent {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// The test forwarder relaying an unwrap to the SPL forwarder, which must
+    /// reject a caller other than the adapter.
+    ForwarderRelay {
+        #[command(flatten)]
+        generate: GenerateArgs,
     },
     /// Three single-unit actions with event-emitted payload blobs and no
-    /// external calls — the captured mainnet transfer's shape (OOM
-    /// regression); see `generate_transfer_shape_transaction`.
-    TransferShape,
-    /// An AnomaPay SPL token wrap proven with the real transfer logic, under
-    /// the forwarder nonce `nonce`; see `generate_anomapay_wrap_transaction`.
-    AnomaPayWrap { nonce: u64 },
-    /// An AnomaPay SPL token unwrap spending the wrap's resource through a
-    /// Merkle path over the fixtures settled before it (`--settled`, in
-    /// settlement order, the wrap last); see
-    /// `generate_anomapay_unwrap_transaction`.
-    AnomaPayUnwrap { settled: Vec<PathBuf> },
+    /// external calls: the captured mainnet transfer's shape.
+    TransferShape {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// An AnomaPay wrap proven with the transfer logic: the user's
+    /// ed25519-authorized escrow deposit creates the owner's resource.
+    SplTokenWrap {
+        /// The forwarder nonce the user signs.
+        #[arg(long, value_name = "N", default_value_t = ANOMAPAY_WRAP_NONCE)]
+        wrap_nonce: u64,
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// An AnomaPay unwrap: the owner spends the wrapped resource, releasing
+    /// the escrow to the recipient.
+    SplTokenUnwrap {
+        /// The wrap fixture, settled alone on a fresh adapter: its created
+        /// commitments are the tree the unwrap proves membership in.
+        #[arg(long, value_name = "FIXTURE")]
+        wrap: PathBuf,
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+}
+
+/// The options every generated fixture takes.
+#[derive(Args)]
+struct GenerateArgs {
+    /// Where to write the fixture. Every resource nonce derives from its file
+    /// stem, so fixtures with different names never share a nullifier.
+    out_path: PathBuf,
+    #[command(flatten)]
+    prover: ProverArgs,
+    /// Also write the final transaction's error variants to DIR:
+    /// wrong_root, no_aggregation, garbage_proof, corrupt_seal, zero_action
+    /// and witness_delta.
+    #[arg(long, value_name = "DIR")]
+    error_variants: Option<PathBuf>,
+    /// Prove against this kind table instead of the committed empty one
+    /// (kind_table.json); the PA must store its commitment.
+    #[arg(long, value_name = "PATH", default_value = KIND_TABLE_PATH)]
+    kind_table: PathBuf,
+    /// Print claim digests for composition debugging.
+    #[arg(long)]
+    debug_assumptions: bool,
+}
+
+#[derive(Args)]
+struct ProverArgs {
+    /// Run the dev-mode executor instead of proving (seconds, no GPU or
+    /// container proving step), and emit a mock seal (selector 0xffffffff)
+    /// only the localnet mock verifier accepts.
+    #[arg(long, conflicts_with = "prover")]
+    mock: bool,
+    /// The prover backend; defaults to queue when QUEUE_BASE_URL is set,
+    /// local otherwise. local runs risc0's CPU prover in-process (its Groth16
+    /// step needs podman/docker); queue dispatches to the AnomaPay workers
+    /// queue at QUEUE_BASE_URL, authenticated with QUEUE_AUTH_TOKEN.
+    #[arg(long, value_enum)]
+    prover: Option<ProverChoice>,
 }
 
 /// Explicit `--prover` selection. `None` (the flag was not passed) resolves
 /// to `Queue` if `QUEUE_BASE_URL` is set in the environment, `Local`
 /// otherwise — see `resolve_prover`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, ValueEnum)]
 enum ProverChoice {
     Local,
     Queue,
 }
 
 enum ForwarderMode {
-    BlockTimeForwarder { output_mismatch: bool },
+    BlockTimeForwarder {
+        output_mismatch: bool,
+        multi_external_call: bool,
+    },
     TestForwarderFail,
     TestForwarderSilent,
     TestForwarderRelay,
@@ -517,7 +654,7 @@ const RELAY_UNWRAP_AMOUNT: u64 = 1;
 /// the transfer logic ref its config authorizes: the seeded mint, to the
 /// seeded recipient. Segment: the test-forwarder, then the SPL forwarder's
 /// unwrap segment (program, config, instructions sysvar, escrow ATA,
-/// recipient ATA, escrow PDA, token program).
+/// recipient ATA, escrow authority, token program).
 fn test_forwarder_relay_payload_blob() -> Result<ExpirableBlob> {
     let seeded_pubkey =
         |label| Pubkey::new_from_array(seeded_keypair(label).verifying_key().to_bytes());
@@ -660,19 +797,16 @@ fn seeded_wrap(fixture_name: &str) -> Result<(AnomaPayActors, SeededOwner, Wrap)
 /// Prove one AnomaPay action through the selected prover and wrap it in a
 /// balanced transaction.
 async fn prove_anomapay_action(prover: &Prover, action: TransferAction) -> Result<Transaction> {
-    let compliance_unit = prove_compliance(prover, &action.compliance_witness)
-        .await
-        .context("prove compliance")?;
-    let logic_verifiers = prove_logic_pair(
+    let proven = prove_compliance_and_logic(
         prover,
+        &action.compliance_witness,
         TOKEN_TRANSFER_ELF,
         &TOKEN_TRANSFER_ID,
         action.consumed_logic.witness,
         action.created_logic.witness,
     )
-    .await?;
-    let proven = arm::action::new(compliance_unit, logic_verifiers)
-        .map_err(|e| anyhow!("build AnomaPay action: {e:?}"))?;
+    .await
+    .context("prove the AnomaPay action")?;
     assemble_transaction(vec![proven], &[action.compliance_witness.rcv])
 }
 
@@ -716,24 +850,6 @@ async fn generate_anomapay_wrap_transaction(
         logic_ref_b64: token_transfer_logic_ref_b64(),
     });
     Ok((tx, metadata))
-}
-
-/// The created commitments of the fixtures at `paths`, in order: the leaves
-/// their settlements append.
-fn tree_leaves_of(paths: &[PathBuf]) -> Result<Vec<Digest>> {
-    let mut leaves = Vec::new();
-    for path in paths {
-        let tx = load_fixture_tx(path)?;
-        let commitments = created_commitments(&tx)?;
-        if commitments.is_empty() {
-            bail!(
-                "{} settles no commitment, it is not a tree leaf",
-                path.display()
-            );
-        }
-        leaves.extend(commitments);
-    }
-    Ok(leaves)
 }
 
 /// The adapter's commitment tree after appending `leaves` in order, replayed
@@ -946,10 +1062,6 @@ async fn prove_action(
         .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
     let created_cm = compliance_witness.created_resources[0].commitment();
 
-    let compliance_unit = prove_compliance(prover, compliance_witness)
-        .await
-        .context("prove compliance")?;
-
     let root = single_action_tree_root(consumed_nf, created_cm)?;
 
     let consumed_instance = LogicInstance {
@@ -965,15 +1077,40 @@ async fn prove_action(
         app_data: created_app_data,
     };
 
-    let logic_verifiers = prove_logic_pair(
+    prove_compliance_and_logic(
         prover,
+        compliance_witness,
         PASSTHROUGH_LOGIC_GUEST_ELF,
         &passthrough_vk,
         consumed_instance,
         created_instance,
     )
+    .await
+    .context("prove the passthrough action")
+}
+
+/// Prove an action's compliance unit and its consumed and created
+/// resources' logic under one guest, and build the action from the proofs.
+async fn prove_compliance_and_logic<T: Serialize + Send + 'static>(
+    prover: &Prover,
+    compliance_witness: &ComplianceWitness,
+    proving_key: &'static [u8],
+    verifying_key: &Digest,
+    consumed: T,
+    created: T,
+) -> Result<Action> {
+    let (compliance_unit, logic_verifiers) = run_job_pair(
+        prover.scheduling(),
+        async {
+            prove_compliance(prover, compliance_witness)
+                .await
+                .context("prove compliance")
+        },
+        prove_logic_pair(prover, proving_key, verifying_key, consumed, created),
+    )
     .await?;
-    arm::action::new(compliance_unit, logic_verifiers).map_err(|e| anyhow!("build action: {e:?}"))
+    arm::action::new(compliance_unit, logic_verifiers)
+        .map_err(|e| anyhow!("build the action from its proofs: {e:?}"))
 }
 
 /// Prove the consumed and the created resource's logic under one guest, and
@@ -986,18 +1123,17 @@ async fn prove_logic_pair<T: Serialize + Send + 'static>(
     consumed: T,
     created: T,
 ) -> Result<Vec<LogicVerifier>> {
-    let mut verifiers = Vec::with_capacity(2);
-    for (witness, label) in [(consumed, "consumed"), (created, "created")] {
+    let jobs = [(consumed, "consumed"), (created, "created")].map(|(witness, label)| async move {
         let (proof, instance) = prove_logic(prover, proving_key, verifying_key, witness)
             .await
             .with_context(|| format!("prove the {label} resource's logic"))?;
-        verifiers.push(LogicVerifier {
+        Ok(LogicVerifier {
             proof,
             instance,
             verifying_key: *verifying_key,
-        });
-    }
-    Ok(verifiers)
+        })
+    });
+    run_jobs(prover.scheduling(), jobs).await
 }
 
 /// Wrap proven actions into a balanced, delta-proved `Transaction`. The delta
@@ -1081,8 +1217,7 @@ async fn generate_transfer_shape_transaction(
     prover: &Prover,
     fixture_name: &str,
 ) -> Result<Transaction> {
-    let mut actions = Vec::with_capacity(TRANSFER_SHAPE_ACTIONS);
-    let mut rcvs = Vec::with_capacity(TRANSFER_SHAPE_ACTIONS);
+    let mut witnesses = Vec::with_capacity(TRANSFER_SHAPE_ACTIONS);
     for i in 0..TRANSFER_SHAPE_ACTIONS {
         let (consumed_resource, nf_key, _, created_resource) =
             deterministic_ephemeral_resource(fixture_name, i as u32)?;
@@ -1113,10 +1248,25 @@ async fn generate_transfer_shape_transaction(
             ..AppData::default()
         };
 
-        actions.push(prove_action(prover, &witness, AppData::default(), created_app_data).await?);
-        rcvs.push(witness.rcv);
+        witnesses.push((witness, created_app_data));
     }
 
+    let actions = run_jobs(
+        prover.scheduling(),
+        witnesses.iter().map(|(witness, created_app_data)| {
+            prove_action(
+                prover,
+                witness,
+                AppData::default(),
+                created_app_data.clone(),
+            )
+        }),
+    )
+    .await?;
+    let rcvs: Vec<Vec<u8>> = witnesses
+        .into_iter()
+        .map(|(witness, _)| witness.rcv)
+        .collect();
     assemble_transaction(actions, &rcvs)
 }
 
@@ -1144,7 +1294,6 @@ async fn generate_test_transaction_with_external_payload(
     prover: &Prover,
     forwarder_mode: ForwarderMode,
     fixture_name: &str,
-    multi_external_call: bool,
 ) -> Result<Transaction> {
     let (consumed_resource, nf_key, _, created_resource) =
         deterministic_ephemeral_resource(fixture_name, 0)?;
@@ -1161,15 +1310,19 @@ async fn generate_test_transaction_with_external_payload(
     // the passthrough logic circuit, which commits whatever it is given.
     let mut consumed_app_data = AppData::default();
     let external_blob = match &forwarder_mode {
-        ForwarderMode::BlockTimeForwarder { output_mismatch } => {
-            block_time_forwarder_external_payload_blob(*output_mismatch)?
-        }
+        ForwarderMode::BlockTimeForwarder {
+            output_mismatch, ..
+        } => block_time_forwarder_external_payload_blob(*output_mismatch)?,
         ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob()?,
         ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
         ForwarderMode::TestForwarderRelay => test_forwarder_relay_payload_blob()?,
     };
     consumed_app_data.external_payload.push(external_blob);
-    if multi_external_call && matches!(forwarder_mode, ForwarderMode::BlockTimeForwarder { .. }) {
+    if let ForwarderMode::BlockTimeForwarder {
+        multi_external_call: true,
+        ..
+    } = forwarder_mode
+    {
         consumed_app_data
             .external_payload
             .push(block_time_forwarder_external_payload_blob(false)?);
@@ -1484,6 +1637,37 @@ fn build_historical_root_consumer_witness(
     ))
 }
 
+/// Prove a one-action historical-root transaction (`label` names it in the
+/// log), aggregate it, and verify the aggregation.
+async fn prove_aggregated_single_action(
+    prover: &Prover,
+    label: &str,
+    witness: ComplianceWitness,
+) -> Result<Transaction> {
+    eprintln!("phase: generate historical-root {label} transaction");
+    let start = Instant::now();
+    let tx = prove_single_action_transaction(prover, witness, AppData::default())
+        .await
+        .with_context(|| format!("build {label} transaction"))?;
+    eprintln!(
+        "phase done: {label} transaction ({})",
+        fmt_duration(start.elapsed())
+    );
+
+    eprintln!("phase: aggregate {label} transaction (batch, groth16)");
+    let start = Instant::now();
+    let tx = aggregate_tx(prover, tx)
+        .await
+        .with_context(|| format!("aggregate {label} tx"))?;
+    eprintln!(
+        "phase done: aggregate {label} ({})",
+        fmt_duration(start.elapsed())
+    );
+    arm::transaction::verify_aggregation(&tx, JournalEncoding::Risc0Serde)
+        .map_err(|e| anyhow!("verify {label} aggregated proof: {e:?}"))?;
+    Ok(tx)
+}
+
 /// Generate the historical-root committer and consumer fixtures.
 ///
 /// The committer transaction's created resource is genuinely non-ephemeral,
@@ -1509,75 +1693,31 @@ async fn generate_historical_root_fixtures(
     prover_choice: Option<ProverChoice>,
 ) -> Result<()> {
     let prover = resolve_prover(prover_choice)?;
-    match &prover {
-        Prover::Local => eprintln!("prover: local (CPU risc0 prover)"),
-        Prover::Queue(_) => eprintln!(
-            "prover: queue ({})",
-            env::var("QUEUE_BASE_URL").unwrap_or_default()
-        ),
-    }
 
     let batch_groth16_leaf = read_sole_created_commitment(batch_groth16_path)
         .context("read batch_groth16.json's committed leaf")?;
 
-    eprintln!("phase: generate historical-root committer transaction");
-    let commit_start = Instant::now();
     let (committer_witness, committed_resource, committer_nf_key) =
         build_historical_root_committer_witness(fixture_name(committer_out)?)?;
-    let mut committer_tx =
-        prove_single_action_transaction(&prover, committer_witness, AppData::default())
-            .await
-            .context("build committer transaction")?;
-    eprintln!(
-        "phase done: committer transaction ({})",
-        fmt_duration(commit_start.elapsed())
-    );
-
-    eprintln!("phase: aggregate committer transaction (batch, groth16)");
-    let agg_start = Instant::now();
-    committer_tx = aggregate_tx(&prover, committer_tx)
-        .await
-        .context("aggregate committer tx")?;
-    eprintln!(
-        "phase done: aggregate committer ({})",
-        fmt_duration(agg_start.elapsed())
-    );
-    arm::transaction::verify_aggregation(&committer_tx, JournalEncoding::Risc0Serde)
-        .map_err(|e| anyhow!("verify committer aggregated proof: {e:?}"))?;
-
-    finalize_and_write_fixture(&mut committer_tx, committer_out, None)
-        .context("write committer fixture")?;
-
     // The committer settles right after batch_groth16 (leaf 0), as leaf 1.
+    // Its commitment is known before it is proven, so the consumer's Merkle
+    // path is too, and the two transactions prove independently.
     let committed_cm = committed_resource.commitment();
     let (merkle_path, expected_root) =
         checked_pa_merkle_path(&[batch_groth16_leaf, committed_cm], 1)?;
-
-    eprintln!("phase: generate historical-root consumer transaction");
-    let consume_start = Instant::now();
     let consumer_witness =
         build_historical_root_consumer_witness(committed_resource, committer_nf_key, merkle_path)
             .context("build consumer witness")?;
-    let mut consumer_tx =
-        prove_single_action_transaction(&prover, consumer_witness, AppData::default())
-            .await
-            .context("build consumer transaction")?;
-    eprintln!(
-        "phase done: consumer transaction ({})",
-        fmt_duration(consume_start.elapsed())
-    );
 
-    eprintln!("phase: aggregate consumer transaction (batch, groth16)");
-    let agg_start = Instant::now();
-    consumer_tx = aggregate_tx(&prover, consumer_tx)
-        .await
-        .context("aggregate consumer tx")?;
-    eprintln!(
-        "phase done: aggregate consumer ({})",
-        fmt_duration(agg_start.elapsed())
-    );
-    arm::transaction::verify_aggregation(&consumer_tx, JournalEncoding::Risc0Serde)
-        .map_err(|e| anyhow!("verify consumer aggregated proof: {e:?}"))?;
+    let (mut committer_tx, mut consumer_tx) = run_job_pair(
+        prover.scheduling(),
+        prove_aggregated_single_action(&prover, "committer", committer_witness),
+        prove_aggregated_single_action(&prover, "consumer", consumer_witness),
+    )
+    .await?;
+
+    finalize_and_write_fixture(&mut committer_tx, committer_out, None)
+        .context("write committer fixture")?;
 
     // The whole point of this fixture: the consumed root must be a genuine,
     // non-padding historical root. If it were the initial root, is_root_valid
@@ -1714,299 +1854,25 @@ fn dump_fixture(input: &Path) -> Result<()> {
     Ok(())
 }
 
-fn print_usage() {
-    eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --forwarder-relay        Test-forwarder relaying an unwrap to the SPL forwarder\n                           (the forwarder must reject a caller other than the adapter)\n  --spl-token-wrap         AnomaPay wrap proven with the transfer logic: the user's\n                           ed25519-authorized escrow deposit creates the owner's resource\n  --spl-token-unwrap       AnomaPay unwrap: the owner spends the wrapped resource, releasing\n                           the escrow to the recipient; needs --settled\n  --wrap-nonce N           (wrap) the forwarder nonce the user signs (default 1)\n  --kind-table PATH        Prove against this kind table instead of the committed\n                           empty one (kind_table.json); the PA must store its commitment\n  --settled FIXTURE        (unwrap) a fixture settled before the unwrap, in settlement\n                           order, the wrap last; repeat per fixture\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --transfer-shape         Three single-unit actions with event-emitted payload blobs\n                           and no external calls (the captured mainnet transfer's shape);\n                           excludes the forwarder flags\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof/corrupt_seal/\n                           zero_action/witness_delta variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent,\n    --forwarder-relay, --spl-token-wrap, --spl-token-unwrap.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - Every resource nonce derives from the output file's stem, so fixtures with\n    different names never share a nullifier.\n"
-    );
-}
-
-fn parse_historical_root_args(args: impl Iterator<Item = String>) -> Result<Command> {
-    let mut positionals: Vec<PathBuf> = Vec::new();
-    let mut prover_choice: Option<ProverChoice> = None;
-    let mut mock = false;
-    let mut args = args;
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--mock" => {
-                mock = true;
-            }
-            "--prover" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--prover requires a value"))?;
-                prover_choice = Some(match value.as_str() {
-                    "local" => ProverChoice::Local,
-                    "queue" => ProverChoice::Queue,
-                    _ => {
-                        return Err(anyhow!(
-                            "invalid --prover value: {value} (expected local or queue)"
-                        ))
-                    }
-                });
-            }
-            _ if arg.starts_with('-') => {
-                return Err(anyhow!("unknown flag in historical-root mode: {arg}"));
-            }
-            _ => positionals.push(PathBuf::from(arg)),
-        }
-    }
-
-    if positionals.len() != 3 {
-        return Err(anyhow!(
-            "Usage: fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]"
-        ));
-    }
-
-    Ok(Command::HistoricalRoot {
-        batch_groth16_path: positionals.remove(0),
-        committer_out: positionals.remove(0),
-        consumer_out: positionals.remove(0),
-        prover_choice,
-        mock,
-    })
-}
-
-fn parse_args() -> Result<Command> {
-    let mut raw_args: Vec<String> = env::args().skip(1).collect();
-
-    // Check for subcommands before flag parsing.
-    if let Some(first) = raw_args.first() {
-        match first.as_str() {
-            "dump" => {
-                if raw_args.len() != 2 {
-                    return Err(anyhow!("Usage: fixture-gen dump <input.json>"));
-                }
-                let input = PathBuf::from(raw_args.remove(1));
-                return Ok(Command::Dump { input });
-            }
-            "historical-root" => {
-                let args = raw_args.into_iter().skip(1);
-                return parse_historical_root_args(args);
-            }
-            _ => {}
-        }
-    }
-
-    let mut args = raw_args.into_iter();
-    let mut debug_assumptions = false;
-    let mut forwarder_mode: Option<ForwarderMode> = None;
-    let mut multi_external_call = false;
-    let mut transfer_shape = false;
-    let mut error_variants_dir: Option<PathBuf> = None;
-    let mut out_path: Option<PathBuf> = None;
-    let mut prover_choice: Option<ProverChoice> = None;
-    let mut mock = false;
-    let mut anomapay: Option<GenerateShape> = None;
-    let mut settled: Vec<PathBuf> = Vec::new();
-    let mut wrap_nonce: Option<u64> = None;
-    let mut kind_table: Option<PathBuf> = None;
-
-    while let Some(arg) = args.next() {
-        // Handle positional arguments before splitting on '='.
-        if !arg.starts_with('-') {
-            if out_path.is_some() {
-                return Err(anyhow!("unexpected extra argument: {arg}"));
-            }
-            out_path = Some(PathBuf::from(arg));
-            continue;
-        }
-
-        // Support both "--flag value" and "--flag=value" uniformly.
-        let (flag, eq_value) = match arg.find('=') {
-            Some(pos) => (&arg[..pos], Some(&arg[pos + 1..])),
-            None => (arg.as_str(), None),
-        };
-
-        match flag {
-            "-h" | "--help" => {
-                print_usage();
-                std::process::exit(0);
-            }
-            "--debug-assumptions" => {
-                debug_assumptions = true;
-            }
-            "--output-mismatch" | "--forwarder-fail" | "--forwarder-silent"
-            | "--forwarder-relay" | "--spl-token-wrap" | "--spl-token-unwrap" => {
-                if forwarder_mode.is_some() || anomapay.is_some() {
-                    return Err(anyhow!(
-                        "at most one of --output-mismatch, --forwarder-fail, --forwarder-silent, \
-                         --forwarder-relay, --spl-token-wrap, --spl-token-unwrap may be set"
-                    ));
-                }
-                match flag {
-                    "--output-mismatch" => {
-                        forwarder_mode = Some(ForwarderMode::BlockTimeForwarder {
-                            output_mismatch: true,
-                        })
-                    }
-                    "--forwarder-fail" => forwarder_mode = Some(ForwarderMode::TestForwarderFail),
-                    "--forwarder-silent" => {
-                        forwarder_mode = Some(ForwarderMode::TestForwarderSilent)
-                    }
-                    "--forwarder-relay" => forwarder_mode = Some(ForwarderMode::TestForwarderRelay),
-                    "--spl-token-wrap" => {
-                        anomapay = Some(GenerateShape::AnomaPayWrap {
-                            nonce: ANOMAPAY_WRAP_NONCE,
-                        })
-                    }
-                    "--spl-token-unwrap" => {
-                        anomapay = Some(GenerateShape::AnomaPayUnwrap { settled: vec![] })
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            "--wrap-nonce" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--wrap-nonce requires a value"))?;
-                wrap_nonce = Some(
-                    value
-                        .parse::<u64>()
-                        .with_context(|| format!("invalid --wrap-nonce value: {value}"))?,
-                );
-            }
-            "--kind-table" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--kind-table requires a path"))?;
-                kind_table = Some(PathBuf::from(value));
-            }
-            "--settled" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--settled requires a fixture path"))?;
-                settled.push(PathBuf::from(value));
-            }
-            "--multi-external-call" => {
-                multi_external_call = true;
-            }
-            "--transfer-shape" => {
-                transfer_shape = true;
-            }
-            "--mock" => {
-                mock = true;
-            }
-            "--error-variants" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--error-variants requires a value"))?;
-                if value.is_empty() {
-                    return Err(anyhow!(
-                        "--error-variants requires a non-empty directory path"
-                    ));
-                }
-                error_variants_dir = Some(PathBuf::from(value));
-            }
-            "--prover" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--prover requires a value"))?;
-                prover_choice = Some(match value.as_str() {
-                    "local" => ProverChoice::Local,
-                    "queue" => ProverChoice::Queue,
-                    _ => {
-                        return Err(anyhow!(
-                            "invalid --prover value: {value} (expected local or queue)"
-                        ))
-                    }
-                });
-            }
-            _ => {
-                return Err(anyhow!("unknown flag: {arg}"));
-            }
-        }
-    }
-
-    let out_path = out_path
-        .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
-
-    if let Some(GenerateShape::AnomaPayUnwrap { settled: leaves }) = &mut anomapay {
-        if settled.is_empty() {
-            return Err(anyhow!(
-                "--spl-token-unwrap needs the fixtures settled before it, in order, \
-                 as --settled arguments, the wrap fixture last"
-            ));
-        }
-        *leaves = std::mem::take(&mut settled);
-    }
-    if !settled.is_empty() {
-        return Err(anyhow!("--settled only applies to --spl-token-unwrap"));
-    }
-    if let Some(value) = wrap_nonce {
-        match &mut anomapay {
-            Some(GenerateShape::AnomaPayWrap { nonce }) => *nonce = value,
-            _ => return Err(anyhow!("--wrap-nonce only applies to --spl-token-wrap")),
-        }
-    }
-
-    let shape = if transfer_shape {
-        if forwarder_mode.is_some() || anomapay.is_some() || multi_external_call {
-            return Err(anyhow!(
-                "--transfer-shape has no external calls; it cannot combine with \
-                 --output-mismatch/--forwarder-fail/--forwarder-silent/--spl-token-wrap/\
-                 --spl-token-unwrap/--multi-external-call"
-            ));
-        }
-        GenerateShape::TransferShape
-    } else if let Some(shape) = anomapay {
-        if multi_external_call {
-            return Err(anyhow!(
-                "--multi-external-call applies to the block-time forwarder, not to \
-                 --spl-token-wrap/--spl-token-unwrap"
-            ));
-        }
-        shape
-    } else {
-        GenerateShape::SingleAction {
-            forwarder_mode: forwarder_mode.unwrap_or(ForwarderMode::BlockTimeForwarder {
-                output_mismatch: false,
-            }),
-            multi_external_call,
-        }
-    };
-
-    Ok(Command::Generate(GenerateArgs {
-        debug_assumptions,
-        shape,
-        error_variants_dir,
-        out_path,
-        prover_choice,
-        mock,
-        kind_table: kind_table.unwrap_or_else(|| PathBuf::from(KIND_TABLE_PATH)),
-    }))
-}
-
 /// Enter mock mode (no-op unless `mock`): proofs run through the local
 /// dev-mode executor (guests execute, nothing is proven), and
 /// `finalize_and_write_fixture` turns the resulting Fake aggregation receipt
 /// into a mock seal. RISC0_DEV_MODE is a runtime env var read by risc0 at
 /// proving time; setting it here keeps the flag self-contained instead of
 /// depending on ambient environment state.
-fn apply_mock_mode(
-    mock: bool,
-    prover_choice: Option<ProverChoice>,
-) -> Result<Option<ProverChoice>> {
+fn apply_mock_mode(&ProverArgs { mock, prover }: &ProverArgs) -> Option<ProverChoice> {
     if !mock {
-        return Ok(prover_choice);
-    }
-    if matches!(prover_choice, Some(ProverChoice::Queue)) {
-        bail!("--mock generates dev-mode receipts with the local executor; --prover queue is incompatible");
+        return prover;
     }
     env::set_var("RISC0_DEV_MODE", "1");
     eprintln!("mode: mock (dev-mode receipts -> mock seal, selector 0xffffffff)");
-    Ok(Some(ProverChoice::Local))
+    Some(ProverChoice::Local)
 }
 
 /// Resolve the `Prover` to use: an explicit `--prover` wins; otherwise default
 /// to `Queue` when `QUEUE_BASE_URL` is set (preserving today's behavior when a
 /// queue is configured), `Local` otherwise (so fixture-gen works out of the
-/// box with no queue credentials).
+/// box with no queue credentials). Logs the resolved prover.
 fn resolve_prover(choice: Option<ProverChoice>) -> Result<Prover> {
     let choice = choice.unwrap_or_else(|| {
         if env::var("QUEUE_BASE_URL").is_ok() {
@@ -2015,67 +1881,10 @@ fn resolve_prover(choice: Option<ProverChoice>) -> Result<Prover> {
             ProverChoice::Local
         }
     });
-    match choice {
-        ProverChoice::Local => Ok(Prover::Local),
-        ProverChoice::Queue => Ok(Prover::Queue(build_queue_client()?)),
-    }
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let command = parse_args()?;
-    // Every proving and verification path checks witness kind tables against
-    // the globally loaded table, so load one before any command runs: the
-    // generated fixture's `--kind-table`, the committed table otherwise.
-    let kind_table = match &command {
-        Command::Generate(args) => args.kind_table.clone(),
-        _ => PathBuf::from(KIND_TABLE_PATH),
+    let prover = match choice {
+        ProverChoice::Local => Prover::Local,
+        ProverChoice::Queue => Prover::Queue(build_queue_client()?),
     };
-    init_kind_table_from_file(&kind_table)
-        .map_err(|e| anyhow!("load kind table {}: {e:?}", kind_table.display()))?;
-    eprintln!(
-        "kind table: {} (commitment {})",
-        kind_table.display(),
-        hex::encode(
-            kind_table_hash()
-                .ok_or_else(|| anyhow!("kind table not loaded"))?
-                .as_bytes()
-        )
-    );
-
-    let GenerateArgs {
-        debug_assumptions,
-        shape,
-        error_variants_dir,
-        out_path,
-        prover_choice,
-        mock,
-        kind_table: _,
-    } = match command {
-        Command::Dump { input } => return dump_fixture(&input),
-        Command::HistoricalRoot {
-            batch_groth16_path,
-            committer_out,
-            consumer_out,
-            prover_choice,
-            mock,
-        } => {
-            let prover_choice = apply_mock_mode(mock, prover_choice)?;
-            return generate_historical_root_fixtures(
-                &batch_groth16_path,
-                &committer_out,
-                &consumer_out,
-                prover_choice,
-            )
-            .await;
-        }
-        Command::Generate(args) => args,
-    };
-
-    let total_start = Instant::now();
-
-    let prover_choice = apply_mock_mode(mock, prover_choice)?;
-    let prover = resolve_prover(prover_choice)?;
     match &prover {
         Prover::Local => eprintln!("prover: local (CPU risc0 prover)"),
         Prover::Queue(_) => eprintln!(
@@ -2083,75 +1892,152 @@ async fn main() -> Result<()> {
             env::var("QUEUE_BASE_URL").unwrap_or_default()
         ),
     }
+    Ok(prover)
+}
+
+/// Load the kind table every proving and verification path checks witness
+/// kind tables against.
+fn load_kind_table(path: &Path) -> Result<()> {
+    init_kind_table_from_file(path)
+        .map_err(|e| anyhow!("load kind table {}: {e:?}", path.display()))?;
+    eprintln!(
+        "kind table: {} (commitment {})",
+        path.display(),
+        hex::encode(
+            kind_table_hash()
+                .ok_or_else(|| anyhow!("kind table not loaded"))?
+                .as_bytes()
+        )
+    );
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    match Cli::parse().command {
+        Command::Dump { input } => {
+            load_kind_table(Path::new(KIND_TABLE_PATH))?;
+            dump_fixture(&input)
+        }
+        Command::HistoricalRoot {
+            batch_groth16,
+            committer_out,
+            consumer_out,
+            prover,
+        } => {
+            load_kind_table(Path::new(KIND_TABLE_PATH))?;
+            generate_historical_root_fixtures(
+                &batch_groth16,
+                &committer_out,
+                &consumer_out,
+                apply_mock_mode(&prover),
+            )
+            .await
+        }
+        Command::Generate(shape) => generate_fixture(shape).await,
+    }
+}
+
+async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
+    let (ShapeCommand::Batch { generate, .. }
+    | ShapeCommand::OutputMismatch { generate }
+    | ShapeCommand::ForwarderFail { generate }
+    | ShapeCommand::ForwarderSilent { generate }
+    | ShapeCommand::ForwarderRelay { generate }
+    | ShapeCommand::TransferShape { generate }
+    | ShapeCommand::SplTokenWrap { generate, .. }
+    | ShapeCommand::SplTokenUnwrap { generate, .. }) = &shape;
+    let GenerateArgs {
+        out_path,
+        prover,
+        error_variants,
+        kind_table,
+        debug_assumptions,
+    } = generate;
+    load_kind_table(kind_table)?;
+    let total_start = Instant::now();
+
+    let prover = resolve_prover(apply_mock_mode(prover))?;
 
     eprintln!("fixture output: {}", out_path.display());
     eprintln!("mode: aggregated (batch Groth16)");
     match &shape {
-        GenerateShape::SingleAction {
-            forwarder_mode:
-                ForwarderMode::BlockTimeForwarder {
-                    output_mismatch: true,
-                },
-            ..
-        } => eprintln!(
-            "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
-        ),
-        GenerateShape::SingleAction {
+        ShapeCommand::Batch {
             multi_external_call: true,
             ..
         } => eprintln!("mode: multi-external-call (two external payload blobs)"),
-        GenerateShape::SingleAction { .. } => {}
-        GenerateShape::TransferShape => eprintln!(
+        ShapeCommand::OutputMismatch { .. } => eprintln!(
+            "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
+        ),
+        ShapeCommand::TransferShape { .. } => eprintln!(
             "mode: transfer-shape ({TRANSFER_SHAPE_ACTIONS} actions, event-emitted payloads, no external calls)"
         ),
-        GenerateShape::AnomaPayWrap { nonce } => eprintln!(
-            "mode: AnomaPay wrap (transfer logic {}, forwarder nonce {nonce})",
+        ShapeCommand::SplTokenWrap { wrap_nonce, .. } => eprintln!(
+            "mode: AnomaPay wrap (transfer logic {}, forwarder nonce {wrap_nonce})",
             TOKEN_TRANSFER_ID
         ),
-        GenerateShape::AnomaPayUnwrap { settled } => eprintln!(
-            "mode: AnomaPay unwrap (transfer logic {}, {} settled fixtures)",
+        ShapeCommand::SplTokenUnwrap { wrap, .. } => eprintln!(
+            "mode: AnomaPay unwrap (transfer logic {}, wrap fixture {})",
             TOKEN_TRANSFER_ID,
-            settled.len()
+            wrap.display()
         ),
+        ShapeCommand::Batch { .. }
+        | ShapeCommand::ForwarderFail { .. }
+        | ShapeCommand::ForwarderSilent { .. }
+        | ShapeCommand::ForwarderRelay { .. } => {}
     }
-    if let Some(dir) = &error_variants_dir {
+    if let Some(dir) = &error_variants {
         eprintln!("error variants output dir: {}", dir.display());
     }
 
     eprintln!("phase: generate_test_transaction");
     let gen_start = Instant::now();
-    let is_transfer_shape = matches!(shape, GenerateShape::TransferShape);
-    let name = fixture_name(&out_path)?;
-    let (mut tx, spl_forwarder) = match shape {
-        GenerateShape::SingleAction {
-            forwarder_mode,
+    let name = fixture_name(out_path)?;
+    let single_action = |mode| generate_test_transaction_with_external_payload(&prover, mode, name);
+    let (mut tx, spl_forwarder) = match &shape {
+        ShapeCommand::Batch {
             multi_external_call,
+            ..
         } => (
-            generate_test_transaction_with_external_payload(
-                &prover,
-                forwarder_mode,
-                name,
-                multi_external_call,
-            )
+            single_action(ForwarderMode::BlockTimeForwarder {
+                output_mismatch: false,
+                multi_external_call: *multi_external_call,
+            })
             .await?,
             None,
         ),
-        GenerateShape::TransferShape => (
+        ShapeCommand::OutputMismatch { .. } => (
+            single_action(ForwarderMode::BlockTimeForwarder {
+                output_mismatch: true,
+                multi_external_call: false,
+            })
+            .await?,
+            None,
+        ),
+        ShapeCommand::ForwarderFail { .. } => {
+            (single_action(ForwarderMode::TestForwarderFail).await?, None)
+        }
+        ShapeCommand::ForwarderSilent { .. } => (
+            single_action(ForwarderMode::TestForwarderSilent).await?,
+            None,
+        ),
+        ShapeCommand::ForwarderRelay { .. } => (
+            single_action(ForwarderMode::TestForwarderRelay).await?,
+            None,
+        ),
+        ShapeCommand::TransferShape { .. } => (
             generate_transfer_shape_transaction(&prover, name).await?,
             None,
         ),
-        GenerateShape::AnomaPayWrap { nonce } => {
-            let (tx, metadata) = generate_anomapay_wrap_transaction(&prover, name, nonce).await?;
+        ShapeCommand::SplTokenWrap { wrap_nonce, .. } => {
+            let (tx, metadata) =
+                generate_anomapay_wrap_transaction(&prover, name, *wrap_nonce).await?;
             (tx, Some(metadata))
         }
-        GenerateShape::AnomaPayUnwrap { settled } => {
-            let wrap_path = settled
-                .last()
-                .ok_or_else(|| anyhow!("--spl-token-unwrap needs the wrap fixture as --settled"))?;
-            let leaves = tree_leaves_of(&settled)?;
+        ShapeCommand::SplTokenUnwrap { wrap, .. } => {
+            let leaves = created_commitments(&load_fixture_tx(wrap)?)?;
             let (tx, metadata) =
-                generate_anomapay_unwrap_transaction(&prover, fixture_name(wrap_path)?, &leaves)
-                    .await?;
+                generate_anomapay_unwrap_transaction(&prover, fixture_name(wrap)?, &leaves).await?;
             (tx, Some(metadata))
         }
     };
@@ -2160,7 +2046,7 @@ async fn main() -> Result<()> {
         fmt_duration(gen_start.elapsed())
     );
 
-    if debug_assumptions {
+    if *debug_assumptions {
         timed_phase(
             "debug_assumptions (claim digests must match env::verify calls)",
             || debug_batch_assumptions(&tx),
@@ -2182,13 +2068,13 @@ async fn main() -> Result<()> {
             .map_err(|e| anyhow!("verify aggregated proof: {e:?}"))
     })?;
 
-    let fixture = finalize_and_write_fixture(&mut tx, &out_path, spl_forwarder)?;
+    let fixture = finalize_and_write_fixture(&mut tx, out_path, spl_forwarder)?;
 
-    if is_transfer_shape {
+    if matches!(shape, ShapeCommand::TransferShape { .. }) {
         check_transfer_shape_wire_size(&fixture.tx_b64)?;
     }
 
-    if let Some(dir) = error_variants_dir.as_deref() {
+    if let Some(dir) = error_variants.as_deref() {
         timed_phase("write_error_variants", || {
             generate_error_variant_fixtures(
                 &tx,
@@ -2332,6 +2218,122 @@ mod tests {
             action.logic_verifier_inputs[0].verifying_key,
             TOKEN_TRANSFER_ID
         );
+    }
+
+    /// Tracks how many mock proving jobs are in flight, and the most ever.
+    #[derive(Default)]
+    struct InFlight {
+        now: std::cell::Cell<usize>,
+        max: std::cell::Cell<usize>,
+    }
+
+    /// A mock proving job returning `id`: it enters, yields `yields` times
+    /// (so jobs given more yields finish later), and leaves.
+    async fn mock_job(in_flight: &InFlight, id: usize, yields: usize) -> Result<usize> {
+        in_flight.now.set(in_flight.now.get() + 1);
+        in_flight
+            .max
+            .set(in_flight.max.get().max(in_flight.now.get()));
+        for _ in 0..yields {
+            tokio::task::yield_now().await;
+        }
+        in_flight.now.set(in_flight.now.get() - 1);
+        Ok(id)
+    }
+
+    /// Queue jobs are all in flight together, and their results come back in
+    /// input order even though the later jobs finish first.
+    #[tokio::test]
+    async fn concurrent_jobs_overlap_and_keep_input_order() {
+        let in_flight = InFlight::default();
+        let jobs = (0..3).map(|id| mock_job(&in_flight, id, 3 - id));
+        let results = run_jobs(JobScheduling::Concurrent, jobs).await.unwrap();
+        assert_eq!(results, vec![0, 1, 2], "results must keep input order");
+        assert_eq!(in_flight.max.get(), 3, "all three jobs must run at once");
+
+        let in_flight = InFlight::default();
+        let pair = run_job_pair(
+            JobScheduling::Concurrent,
+            mock_job(&in_flight, 0, 2),
+            mock_job(&in_flight, 1, 1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(pair, (0, 1), "the pair must keep input order");
+        assert_eq!(in_flight.max.get(), 2, "both jobs must run at once");
+    }
+
+    /// Local jobs run strictly one at a time, in input order.
+    #[tokio::test]
+    async fn sequential_jobs_never_overlap() {
+        let in_flight = InFlight::default();
+        let jobs = (0..3).map(|id| mock_job(&in_flight, id, 3 - id));
+        let results = run_jobs(JobScheduling::Sequential, jobs).await.unwrap();
+        assert_eq!(results, vec![0, 1, 2], "results must keep input order");
+        assert_eq!(in_flight.max.get(), 1, "only one job may run at a time");
+
+        let in_flight = InFlight::default();
+        let pair = run_job_pair(
+            JobScheduling::Sequential,
+            mock_job(&in_flight, 0, 2),
+            mock_job(&in_flight, 1, 1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(pair, (0, 1), "the pair must keep input order");
+        assert_eq!(in_flight.max.get(), 1, "only one job may run at a time");
+    }
+
+    /// The local prover schedules sequentially: proving in parallel on one
+    /// machine exhausts it.
+    #[test]
+    fn local_prover_schedules_sequentially() {
+        assert!(matches!(
+            Prover::Local.scheduling(),
+            JobScheduling::Sequential
+        ));
+    }
+
+    /// Each fixture shape is its own subcommand, and options that belong to
+    /// another shape are rejected by the parser.
+    #[test]
+    fn subcommands_accept_only_their_own_options() {
+        let parse = |args: &[&str]| {
+            Cli::try_parse_from(std::iter::once("fixture-gen").chain(args.iter().copied()))
+        };
+        assert!(parse(&["batch", "--multi-external-call", "out.json"]).is_ok());
+        assert!(parse(&["spl-token-wrap", "--wrap-nonce", "2", "out.json"]).is_ok());
+        assert!(parse(&["spl-token-unwrap", "--wrap", "a.json", "out.json"]).is_ok());
+        for rejected in [
+            &["spl-token-unwrap", "out.json"][..],
+            &["forwarder-fail", "--multi-external-call", "out.json"],
+            &["transfer-shape", "--multi-external-call", "out.json"],
+            &["batch", "--wrap-nonce", "2", "out.json"],
+            &["batch", "--wrap", "a.json", "out.json"],
+            &["output-mismatch", "--multi-external-call", "out.json"],
+            &[
+                "spl-token-unwrap",
+                "--wrap",
+                "a.json",
+                "--wrap",
+                "b.json",
+                "out.json",
+            ],
+            &["spl-token-wrap", "--multi-external-call", "out.json"],
+            &["batch", "--mock", "--prover", "queue", "out.json"],
+            &["batch", "--error-variants", "", "out.json"],
+            &[
+                "historical-root",
+                "--kind-table",
+                "t.json",
+                "a.json",
+                "b.json",
+                "c.json",
+            ],
+            &["batch"],
+        ] {
+            assert!(parse(rejected).is_err(), "must reject {rejected:?}");
+        }
     }
 
     fn fixture_nullifier(fixture_name: &str, index: u32) -> Digest {

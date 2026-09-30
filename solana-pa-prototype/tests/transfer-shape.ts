@@ -2,19 +2,14 @@
  * The three-action transfer-shape fixture: it exhausts the default heap and
  * settles within the extended one.
  */
-import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  loadFixture,
-  createdCommitmentsOf as commitmentsOf,
-} from "./utils";
+import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
+import { assertFails } from "./utils/helpers";
 import {
   program,
   paState,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
-  ensureAdapterInitialized,
-  extractPAErrorCode,
   cpiEventsOf,
   settleFromTxDataBuilder,
   useAdapterSuite,
@@ -22,10 +17,6 @@ import {
 
 describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   const { funder, uploadTxData, settleFixtureViaTxData } = useAdapterSuite();
-
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
 
   // Successor of the imported-mainnet-transfer OOM regression: a synthetic
   // three-action transaction at least as large on the wire as the captured
@@ -43,41 +34,23 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   it("cannot settle the transfer-shape fixture without the extended heap budget", async () => {
     const fx = loadFixture("batch_groth16_transfer_shape.json");
     const payload = Buffer.from(fx.tx_b64, "base64");
-    const authority = Keypair.generate();
-    await funder.fund(authority, 2);
+    const authority = await funder.fresh(2);
     const { uploadId, txData } = await uploadTxData(authority, payload);
     const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
 
-    let caught: any = null;
-    try {
-      // Full CU budget but NO requestHeapFrame: only the default heap.
-      await settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, nullifierAccounts, false)
+    // Full CU budget but NO requestHeapFrame: only the default heap. The
+    // adapter must fail on memory exhaustion — its allocator writing past the
+    // default heap into the unallocated region — not at a later check (e.g. the
+    // dummy root marker) reached after the heap survived: that would mean
+    // the fixture no longer exhausts the default heap and must grow.
+    await assertFails(
+      settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, nullifierAccounts, false)
         .signers([authority])
-        .rpc();
-    } catch (e: any) {
-      caught = e;
-    }
-    assert.isNotNull(
-      caught,
-      "transfer-shape settlement succeeded in the default heap — the fixture no " +
-        "longer exercises the OOM regression; increase its payload sizes",
-    );
-
-    // The failure must be genuine memory exhaustion, not a later check
-    // (e.g. the dummy root marker) reached after the heap survived: a PA
-    // error code would mean the program ran to a logic check, so the
-    // fixture did NOT exhaust the default heap.
-    const code = extractPAErrorCode(caught);
-    const logs: string[] = caught?.logs ?? caught?.error?.logs ?? [];
-    assert.isNull(
-      code,
-      `expected a runtime memory failure, got PA error code ${code} — the ` +
-        "fixture settled past the heap in the default budget; increase its " +
-        `payload sizes\nLogs:\n${logs.slice(-15).join("\n")}`,
-    );
-    assert.ok(
-      logs.some((l) => /memory allocation failed|out of memory|Access violation/i.test(l)),
-      `expected a memory-exhaustion log line\nLogs:\n${logs.slice(-15).join("\n")}`,
+        .rpc(),
+      {
+        program: program.programId,
+        reason: /^Access violation writing \d+ bytes at address 0x[0-9a-f]+ \(in unallocated region\)$/,
+      },
     );
   });
 
@@ -95,15 +68,10 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     });
 
     const stateAfter = await program.account.paStateAccount.fetch(paState);
-    assert.equal(
-      stateAfter.nextIndex.toNumber(),
-      nextIndexBefore + 3,
-      "three created commitments should be appended",
-    );
+    assert.equal(stateAfter.nextIndex.toNumber(), nextIndexBefore + 3, "three created commitments should be appended");
 
     const { tx: txResult, events } = await cpiEventsOf(sig);
-    const innerCount =
-      txResult.meta?.innerInstructions?.reduce((n, g) => n + g.instructions.length, 0) ?? 0;
+    const innerCount = txResult.meta?.innerInstructions?.reduce((n, g) => n + g.instructions.length, 0) ?? 0;
     console.log(
       `transfer-shape settlement: ${txResult!.meta?.computeUnitsConsumed} CU, ` +
         `${events.length} CPI events, ${innerCount} inner instructions of the ` +
@@ -132,9 +100,7 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     const discoveryEvents = events.filter((e) => e.name === "discoveryPayloadEvent");
     assert.equal(resourceEvents.length, 3, "one resource payload event per created resource");
     assert.equal(discoveryEvents.length, 3, "one discovery payload event per created resource");
-    const createdTags = txEvents[0].data.tags.filter(
-      (_: unknown, i: number) => !txEvents[0].data.isConsumed[i],
-    );
+    const createdTags = txEvents[0].data.tags.filter((_: unknown, i: number) => !txEvents[0].data.isConsumed[i]);
     for (const [evs, byteLen] of [
       [resourceEvents, 2048],
       [discoveryEvents, 768],

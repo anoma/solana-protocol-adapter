@@ -72,8 +72,8 @@ pub enum ErrorCode {
     #[msg("Zero address not allowed")]
     ZeroAddressNotAllowed,
 
-    #[msg("Invalid escrow PDA")]
-    InvalidEscrowPda,
+    #[msg("Invalid escrow authority")]
+    InvalidEscrowAuthority,
 
     #[msg("Invalid nonce bitmap PDA - doesn't match derived address")]
     InvalidNonceBitmapPda,

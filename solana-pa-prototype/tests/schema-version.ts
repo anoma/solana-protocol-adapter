@@ -3,38 +3,28 @@
  * that loads pa_state applies.
  */
 import * as anchor from "@anchor-lang/core";
-import { PublicKey, SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
+import { AccountMeta, PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";
-import {
-  loadFixture,
-  randomRef,
-  closeMarkersBatch,
-  emergencyStop,
-  setKindTableCommitment,
-} from "./utils";
+import { setKindTableCommitment } from "../client/instructions";
+import { closeMarkersBatch } from "../client/devTeardown";
+import { loadFixture } from "./utils/fixtures";
+import { randomRef, assertFails } from "./utils/helpers";
 import {
   provider,
   program,
   paState,
-  VERIFIER_PROGRAM_ID,
-  routerPda,
-  verifierEntryPda,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
-  ensureAdapterInitialized,
   buildSettleRemainingAccounts,
-  assertPAError,
+  setExpiryBounds,
+  settleBuilder,
   settleFromTxDataBuilder,
+  stopAdapter,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
 describe("protocol-adapter (dev_set_schema_version tooling)", () => {
   const { funder, uploadTxData, initTxData, keepTxData, closeTxData, settleFixtureViaTxData } = useAdapterSuite();
-
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
 
   const setSchemaVersion = (version: number) =>
     program.methods
@@ -43,19 +33,16 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       .rpc();
 
   it("dev_set_schema_version rejects a non-authority signer", async () => {
-    const intruder = Keypair.generate();
-    await funder.fund(intruder, 1);
+    const intruder = await funder.fresh(1);
     const before = await program.account.paStateAccount.fetch(paState);
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .devSetSchemaVersion(before.schemaVersion + 1)
         .accountsPartial({ paState, authority: intruder.publicKey })
         .signers([intruder])
-        .rpc();
-      assert.fail("dev_set_schema_version must require the PA authority");
-    } catch (e: any) {
-      assertPAError(e, "Unauthorized");
-    }
+        .rpc(),
+      { program, error: "Unauthorized" },
+    );
     const after = await program.account.paStateAccount.fetch(paState);
     assert.equal(after.schemaVersion, before.schemaVersion, "a rejected call must not change the version");
   });
@@ -89,22 +76,20 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
     let settleTxData: PublicKey;
     // The two uploads stay open across the cases; after() closes them.
     let keptUploads: ReturnType<typeof keepTxData>[];
-    let settleRemainingAccounts: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[];
+    let settleRemainingAccounts: AccountMeta[];
 
     before(async () => {
       current = (await program.account.paStateAccount.fetch(paState)).schemaVersion;
 
-      extendAuthority = Keypair.generate();
-      await funder.fund(extendAuthority, 2);
+      extendAuthority = await funder.fresh(2);
       ({ uploadId: extendUploadId, txData: extendTxData } = await initTxData(extendAuthority, 100));
 
-      settleAuthority = Keypair.generate();
-      await funder.fund(settleAuthority, 2);
+      settleAuthority = await funder.fresh(2);
       const settleFixture = loadFixture("wrong_root.json");
       const settlePayload = Buffer.from(settleFixture.tx_b64, "base64");
       ({ uploadId: settleUploadId, txData: settleTxData } = await uploadTxData(settleAuthority, settlePayload));
       settleRemainingAccounts = buildSettleRemainingAccounts(
-        deriveNullifierAccounts(settleFixture.consumed_nullifiers_b64)
+        deriveNullifierAccounts(settleFixture.consumed_nullifiers_b64),
       );
 
       keptUploads = [keepTxData(extendTxData), keepTxData(settleTxData)];
@@ -126,11 +111,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
     const cases: { name: string; run: () => Promise<unknown> }[] = [
       {
         name: "update_expiry_config",
-        run: () =>
-          program.methods
-            .updateExpiryConfig(new anchor.BN(1), new anchor.BN(2))
-            .accountsPartial({ paState, authority: provider.wallet.publicKey })
-            .rpc(),
+        run: () => setExpiryBounds(1, 2),
       },
       {
         name: "propose_authority",
@@ -143,10 +124,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       {
         name: "accept_authority",
         run: () =>
-          program.methods
-            .acceptAuthority()
-            .accountsPartial({ paState, newAuthority: provider.wallet.publicKey })
-            .rpc(),
+          program.methods.acceptAuthority().accountsPartial({ paState, newAuthority: provider.wallet.publicKey }).rpc(),
       },
       {
         name: "set_kind_table_commitment",
@@ -167,26 +145,8 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
           // before the payload is parsed, and a real fixture exceeds the
           // transaction size limit when passed inline.
           const payload = Buffer.from([0, 1, 2, 3]);
-          const payer = Keypair.generate();
-          await funder.fund(payer, 2);
-          return program.methods
-            .settle(payload)
-            .accountsPartial({
-              paState,
-              payer: payer.publicKey,
-              systemProgram: SystemProgram.programId,
-              newRootMarker: DUMMY_ROOT_MARKER,
-              verifierRouterProgram: VERIFIER_ROUTER_ID,
-              router: routerPda,
-              verifierEntry: verifierEntryPda,
-              verifierProgram: VERIFIER_PROGRAM_ID,
-            })
-            .preInstructions([
-              ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-              ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-            ])
-            .signers([payer])
-            .rpc();
+          const payer = await funder.fresh(2);
+          return settleBuilder(payer.publicKey, payload).signers([payer]).rpc();
         },
       },
       {
@@ -207,9 +167,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
         run: async () => {
           const fx = loadFixture("wrong_root.json");
           const payload = Buffer.from(fx.tx_b64, "base64");
-          const remaining = buildSettleRemainingAccounts(
-            deriveNullifierAccounts(fx.consumed_nullifiers_b64)
-          );
+          const remaining = buildSettleRemainingAccounts(deriveNullifierAccounts(fx.consumed_nullifiers_b64));
           return settleFixtureViaTxData(payload, remaining, { newRootMarker: DUMMY_ROOT_MARKER });
         },
       },
@@ -226,26 +184,17 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       },
       {
         name: "close_markers_batch",
-        run: () =>
-          closeMarkersBatch(program, provider.wallet.publicKey, [])
-            .rpc(),
+        run: () => closeMarkersBatch(program, provider.wallet.publicKey, []).rpc(),
       },
       {
         name: "emergency_stop",
-        run: () =>
-          emergencyStop(program, provider.wallet.publicKey)
-            .rpc(),
+        run: stopAdapter,
       },
     ];
 
     for (const c of cases) {
       it(`${c.name} refuses a foreign schema version`, async () => {
-        try {
-          await c.run();
-          assert.fail(`${c.name} must refuse an account whose schema version is not this binary's`);
-        } catch (e: any) {
-          assertPAError(e, "UnsupportedStateSchema");
-        }
+        await assertFails(c.run(), { program, error: "UnsupportedStateSchema" });
       });
     }
   });

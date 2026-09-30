@@ -100,12 +100,12 @@ done
 if [[ "$PHASE" != "test" ]]; then
   # Anchor's SBF toolchain can leave incompatible host debug artifacts in
   # target/. Clean host packages so subsequent nix cargo commands always
-  # rebuild with nix rustc. (The 'test' phase compiles nothing, and on CI
-  # its runner has no cargo.)
-  cargo clean \
-    --package block-time-forwarder \
-    --package spl-token-forwarder \
-    --package protocol-adapter
+  # rebuild with nix rustc. (The 'test' phase compiles nothing.)
+  clean_args=()
+  for name in "${PROGRAM_NAMES[@]}"; do
+    clean_args+=(--package "${PROGRAM_PACKAGE[$name]}")
+  done
+  cargo clean "${clean_args[@]}"
 fi
 
 echo "==> All tests passed"

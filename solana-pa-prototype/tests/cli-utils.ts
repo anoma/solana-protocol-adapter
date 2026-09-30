@@ -24,15 +24,27 @@ describe("operator script arguments (scripts/cli-utils.ts)", () => {
   it("requireEnv rejects a missing or empty variable, naming it and what it is", () => {
     assert.throws(() => withEnv(undefined, () => requireEnv(VAR, "the thing")), `Missing ${VAR}: the thing`);
     assert.throws(() => withEnv("", () => requireEnv(VAR, "the thing")), `Missing ${VAR}: the thing`);
-    assert.equal(withEnv("x", () => requireEnv(VAR, "the thing")), "x");
+    assert.equal(
+      withEnv("x", () => requireEnv(VAR, "the thing")),
+      "x",
+    );
   });
 
   it("requireHexBytes reads exactly the requested width, with or without 0x", () => {
     const bytes = Array.from({ length: 32 }, (_, i) => i);
     const hex = Buffer.from(bytes).toString("hex");
-    assert.deepEqual(withEnv(hex, () => requireHexBytes(VAR, 32, "")), bytes);
-    assert.deepEqual(withEnv(`0x${hex.toUpperCase()}`, () => requireHexBytes(VAR, 32, "")), bytes);
-    assert.deepEqual(withEnv("0x73c457ba", () => requireHexBytes(VAR, 4, "")), [0x73, 0xc4, 0x57, 0xba]);
+    assert.deepEqual(
+      withEnv(hex, () => requireHexBytes(VAR, 32, "")),
+      bytes,
+    );
+    assert.deepEqual(
+      withEnv(`0x${hex.toUpperCase()}`, () => requireHexBytes(VAR, 32, "")),
+      bytes,
+    );
+    assert.deepEqual(
+      withEnv("0x73c457ba", () => requireHexBytes(VAR, 4, "")),
+      [0x73, 0xc4, 0x57, 0xba],
+    );
   });
 
   it("requireHexBytes rejects the wrong width and non-hex input instead of truncating or padding", () => {
@@ -54,8 +66,14 @@ describe("operator script arguments (scripts/cli-utils.ts)", () => {
   });
 
   it("requireRawAmount reads a non-negative integer exactly, beyond 2^53", () => {
-    assert.equal(withEnv("0", () => requireRawAmount(VAR, "")), 0n);
-    assert.equal(withEnv("18446744073709551615", () => requireRawAmount(VAR, "")), 18446744073709551615n);
+    assert.equal(
+      withEnv("0", () => requireRawAmount(VAR, "")),
+      0n,
+    );
+    assert.equal(
+      withEnv("18446744073709551615", () => requireRawAmount(VAR, "")),
+      18446744073709551615n,
+    );
     for (const bad of ["-1", "1.5", "1e6", " 1", "0x10"]) {
       assert.throws(() => withEnv(bad, () => requireRawAmount(VAR, "")), `${VAR} must be a non-negative integer`);
     }

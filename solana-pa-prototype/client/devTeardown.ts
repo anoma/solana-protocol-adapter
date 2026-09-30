@@ -1,13 +1,14 @@
 /**
  * Builders for the adapter's `dev-teardown` instructions, which production
- * builds do not compile in. They live apart from helpers.ts because the
- * operator scripts that run against production builds import helpers.ts, and
- * naming one of these instructions there would stop them compiling against
- * production types. Only the suite and close-pdas.ts import this module.
+ * builds do not compile in. They are kept out of instructions.ts so that
+ * only the tools meant for dev deployments reach them: the suite and
+ * close-pdas.ts import this module, and the operator scripts that run
+ * against production deployments do not.
  */
 import { Program } from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
-import { ProtocolAdapter } from "../../target/types/protocol_adapter";
+import { ProtocolAdapter } from "../target/types/protocol_adapter";
+import { chunks } from "./instructions";
 import { derivePaStatePda } from "./pda";
 
 /**
@@ -21,7 +22,7 @@ export function closeMarkersBatch(program: Program<ProtocolAdapter>, authority: 
   if (typeof method !== "function") {
     throw new Error(
       "Instruction 'close_markers_batch' is not present in the program's IDL (target/idl/protocol_adapter.json): " +
-        "the program was built without the 'dev-teardown' feature."
+        "the program was built without the 'dev-teardown' feature.",
     );
   }
   return (method as () => ReturnType<Program<ProtocolAdapter>["methods"][keyof Program<ProtocolAdapter>["methods"]]>)()
@@ -35,10 +36,16 @@ export function closeMarkersBatch(program: Program<ProtocolAdapter>, authority: 
  * be the PA authority of a stopped adapter. Returns how many were closed.
  */
 export async function closeAllMarkers(program: Program<ProtocolAdapter>, authority: PublicKey): Promise<number> {
-  const markers = await program.provider.connection.getProgramAccounts(program.programId, { filters: [{ dataSize: 0 }] });
+  const markers = await program.provider.connection.getProgramAccounts(program.programId, {
+    filters: [{ dataSize: 0 }],
+  });
   const BATCH_SIZE = 20;
-  for (let i = 0; i < markers.length; i += BATCH_SIZE) {
-    await closeMarkersBatch(program, authority, markers.slice(i, i + BATCH_SIZE).map(({ pubkey }) => pubkey)).rpc();
+  for (const batch of chunks(markers, BATCH_SIZE)) {
+    await closeMarkersBatch(
+      program,
+      authority,
+      batch.map(({ pubkey }) => pubkey),
+    ).rpc();
   }
   return markers.length;
 }

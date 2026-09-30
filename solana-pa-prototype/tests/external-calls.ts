@@ -4,28 +4,21 @@
  * forwarder is deployed nowhere else).
  */
 import { Keypair } from "@solana/web3.js";
-import { assert } from "chai";
-import {
-  loadFixture,
-} from "./utils";
+import { loadFixture } from "./utils/fixtures";
+import { assertFails } from "./utils/helpers";
 import {
   blockTimeForwarderId,
+  blockTimeForwarderProgram,
+  program,
+  testForwarderProgram,
   testForwarderId,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
-  ensureAdapterInitialized,
-  PA_ERRORS,
-  extractPAErrorCode,
-  assertPAError,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
 describe("protocol-adapter (External call error paths)", () => {
   const { settleFixtureViaTxData } = useAdapterSuite();
-
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
 
   it("rejects settlement when forwarder CPI accounts are wrong", async () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
@@ -41,19 +34,10 @@ describe("protocol-adapter (External call error paths)", () => {
       { pubkey: randomAccount, isWritable: false, isSigner: false },
     ];
 
-    try {
-      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
-      assert.fail("expected CPI failure");
-    } catch (e: any) {
-      // CPI error propagation: Solana records the INNER program's error code,
-      // not the PA's remapped ExternalCallCpiFailed. The PA's From<ProgramError>
-      // impl runs in Rust but the runtime has already committed the inner code.
-      // btf's AccountSysvarMismatch = Anchor error 3015 (0xBC7).
-      const code = extractPAErrorCode(e);
-      assert.isNotNull(code, "Expected a program error code in logs");
-      assert.notEqual(code, PA_ERRORS["ExternalCallCpiFailed"],
-        "Solana CPI error propagation: inner error code should appear, not PA's remapped code");
-    }
+    await assertFails(settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER }), {
+      program: blockTimeForwarderProgram,
+      error: "AccountSysvarMismatch",
+    });
   });
 
   it("rejects settlement when test-forwarder returns error", async () => {
@@ -61,22 +45,13 @@ describe("protocol-adapter (External call error paths)", () => {
     const payload = Buffer.from(failFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(failFixture.consumed_nullifiers_b64);
 
-    const remainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: testForwarderId, isWritable: false, isSigner: false },
-    ];
+    const remainingAccounts = [...nullifierAccounts, { pubkey: testForwarderId, isWritable: false, isSigner: false }];
 
-    try {
-      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
-      assert.fail("expected CPI failure from test-forwarder");
-    } catch (e: any) {
-      // CPI error propagation: test-forwarder's IntentionalFailure (6000)
-      // propagates through instead of PA's ExternalCallCpiFailed (6019).
-      const code = extractPAErrorCode(e);
-      assert.isNotNull(code, "Expected a program error code in logs");
-      assert.equal(code, 6000,
-        "test-forwarder's IntentionalFailure (6000) should propagate through CPI");
-    }
+    // The forwarder's own error fails the settlement.
+    await assertFails(settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER }), {
+      program: testForwarderProgram,
+      error: "IntentionalFailure",
+    });
   });
 
   it("rejects ExternalCallOutputMismatch when forwarder returns no data", async () => {
@@ -84,16 +59,11 @@ describe("protocol-adapter (External call error paths)", () => {
     const payload = Buffer.from(silentFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(silentFixture.consumed_nullifiers_b64);
 
-    const remainingAccounts = [
-      ...nullifierAccounts,
-      { pubkey: testForwarderId, isWritable: false, isSigner: false },
-    ];
+    const remainingAccounts = [...nullifierAccounts, { pubkey: testForwarderId, isWritable: false, isSigner: false }];
 
-    try {
-      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
-      assert.fail("expected ExternalCallOutputMismatch error");
-    } catch (e: any) {
-      assertPAError(e, "ExternalCallOutputMismatch");
-    }
+    await assertFails(settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER }), {
+      program,
+      error: "ExternalCallOutputMismatch",
+    });
   });
 });

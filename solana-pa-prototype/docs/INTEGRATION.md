@@ -2,7 +2,7 @@
 
 This document is the contract for software that talks to the Protocol Adapter (PA) on chain: services that build and submit transactions, indexers that reconstruct state from its events, explorers, and client bindings. It covers the four things the README's client walkthrough does not: the exact wire format of a transaction, the transaction-data upload account's semantics, the full event set with emission rules, and the root-marker model.
 
-Call-level mechanics — instruction call sequences, account lists, PDA derivations, the `remaining_accounts` layout, and external-call encoding — are in the repo README under "Building a Client" and are not repeated here. Canonical TypeScript derivations live in `tests/utils/constants.ts` and `tests/utils/pda.ts`. Where this document names source files, they are under `programs/solana-pa-prototype/src/`.
+Call-level mechanics — instruction call sequences, account lists, PDA derivations, the `remaining_accounts` layout, and external-call encoding — are in the repo README under "Building a Client" and are not repeated here. Canonical TypeScript derivations live in `client/constants.ts` and `client/pda.ts`, and the instruction builders the operator scripts and tests share in `client/instructions.ts`. Where this document names source files, they are under `programs/solana-pa-prototype/src/`.
 
 ## Two submission paths
 

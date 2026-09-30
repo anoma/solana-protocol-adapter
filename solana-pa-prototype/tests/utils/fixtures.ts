@@ -54,7 +54,7 @@ export type Fixture = {
   spl_token_unwrap?: SplTokenUnwrapMetadata;
 };
 
-export function readJson<T>(filePath: string): T {
+function readJson<T>(filePath: string): T {
   return JSON.parse(readFileSync(filePath, "utf8")) as T;
 }
 
@@ -62,16 +62,13 @@ export function loadFixture<T = Fixture>(filename: string): T {
   return readJson<T>(path.join(FIXTURE_DIR, filename));
 }
 
-/** Load a fixture, or fail naming the fixture-gen command that produces it. */
-export function requireFixture(filename: string, flags: string): Fixture {
+/** Load a fixture, or fail naming the command that regenerates the fixture set. */
+export function requireFixture(filename: string): Fixture {
   try {
     return loadFixture(filename);
   } catch (e: any) {
-    const mock = process.env.PA_TEST_MODE === "mock" ? "--mock " : "";
-    const target = path.relative(process.cwd(), path.join(FIXTURE_DIR, filename));
-    throw new Error(
-      `${filename} missing (${e.message}); generate with: ./scripts/dev.sh gen-fixtures ${mock}${flags} ${target}`
-    );
+    const mode = process.env.PA_TEST_MODE ?? "real";
+    throw new Error(`${filename} missing (${e.message}); generate with: ./scripts/dev.sh regen-fixtures ${mode}`);
   }
 }
 

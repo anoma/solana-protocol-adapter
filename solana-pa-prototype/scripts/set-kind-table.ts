@@ -1,7 +1,7 @@
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { setKindTableCommitment } from "../tests/utils/helpers";
+import { setKindTableCommitment } from "../client/instructions";
 import { requireHexBytes } from "./cli-utils";
 
 async function main() {
@@ -14,7 +14,7 @@ async function main() {
     "PA_KIND_TABLE_COMMITMENT",
     32,
     "the sha256 commitment (hex, 32 bytes) of the kind table every settled aggregation instance must carry from now on.\n" +
-      "   Transactions proven against the previous table are rejected once this is installed."
+      "   Transactions proven against the previous table are rejected once this is installed.",
   );
 
   await setKindTableCommitment(program, provider.wallet.publicKey, kindTableCommitment).rpc();

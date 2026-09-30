@@ -1,24 +1,20 @@
-import * as anchor from "@anchor-lang/core";
 import {
   AddressLookupTableAccount,
   AddressLookupTableProgram,
   Connection,
   Keypair,
-  MessageV0,
   PublicKey,
   SystemProgram,
   SYSVAR_CLOCK_PUBKEY,
   SYSVAR_INSTRUCTIONS_PUBKEY,
   Transaction,
   TransactionInstruction,
-  TransactionMessage,
-  VersionedTransaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
-import { getRouterPda, getVerifierEntryPda } from "../../scripts/verifier-utils";
-import { escrowAccounts } from "./helpers";
-import { deriveConfigPda, deriveEventAuthorityPda, derivePaStatePda } from "./pda";
+import { getRouterPda, getVerifierEntryPda } from "./verifier";
+import { escrowAccounts } from "./instructions";
+import { deriveConfigPda, deriveEscrowAuthority, deriveEventAuthorityPda, derivePaStatePda } from "./pda";
 
 /** What fixes a deployment's settlement key set. */
 export interface SettlementKeySources {
@@ -56,11 +52,9 @@ export function settlementLookupKeys(s: SettlementKeySources): PublicKey[] {
     s.blockTimeForwarder,
     s.splTokenForwarder,
     forwarderConfig,
+    deriveEscrowAuthority(s.splTokenForwarder),
     TOKEN_PROGRAM_ID,
-    ...s.mints.flatMap((mint) => {
-      const { escrowPda, escrowAta } = escrowAccounts(s.splTokenForwarder, mint);
-      return [escrowPda, escrowAta];
-    }),
+    ...s.mints.map((mint) => escrowAccounts(s.splTokenForwarder, mint).escrowAta),
   ];
 }
 
@@ -114,38 +108,9 @@ export async function ensureSettlementLookupTable(
   let signature: string | undefined;
   if (instructions.length > 0) {
     signature = await sendAndConfirmTransaction(connection, new Transaction().add(...instructions), [payer], {
-      commitment: "confirmed",
+      preflightCommitment: "confirmed",
+      commitment: "finalized",
     });
-    await connection.confirmTransaction(signature, "finalized");
   }
   return { table: await fetchLookupTable(connection, address), added, signature };
-}
-
-/** Compile `instructions` into a v0 message against `table`, the provider wallet paying. */
-export async function compileV0(
-  provider: anchor.AnchorProvider,
-  instructions: TransactionInstruction[],
-  table: AddressLookupTableAccount,
-): Promise<MessageV0> {
-  const { blockhash } = await provider.connection.getLatestBlockhash("confirmed");
-  return new TransactionMessage({
-    payerKey: provider.wallet.publicKey,
-    recentBlockhash: blockhash,
-    instructions,
-  }).compileToV0Message([table]);
-}
-
-/**
- * Send `instructions` as a v0 transaction against `table`, signed by the
- * wallet and `signers`. The provider wraps a failed transaction's logs into
- * the thrown error as it does for legacy transactions.
- */
-export async function sendV0(
-  provider: anchor.AnchorProvider,
-  instructions: TransactionInstruction[],
-  signers: Keypair[],
-  table: AddressLookupTableAccount,
-): Promise<string> {
-  const message = await compileV0(provider, instructions, table);
-  return provider.sendAndConfirm(new VersionedTransaction(message), signers);
 }

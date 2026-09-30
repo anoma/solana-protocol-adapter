@@ -1,4 +1,4 @@
-use crate::state::PAStateAccount;
+use crate::state::{PAStateAccount, EMPTY_KIND_TABLE_COMMITMENT, SCHEMA_VERSION};
 use crate::tests::utils::create_test_pa_state;
 use anchor_lang::prelude::*;
 use arm_core::compliance::hash_kind_table_entries;
@@ -26,8 +26,8 @@ fn schema_version_is_byte_eight_of_the_account_data() {
 }
 
 #[test]
-fn base_space_reserves_the_maximal_pending_authority_encoding() {
-    // `Option<Pubkey>` encodes `Some` as 33 bytes, the size BASE_SPACE reserves.
+fn initial_space_reserves_the_maximal_pending_authority_encoding() {
+    // `Option<Pubkey>` encodes `Some` as 33 bytes, the size INITIAL_SPACE reserves.
     let state = PAStateAccount {
         pending_authority: Some(Pubkey::new_unique()),
         ..create_test_pa_state()
@@ -48,13 +48,13 @@ fn trailing_bytes_still_deserialize() {
     bytes.extend_from_slice(&[0xFF; 16]);
     let decoded = PAStateAccount::try_deserialize(&mut bytes.as_slice())
         .expect("trailing bytes appended by a newer layout must not break deserialization");
-    assert_eq!(decoded.schema_version, PAStateAccount::SCHEMA_VERSION);
+    assert_eq!(decoded.schema_version, SCHEMA_VERSION);
 }
 
 #[test]
 fn empty_kind_table_commitment_is_the_commitment_of_no_entries() {
     assert_eq!(
-        PAStateAccount::EMPTY_KIND_TABLE_COMMITMENT,
+        EMPTY_KIND_TABLE_COMMITMENT,
         <[u8; 32]>::from(hash_kind_table_entries(&[])),
         "the constant initialize stores must be the ARM's commitment of the empty kind table"
     );

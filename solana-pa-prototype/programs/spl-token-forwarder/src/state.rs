@@ -20,7 +20,6 @@ pub struct Config {
     pub emergency_committee: Pubkey,
     /// Emergency caller set by committee (zero = not set)
     pub emergency_caller: Pubkey,
-    pub bump: u8,
 }
 
 /// Whether the Protocol Adapter is emergency stopped, read from its state
@@ -38,11 +37,31 @@ pub fn derive_pa_state_pda(pa_program_id: &Pubkey) -> (Pubkey, u8) {
     Pubkey::find_program_address(&[PA_STATE_SEED], pa_program_id)
 }
 
+#[constant]
 pub const CONFIG_SEED: &[u8] = b"config";
-/// Escrow authority PDA, one per token mint.
+/// The config's address, derived at compile time: `initialize` creates the
+/// config only at this canonical PDA, so checking an account against it
+/// costs no PDA derivation.
+pub const CONFIG_PDA: Pubkey = Pubkey::new_from_array(
+    anchor_lang::derive_program_address(&[CONFIG_SEED], &crate::ID_CONST.to_bytes()).0,
+);
+/// Seed of the escrow authority.
+#[constant]
 pub const ESCROW_SEED: &[u8] = b"escrow";
+const ESCROW_AUTHORITY_DERIVATION: ([u8; 32], u8) =
+    anchor_lang::derive_program_address(&[ESCROW_SEED], &crate::ID_CONST.to_bytes());
+/// The escrow authority, derived at compile time: the one PDA that owns every
+/// mint's escrow token account, as the EVM forwarder holds every token at
+/// its own address. Checking an account against it costs no PDA derivation.
+pub const ESCROW_AUTHORITY: Pubkey = Pubkey::new_from_array(ESCROW_AUTHORITY_DERIVATION.0);
+/// The escrow authority's canonical bump, with which it signs.
+pub const ESCROW_AUTHORITY_BUMP: u8 = ESCROW_AUTHORITY_DERIVATION.1;
+/// The escrow authority's signer seeds, with its compile-time bump.
+pub(crate) const ESCROW_SIGNER_SEEDS: &[&[u8]] = &[ESCROW_SEED, &[ESCROW_AUTHORITY_BUMP]];
 /// Nonce bitmap PDA, one per user per 256-nonce word.
+#[constant]
 pub const NONCE_BITMAP_SEED: &[u8] = b"nonce_bitmap";
+#[constant]
 pub const NONCES_PER_WORD: u64 = 256;
 
 /// One 256-nonce word of a user's wrap nonces (Permit2's bitmap pattern).
@@ -54,11 +73,30 @@ pub const NONCES_PER_WORD: u64 = 256;
 #[derive(InitSpace, Default)]
 pub struct NonceBitmap {
     pub bits: [u8; 32],
+    /// The canonical bump of the bitmap's address, stored by `init_nonce_bitmap`.
+    pub bump: u8,
 }
 
 impl NonceBitmap {
-    /// Account size: Anchor discriminator plus the word.
-    pub const ACCOUNT_SIZE: usize = 8 + Self::INIT_SPACE;
+    /// Account size: Anchor discriminator, the word, and the bump.
+    pub const ACCOUNT_SIZE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
+
+    /// Whether `key` is the address of `user`'s word `word_index` under the
+    /// stored bump. `init_nonce_bitmap` creates bitmaps only at the canonical
+    /// address and stores its bump, so this recognizes exactly that bitmap
+    /// without searching for the bump.
+    pub fn is_at(&self, key: &Pubkey, program_id: &Pubkey, user: &Pubkey, word_index: u64) -> bool {
+        Pubkey::create_program_address(
+            &[
+                NONCE_BITMAP_SEED,
+                user.as_ref(),
+                &word_index.to_le_bytes(),
+                &[self.bump],
+            ],
+            program_id,
+        )
+        .is_ok_and(|address| address == *key)
+    }
 
     pub fn is_used(&self, bit_position: u8) -> bool {
         let byte_index = (bit_position / 8) as usize;
@@ -71,20 +109,6 @@ impl NonceBitmap {
         let bit_offset = bit_position % 8;
         self.bits[byte_index] |= 1 << bit_offset;
     }
-}
-
-/// The escrow authority for a token mint: the PDA that owns the escrow token account.
-pub fn derive_escrow_pda(program_id: &Pubkey, token_mint: &Pubkey) -> (Pubkey, u8) {
-    Pubkey::find_program_address(&[ESCROW_SEED, token_mint.as_ref()], program_id)
-}
-
-pub fn derive_nonce_bitmap_pda(
-    program_id: &Pubkey,
-    user: &Pubkey,
-    word_index: u64,
-) -> (Pubkey, u8) {
-    let word_bytes = word_index.to_le_bytes();
-    Pubkey::find_program_address(&[NONCE_BITMAP_SEED, user.as_ref(), &word_bytes], program_id)
 }
 
 /// The bitmap word a nonce lives in and its bit within that word.

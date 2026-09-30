@@ -21,8 +21,8 @@
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { closeAllMarkers } from "../tests/utils/devTeardown";
-import { derivePaStatePda } from "../tests/utils/pda";
+import { closeAllMarkers } from "../client/devTeardown";
+import { derivePaStatePda } from "../client/pda";
 
 async function main() {
   const provider = anchor.AnchorProvider.env();
@@ -45,10 +45,7 @@ async function main() {
 
   const paState = await program.account.paStateAccount.fetch(paStatePda);
   if (!paState.authority.equals(wallet.publicKey)) {
-    console.error(
-      `❌ Wallet ${wallet.publicKey.toBase58()} is not the PA authority ` +
-      `(${paState.authority.toBase58()})`
-    );
+    console.error(`❌ Wallet ${wallet.publicKey.toBase58()} is not the PA authority (${paState.authority.toBase58()})`);
     process.exit(1);
   }
 

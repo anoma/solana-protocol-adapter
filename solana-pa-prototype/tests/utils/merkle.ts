@@ -4,7 +4,7 @@ import { Program } from "@anchor-lang/core";
 import { createHash } from "crypto";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
-import { deriveRootMarkerPda } from "./pda";
+import { deriveRootMarkerPda } from "../../client/pda";
 
 const MAX_TREE_DEPTH = 32;
 
@@ -75,7 +75,7 @@ function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
 export async function predictRootMarkerPda(
   program: Program<ProtocolAdapter>,
   paState: PublicKey,
-  createdCommitments: Buffer[]
+  createdCommitments: Buffer[],
 ): Promise<PublicKey> {
   const root = await predictRootAfterAppend(program, paState, createdCommitments);
   return deriveRootMarkerPda(paState, root, program.programId);
@@ -85,7 +85,7 @@ export async function predictRootMarkerPda(
 export async function predictRootAfterAppend(
   program: Program<ProtocolAdapter>,
   paState: PublicKey,
-  createdCommitments: Buffer[]
+  createdCommitments: Buffer[],
 ): Promise<Buffer> {
   const state = await program.account.paStateAccount.fetch(paState);
   return computeRootAfterAppend(state, createdCommitments);

@@ -5,26 +5,12 @@
  */
 import { PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  AUTHORITY_MISMATCH_PATTERN,
-  errorHaystack,
-  emergencyStop,
-} from "./utils";
-import {
-  provider,
-  program,
-  paState,
-  ensureAdapterInitialized,
-  assertPAError,
-  useAdapterSuite,
-} from "./utils/adapterSuite";
+import { emergencyStop } from "../client/instructions";
+import { assertFails } from "./utils/helpers";
+import { provider, program, paState, useAdapterSuite } from "./utils/adapterSuite";
 
 describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   const { funder } = useAdapterSuite();
-
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
 
   it("stores authority on PAStateAccount after initialize", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
@@ -36,61 +22,44 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
   it("initializes with paused=false", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(JSON.stringify(state.lifecycle), JSON.stringify({ running: {} }), "State should be Running after initialize");
+    assert.equal(
+      JSON.stringify(state.lifecycle),
+      JSON.stringify({ running: {} }),
+      "State should be Running after initialize",
+    );
   });
 
   it("rejects emergency_stop from non-authority", async () => {
-    const nonAuthority = Keypair.generate();
-    await funder.fund(nonAuthority, 1);
+    const nonAuthority = await funder.fresh(1);
 
-    try {
-      await emergencyStop(program, nonAuthority.publicKey)
-        .signers([nonAuthority])
-        .rpc();
-      assert.fail("expected emergency_stop to fail for non-authority");
-    } catch (e: any) {
-      const haystack = errorHaystack(e);
-      // Anchor's has_one constraint produces "A has one constraint was violated"
-      // or our custom error "Unauthorized"
-      assert.match(
-        haystack,
-        AUTHORITY_MISMATCH_PATTERN,
-        "Should fail with Unauthorized or has_one constraint error"
-      );
-    }
+    await assertFails(emergencyStop(program, nonAuthority.publicKey).signers([nonAuthority]).rpc(), {
+      program,
+      error: "Unauthorized",
+    });
   });
 
   it("rejects propose_authority from non-authority", async () => {
-    const nonAuthority = Keypair.generate();
+    const nonAuthority = await funder.fresh(1);
     const newAuthority = Keypair.generate();
-    await funder.fund(nonAuthority, 1);
 
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .proposeAuthority(newAuthority.publicKey)
         .accountsPartial({
           paState,
           authority: nonAuthority.publicKey,
         })
         .signers([nonAuthority])
-        .rpc();
-      assert.fail("expected propose_authority to fail for non-authority");
-    } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        AUTHORITY_MISMATCH_PATTERN,
-        "Should fail with Unauthorized or has_one constraint error"
-      );
-    }
+        .rpc(),
+      { program, error: "Unauthorized" },
+    );
   });
 
   it("two-step authority transfer: propose + accept", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const currentAuthority = stateBefore.authority;
 
-    const newAuthority = Keypair.generate();
-    await funder.fund(newAuthority, 1);
+    const newAuthority = await funder.fresh(1);
 
     // Step 1: propose
     await program.methods
@@ -103,10 +72,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
     // Authority hasn't changed yet
     const stateAfterPropose = await program.account.paStateAccount.fetch(paState);
-    assert.ok(
-      stateAfterPropose.authority.equals(currentAuthority),
-      "Authority should NOT change after propose"
-    );
+    assert.ok(stateAfterPropose.authority.equals(currentAuthority), "Authority should NOT change after propose");
 
     // Step 2: accept (signed by new authority)
     await program.methods
@@ -119,10 +85,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     const stateAfterAccept = await program.account.paStateAccount.fetch(paState);
-    assert.ok(
-      stateAfterAccept.authority.equals(newAuthority.publicKey),
-      "Authority should be updated after accept"
-    );
+    assert.ok(stateAfterAccept.authority.equals(newAuthority.publicKey), "Authority should be updated after accept");
 
     // Restore: propose back, accept with provider wallet
     await program.methods
@@ -143,18 +106,14 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     const stateRestored = await program.account.paStateAccount.fetch(paState);
-    assert.ok(
-      stateRestored.authority.equals(currentAuthority),
-      "Authority should be restored to original"
-    );
+    assert.ok(stateRestored.authority.equals(currentAuthority), "Authority should be restored to original");
   });
 
   it("old authority cannot call emergency_stop after transfer", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const originalAuthority = stateBefore.authority;
 
-    const newAuthority = Keypair.generate();
-    await funder.fund(newAuthority, 1);
+    const newAuthority = await funder.fresh(1);
 
     // Two-step transfer
     await program.methods
@@ -173,18 +132,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .signers([newAuthority])
       .rpc();
 
-    try {
-      await emergencyStop(program, provider.wallet.publicKey)
-        .rpc();
-      assert.fail("expected emergency_stop to fail for old authority");
-    } catch (e: any) {
-      const haystack = errorHaystack(e);
-      assert.match(
-        haystack,
-        AUTHORITY_MISMATCH_PATTERN,
-        "Should fail with Unauthorized or has_one constraint error"
-      );
-    }
+    await assertFails(emergencyStop(program, provider.wallet.publicKey).rpc(), { program, error: "Unauthorized" });
 
     // Restore
     await program.methods
@@ -216,14 +164,10 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
     // Authority is still the provider — proposal doesn't transfer
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.ok(
-      state.authority.equals(provider.wallet.publicKey),
-      "Authority should still be provider after propose"
-    );
+    assert.ok(state.authority.equals(provider.wallet.publicKey), "Authority should still be provider after propose");
 
     // Overwrite with a real candidate, complete transfer, then restore
-    const realCandidate = Keypair.generate();
-    await funder.fund(realCandidate, 1);
+    const realCandidate = await funder.fresh(1);
 
     await program.methods
       .proposeAuthority(realCandidate.publicKey)
@@ -243,10 +187,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     const stateAfter = await program.account.paStateAccount.fetch(paState);
-    assert.ok(
-      stateAfter.authority.equals(realCandidate.publicKey),
-      "Authority should transfer to the real candidate"
-    );
+    assert.ok(stateAfter.authority.equals(realCandidate.publicKey), "Authority should transfer to the real candidate");
 
     // Restore
     await program.methods
@@ -267,28 +208,24 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   });
 
   it("accept_authority fails without a pending proposal", async () => {
-    const random = Keypair.generate();
-    await funder.fund(random, 1);
+    const random = await funder.fresh(1);
 
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .acceptAuthority()
         .accountsPartial({
           paState,
           newAuthority: random.publicKey,
         })
         .signers([random])
-        .rpc();
-      assert.fail("accept_authority should fail with no pending proposal");
-    } catch (e: any) {
-      assertPAError(e, "NoPendingAuthority");
-    }
+        .rpc(),
+      { program, error: "NoPendingAuthority" },
+    );
   });
 
   it("wrong signer cannot accept a pending proposal", async () => {
     const intended = Keypair.generate();
-    const attacker = Keypair.generate();
-    await funder.fund(attacker, 1);
+    const attacker = await funder.fresh(1);
 
     // Propose the intended authority
     await program.methods
@@ -300,19 +237,17 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     // Attacker tries to accept
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .acceptAuthority()
         .accountsPartial({
           paState,
           newAuthority: attacker.publicKey,
         })
         .signers([attacker])
-        .rpc();
-      assert.fail("attacker should not be able to accept someone else's proposal");
-    } catch (e: any) {
-      assertPAError(e, "Unauthorized");
-    }
+        .rpc(),
+      { program, error: "Unauthorized" },
+    );
 
     // Cancel the proposal
     await program.methods
@@ -325,10 +260,8 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   });
 
   it("overwrite invalidates previous proposal", async () => {
-    const firstCandidate = Keypair.generate();
-    const secondCandidate = Keypair.generate();
-    await funder.fund(firstCandidate, 1);
-    await funder.fund(secondCandidate, 1);
+    const firstCandidate = await funder.fresh(1);
+    const secondCandidate = await funder.fresh(1);
 
     // Propose first candidate
     await program.methods
@@ -349,19 +282,17 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     // First candidate cannot accept
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .acceptAuthority()
         .accountsPartial({
           paState,
           newAuthority: firstCandidate.publicKey,
         })
         .signers([firstCandidate])
-        .rpc();
-      assert.fail("first candidate should not be able to accept after overwrite");
-    } catch (e: any) {
-      assertPAError(e, "Unauthorized");
-    }
+        .rpc(),
+      { program, error: "Unauthorized" },
+    );
 
     // Cancel
     await program.methods
@@ -374,8 +305,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   });
 
   it("pending_authority is cleared after accept", async () => {
-    const candidate = Keypair.generate();
-    await funder.fund(candidate, 1);
+    const candidate = await funder.fresh(1);
 
     await program.methods
       .proposeAuthority(candidate.publicKey)
@@ -395,19 +325,17 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     // Second accept should fail — pending is cleared
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .acceptAuthority()
         .accountsPartial({
           paState,
           newAuthority: candidate.publicKey,
         })
         .signers([candidate])
-        .rpc();
-      assert.fail("second accept should fail");
-    } catch (e: any) {
-      assertPAError(e, "NoPendingAuthority");
-    }
+        .rpc(),
+      { program, error: "NoPendingAuthority" },
+    );
 
     // Restore authority
     await program.methods
@@ -428,8 +356,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   });
 
   it("cancel_authority_transfer clears pending proposal", async () => {
-    const candidate = Keypair.generate();
-    await funder.fund(candidate, 1);
+    const candidate = await funder.fresh(1);
 
     await program.methods
       .proposeAuthority(candidate.publicKey)
@@ -448,33 +375,29 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
       .rpc();
 
     // Accept should fail — cancelled
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .acceptAuthority()
         .accountsPartial({
           paState,
           newAuthority: candidate.publicKey,
         })
         .signers([candidate])
-        .rpc();
-      assert.fail("accept should fail after cancel");
-    } catch (e: any) {
-      assertPAError(e, "NoPendingAuthority");
-    }
+        .rpc(),
+      { program, error: "NoPendingAuthority" },
+    );
   });
 
   it("cancel_authority_transfer fails when no proposal is pending", async () => {
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .cancelAuthorityTransfer()
         .accountsPartial({
           paState,
           authority: provider.wallet.publicKey,
         })
-        .rpc();
-      assert.fail("cancel should fail with no pending proposal");
-    } catch (e: any) {
-      assertPAError(e, "NoPendingAuthority");
-    }
+        .rpc(),
+      { program, error: "NoPendingAuthority" },
+    );
   });
 });

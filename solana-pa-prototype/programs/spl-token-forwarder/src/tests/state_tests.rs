@@ -2,11 +2,36 @@
 
 use crate::state::{
     base64_of_hash, nonce_to_word_and_bit, pa_is_stopped, NonceBitmap, UnwrapInput, WrapInput,
-    WrapMessage, NONCES_PER_WORD, SIGNED_MESSAGE_LEN,
+    WrapMessage, CONFIG_PDA, CONFIG_SEED, ESCROW_AUTHORITY, ESCROW_AUTHORITY_BUMP, ESCROW_SEED,
+    NONCES_PER_WORD, NONCE_BITMAP_SEED, SIGNED_MESSAGE_LEN,
 };
 use anchor_lang::prelude::{borsh, Pubkey};
 use anchor_lang::AccountSerialize;
 use protocol_adapter::state::{PALifecycle, PAStateAccount};
+
+/// The compile-time config address is the canonical PDA `initialize`
+/// creates, the only address a config can live at.
+#[test]
+fn config_pda_is_the_canonical_config_address() {
+    let (canonical, _) = Pubkey::find_program_address(&[CONFIG_SEED], &crate::ID);
+    assert_eq!(
+        CONFIG_PDA, canonical,
+        "CONFIG_PDA must equal find_program_address([CONFIG_SEED], program id)"
+    );
+}
+
+/// The compile-time escrow authority is the canonical PDA of the escrow
+/// seed: the one address that owns every mint's escrow token account, and
+/// the bump that signs for it.
+#[test]
+fn escrow_authority_is_the_canonical_escrow_address_and_bump() {
+    let canonical = Pubkey::find_program_address(&[ESCROW_SEED], &crate::ID);
+    assert_eq!(
+        (ESCROW_AUTHORITY, ESCROW_AUTHORITY_BUMP),
+        canonical,
+        "(ESCROW_AUTHORITY, ESCROW_AUTHORITY_BUMP) must equal find_program_address([ESCROW_SEED], program id)"
+    );
+}
 
 /// The field-by-field hash is sha256 of the message's 120-byte Borsh encoding.
 #[test]
@@ -225,6 +250,73 @@ fn nonce_bitmap_marks_and_reads_every_bit() {
 
     bitmap.mark_used(0);
     assert_eq!(bitmap.bits[0], 0b1000_0001, "marking twice is idempotent");
+}
+
+/// The canonical nonce bitmap address of `user`'s word `word_index`, and its bump.
+fn canonical_bitmap(user: &Pubkey, word_index: u64) -> (Pubkey, u8) {
+    Pubkey::find_program_address(
+        &[NONCE_BITMAP_SEED, user.as_ref(), &word_index.to_le_bytes()],
+        &crate::ID,
+    )
+}
+
+/// A bitmap is recognized at the address its seeds and stored bump derive,
+/// and nowhere else: not as another user's bitmap, not as another word's.
+#[test]
+fn nonce_bitmap_is_at_only_the_address_of_its_own_user_and_word() {
+    let user = Pubkey::new_from_array([7u8; 32]);
+    let other_user = Pubkey::new_from_array([8u8; 32]);
+    let (address, bump) = canonical_bitmap(&user, 3);
+    let bitmap = NonceBitmap {
+        bump,
+        ..NonceBitmap::default()
+    };
+    assert!(
+        bitmap.is_at(&address, &crate::ID, &user, 3),
+        "the bitmap created for (user, word 3) must be accepted for (user, word 3)"
+    );
+    assert!(
+        !bitmap.is_at(&address, &crate::ID, &other_user, 3),
+        "the bitmap of (user, word 3) must be rejected for another user"
+    );
+    assert!(
+        !bitmap.is_at(&address, &crate::ID, &user, 4),
+        "the bitmap of (user, word 3) must be rejected for another word"
+    );
+
+    let (other_address, other_bump) = canonical_bitmap(&other_user, 3);
+    let other_bitmap = NonceBitmap {
+        bump: other_bump,
+        ..NonceBitmap::default()
+    };
+    assert!(
+        !other_bitmap.is_at(&other_address, &crate::ID, &user, 3),
+        "another user's bitmap passed for (user, word 3) must be rejected"
+    );
+}
+
+/// The check binds the address to the stored bump: the canonical address is
+/// not accepted under any other bump, so only the bump `init_nonce_bitmap`
+/// stores (Anchor's canonical `ctx.bumps`) recognizes it.
+#[test]
+fn nonce_bitmap_address_check_uses_the_stored_bump() {
+    let user = Pubkey::new_from_array([9u8; 32]);
+    let (address, canonical_bump) = canonical_bitmap(&user, 0);
+    for bump in (0..=u8::MAX).filter(|b| *b != canonical_bump) {
+        let bitmap = NonceBitmap {
+            bump,
+            ..NonceBitmap::default()
+        };
+        assert!(
+            !bitmap.is_at(&address, &crate::ID, &user, 0),
+            "bump {bump} is not the canonical {canonical_bump} and must not reach the canonical address"
+        );
+    }
+}
+
+#[test]
+fn nonce_bitmap_account_is_discriminator_word_and_bump() {
+    assert_eq!(NonceBitmap::ACCOUNT_SIZE, 8 + 32 + 1);
 }
 
 // =============================================================================

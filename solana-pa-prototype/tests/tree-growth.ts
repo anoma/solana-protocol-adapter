@@ -4,10 +4,8 @@
  */
 import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import {
-  loadFixture,
-  createdCommitmentsOf as commitmentsOf,
-} from "./utils";
+import { RESULT_LT } from "../client/constants";
+import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
 import {
   provider,
   program,
@@ -15,36 +13,21 @@ import {
   blockTimeForwarderId,
   deriveRootPda,
   deriveNullifierAccounts,
-  ensureAdapterInitialized,
   assertFixtureUnsettled,
-  buildSettleRemainingAccounts,
   cpiEventsOf,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
 describe("protocol-adapter (Tree growth and multi-settlement)", () => {
-  const { settleFixtureViaTxData } = useAdapterSuite();
-
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
+  const { settleFixtureViaTxData, settleUnsettledFixture } = useAdapterSuite();
 
   let v2TxSig: string;
 
   it("settles v2 fixture (appends one leaf)", async () => {
-    await assertFixtureUnsettled("batch_groth16_v2.json");
-
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
-    const v2Fixture = loadFixture("batch_groth16_v2.json");
-    const payload = Buffer.from(v2Fixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(v2Fixture.consumed_nullifiers_b64);
-    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
-
-    v2TxSig = await settleFixtureViaTxData(payload, remainingAccounts, {
-      createdCommitments: commitmentsOf(v2Fixture),
-    });
+    v2TxSig = await settleUnsettledFixture("batch_groth16_v2.json");
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
@@ -58,7 +41,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     assert.ok(
       v2TxSig,
       "v2 settlement did not produce a transaction signature — the preceding " +
-      "'settles v2 fixture' test must have failed"
+        "'settles v2 fixture' test must have failed",
     );
 
     const { events } = await cpiEventsOf(v2TxSig);
@@ -66,12 +49,10 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
     assert.isAtLeast(actionEvents.length, 1, "Should emit actionExecutedEvent");
     assert.ok(
-      Array.isArray(actionEvents[0].data.actionTreeRoot) &&
-        actionEvents[0].data.actionTreeRoot.length === 32,
+      Array.isArray(actionEvents[0].data.actionTreeRoot) && actionEvents[0].data.actionTreeRoot.length === 32,
       "action_tree_root should be 32 bytes",
     );
-    assert.equal(actionEvents[0].data.actionTagCount, 2,
-      "action_tag_count should be 2 (consumed + created)");
+    assert.equal(actionEvents[0].data.actionTagCount, 2, "action_tag_count should be 2 (consumed + created)");
 
     const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
     assert.equal(txEvents.length, 1, "Should emit exactly one transactionExecutedEvent");
@@ -87,12 +68,9 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
 
     const fwdEvents = events.filter((e) => e.name === "forwarderCallExecutedEvent");
     assert.isAtLeast(fwdEvents.length, 1, "Should emit forwarderCallExecutedEvent");
-    assert.ok(
-      fwdEvents[0].data.forwarder.equals(blockTimeForwarderId),
-      `forwarder should be ${blockTimeForwarderId}`,
-    );
+    assert.ok(fwdEvents[0].data.forwarder.equals(blockTimeForwarderId), `forwarder should be ${blockTimeForwarderId}`);
     const outputBytes = Buffer.from(fwdEvents[0].data.output);
-    assert.deepEqual(outputBytes, Buffer.from([0x00]), "output should be RESULT_LT (0x00)");
+    assert.deepEqual(outputBytes, Buffer.from([RESULT_LT]), "output should be RESULT_LT");
   });
 
   it("retains a root marker for the v2 settlement's resulting root", async () => {
@@ -105,26 +83,14 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
 
     const info = await provider.connection.getAccountInfo(rootMarkerPda);
     assert.ok(info, "Root marker should exist for the current root after settlement");
-    assert.ok(
-      info!.owner.equals(program.programId),
-      "Root marker should be owned by the PA program",
-    );
+    assert.ok(info!.owner.equals(program.programId), "Root marker should be owned by the PA program");
   });
 
   it("settles v3 fixture (appends one leaf)", async () => {
-    await assertFixtureUnsettled("batch_groth16_v3.json");
-
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
-    const v3Fixture = loadFixture("batch_groth16_v3.json");
-    const payload = Buffer.from(v3Fixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(v3Fixture.consumed_nullifiers_b64);
-    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
-
-    await settleFixtureViaTxData(payload, remainingAccounts, {
-      createdCommitments: commitmentsOf(v3Fixture),
-    });
+    await settleUnsettledFixture("batch_groth16_v3.json");
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
