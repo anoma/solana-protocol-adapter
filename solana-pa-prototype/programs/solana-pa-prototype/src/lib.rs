@@ -129,6 +129,15 @@ pub mod protocol_adapter {
             proof_selector != [0u8; 4],
             PAError::ZeroProofSelectorNotAllowed
         );
+        // pa-evm's initializer's sanity check: the verifier is not paused already.
+        require!(
+            !verifier_paused(
+                &ctx.accounts.verifier_entry,
+                &verifier_router,
+                proof_selector
+            )?,
+            PAError::RiscZeroVerifierPaused
+        );
         ctx.accounts.pa_state.set_inner(PAStateAccount::running(
             ctx.bumps.pa_state,
             verifier_router,
@@ -154,10 +163,7 @@ pub mod protocol_adapter {
         ctx: Context<'info, Settle<'info>>,
         transaction_data: Vec<u8>,
     ) -> Result<()> {
-        require!(
-            ctx.accounts.pa_state.lifecycle == PALifecycle::Running,
-            PAError::Stopped
-        );
+        require!(!ctx.accounts.pa_state.paused, PAError::EnforcedPause);
 
         let tx: Transaction = bincode::deserialize(&transaction_data)
             .map_err(|_| error!(PAError::InvalidTransactionData))?;
@@ -333,10 +339,7 @@ pub mod protocol_adapter {
         ctx: Context<'info, SettleFromTxData<'info>>,
         _upload_id: u64,
     ) -> Result<()> {
-        require!(
-            ctx.accounts.pa_state.lifecycle == PALifecycle::Running,
-            PAError::Stopped
-        );
+        require!(!ctx.accounts.pa_state.paused, PAError::EnforcedPause);
 
         let txdata = &ctx.accounts.tx_data;
 
@@ -376,40 +379,51 @@ pub mod protocol_adapter {
         Ok(())
     }
 
-    /// Emergency stop — terminal. Retires this deployment permanently.
+    /// Pause settlement. Mirrors pa-evm's `pause()`: owner-only, refused
+    /// while already paused (`EnforcedPause`), announced with `PausedEvent`.
+    /// While paused, `settle` and `settle_from_txdata` refuse every
+    /// transaction; nothing else is gated.
     ///
-    /// There is no resume instruction: `Running` is set only at initialization
-    /// and this is the only transition out of it. Recovery from a stop is
-    /// migration to a new deployment. pa-evm V2 differs: its owner's `pause()`
-    /// is undone by `unpause()` (anoma/dos-pm#86 tracks the difference).
-    ///
-    /// Terminality is a property of this program's code, not of the runtime:
-    /// the upgrade authority could deploy code that resumes, as a UUPS
-    /// upgrade could on EVM. `close_markers_batch` exists only in
-    /// `dev-teardown` builds (never present in production) to reclaim marker
-    /// rent so a *development* deployment can be re-initialized in place; it
-    /// has no production counterpart, and it too requires the upgrade
-    /// authority.
-    ///
-    /// A production shutdown of this deployment is a separate, later step:
-    /// setting `program_data.upgrade_authority_address` to `None` makes the
-    /// program immutable. Do that only once the deployment is truly retired,
-    /// because `initialize` requires
-    /// `program_data.upgrade_authority_address == Some(payer.key())` — once
-    /// the authority is `None`, this program ID can never be initialized
-    /// again.
-    pub fn emergency_stop(ctx: Context<EmergencyStop>) -> Result<()> {
+    /// A permanent shutdown is a pause followed by setting
+    /// `program_data.upgrade_authority_address` to `None`: with no upgrade
+    /// authority, no one can unpause or upgrade. Do that only once the
+    /// deployment is truly retired, because `initialize` requires
+    /// `program_data.upgrade_authority_address == Some(payer.key())`, so this
+    /// program ID can never be initialized again. `close_markers_batch`, which
+    /// requires a paused adapter, exists only in `dev-teardown` builds (never
+    /// present in production) to reclaim marker rent so a *development*
+    /// deployment can be re-initialized in place.
+    pub fn pause(ctx: Context<SetPause>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
-        require!(
-            state.lifecycle == PALifecycle::Running,
-            PAError::AlreadyStopped
-        );
-        state.lifecycle = PALifecycle::Stopped;
-        msg!(
-            "Emergency stop activated by {}",
-            ctx.accounts.authority.key()
-        );
+        require!(!state.paused, PAError::EnforcedPause);
+        state.paused = true;
+        emit_cpi!(PausedEvent {
+            account: ctx.accounts.authority.key(),
+        });
         Ok(())
+    }
+
+    /// Resume settlement. Mirrors pa-evm's `unpause()`: owner-only, refused
+    /// while not paused (`ExpectedPause`), announced with `UnpausedEvent`.
+    pub fn unpause(ctx: Context<SetPause>) -> Result<()> {
+        let state = &mut ctx.accounts.pa_state;
+        require!(state.paused, PAError::ExpectedPause);
+        state.paused = false;
+        emit_cpi!(UnpausedEvent {
+            account: ctx.accounts.authority.key(),
+        });
+        Ok(())
+    }
+
+    /// Whether the router has paused the verifier this deployment routes to.
+    /// Mirrors pa-evm's `riscZeroVerifierPaused()`: read by simulation.
+    pub fn risc_zero_verifier_paused(ctx: Context<VerifierPauseStatus>) -> Result<bool> {
+        let state = &ctx.accounts.pa_state;
+        verifier_paused(
+            &ctx.accounts.verifier_entry,
+            &state.verifier_router,
+            state.proof_selector,
+        )
     }
 
     /// Replace the kind-table commitment every settled aggregation instance
@@ -506,10 +520,7 @@ pub mod protocol_adapter {
     /// instruction is absent unless `dev-teardown` is enabled.
     #[cfg(feature = "dev-teardown")]
     pub fn close_markers_batch<'info>(ctx: Context<'info, CloseMarkersBatch<'info>>) -> Result<()> {
-        require!(
-            ctx.accounts.pa_state.lifecycle == PALifecycle::Stopped,
-            PAError::NotStopped
-        );
+        require!(ctx.accounts.pa_state.paused, PAError::ExpectedPause);
         let authority_info = ctx.accounts.authority.to_account_info();
         for marker in ctx.remaining_accounts {
             require!(marker.owner == &crate::ID, PAError::InvalidMarker);
@@ -875,10 +886,15 @@ pub struct Initialize<'info> {
             @ PAError::Unauthorized
     )]
     pub program_data: Account<'info, ProgramData>,
+
+    /// CHECK: The handler requires the router's verifier entry for the
+    /// initialized selector (`verifier_paused`).
+    pub verifier_entry: UncheckedAccount<'info>,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
-pub struct EmergencyStop<'info> {
+pub struct SetPause<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
@@ -978,6 +994,21 @@ pub struct SetKindTableCommitment<'info> {
 
 #[derive(Accounts)]
 pub struct Version {}
+
+#[derive(Accounts)]
+pub struct VerifierPauseStatus<'info> {
+    #[account(
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        constraint = pa_state.schema_version == SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    /// CHECK: The handler requires the router's verifier entry for the
+    /// deployment's selector (`verifier_paused`).
+    pub verifier_entry: UncheckedAccount<'info>,
+}
 
 #[event_cpi]
 #[derive(Accounts)]
@@ -1270,6 +1301,18 @@ pub struct KindTableCommitmentUpdatedEvent {
     pub kind_table_commitment: [u8; 32],
 }
 
+/// Mirrors OpenZeppelin Pausable: `event Paused(address account);`
+#[event]
+pub struct PausedEvent {
+    pub account: Pubkey,
+}
+
+/// Mirrors OpenZeppelin Pausable: `event Unpaused(address account);`
+#[event]
+pub struct UnpausedEvent {
+    pub account: Pubkey,
+}
+
 /// Mirrors pa-evm: `event CommitmentTreeRootAdded(bytes32 root);`: the
 /// empty tree's root at initialization, then the root each settlement that
 /// appends commitments produces.
@@ -1312,6 +1355,20 @@ pub struct ForwarderCallExecutedEvent {
     pub forwarder: Pubkey,
     pub input: Vec<u8>,
     pub output: Vec<u8>,
+}
+
+/// Whether the router has emergency-stopped the verifier it routes
+/// `selector` to: the `estopped` flag of the router's verifier entry
+/// `["verifier", selector]`, as pa-evm's `riscZeroVerifierPaused()` asks the
+/// router. Any other account is refused.
+fn verifier_paused(entry: &AccountInfo, router: &Pubkey, selector: [u8; 4]) -> Result<bool> {
+    let (expected, _) = Pubkey::find_program_address(&[b"verifier", &selector], router);
+    require_keys_eq!(*entry.key, expected, PAError::InvalidVerifierEntry);
+    require_keys_eq!(*entry.owner, *router, PAError::InvalidVerifierEntry);
+    let data = entry.try_borrow_data()?;
+    let entry = verifier_router::accounts::VerifierEntry::try_deserialize(&mut &data[..])
+        .map_err(|_| error!(PAError::InvalidVerifierEntry))?;
+    Ok(entry.estopped)
 }
 
 fn emit_app_data_events(

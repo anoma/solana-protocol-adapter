@@ -15,18 +15,18 @@
  *                                     STF_LOGIC_REF, once; escrow, nonce
  *                                     bitmaps and the committee are untouched.
  *   close-config          (committee) Close only the config PDA (retirement).
- *                                     Requires the adapter to be stopped.
+ *                                     Requires the adapter to be paused.
  *   set-emergency-caller  (committee) Name STF_EMERGENCY_CALLER, once, while
- *                                     the adapter is stopped.
+ *                                     the adapter is paused.
  *   emergency-withdraw    (caller)    Move STF_AMOUNT of STF_TOKEN_MINT from
  *                                     escrow to STF_RECIPIENT.
  *   drain-escrow          (committee) Drain STF_TOKEN_MINT's escrow to
  *                                     STF_RECIPIENT and close the escrow ATA.
- *                                     Requires the adapter to be stopped.
+ *                                     Requires the adapter to be paused.
  *   teardown              (committee) Close every nonce bitmap, drain and
  *                                     close STF_TOKEN_MINT's escrow to the
  *                                     committee, close the config. Requires
- *                                     the adapter to be stopped.
+ *                                     the adapter to be paused.
  *   migrate               (upgrade    After upgrading the program in place
  *                          authority) from its previous build: migrate the
  *                                     config, every nonce bitmap still in the
@@ -34,7 +34,7 @@
  *                                     STF_TOKEN_MINTS escrow. Idempotent.
  *
  * The program enforces who may do what and when; a refused command fails
- * with the program's error (UnauthorizedCaller, ProtocolAdapterNotStopped,
+ * with the program's error (UnauthorizedCaller, ProtocolAdapterNotPaused,
  * EmergencyCallerAlreadySet, ...).
  *
  * Environment (read per command):

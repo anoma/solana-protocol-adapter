@@ -1,12 +1,12 @@
 # Operating a Protocol Adapter Deployment
 
-This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, upgrade it, run it, stop it in an emergency, and retire it permanently. The one fact that shapes everything here: **the adapter is upgradeable, so "stopped forever" is not enforced by the chain — it is enforced by custody of the upgrade authority.** The same holds for pa-evm V2, a UUPS proxy its owner upgrades in place (`upgradeToAndCall`) and pauses and unpauses (`pause()`, `unpause()`). The Solana adapter's stop is stricter than pa-evm's pause: `emergency_stop` has no inverse instruction, so only an upgrade could undo it, and burning the upgrade authority, the last Sunsetting step, makes it permanent. (That difference from pa-evm V2 is tracked in anoma/dos-pm#86.)
+This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, upgrade it, run it, pause it, and retire it permanently. The one fact that shapes everything here: **the adapter is upgradeable, so "paused forever" is not enforced by the chain — it is enforced by custody of the upgrade authority.** The same holds for pa-evm V2, a UUPS proxy its owner upgrades in place (`upgradeToAndCall`) and pauses and unpauses (`pause()`, `unpause()`); the Solana adapter has the same owner-only `pause` and `unpause`. Burning the upgrade authority, the last Sunsetting step, makes a pause permanent.
 
 Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically; cluster operations take `--cluster <localnet|devnet|mainnet>` (see `scripts/ops.sh` for all flags). Commands shown as `solana`, `npx` or `solana-verify` run directly.
 
 ## The owner
 
-A deployment has one owner: each program's upgrade authority, which the BPF loader records in the program's ProgramData account. The adapter's owner-only instructions (`initialize`, `emergency_stop`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_ref`, `migrate_state`) and the forwarder's (`initialize`, `reinitialize`, the `migrate_*` instructions) require it as signer. This mirrors pa-evm, whose owner is also the one who authorizes its upgrades.
+A deployment has one owner: each program's upgrade authority, which the BPF loader records in the program's ProgramData account. The adapter's owner-only instructions (`initialize`, `pause`, `unpause`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_ref`, `migrate_state`) and the forwarder's (`initialize`, `reinitialize`, the `migrate_*` instructions) require it as signer. This mirrors pa-evm, whose owner is also the one who authorizes its upgrades.
 
 Ownership moves with the upgrade authority, and is given up with it:
 
@@ -17,7 +17,7 @@ solana program set-upgrade-authority <program id> --final \
   --upgrade-authority <current authority keypair> --url <rpc>                              # renounces it for good
 ```
 
-The new authority must sign unless `--skip-new-upgrade-authority-signer-check` is passed (for a key that cannot sign, such as a multisig vault). No program instruction or event is involved; the loader's ProgramData account is where the current owner is read. A final program can never be upgraded, initialized again, stopped or reconfigured.
+The new authority must sign unless `--skip-new-upgrade-authority-signer-check` is passed (for a key that cannot sign, such as a multisig vault). No program instruction or event is involved; the loader's ProgramData account is where the current owner is read. A final program can never be upgraded, initialized again, paused, unpaused or reconfigured.
 
 The owner can replace the program binary, which means it could deploy code that undoes a stop: a stop is only as permanent as upgrade-authority custody. Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
 
@@ -139,36 +139,36 @@ PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --clust
 
 The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the new value, as pa-evm's `KindTableCommitmentUpdated` does. From that slot on, transactions proven against the previous table are rejected (`KindTableCommitmentMismatch`), so provers must load the new table before it is installed. The generated Solana tables and their commitments come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
 
-## Emergency stop
+## Pausing
 
-The stop exists for one scenario: the deployment can no longer be trusted — typically a suspected vulnerability — and settlement must halt now.
+A pause halts settlement, as pa-evm's owner does with `pause()`: for a suspected vulnerability, or while an upgrade that fixes one is prepared. `unpause` resumes it, as pa-evm's `unpause()` does.
 
 ```sh
-./scripts/dev.sh estop --cluster devnet        # prints what will happen, then refuses
-./scripts/dev.sh estop --cluster devnet --yes  # executes
+./scripts/dev.sh pause --cluster devnet     # upgrade-authority wallet
+./scripts/dev.sh unpause --cluster devnet   # upgrade-authority wallet
 ```
 
-The command must be signed by the upgrade authority. It flips the lifecycle flag from Running to Stopped and there is no instruction that flips it back.
+Both are owner-only. `pause` is refused while already paused (`EnforcedPause`) and `unpause` while not paused (`ExpectedPause`), as OpenZeppelin's Pausable refuses them; each emits `PausedEvent` / `UnpausedEvent` with the signer, as `Paused(account)` / `Unpaused(account)` do. The commands are idempotent: they do nothing when the adapter is already in the requested state.
 
-What stops: `settle` and `settle_from_txdata` reject every transaction with `PAError::Stopped`. Those are the only two instructions gated on the lifecycle flag.
+What pauses: `settle` and `settle_from_txdata` reject every transaction with `EnforcedPause`. Those are the only two instructions gated on the flag, as `execute` is pa-evm's only `whenNotPaused` function.
 
-What keeps working: everything else. All accounts (PAState, the commitment tree, nullifier and root markers) remain on chain and readable forever. Transaction-data upload accounts can still be closed and their rent reclaimed by their owners. Expiry configuration, and moving the upgrade authority (`solana program set-upgrade-authority`), still function.
+What keeps working: everything else. All accounts (PAState, the commitment tree, nullifier and root markers) remain on chain and readable. Transaction-data upload accounts can still be closed and their rent reclaimed by their owners. Expiry configuration, the kind table, the denylist, upgrades, and moving the upgrade authority (`solana program set-upgrade-authority`) still function.
 
-What a stop does **not** do: it does not prevent the upgrade-authority holder from deploying a modified binary. If the stop is meant to be permanent, finish the job with the Sunsetting steps below.
+A pause is as permanent as upgrade-authority custody: whoever holds the upgrade authority can unpause. To make it permanent, finish with the Sunsetting steps below.
 
 ### The second kill switch: the verifier
 
-Settlement also depends on RISC0's verifier router (the program pinned at `initialize`). The router keeps its own per-verifier emergency stop, checked inside the router during the verification call — the PA does not check it and cannot: a failed cross-program invocation aborts the whole transaction, so the PA never sees the error to translate it. pa-evm V2 likewise keeps the two apart: `paused()` reports its own pause and `riscZeroVerifierPaused()` the verifier's; `execute` checks only its own, and a paused verifier fails inside the router call.
+Settlement also depends on RISC0's verifier router (the program pinned at `initialize`). The router keeps its own per-verifier emergency stop, checked inside the router during the verification call — the PA does not check it and cannot: a failed cross-program invocation aborts the whole transaction, so the PA never sees the error to translate it. As in pa-evm V2, the adapter reports the two separately: `PAStateAccount.paused` is its own pause, and the `risc_zero_verifier_paused` view (read by simulation, as pa-evm's `riscZeroVerifierPaused()`) reads the router's verifier entry for the deployment's selector. `initialize` refuses a verifier the router has already paused (`RiscZeroVerifierPaused`), as pa-evm's initializer does.
 
 Diagnosis is by transaction logs: a router-side stop shows the router program's own `SelectorDeactivated` error in the failed transaction's logs, clearly distinct from a proof failure. Whether anyone outside this project can trip that switch depends on who owns the router deployment — the current owner is in the cluster's deployment record.
 
 ## Recovery
 
-The Solana adapter has no instruction that resumes a stopped PA. pa-evm V2 differs: its owner resumes a paused adapter with `unpause()`, after an in-place `upgradeToAndCall` if the code needed fixing (anoma/dos-pm#86 tracks the difference). Here, recovery from a stopped PA is migration to a new deployment.
+A pause is recovered in place: fix the code if needed (`upgrade`, then any migration), then `unpause`, as pa-evm's owner does with `upgradeToAndCall` and `unpause()`. The tree, markers and every resource stay valid.
 
-Concretely, migration means: deploy a fresh PA under a new program ID (new keypair), initialize it, and have applications re-establish their state against the new deployment's empty commitment tree. The stopped deployment's tree, markers, and history remain on chain and readable forever, so nothing about the old state is lost as evidence — but resources committed to the old tree cannot be settled anywhere, and value they represent must be recovered at the application layer (each application proves what it owned in the old tree and re-issues it in the new one, under whatever policy its owners decide).
+When the deployment itself cannot be trusted any more, recovery is migration to a new deployment: deploy a fresh PA under a new program ID (new keypair), initialize it, and have applications re-establish their state against the new deployment's empty commitment tree. The old deployment's tree, markers, and history remain on chain and readable, so nothing about the old state is lost as evidence — but resources committed to the old tree cannot be settled in the new one, and value they represent must be recovered at the application layer (each application proves what it owned in the old tree and re-issues it in the new one, under whatever policy its owners decide).
 
-The PAState account of a stopped deployment can never be re-initialized. This is deliberate: the account address derives from a fixed seed, so re-initializing would resurrect old nullifier-marker addresses and let previously spent notes spend again.
+The PAState account can never be re-initialized. This is deliberate: the account address derives from a fixed seed, so re-initializing would resurrect old nullifier-marker addresses and let previously spent notes spend again.
 
 ## The SPL token forwarder
 
@@ -221,7 +221,7 @@ The command is idempotent. Until a bitmap is migrated, wraps on its word fail wi
 
 The committee and its emergency caller carry over the EVM V1 forwarder's emergency mechanism; the EVM V2 forwarder has none (it relies on its owner's upgrades), and anoma/dos-pm#86 tracks whether this forwarder keeps, replaces or drops it. As built:
 
-Once the adapter is stopped (`estop`), the committee names an emergency caller, once, and that caller withdraws from escrow directly without going through the adapter:
+Once the adapter is paused (`pause`), the committee names an emergency caller, once, and that caller withdraws from escrow directly without going through the adapter:
 
 ```sh
 STF_EMERGENCY_CALLER=<pubkey> ./scripts/dev.sh forwarder set-emergency-caller --cluster <c>   # committee wallet
@@ -229,21 +229,21 @@ STF_TOKEN_MINT=<mint> STF_RECIPIENT=<owner> STF_AMOUNT=<raw units> \
   ./scripts/dev.sh forwarder emergency-withdraw --cluster <c>                                # caller wallet
 ```
 
-`set-emergency-caller` refuses while the adapter is running and cannot be repeated. The committee can also drain and close an escrow outright with `drain-escrow`, but like every committee teardown command it refuses while the adapter is running.
+`set-emergency-caller` refuses while the adapter is not paused and cannot be repeated. The committee can also drain and close an escrow outright with `drain-escrow`, but like every committee teardown command it refuses while the adapter is not paused.
 
 ### Retiring the forwarder
 
-Once the adapter is stopped, `STF_TOKEN_MINT=<mint> ./scripts/dev.sh forwarder teardown --cluster <c>` (committee wallet) closes every nonce bitmap, drains and closes that mint's escrow to the committee, and closes the config, reclaiming their rent. Run it once per mint that has an escrow, then close the program with `teardown stf` (which first attempts `close-pdas` on the adapter, as every `teardown` does).
+Once the adapter is paused, `STF_TOKEN_MINT=<mint> ./scripts/dev.sh forwarder teardown --cluster <c>` (committee wallet) closes every nonce bitmap, drains and closes that mint's escrow to the committee, and closes the config, reclaiming their rent. Run it once per mint that has an escrow, then close the program with `teardown stf` (which first attempts `close-pdas` on the adapter, as every `teardown` does).
 
 ## Sunsetting
 
 Permanent retirement, in order. The order matters because `initialize` requires a live upgrade authority: once the authority is gone, that program ID can never host a PA again — which is the point, but only as the final step.
 
-1. **Stop settlement.** `./scripts/dev.sh estop --cluster <c> --yes`.
-2. **Reclaim marker rent — development builds only.** `./scripts/dev.sh close-pdas --cluster <c>` closes nullifier and root markers via `close_markers_batch`, which requires the Stopped state and exists only in `--dev-teardown` builds. Production builds abandon marker rent by design; there is deliberately no production path that deletes replay-protection markers. The command validates the instruction against the locally built IDL, so run a development build first (`./scripts/dev.sh run "./scripts/ops.sh build-dev"`) if the last build was a production one.
+1. **Pause settlement.** `./scripts/dev.sh pause --cluster <c>`.
+2. **Reclaim marker rent — development builds only.** `./scripts/dev.sh close-pdas --cluster <c>` closes nullifier and root markers via `close_markers_batch`, which requires a paused adapter and exists only in `--dev-teardown` builds. Production builds abandon marker rent by design; there is deliberately no production path that deletes replay-protection markers. The command validates the instruction against the locally built IDL, so run a development build first (`./scripts/dev.sh run "./scripts/ops.sh build-dev"`) if the last build was a production one.
 3. **End the program.** Two mutually exclusive options:
    - `solana program close <PROGRAM_ID> --bypass-warning --keypair <upgrade authority keypair> --url <rpc>` — reclaims the program account's rent and burns the program ID permanently (`./scripts/dev.sh teardown --cluster <c>` does steps 2 and 3 together), or
-   - `solana program set-upgrade-authority <PROGRAM_ID> --final --upgrade-authority <upgrade authority keypair> --url <rpc>` — keeps the stopped program on chain forever but makes it immutable: no future upgrade can undo the stop, and the state remains readable at its original addresses.
+   - `solana program set-upgrade-authority <PROGRAM_ID> --final --upgrade-authority <upgrade authority keypair> --url <rpc>` — keeps the paused program on chain forever but makes it immutable: no one can unpause or upgrade it, and the state remains readable at its original addresses.
 
 For a beta deployment on devnet, closing the program (reclaiming rent) is the normal end. Immutability-by-burned-authority is the shape a mainnet retirement would take when the historical state should stay served at its known addresses.
 

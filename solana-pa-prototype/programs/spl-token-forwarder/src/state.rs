@@ -4,7 +4,7 @@
 use anchor_lang::prelude::*;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use protocol_adapter::state::{PALifecycle, PAStateAccount, PA_STATE_SEED};
+use protocol_adapter::state::{PAStateAccount, PA_STATE_SEED};
 
 /// Configuration account for the forwarder.
 ///
@@ -40,14 +40,14 @@ impl Config {
 #[constant]
 pub const CONFIG_VERSION: u64 = 2;
 
-/// Whether the Protocol Adapter is emergency stopped, read from its state
-/// account through the adapter's own account type. Data that is not a PA
-/// state account (wrong discriminator, truncated, unknown layout) is an
-/// error, never "not stopped".
-pub fn pa_is_stopped(pa_state_data: &[u8]) -> Result<bool> {
+/// Whether the Protocol Adapter is paused, read from its state account
+/// through the adapter's own account type. Data that is not a PA state
+/// account (wrong discriminator, truncated, unknown layout) is an error,
+/// never "not paused".
+pub fn pa_is_paused(pa_state_data: &[u8]) -> Result<bool> {
     let state = PAStateAccount::try_deserialize(&mut &pa_state_data[..])
         .map_err(|_| crate::ErrorCode::InvalidPaState)?;
-    Ok(state.lifecycle == PALifecycle::Stopped)
+    Ok(state.paused)
 }
 
 /// Derive the PA state PDA address from the PA program ID.

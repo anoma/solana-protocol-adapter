@@ -10,7 +10,7 @@
 import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { assert } from "chai";
 import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
-import { emergencyStop, setKindTableCommitment } from "../client/instructions";
+import { pauseAdapter, setKindTableCommitment } from "../client/instructions";
 import { BPF_LOADER_UPGRADEABLE, deriveProgramDataPda } from "../client/pda";
 import { assertFails } from "./utils/helpers";
 import { provider, program, paState, forwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
@@ -37,14 +37,14 @@ describe("protocol-adapter (authority)", () => {
   const wallet = provider.wallet.publicKey;
   const kindTable = Array.from(EMPTY_KIND_TABLE_COMMITMENT);
 
-  it("initializes running", async () => {
+  it("initializes unpaused", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(JSON.stringify(state.lifecycle), JSON.stringify({ running: {} }));
+    assert.isFalse(state.paused);
   });
 
-  it("rejects emergency_stop from a signer that is not the upgrade authority", async () => {
+  it("rejects pause from a signer that is not the upgrade authority", async () => {
     const nonAuthority = await funder.fresh(1);
-    await assertFails(emergencyStop(program, nonAuthority.publicKey).signers([nonAuthority]).rpc(), {
+    await assertFails(pauseAdapter(program, nonAuthority.publicKey).signers([nonAuthority]).rpc(), {
       program,
       error: "Unauthorized",
       account: "program_data",

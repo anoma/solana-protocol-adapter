@@ -80,7 +80,7 @@ entry point for one fixture.
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
 | `./scripts/dev.sh shell` / `run <cmd>` | Interactive Nix shell / one command in it |
-| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-ref`, `migrate-state`, `forwarder`, `lookup-table`, `estop`, `status`, `balance`, `close-pdas`, `teardown`, `sync-ids`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
+| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-ref`, `migrate-state`, `forwarder`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `close-pdas`, `teardown`, `sync-ids`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
 
 ### Rebuilding From Scratch
 
@@ -470,7 +470,7 @@ cd solana-pa-prototype
 
 ### Deploy to a Real Cluster
 
-Deployment, initialization, upgrades, emergency stop, and retirement procedures for
+Deployment, initialization, upgrades, pausing, and retirement procedures for
 devnet/mainnet live in
 [`solana-pa-prototype/docs/OPERATIONS.md`](solana-pa-prototype/docs/OPERATIONS.md).
 

@@ -12,7 +12,7 @@ import { chunks } from "./instructions";
 import { derivePaStatePda } from "./pda";
 
 /**
- * `close_markers_batch` by `authority` over `markers`; only on a stopped
+ * `close_markers_batch` by `authority` over `markers`; only on a paused
  * adapter. The method is looked up untyped: naming it in a type would make
  * this module fail to compile against production types, preempting the
  * actionable error thrown when the program was built without the feature.
@@ -33,7 +33,7 @@ export function closeMarkersBatch(program: Program<ProtocolAdapter>, authority: 
 /**
  * Close every marker account (the zero-byte nullifier and root markers) the
  * adapter owns, in batches, as `authority`: the provider wallet, which must
- * be the program's upgrade authority, on a stopped adapter. Returns how many
+ * be the program's upgrade authority, on a paused adapter. Returns how many
  * were closed.
  */
 export async function closeAllMarkers(program: Program<ProtocolAdapter>, authority: PublicKey): Promise<number> {

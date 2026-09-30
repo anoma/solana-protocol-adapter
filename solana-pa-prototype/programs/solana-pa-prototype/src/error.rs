@@ -81,14 +81,20 @@ pub enum PAError {
     NullifierDuplication,
 
     // Protocol state errors
-    #[msg("Protocol adapter is stopped")]
-    Stopped,
     #[msg("Unauthorized: the signer does not hold the authority this instruction requires")]
     Unauthorized,
-    #[msg("Protocol adapter is already stopped")]
-    AlreadyStopped,
-    #[msg("Operation requires the PA to be stopped")]
-    NotStopped,
+    /// OpenZeppelin Pausable's `EnforcedPause`: the adapter is paused.
+    #[msg("The protocol adapter is paused")]
+    EnforcedPause,
+    /// OpenZeppelin Pausable's `ExpectedPause`: the adapter is not paused.
+    #[msg("The protocol adapter is not paused")]
+    ExpectedPause,
+    /// pa-evm's `RiscZeroVerifierPaused`: the router has emergency-stopped the
+    /// verifier registered for this deployment's selector.
+    #[msg("The RISC Zero verifier for this deployment's selector is paused")]
+    RiscZeroVerifierPaused,
+    #[msg("Account is not the verifier router's entry for this deployment's selector")]
+    InvalidVerifierEntry,
 
     // Merkle tree errors
     #[msg("Tree has reached maximum depth (32 levels)")]

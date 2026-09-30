@@ -1,5 +1,5 @@
 /**
- * close_markers_batch: refused while the adapter runs, and on a stopped
+ * close_markers_batch: refused while the adapter is not paused, and on a paused
  * adapter it closes the markers and refunds their rent. The before hook
  * settles the primary fixture, leaving markers to close.
  */
@@ -7,7 +7,7 @@ import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { assert } from "chai";
 import { closeAllMarkers, closeMarkersBatch } from "../client/devTeardown";
 import { assertFails } from "./utils/helpers";
-import { provider, program, paState, stopAdapter, useAdapterSuite } from "./utils/adapterSuite";
+import { provider, program, paState, pauseAsOwner, useAdapterSuite } from "./utils/adapterSuite";
 
 // ── Close instruction tests ──────────────────────────────────────────────
 
@@ -16,9 +16,9 @@ describe("protocol-adapter (Close instructions)", () => {
 
   before(() => settleFixture("batch_groth16.json"));
 
-  it("close_markers_batch fails when PA is not stopped", async () => {
+  it("close_markers_batch fails when the PA is not paused", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.deepEqual(state.lifecycle, { running: {} }, "PA should be Running at start of test");
+    assert.isFalse(state.paused, "the PA is not paused at the start of the test");
 
     // The markers the before hook's settlement created
     const markers = await provider.connection.getProgramAccounts(program.programId, {
@@ -32,12 +32,12 @@ describe("protocol-adapter (Close instructions)", () => {
         provider.wallet.publicKey,
         markers.map(({ pubkey }) => pubkey),
       ).rpc(),
-      { program, error: "NotStopped" },
+      { program, error: "ExpectedPause" },
     );
   });
 
-  describe("on a stopped adapter", () => {
-    before(stopAdapter);
+  describe("on a paused adapter", () => {
+    before(pauseAsOwner);
 
     it("close_markers_batch closes marker PDAs and refunds rent", async () => {
       const markersBefore = (

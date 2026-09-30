@@ -1,14 +1,14 @@
 //! Tests for the wire formats, the nonce bitmap, and the adapter-state read.
 
 use crate::state::{
-    base64_of_hash, nonce_to_word_and_bit, pa_is_stopped, NonceBitmap, UnwrapInput, WrapInput,
+    base64_of_hash, nonce_to_word_and_bit, pa_is_paused, NonceBitmap, UnwrapInput, WrapInput,
     WrapMessage, CONFIG_PDA, CONFIG_SEED, ESCROW_AUTHORITY, ESCROW_AUTHORITY_BUMP, ESCROW_SEED,
     NONCES_PER_WORD, NONCE_BITMAP_SEED, PREVIOUS_CONFIG_SIZE, PREVIOUS_NONCE_BITMAP_SIZE,
     SIGNED_MESSAGE_LEN,
 };
 use anchor_lang::prelude::{borsh, Pubkey};
 use anchor_lang::AccountSerialize;
-use protocol_adapter::state::{PALifecycle, PAStateAccount};
+use protocol_adapter::state::PAStateAccount;
 
 /// The compile-time config address is the canonical PDA `initialize`
 /// creates, the only address a config can live at.
@@ -321,14 +321,14 @@ fn nonce_bitmap_account_is_discriminator_word_and_bump() {
 }
 
 // =============================================================================
-// PA Emergency Stopped Tests
+// PA Paused Tests
 // =============================================================================
 
 /// A PA state account exactly as the adapter serializes it (discriminator
-/// plus the current layout), with the given lifecycle and denied logic refs.
-fn serialized_pa_state(lifecycle: PALifecycle, denied_logic_refs: Vec<[u8; 32]>) -> Vec<u8> {
+/// plus the current layout), paused or not, with the given denied logic refs.
+fn serialized_pa_state(paused: bool, denied_logic_refs: Vec<[u8; 32]>) -> Vec<u8> {
     let state = PAStateAccount {
-        lifecycle,
+        paused,
         denied_logic_refs,
         ..PAStateAccount::running(254, Pubkey::new_unique(), [0x73, 0xc4, 0x57, 0xba])
     };
@@ -338,32 +338,32 @@ fn serialized_pa_state(lifecycle: PALifecycle, denied_logic_refs: Vec<[u8; 32]>)
 }
 
 #[test]
-fn pa_is_stopped_reads_the_lifecycle_from_the_adapter_layout() {
-    for (lifecycle, denied_logic_refs, stopped) in [
-        (PALifecycle::Stopped, vec![], true),
-        (PALifecycle::Stopped, vec![[7u8; 32]], true),
-        (PALifecycle::Running, vec![[7u8; 32]], false),
+fn pa_is_paused_reads_the_flag_from_the_adapter_layout() {
+    for (paused, denied_logic_refs) in [
+        (true, vec![]),
+        (true, vec![[7u8; 32]]),
+        (false, vec![[7u8; 32]]),
     ] {
-        let data = serialized_pa_state(lifecycle, denied_logic_refs);
-        assert_eq!(pa_is_stopped(&data).unwrap(), stopped, "{lifecycle:?}");
+        let data = serialized_pa_state(paused, denied_logic_refs);
+        assert_eq!(pa_is_paused(&data).unwrap(), paused);
     }
 }
 
 #[test]
-fn pa_is_stopped_rejects_data_that_is_not_a_pa_state_account() {
-    let mut data = serialized_pa_state(PALifecycle::Stopped, vec![]);
+fn pa_is_paused_rejects_data_that_is_not_a_pa_state_account() {
+    let mut data = serialized_pa_state(true, vec![]);
     data[0] ^= 0xff; // corrupt the discriminator
     assert!(
-        pa_is_stopped(&data).is_err(),
-        "a foreign account must be an error, not \"not stopped\""
+        pa_is_paused(&data).is_err(),
+        "a foreign account must be an error, not \"not paused\""
     );
 }
 
 #[test]
-fn pa_is_stopped_rejects_truncated_data() {
-    let data = serialized_pa_state(PALifecycle::Stopped, vec![]);
-    assert!(pa_is_stopped(&data[..40]).is_err());
-    assert!(pa_is_stopped(&[]).is_err());
+fn pa_is_paused_rejects_truncated_data() {
+    let data = serialized_pa_state(true, vec![]);
+    assert!(pa_is_paused(&data[..40]).is_err());
+    assert!(pa_is_paused(&[]).is_err());
 }
 
 /// The previous build's account sizes the migrations require, as its devnet

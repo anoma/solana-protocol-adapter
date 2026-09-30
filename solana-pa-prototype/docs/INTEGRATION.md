@@ -9,7 +9,7 @@ Call-level mechanics — instruction call sequences, account lists, PDA derivati
 - **`settle(transaction_data: Vec<u8>)`** — one instruction carrying the whole serialized transaction. Only usable when the transaction fits in a single Solana transaction.
 - **`txdata_init` → `txdata_write` (repeated) → `settle_from_txdata`** — upload the serialized transaction in chunks to a buffer account, then settle from it. This is the normal path; real transactions with proofs do not fit in one Solana transaction.
 
-Both paths verify the same things and emit the same events. Settlement is rejected while the deployment is emergency-stopped.
+Both paths verify the same things and emit the same events. Settlement is rejected while the deployment is paused.
 
 ## The transaction wire format
 
@@ -89,6 +89,6 @@ Production binaries contain no instruction that deletes markers. (Development bu
 - `verifier_router: Pubkey` — the RISC0 verifier router the PA will call for proof verification. Settlement requires passing this exact program (plus its router PDA, verifier entry, and verifier program) in the settle accounts.
 - `proof_selector: [u8;4]` — the 4-byte selector every transaction's aggregation proof must carry.
 
-Program IDs, the router addresses for the current devnet deployment, and key custody are in `docs/DEVNET_DEPLOYMENT.md`. Operator procedures (deploy, emergency stop, retirement) are in `docs/OPERATIONS.md`; the fact integrators care about: a stopped deployment rejects settlement and has no resume instruction — recovery is a new deployment with a fresh, empty tree.
+Program IDs, the router addresses for the current devnet deployment, and key custody are in `docs/DEVNET_DEPLOYMENT.md`. Operator procedures (deploy, pause, retirement) are in `docs/OPERATIONS.md`; the fact integrators care about: a paused deployment rejects settlement (`EnforcedPause`) until its owner unpauses it, and `PAStateAccount.paused` reports it.
 
 The state account (`PAStateAccount`, PDA seed `pa_state`) carries its layout number at byte 8 of the account data, immediately after the Anchor discriminator. A client that decodes the account directly rather than through the published IDL must check that byte against the layout it was written for before reading further fields; every instruction that reads the account refuses a version other than the program's own, except `migrate_state`, which accepts only the previous version and rewrites it into the current layout; so a mismatch a client sees is a deployment mid-migration, not corrupt data.

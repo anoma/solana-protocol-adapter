@@ -1,5 +1,5 @@
 /**
- * SPL token forwarder emergency flow on a stopped adapter: the committee
+ * SPL token forwarder emergency flow on a paused adapter: the committee
  * names an emergency caller, who withdraws from escrow through
  * forward_emergency_call. The before hook initializes the adapter and the
  * forwarder config (no emergency caller), then stops the adapter.
@@ -16,10 +16,10 @@ import {
   initForwarderConfig,
   paState,
   provider,
-  stopAdapter,
+  pauseAsOwner,
 } from "./utils/adapterSuite";
 
-describe("forwarder emergency (adapter stopped)", () => {
+describe("forwarder emergency (adapter paused)", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
   const funder = makeFunder(provider);
 
@@ -41,7 +41,7 @@ describe("forwarder emergency (adapter stopped)", () => {
 
     await ensureAdapterInitialized();
     await initForwarderConfig(randomRef(), emergencyCommittee.publicKey);
-    await stopAdapter();
+    await pauseAsOwner();
 
     ({ mint, escrowAuthority, escrowAta } = await createFundedEscrow(
       provider,
@@ -88,7 +88,7 @@ describe("forwarder emergency (adapter stopped)", () => {
 
   // Mirrors: test_setEmergencyCaller_sets_the_emergency_caller and
   // test_emergencyCaller_returns_the_emergency_caller_after_it_has_been_set
-  it("lets the committee set the emergency caller once the adapter is stopped", async () => {
+  it("lets the committee set the emergency caller once the adapter is paused", async () => {
     await setEmergencyCallerAsCommittee(emergencyCaller.publicKey);
     const config = await forwarderProgram.account.config.fetch(configPda);
     assert.ok(config.emergencyCaller.equals(emergencyCaller.publicKey));

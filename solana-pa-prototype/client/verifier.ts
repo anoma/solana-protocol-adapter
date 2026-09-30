@@ -9,6 +9,8 @@ export const GROTH16_VERIFIER_ID = new PublicKey("2Yfa83Lzbn71ie3J1KQRiNQz1qHnvV
 // Selector the synthetic VerifierEntry registers the mock verifier under
 // (risc0 fake-receipt convention; the real Groth16 selector is 0x73c457ba).
 export const MOCK_SELECTOR = Buffer.from([0xff, 0xff, 0xff, 0xff]);
+/** Localnet only: a selector registered to the mock verifier with the router's estop set, a paused verifier. */
+export const PAUSED_MOCK_SELECTOR = Buffer.from([0xff, 0xff, 0xff, 0xfe]);
 
 export function getRouterPda(routerProgramId: PublicKey = VERIFIER_ROUTER_ID): [PublicKey, number] {
   return PublicKey.findProgramAddressSync([Buffer.from("router")], routerProgramId);
