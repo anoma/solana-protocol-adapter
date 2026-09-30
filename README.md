@@ -107,7 +107,7 @@ Inside the shell:
 ```bash
 cd solana-pa-prototype
 
-# Build programs (SBPF v0 with the flake's platform-tools; see scripts/validator-deploy.sh)
+# Build programs (SBPF v3 with the flake's platform-tools; see scripts/validator-deploy.sh)
 ./scripts/ops.sh build-dev
 
 # Run tests (start validator separately first)
@@ -559,7 +559,7 @@ nix --extra-experimental-features 'nix-command flakes' develop
 
 ### Unsupported Host: `aarch64-linux`
 
-The pinned Agave `v3.0.13` release does not publish `aarch64-unknown-linux-gnu` binaries.  
+The pinned Agave `v4.3.0` release does not publish `aarch64-unknown-linux-gnu` binaries.  
 Use an `x86_64-linux` host (or macOS) for this repo's pinned Nix workflow.
 
 ### Validator Won't Start / Connection Refused

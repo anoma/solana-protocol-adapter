@@ -90,3 +90,11 @@ export function createdCommitmentsOf(fixture: Fixture): Buffer[] {
   }
   return fixture.created_commitments_b64.map((b) => Buffer.from(b, "base64"));
 }
+
+/** The serialized tampered clone of `fixture`'s transaction. */
+export function tamperedTxOf(fixture: Fixture): Buffer {
+  if (!fixture.tx_tampered_b64) {
+    throw new Error("fixture is missing tx_tampered_b64 — regenerate it with ./scripts/dev.sh regen-fixtures");
+  }
+  return Buffer.from(fixture.tx_tampered_b64, "base64");
+}

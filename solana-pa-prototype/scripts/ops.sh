@@ -739,19 +739,26 @@ cmd_balance() {
   echo "$(get_wallet_pubkey)  $(get_balance) SOL"
 }
 
+# solana-verify maps [workspace.metadata.cli] solana (Cargo.toml) to a build
+# image through a table compiled into each release; 0.5.2 is the release whose
+# table has the Solana version pinned there.
+SOLANA_VERIFY_VERSION="0.5.2"
+
 # Deterministic (verifiable) build of the PA via solana-verify's pinned
 # Docker image; with a cluster, also compares against the deployed program's
 # hash. The resulting target/deploy/protocol_adapter.so is the artifact that
 # must be shipped (deploy/upgrade --prebuilt) for verification to succeed —
 # any local rebuild produces different bytes.
 cmd_verify_build() {
-  if ! command -v solana-verify >/dev/null 2>&1; then
-    echo "❌ solana-verify is not installed. Install with:" >&2
-    echo "   cargo install solana-verify --locked" >&2
+  # A missing solana-verify fails the substitution ("command not found") and
+  # the comparison both.
+  if [[ "$(solana-verify --version)" != "solana-verify ${SOLANA_VERIFY_VERSION}" ]]; then
+    echo "❌ verify-build needs solana-verify ${SOLANA_VERIFY_VERSION}. Install with:" >&2
+    echo "   cargo install solana-verify --version ${SOLANA_VERIFY_VERSION} --locked" >&2
     exit 1
   fi
 
-  checked_sbf_build solana-verify build --library-name protocol_adapter
+  checked_sbf_build solana-verify build --library-name protocol_adapter --arch "$SBPF_ARCH"
 
   local built
   built="$(solana-verify get-executable-hash target/deploy/protocol_adapter.so)"

@@ -28,29 +28,39 @@ dev-teardown = []
 anchor-lang = { workspace = true, features = ["event-cpi"] }
 solana-sha256-hasher = "3.1"
 
-# Serialization - must match arm-risc0 exactly
+# Serialization - must match arm-risc0 exactly: anoma-rm-core 2.0.0-rc.6
+# encodes Transaction with bincode 1.3 (bincode 3.0.0 is a compile_error! stub).
 bincode = "1.3.3"
 borsh = "1.5"
 serde = { version = "1.0", features = ["derive"] }
 
 # BN254 G1 negation of the seal's pi_a before the verifier router CPI.
+# One ark version in the graph: solana-bn254 3.2.1 (dev-dependency) requires ark ^0.5.
 ark-bn254 = { version = "0.5.0", default-features = false, features = ["curve"] }
 ark-ff = { version = "0.5.0", default-features = false }
 
-hex-literal = "0.4"
+hex-literal = "1.1"
 
 # ARM core types (no zkvm dependency, Borsh serialization)
 arm-core = { package = "anoma-rm-core", version = "=2.0.0-rc.6", features = ["borsh"] }
 # ARM Solana-specific types (Borsh, syscalls, delta verification)
 arm-solana = { package = "anoma-rm-solana", version = "=2.0.0-rc.6" }
 
+# arm-solana's delta verification calls the sol_secp256k1_recover syscall
+# through solana-nostd-secp256k1-recover. SBPF v3 programs may not carry
+# undefined symbols, so v3 targets reach syscalls by their static hash; that
+# crate selects the static form with this Cargo feature instead of the
+# target's `static-syscalls` target feature, so the targets that have the
+# target feature turn the Cargo feature on here.
+[target.'cfg(target_feature = "static-syscalls")'.dependencies]
+solana-nostd-secp256k1-recover = { version = "0.2.0", features = ["static-syscalls"] }
 
 [dev-dependencies]
 # Forwarder example program (used in tests for constants/encoding)
 block-time-forwarder = { path = "../block-time-forwarder", default-features = false, features = ["no-entrypoint"] }
 
 # SHA-256 equivalence testing (verifying syscall matches software implementation)
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Host alt_bn128 G1 addition, checking pi_a negation against the curve group law
 solana-bn254 = "3.2.1"

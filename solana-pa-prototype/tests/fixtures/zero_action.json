@@ -3,10 +3,10 @@
   "aggregation_strategy": "batch",
   "aggregation_proof_type": "groth16",
   "selector": "0x73c457ba",
-  "tx_b64": "AAEAAABBAAAAAAAAAIRf7sxc2drM8+Th0BWcYk+lv4K9dLZLg14tBH+5bjqUCfW0cWLy+7MOMuVsW84K3a5PTRXcifGtriJ3pnMau4MbAAEEAQAAAAAAAHPEV7op8TEn5KxGIMLeiCJtdJXvNqFvlnb1o0Ka7WYhCyAf2yo5i19/+6ACxch0xle/fYzD+XrjHBPMMRlNwhCrho+4EuAu68dorPCatNTgjyS6uiMkXRyjvzsgvaxVOYe9k5ggQn6cde0l9N12xiEUWJ9YWH1Q3ZnYx9Imlxanr5OCxyXY84ffFk2apwIBeQfziJOLp+092zWTjbcoSMoNI/EWJsxv6P3153Qrdqp9pyuJ9lZptBU2W/mhI0KlcSGLoyks+R8RCgW31NSZ3HYJd/VLFeU6A8cqX664fn2xG1n/oAyNM6H2kArveV/MJii2XVzkW1AIoOY69WfPxAJo66wCQGxg+HpbtUKn/HMBulwB/ncktbPJ4zUhTQkqELQF9aDjsMRCmPwcFJr79MiZb7kkJ65B5GSbk0yklZkbeFK4VQAAAAAAAAAA",
+  "tx_b64": "AAEAAABBAAAAAAAAAPB0ndFnGZ1kSsL5Jtzmr8Uclx/tgGT3T8rH+7hDIKneGuEFwizX8y1seCM/+tkm/RmmLJjKGb93/rfpUVI5PKUbAAEEAQAAAAAAAHPEV7omiGH9pwPj3wPdtSvoziddymyvBznnqtEoaJUnrz+5LwSAnYqy8nqRJCevhhHrBJJk+TT9dY3FdjF3WkoVmgpAHqBbuu0X95zFL69k1Lub+Mp1sOKCYhQ+w/YjNWezxdEGdMQIH4FysmXLBhNK1pNQwSQ/A7genHIN8mRysr9KxSHYmh7O0DsJs2Q1XhUYicn+KSbxj6819yk8mKuWUcKqLHMBIqSH582thAkeaw/MB9NdFlgHhu75YJTURetHlo0qguGjJZQCHI04L8Z9uHdt6xzwp2ymlYMJr8u/zVtVJh10mRgMf2AleNtiWd/W3JPsvkLwNn0JNDB4yplRjP4uQGxg+HpbtUKn/HMBulwB/ncktbPJ4zUhTQkqELQF9aDjsMRCmPwcFJr79MiZb7kkJ65B5GSbk0yklZkbeFK4VQAAAAAAAAAA",
   "tx_tampered_b64": "",
   "consumed_nullifiers_b64": [
-    "MBAOb7KPPiGjeMHDO0Em404VdeqhwiAiOQy9qagkwsQ="
+    "2IF4/dbOfTVF4DUQlcVm7Im8BBM10gjWe1YR5YoJ2uU="
   ],
   "created_commitments_b64": []
 }
