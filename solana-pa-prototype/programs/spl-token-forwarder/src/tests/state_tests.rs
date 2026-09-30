@@ -5,43 +5,26 @@ use crate::state::{
     WrapMessage, NONCES_PER_WORD, SIGNED_MESSAGE_LEN,
 };
 use anchor_lang::prelude::Pubkey;
-use anchor_lang::AccountSerialize;
+use anchor_lang::{AccountSerialize, AnchorSerialize};
 use protocol_adapter::state::{PALifecycle, PAStateAccount};
 
+/// The field-by-field hash is sha256 of the message's 120-byte Borsh encoding.
 #[test]
-fn test_wrap_message_serialization() {
+fn wrap_message_hash_is_sha256_of_its_borsh_encoding() {
     let msg = WrapMessage {
-        forwarder_id: [0xAAu8; 32], // Domain separation - forwarder program ID
+        forwarder_id: [0xAAu8; 32],
         token_mint: [1u8; 32],
         amount: 1000,
         nonce: 42,
-        deadline: 1700000000,
+        deadline: -1_700_000_000,
         action_tree_root: [2u8; 32],
     };
-
-    let bytes = msg.to_bytes();
-    assert_eq!(bytes.len(), WrapMessage::SIZE);
-
-    // Verify forwarder_id (domain separation)
-    assert_eq!(&bytes[0..32], &[0xAAu8; 32]);
-
-    // Verify token_mint
-    assert_eq!(&bytes[32..64], &[1u8; 32]);
-
-    // Verify amount
-    assert_eq!(u64::from_le_bytes(bytes[64..72].try_into().unwrap()), 1000);
-
-    // Verify nonce
-    assert_eq!(u64::from_le_bytes(bytes[72..80].try_into().unwrap()), 42);
-
-    // Verify deadline
+    let encoded = msg.try_to_vec().unwrap();
+    assert_eq!(encoded.len(), WrapMessage::SIZE);
     assert_eq!(
-        i64::from_le_bytes(bytes[80..88].try_into().unwrap()),
-        1700000000
+        msg.hash(),
+        anchor_lang::solana_program::hash::hash(&encoded).to_bytes()
     );
-
-    // Verify action_tree_root
-    assert_eq!(&bytes[88..120], &[2u8; 32]);
 }
 
 #[test]
@@ -67,35 +50,6 @@ fn test_wrap_message_domain_separation() {
 
     // Hashes must be different due to domain separation
     assert_ne!(msg1.hash(), msg2.hash());
-}
-
-#[test]
-fn test_wrap_input_parsing() {
-    let mut data = vec![0u8; WrapInput::SIZE];
-
-    // token_mint
-    data[0..32].copy_from_slice(&[1u8; 32]);
-    // amount
-    data[32..40].copy_from_slice(&1000u64.to_le_bytes());
-    // user
-    data[40..72].copy_from_slice(&[2u8; 32]);
-    // nonce
-    data[72..80].copy_from_slice(&42u64.to_le_bytes());
-    // deadline
-    data[80..88].copy_from_slice(&1700000000i64.to_le_bytes());
-    // action_tree_root
-    data[88..120].copy_from_slice(&[3u8; 32]);
-    // ed25519_ix_index
-    data[120] = 0;
-
-    let input = WrapInput::try_from_bytes(&data).unwrap();
-    assert_eq!(input.token_mint.to_bytes(), [1u8; 32]);
-    assert_eq!(input.amount, 1000);
-    assert_eq!(input.user.to_bytes(), [2u8; 32]);
-    assert_eq!(input.nonce, 42);
-    assert_eq!(input.deadline, 1700000000);
-    assert_eq!(input.action_tree_root, [3u8; 32]);
-    assert_eq!(input.ed25519_ix_index, 0);
 }
 
 /// The client library encodes the wrap input this program parses, and the
@@ -162,29 +116,6 @@ fn unwrap_input_parses_the_client_encoding() {
 }
 
 #[test]
-fn wrap_input_round_trips_through_to_bytes() {
-    let input = WrapInput {
-        token_mint: Pubkey::new_unique(),
-        amount: 100_000_000,
-        user: Pubkey::new_unique(),
-        nonce: 7,
-        deadline: 4_102_444_800,
-        action_tree_root: [0xab; 32],
-        ed25519_ix_index: 3,
-    };
-    let bytes = input.to_bytes();
-    assert_eq!(bytes.len(), WrapInput::SIZE);
-    let parsed = WrapInput::try_from_bytes(&bytes).unwrap();
-    assert_eq!(parsed.token_mint, input.token_mint);
-    assert_eq!(parsed.amount, input.amount);
-    assert_eq!(parsed.user, input.user);
-    assert_eq!(parsed.nonce, input.nonce);
-    assert_eq!(parsed.deadline, input.deadline);
-    assert_eq!(parsed.action_tree_root, input.action_tree_root);
-    assert_eq!(parsed.ed25519_ix_index, input.ed25519_ix_index);
-}
-
-#[test]
 fn unwrap_input_round_trips_through_to_bytes() {
     let input = UnwrapInput {
         token_mint: Pubkey::new_unique(),
@@ -197,23 +128,6 @@ fn unwrap_input_round_trips_through_to_bytes() {
     assert_eq!(parsed.token_mint, input.token_mint);
     assert_eq!(parsed.amount, input.amount);
     assert_eq!(parsed.recipient, input.recipient);
-}
-
-#[test]
-fn test_unwrap_input_parsing() {
-    let mut data = vec![0u8; UnwrapInput::SIZE];
-
-    // token_mint
-    data[0..32].copy_from_slice(&[1u8; 32]);
-    // amount
-    data[32..40].copy_from_slice(&500u64.to_le_bytes());
-    // recipient
-    data[40..72].copy_from_slice(&[2u8; 32]);
-
-    let input = UnwrapInput::try_from_bytes(&data).unwrap();
-    assert_eq!(input.token_mint.to_bytes(), [1u8; 32]);
-    assert_eq!(input.amount, 500);
-    assert_eq!(input.recipient.to_bytes(), [2u8; 32]);
 }
 
 #[test]
@@ -324,20 +238,15 @@ fn nonce_bitmap_marks_and_reads_every_bit() {
 /// plus the current layout), with the given lifecycle.
 fn serialized_pa_state(lifecycle: PALifecycle, pending_authority: Option<Pubkey>) -> Vec<u8> {
     let state = PAStateAccount {
-        schema_version: PAStateAccount::SCHEMA_VERSION,
-        bump: 254,
-        authority: Pubkey::new_unique(),
-        verifier_router: Pubkey::new_unique(),
-        proof_selector: [0x73, 0xc4, 0x57, 0xba],
-        kind_table_commitment: [0u8; 32],
-        pending_authority,
         lifecycle,
-        root: [7u8; 32],
-        next_index: 3,
-        current_depth: 2,
-        frontier: vec![[1u8; 32], [2u8; 32]],
-        min_expiry_slots: 100,
-        max_expiry_slots: 216_000,
+        pending_authority,
+        ..PAStateAccount::running(
+            254,
+            Pubkey::new_unique(),
+            Pubkey::new_unique(),
+            [0x73, 0xc4, 0x57, 0xba],
+            [0u8; 32],
+        )
     };
     let mut data = Vec::new();
     state.try_serialize(&mut data).unwrap();

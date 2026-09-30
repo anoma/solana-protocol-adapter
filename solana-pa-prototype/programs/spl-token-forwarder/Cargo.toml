@@ -18,6 +18,8 @@ idl-build = ["anchor-lang/idl-build", "protocol-adapter/idl-build"]
 
 [dependencies]
 anchor-lang = { workspace = true }
+# Standard base64 of the signed message hash.
+base64 = "0.21.7"
 # The adapter's state account type, so the emergency-stopped check reads the
 # lifecycle field through the adapter's own layout instead of byte offsets.
 protocol-adapter = { path = "../solana-pa-prototype", default-features = false, features = ["no-entrypoint"] }

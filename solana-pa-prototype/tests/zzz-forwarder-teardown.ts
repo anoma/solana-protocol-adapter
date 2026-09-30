@@ -5,7 +5,7 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Keypair, PublicKey } from "@solana/web3.js";
-import { createMint, getAccount, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
+import { getAccount, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { assert } from "chai";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
@@ -17,7 +17,6 @@ import {
   createFundedEscrow,
   deriveConfigPda,
   derivePaStatePda,
-  escrowAccounts,
   makeFunder,
   seededKeypair,
   closeConfig,
@@ -55,7 +54,7 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
   });
 
   const closeEscrowAs = (authority: Keypair, accounts = escrow) =>
-    closeEscrow(forwarderProgram, configPda, authority.publicKey, paState, accounts).signers([authority]).rpc();
+    closeEscrow(forwarderProgram, authority.publicKey, paState, accounts).signers([authority]).rpc();
 
   const closeConfigAs = (authority: Keypair) =>
     closeConfig(forwarderProgram, authority.publicKey, paState).signers([authority]).rpc();
@@ -63,7 +62,7 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
   it("close_escrow rejects a non-committee authority", () => assertRejects(closeEscrowAs(impostor), /UnauthorizedCaller/));
 
   it("close_nonce_bitmaps_batch rejects a non-committee authority", () =>
-    assertRejects(closeAllNonceBitmaps(forwarderProgram, configPda, impostor.publicKey, paState, [impostor]), /UnauthorizedCaller/));
+    assertRejects(closeAllNonceBitmaps(forwarderProgram, impostor.publicKey, paState, [impostor]), /UnauthorizedCaller/));
 
   it("close_config rejects a non-committee authority", () => assertRejects(closeConfigAs(impostor), /UnauthorizedCaller/));
 
@@ -82,7 +81,7 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
   it("closes the nonce bitmaps the wrap tests created and refunds their rent", async () => {
     const committeeBefore = await provider.connection.getBalance(emergencyCommittee.publicKey);
 
-    const closed = await closeAllNonceBitmaps(forwarderProgram, configPda, emergencyCommittee.publicKey, paState, [emergencyCommittee]);
+    const closed = await closeAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [emergencyCommittee]);
 
     assert.isAbove(closed, 0, "the adapter suite's wrap must have created at least one nonce bitmap");
     assert.isEmpty(await forwarderProgram.account.nonceBitmap.all(), "every nonce bitmap is closed");
@@ -107,9 +106,7 @@ describe("zzz-forwarder-teardown (reclaims forwarder rent)", () => {
   });
 
   it("close_escrow closes an empty escrow", async () => {
-    const mint = await createMint(provider.connection, emergencyCommittee, emergencyCommittee.publicKey, null, 6);
-    const empty = escrowAccounts(forwarderProgram.programId, mint);
-    await getOrCreateAssociatedTokenAccount(provider.connection, emergencyCommittee, mint, empty.escrowPda, true);
+    const { mint, ...empty } = await createFundedEscrow(provider, forwarderProgram.programId, emergencyCommittee, 0n);
     const recipientAta = (
       await getOrCreateAssociatedTokenAccount(provider.connection, emergencyCommittee, mint, emergencyCommittee.publicKey)
     ).address;

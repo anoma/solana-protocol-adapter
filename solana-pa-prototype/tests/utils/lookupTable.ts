@@ -17,7 +17,7 @@ import {
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { getRouterPda, getVerifierEntryPda } from "../../scripts/verifier-utils";
-import { escrowAccounts, waitForSlotPast } from "./helpers";
+import { confirmedTransaction, escrowAccounts, waitForSlotPast } from "./helpers";
 import { deriveConfigPda, deriveEventAuthorityPda, derivePaStatePda } from "./pda";
 
 /** What fixes a deployment's settlement key set. */
@@ -115,9 +115,7 @@ export async function ensureSettlementLookupTable(
     signature = await sendAndConfirmTransaction(connection, new Transaction().add(...instructions), [payer], {
       commitment: "confirmed",
     });
-    const tx = await connection.getTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-    if (!tx) throw new Error(`lookup table transaction ${signature} not found after confirmation`);
-    await waitForSlotPast(connection, tx.slot);
+    await waitForSlotPast(connection, (await confirmedTransaction(connection, signature)).slot);
   }
   return { table: await fetchLookupTable(connection, address), added, signature };
 }

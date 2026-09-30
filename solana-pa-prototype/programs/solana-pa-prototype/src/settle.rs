@@ -6,7 +6,9 @@
 //! transaction's unproven parts) is what makes the extracted values
 //! trustworthy.
 
-use arm_core::aggregation_instance::{ActionAggregated, AggregationInstance};
+use arm_core::aggregation_instance::{
+    ActionAggregated, AggregationInstance, ConsumedResourceAggregated, CreatedResourceAggregated,
+};
 use arm_core::logic_instance::AppData;
 use arm_core::Digest;
 
@@ -51,43 +53,27 @@ pub fn total_resource_count(instance: &AggregationInstance) -> usize {
     instance.actions.iter().map(action_resource_count).sum()
 }
 
-fn consumed_count(instance: &AggregationInstance) -> usize {
-    instance
-        .actions
-        .iter()
-        .map(|a| a.consumed_publics.len())
-        .sum()
+fn consumed(instance: &AggregationInstance) -> impl Iterator<Item = &ConsumedResourceAggregated> {
+    instance.actions.iter().flat_map(|a| &a.consumed_publics)
 }
 
-fn created_count(instance: &AggregationInstance) -> usize {
-    instance
-        .actions
-        .iter()
-        .map(|a| a.created_publics.len())
-        .sum()
+fn created(instance: &AggregationInstance) -> impl Iterator<Item = &CreatedResourceAggregated> {
+    instance.actions.iter().flat_map(|a| &a.created_publics)
 }
 
 /// Nullifiers of all consumed resources, in instance order.
 /// Pre-sized so the BPF bump allocator (no free) doesn't retain
 /// capacity-doubled buffers.
 pub fn extract_nullifiers(instance: &AggregationInstance) -> Vec<Digest> {
-    let mut out = Vec::with_capacity(consumed_count(instance));
-    for action in &instance.actions {
-        for consumed in &action.consumed_publics {
-            out.push(consumed.resource_nullifier);
-        }
-    }
+    let mut out = Vec::with_capacity(consumed(instance).count());
+    out.extend(consumed(instance).map(|c| c.resource_nullifier));
     out
 }
 
 /// Commitments of all created resources, in instance order.
 pub fn extract_commitments(instance: &AggregationInstance) -> Vec<Digest> {
-    let mut out = Vec::with_capacity(created_count(instance));
-    for action in &instance.actions {
-        for created in &action.created_publics {
-            out.push(created.resource_commitment);
-        }
-    }
+    let mut out = Vec::with_capacity(created(instance).count());
+    out.extend(created(instance).map(|c| c.resource_commitment));
     out
 }
 
@@ -98,12 +84,10 @@ pub fn extract_commitments(instance: &AggregationInstance) -> Vec<Digest> {
 /// so deduplication saves significant compute when resources share roots.
 /// Pre-sized to the worst case (one root per consumed resource).
 pub fn unique_consumed_roots(instance: &AggregationInstance) -> Vec<Digest> {
-    let mut unique_roots: Vec<Digest> = Vec::with_capacity(consumed_count(instance));
-    for action in &instance.actions {
-        for consumed in &action.consumed_publics {
-            if !unique_roots.contains(&consumed.commitment_tree_root) {
-                unique_roots.push(consumed.commitment_tree_root);
-            }
+    let mut unique_roots: Vec<Digest> = Vec::with_capacity(consumed(instance).count());
+    for resource in consumed(instance) {
+        if !unique_roots.contains(&resource.commitment_tree_root) {
+            unique_roots.push(resource.commitment_tree_root);
         }
     }
     unique_roots

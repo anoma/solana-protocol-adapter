@@ -17,13 +17,17 @@ export function requireEnv(name: string, what: string): string {
   return value;
 }
 
-export function requirePubkey(name: string, what: string): PublicKey {
-  const raw = requireEnv(name, what);
+/** `raw`, a value of variable `name`, as a base58 pubkey. */
+export function parsePubkey(name: string, raw: string): PublicKey {
   try {
     return new PublicKey(raw);
   } catch {
     throw new Error(`${name} is not a valid pubkey: "${raw}"`);
   }
+}
+
+export function requirePubkey(name: string, what: string): PublicKey {
+  return parsePubkey(name, requireEnv(name, what));
 }
 
 /** A fixed-width hex byte string (an optional 0x prefix is accepted), as the byte array Anchor takes. */

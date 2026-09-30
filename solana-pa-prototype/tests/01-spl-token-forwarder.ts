@@ -18,6 +18,7 @@ import {
   EMERGENCY_COMMITTEE_LABEL,
   OP_UNWRAP,
   assertRejects,
+  confirmedTransaction,
   deriveConfigPda,
   derivePaStatePda,
   deriveProgramDataPda,
@@ -125,11 +126,9 @@ describe("01-spl-token-forwarder (config and direct-call guards)", () => {
         assert.ok(after.emergencyCommittee.equals(before.emergencyCommittee), "the committee is untouched");
         assert.ok(after.emergencyCaller.equals(before.emergencyCaller), "the emergency caller is untouched");
 
-        await provider.connection.confirmTransaction(sig, "confirmed");
-        const tx = await provider.connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
-        assert.ok(tx, `transaction ${sig} is fetchable once confirmed`);
+        const tx = await confirmedTransaction(provider.connection, sig);
         const parser = new anchor.EventParser(forwarderProgram.programId, forwarderProgram.coder);
-        const events = [...parser.parseLogs(tx!.meta!.logMessages!)];
+        const events = [...parser.parseLogs(tx.meta!.logMessages!)];
         // pa-evm's rotation (ERC20ForwarderV2.reinitialize behind upgradeToAndCall)
         // emits only the proxy's Upgraded and Initialized events, nothing naming
         // the logic ref; the config account is where the new ref is read.
