@@ -103,6 +103,20 @@ describe("settlement", () => {
       await assertFails(settleViaTxData(txTampered, { newRootMarker: DUMMY_ROOT_MARKER }), VERIFIER.rejection);
     });
 
+    // Proofs are verified after the nullifiers are recorded, as in pa-evm, so
+    // this runs while the fixture's nullifier is unspent: afterwards the
+    // settlement would stop at DuplicateNullifier before reaching the verifier.
+    it("rejects InvalidProof (garbage aggregation proof bytes)", async () => {
+      const fx = loadFixture("garbage_proof.json");
+      await assertFails(
+        settleViaTxData(Buffer.from(fx.tx_b64, "base64"), {
+          nullifierAccounts: deriveNullifierAccounts(fx.consumed_nullifiers_b64),
+          newRootMarker: DUMMY_ROOT_MARKER,
+        }),
+        { program, error: "InvalidProof" },
+      );
+    });
+
     it("accepts a valid Groth16 batch aggregation tx and creates root marker", async () => {
       // Guardrail: fixture should actually include a block-time-forwarder external call.
       // If not present, this test can pass without exercising the external call path.
@@ -193,10 +207,9 @@ describe("settlement", () => {
 
       const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
 
-      // Pass ZERO nullifier accounts but still include forwarder+clock: the
-      // fixture's one nullifier claims the forwarder slot, leaving too few
-      // accounts for the forwarder's call segment, a malformed settlement.
-      const allRemainingAccounts = buildSettleRemainingAccounts([]);
+      // Pass no remaining accounts at all: the fixture's one nullifier has no
+      // marker slot.
+      const allRemainingAccounts: AccountMeta[] = [];
 
       await assertFails(
         settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, allRemainingAccounts)
@@ -257,10 +270,6 @@ describe("settlement", () => {
 
     it("rejects AggregationRequired (no aggregation proof)", async () => {
       await expectSettleError("no_aggregation.json", "AggregationRequired");
-    });
-
-    it("rejects InvalidProof (garbage aggregation proof bytes)", async () => {
-      await expectSettleError("garbage_proof.json", "InvalidProof");
     });
   });
 });
