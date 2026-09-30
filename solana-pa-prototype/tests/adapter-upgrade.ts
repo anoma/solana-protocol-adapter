@@ -8,19 +8,37 @@
  */
 import { createHash } from "crypto";
 import { execFileSync } from "child_process";
-import { SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { Keypair, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { assert } from "chai";
 import { migrateState } from "../client/instructions";
 import { EMPTY_KIND_TABLE_COMMITMENT, SCHEMA_VERSION } from "../client/constants";
-import { deriveProgramDataPda } from "../client/pda";
+import { deriveProgramDataPda, deriveRootMarkerPda } from "../client/pda";
+import { loadFixture, createdCommitmentsOf } from "./utils/fixtures";
+import { EMPTY_TREE, computeRootAfterAppend } from "./utils/merkle";
 import { makeFunder, randomRef, assertFails } from "./utils/helpers";
-import { provider, program, paState, PROOF_SELECTOR, useAdapterSuite } from "./utils/adapterSuite";
+import {
+  provider,
+  program,
+  paState,
+  PROOF_SELECTOR,
+  buildSettleRemainingAccounts,
+  deriveNullifierAccounts,
+  useAdapterSuite,
+} from "./utils/adapterSuite";
 import { VERIFIER_ROUTER_ID } from "../client/verifier";
 
 describe("protocol-adapter (upgraded in place across a state-layout change)", () => {
-  const { settleUnsettledFixture } = useAdapterSuite({ initialize: false });
+  const { settleUnsettledFixture, settleFixtureViaTxData } = useAdapterSuite({ initialize: false });
   const funder = makeFunder(provider);
   const authority = provider.wallet.publicKey;
+
+  /** An instruction of the previous build: its Anchor discriminator and Borsh arguments. */
+  const previousInstruction = (name: string, args: Buffer[], keys: TransactionInstruction["keys"]) =>
+    new TransactionInstruction({
+      programId: program.programId,
+      keys,
+      data: Buffer.concat([createHash("sha256").update(`global:${name}`).digest().subarray(0, 8), ...args]),
+    });
 
   /** The state account's raw bytes: the previous layout is not this build's. */
   const stateBytes = async () => (await provider.connection.getAccountInfo(paState))!.data;
@@ -31,38 +49,48 @@ describe("protocol-adapter (upgraded in place across a state-layout change)", ()
   // selector and the kind-table commitment, over the state, the payer, the
   // system program, the program and its ProgramData.
   it("initializes the previous build", async () => {
-    const data = Buffer.concat([
-      createHash("sha256").update("global:initialize").digest().subarray(0, 8),
-      VERIFIER_ROUTER_ID.toBuffer(),
-      PROOF_SELECTOR,
-      EMPTY_KIND_TABLE_COMMITMENT,
-    ]);
-    const initializePrevious = new TransactionInstruction({
-      programId: program.programId,
-      keys: [
+    const initializePrevious = previousInstruction(
+      "initialize",
+      [VERIFIER_ROUTER_ID.toBuffer(), PROOF_SELECTOR, EMPTY_KIND_TABLE_COMMITMENT],
+      [
         { pubkey: paState, isSigner: false, isWritable: true },
         { pubkey: authority, isSigner: true, isWritable: true },
         { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: program.programId, isSigner: false, isWritable: false },
         { pubkey: deriveProgramDataPda(program.programId), isSigner: false, isWritable: false },
       ],
-      data,
-    });
+    );
     await provider.sendAndConfirm(new Transaction().add(initializePrevious));
     assert.equal((await stateBytes())[8], 1, "the previous build writes schema version 1");
   });
 
+  // The previous build's state is not this build's layout, so the root the
+  // settlement produces is predicted from the fresh tree rather than read.
   it("settles through the previous build", async () => {
-    await settleUnsettledFixture("batch_groth16.json");
+    const fixture = loadFixture("batch_groth16.json");
+    const newRoot = computeRootAfterAppend(EMPTY_TREE, createdCommitmentsOf(fixture));
+    await settleFixtureViaTxData(
+      Buffer.from(fixture.tx_b64, "base64"),
+      buildSettleRemainingAccounts(deriveNullifierAccounts(fixture.consumed_nullifiers_b64)),
+      { newRootMarker: deriveRootMarkerPda(paState, newRoot, program.programId) },
+    );
   });
 
-  // A pending authority that is proposed and then cancelled leaves the
-  // serialized state 32 bytes shorter than before, over stale bytes: the
-  // migration must parse the previous layout, not reinterpret its bytes.
+  // The previous build's two-step transfer: a pending authority that is
+  // proposed and then cancelled leaves the serialized state 32 bytes shorter
+  // than before, over stale bytes, so the migration must parse the previous
+  // layout rather than reinterpret its bytes. Both take the state and the
+  // authority.
   it("proposes and cancels an authority transfer through the previous build", async () => {
-    const proposed = await funder.fresh(1);
-    await program.methods.proposeAuthority(proposed.publicKey).accountsPartial({ paState, authority }).rpc();
-    await program.methods.cancelAuthorityTransfer().accountsPartial({ paState, authority }).rpc();
+    const keys = [
+      { pubkey: paState, isSigner: false, isWritable: true },
+      { pubkey: authority, isSigner: true, isWritable: false },
+    ];
+    const proposed = Keypair.generate().publicKey;
+    await provider.sendAndConfirm(
+      new Transaction().add(previousInstruction("propose_authority", [proposed.toBuffer()], keys)),
+    );
+    await provider.sendAndConfirm(new Transaction().add(previousInstruction("cancel_authority_transfer", [], keys)));
     stateBeforeUpgrade = Buffer.from(await stateBytes());
   });
 
@@ -116,13 +144,13 @@ describe("protocol-adapter (upgraded in place across a state-layout change)", ()
     assert.equal(state.schemaVersion, SCHEMA_VERSION, "the state is in this build's layout");
     assert.deepEqual(state.deniedLogicRefs, [], "no logic ref is denied");
     assert.ok(state.authority.equals(authority), "the authority carries over");
-    assert.isNull(state.pendingAuthority, "no transfer is pending");
     assert.ok(state.verifierRouter.equals(VERIFIER_ROUTER_ID), "the verifier router carries over");
     assert.deepEqual(Buffer.from(state.proofSelector), PROOF_SELECTOR, "the proof selector carries over");
     assert.deepEqual(Buffer.from(state.kindTableCommitment), EMPTY_KIND_TABLE_COMMITMENT);
     assert.equal(state.nextIndex.toNumber(), 1, "the tree keeps its leaf");
-    // The previous layout's fields up to the frontier are byte-for-byte this
-    // layout's: the root sits at the same place in both.
+    // The root's place in the previous layout: discriminator, schema version,
+    // bump, authority, router, selector, kind table, an absent pending
+    // authority (one byte) and the lifecycle.
     const rootOffset = 8 + 1 + 1 + 32 + 32 + 4 + 32 + 1 + 1;
     assert.deepEqual(
       Buffer.from(state.root),

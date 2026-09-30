@@ -121,6 +121,14 @@ pub mod protocol_adapter {
         verifier_router: Pubkey,
         proof_selector: [u8; 4],
     ) -> Result<()> {
+        require!(
+            verifier_router != Pubkey::default(),
+            PAError::ZeroVerifierRouterNotAllowed
+        );
+        require!(
+            proof_selector != [0u8; 4],
+            PAError::ZeroProofSelectorNotAllowed
+        );
         ctx.accounts.pa_state.set_inner(PAStateAccount::running(
             ctx.bumps.pa_state,
             ctx.accounts.payer.key(),
@@ -128,11 +136,15 @@ pub mod protocol_adapter {
             proof_selector,
         ));
 
-        // pa-evm's initializer adds the empty tree's root, then installs the
-        // empty kind table.
+        // pa-evm's initializer transfers ownership to the initial owner, adds
+        // the empty tree's root, then installs the empty kind table.
         let events = events::EventCpi {
             authority: ctx.accounts.event_authority.to_account_info(),
         };
+        events.emit(&AuthorityTransferredEvent {
+            previous_authority: Pubkey::default(),
+            new_authority: ctx.accounts.payer.key(),
+        })?;
         events.emit(&CommitmentTreeRootAddedEvent {
             root: EMPTY_TREE_ROOT_INITIAL.into(),
         })?;
@@ -485,48 +497,39 @@ pub mod protocol_adapter {
         Ok(())
     }
 
-    /// Propose a new authority. The transfer is not effective until the
-    /// proposed authority calls `accept_authority`.
-    pub fn propose_authority(ctx: Context<ProposeAuthority>, new_authority: Pubkey) -> Result<()> {
-        let state = &mut ctx.accounts.pa_state;
-        state.pending_authority = Some(new_authority);
-        msg!(
-            "Authority transfer proposed: {} -> {}",
-            state.authority,
-            new_authority
-        );
-        Ok(())
-    }
-
-    /// Accept a pending authority transfer. Must be signed by the proposed
-    /// authority. Completes the two-step transfer.
-    pub fn accept_authority(ctx: Context<AcceptAuthority>) -> Result<()> {
-        let state = &mut ctx.accounts.pa_state;
-        let new_authority = state.pending_authority.ok_or(PAError::NoPendingAuthority)?;
+    /// Transfer the authority to `new_authority`, at once. Mirrors
+    /// OpenZeppelin's `OwnableUpgradeable.transferOwnership`, pa-evm's
+    /// ownership: authority only, the zero key rejected, announced with
+    /// AuthorityTransferred.
+    pub fn transfer_authority(
+        ctx: Context<TransferAuthority>,
+        new_authority: Pubkey,
+    ) -> Result<()> {
         require!(
-            ctx.accounts.new_authority.key() == new_authority,
-            PAError::Unauthorized
+            new_authority != Pubkey::default(),
+            PAError::ZeroAuthorityNotAllowed
         );
-        let old_authority = state.authority;
+        let state = &mut ctx.accounts.pa_state;
+        let previous_authority = state.authority;
         state.authority = new_authority;
-        state.pending_authority = None;
-        msg!(
-            "Authority transferred: {} -> {}",
-            old_authority,
-            new_authority
-        );
+        emit_cpi!(AuthorityTransferredEvent {
+            previous_authority,
+            new_authority,
+        });
         Ok(())
     }
 
-    /// Cancel a pending authority transfer. Only callable by the current authority.
-    pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Result<()> {
+    /// Give the authority up for good: it becomes the zero key, which no one
+    /// can sign as, so every authority instruction is closed. Mirrors
+    /// `OwnableUpgradeable.renounceOwnership`.
+    pub fn renounce_authority(ctx: Context<TransferAuthority>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
-        require!(
-            state.pending_authority.is_some(),
-            PAError::NoPendingAuthority
-        );
-        state.pending_authority = None;
-        msg!("Pending authority transfer cancelled");
+        let previous_authority = state.authority;
+        state.authority = Pubkey::default();
+        emit_cpi!(AuthorityTransferredEvent {
+            previous_authority,
+            new_authority: Pubkey::default(),
+        });
         Ok(())
     }
 
@@ -1005,37 +1008,9 @@ pub struct SetKindTableCommitment<'info> {
     pub authority: Signer<'info>,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
-pub struct ProposeAuthority<'info> {
-    #[account(
-        mut,
-        seeds = [PA_STATE_SEED],
-        bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
-        constraint = pa_state.schema_version == SCHEMA_VERSION
-            @ PAError::UnsupportedStateSchema,
-    )]
-    pub pa_state: Account<'info, PAStateAccount>,
-
-    pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct AcceptAuthority<'info> {
-    #[account(
-        mut,
-        seeds = [PA_STATE_SEED],
-        bump = pa_state.bump,
-        constraint = pa_state.schema_version == SCHEMA_VERSION
-            @ PAError::UnsupportedStateSchema,
-    )]
-    pub pa_state: Account<'info, PAStateAccount>,
-
-    pub new_authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct CancelAuthorityTransfer<'info> {
+pub struct TransferAuthority<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
@@ -1314,6 +1289,15 @@ pub struct ApplicationPayloadEvent {
 #[event]
 pub struct KindTableCommitmentUpdatedEvent {
     pub kind_table_commitment: [u8; 32],
+}
+
+/// Mirrors OpenZeppelin's `event OwnershipTransferred(address indexed
+/// previousOwner, address indexed newOwner);`: at initialization (from the
+/// zero key), on every transfer, and on renouncement (to the zero key).
+#[event]
+pub struct AuthorityTransferredEvent {
+    pub previous_authority: Pubkey,
+    pub new_authority: Pubkey,
 }
 
 /// Mirrors pa-evm: `event CommitmentTreeRootAdded(bytes32 root);`: the

@@ -325,11 +325,11 @@ fn nonce_bitmap_account_is_discriminator_word_and_bump() {
 // =============================================================================
 
 /// A PA state account exactly as the adapter serializes it (discriminator
-/// plus the current layout), with the given lifecycle.
-fn serialized_pa_state(lifecycle: PALifecycle, pending_authority: Option<Pubkey>) -> Vec<u8> {
+/// plus the current layout), with the given lifecycle and denied logic refs.
+fn serialized_pa_state(lifecycle: PALifecycle, denied_logic_refs: Vec<[u8; 32]>) -> Vec<u8> {
     let state = PAStateAccount {
         lifecycle,
-        pending_authority,
+        denied_logic_refs,
         ..PAStateAccount::running(
             254,
             Pubkey::new_unique(),
@@ -344,19 +344,19 @@ fn serialized_pa_state(lifecycle: PALifecycle, pending_authority: Option<Pubkey>
 
 #[test]
 fn pa_is_stopped_reads_the_lifecycle_from_the_adapter_layout() {
-    for (lifecycle, pending_authority, stopped) in [
-        (PALifecycle::Stopped, None, true),
-        (PALifecycle::Stopped, Some(Pubkey::new_unique()), true),
-        (PALifecycle::Running, Some(Pubkey::new_unique()), false),
+    for (lifecycle, denied_logic_refs, stopped) in [
+        (PALifecycle::Stopped, vec![], true),
+        (PALifecycle::Stopped, vec![[7u8; 32]], true),
+        (PALifecycle::Running, vec![[7u8; 32]], false),
     ] {
-        let data = serialized_pa_state(lifecycle, pending_authority);
+        let data = serialized_pa_state(lifecycle, denied_logic_refs);
         assert_eq!(pa_is_stopped(&data).unwrap(), stopped, "{lifecycle:?}");
     }
 }
 
 #[test]
 fn pa_is_stopped_rejects_data_that_is_not_a_pa_state_account() {
-    let mut data = serialized_pa_state(PALifecycle::Stopped, None);
+    let mut data = serialized_pa_state(PALifecycle::Stopped, vec![]);
     data[0] ^= 0xff; // corrupt the discriminator
     assert!(
         pa_is_stopped(&data).is_err(),
@@ -366,7 +366,7 @@ fn pa_is_stopped_rejects_data_that_is_not_a_pa_state_account() {
 
 #[test]
 fn pa_is_stopped_rejects_truncated_data() {
-    let data = serialized_pa_state(PALifecycle::Stopped, None);
+    let data = serialized_pa_state(PALifecycle::Stopped, vec![]);
     assert!(pa_is_stopped(&data[..40]).is_err());
     assert!(pa_is_stopped(&[]).is_err());
 }

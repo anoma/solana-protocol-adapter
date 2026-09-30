@@ -4,11 +4,15 @@
  * pa-evm's initializer does. Needs an adapter that was never initialized,
  * which the file's fresh validator provides.
  */
+import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
 import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
+import { initializeAdapter } from "../client/instructions";
+import { VERIFIER_ROUTER_ID } from "../client/verifier";
 import { EMPTY_TREE_ROOT_INITIAL } from "./utils/constants";
 import { assertFails } from "./utils/helpers";
 import {
+  PROOF_SELECTOR,
   buildInitialize,
   cpiEventsOf,
   paState,
@@ -50,6 +54,19 @@ describe("protocol-adapter (initialize)", () => {
     assert.isFalse(await paStateExists(), "PAState must remain uninitialized after the rejected call");
   });
 
+  // Mirrors pa-evm's constructor: ZeroRiscZeroVerifier{Router,Selector}NotAllowed.
+  it("rejects a zero verifier router", () =>
+    assertFails(
+      initializeAdapter(program, provider.wallet.publicKey, PublicKey.default, Array.from(PROOF_SELECTOR)).rpc(),
+      { program, error: "ZeroVerifierRouterNotAllowed" },
+    ));
+
+  it("rejects a zero proof selector", () =>
+    assertFails(initializeAdapter(program, provider.wallet.publicKey, VERIFIER_ROUTER_ID, [0, 0, 0, 0]).rpc(), {
+      program,
+      error: "ZeroProofSelectorNotAllowed",
+    }));
+
   it("stores the empty kind table and emits the initial root and the kind table, as pa-evm's initializer does", async () => {
     assert.isFalse(await paStateExists(), "this test initializes the adapter, so it must start uninitialized");
 
@@ -61,16 +78,19 @@ describe("protocol-adapter (initialize)", () => {
       EMPTY_KIND_TABLE_COMMITMENT,
       "initialize must store the empty kind table's commitment",
     );
-    // pa-evm's initializer adds the empty tree's root (CommitmentTreeRootAdded)
-    // and then installs the empty kind table (KindTableCommitmentUpdated).
+    // pa-evm's initializer transfers ownership to the initial owner
+    // (OwnershipTransferred from the zero address), adds the empty tree's root
+    // (CommitmentTreeRootAdded) and installs the empty kind table
+    // (KindTableCommitmentUpdated), in that order.
     const { events } = await cpiEventsOf(sig);
     assert.deepEqual(
-      events.map((e) => [e.name, Buffer.from(e.data.root ?? e.data.kindTableCommitment).toString("hex")]),
-      [
-        ["commitmentTreeRootAddedEvent", EMPTY_TREE_ROOT_INITIAL.toString("hex")],
-        ["kindTableCommitmentUpdatedEvent", EMPTY_KIND_TABLE_COMMITMENT.toString("hex")],
-      ],
-      "initialize must emit the initial root and then the empty kind table",
+      events.map((e) => e.name),
+      ["authorityTransferredEvent", "commitmentTreeRootAddedEvent", "kindTableCommitmentUpdatedEvent"],
+      "initialize emits pa-evm's initializer events in order",
     );
+    assert.ok(events[0].data.previousAuthority.equals(PublicKey.default), "the authority comes from no one");
+    assert.ok(events[0].data.newAuthority.equals(provider.wallet.publicKey), "to the initializing upgrade authority");
+    assert.deepEqual(Buffer.from(events[1].data.root), EMPTY_TREE_ROOT_INITIAL, "the empty tree's root");
+    assert.deepEqual(Buffer.from(events[2].data.kindTableCommitment), EMPTY_KIND_TABLE_COMMITMENT);
   });
 });

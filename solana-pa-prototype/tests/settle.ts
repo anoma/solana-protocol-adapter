@@ -65,16 +65,14 @@ describe("settlement", () => {
     });
 
     it("account size matches expected size for current depth (no over-allocation)", async () => {
-      // The account holds the current frontier and every other field at its
-      // largest encoding (a pending authority set), and nothing more.
+      // The account holds the current frontier and the denylist, and nothing
+      // more.
       const state = await program.account.paStateAccount.fetch(paState);
       const accountInfo = await provider.connection.getAccountInfo(paState);
 
       assert.ok(accountInfo, "PAState account should exist");
 
-      const expectedSize = (
-        await program.coder.accounts.encode("paStateAccount", { ...state, pendingAuthority: PublicKey.default })
-      ).length;
+      const expectedSize = (await program.coder.accounts.encode("paStateAccount", state)).length;
       assert.equal(
         accountInfo!.data.length,
         expectedSize,

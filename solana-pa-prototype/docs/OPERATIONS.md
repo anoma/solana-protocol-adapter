@@ -10,10 +10,10 @@ A deployment has two independent authorities:
 
 | Authority | Lives in | Controls | Moved by |
 |---|---|---|---|
-| PA authority | `PAStateAccount.authority` | `emergency_stop`, `update_expiry_config`, authority transfer | `propose_authority` + `accept_authority` (two-step, on chain) |
-| Upgrade authority | BPF loader's ProgramData account | replacing the program binary; signing `initialize`; final immutability | `solana program set-upgrade-authority` |
+| PA authority | `PAStateAccount.authority` | `emergency_stop`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_ref`, authority transfer | `transfer_authority` (one step, effective at once, as pa-evm's ownership transfer); `renounce_authority` gives it up for good. Each emits `AuthorityTransferredEvent`. |
+| Upgrade authority | BPF loader's ProgramData account | replacing the program binary; signing `initialize`; `migrate_state` after a layout-changing upgrade; final immutability | `solana program set-upgrade-authority` |
 
-They start as the same key: `initialize` requires its payer to be the program's upgrade authority, and records that payer as the initial PA authority (`programs/solana-pa-prototype/src/lib.rs`, the `Initialize` accounts constraint and handler). After initialization no instruction ever compares them, so they can be split freely — the integration suite exercises operation with them split (`tests/authority.ts`, the authority transfer tests).
+They start as the same key: `initialize` requires its payer to be the program's upgrade authority, and records that payer as the initial PA authority (`programs/solana-pa-prototype/src/lib.rs`, the `Initialize` accounts constraint and handler). After initialization no instruction ever compares them, so they can be split freely — the integration suite exercises operation with them split (`tests/authority.ts`, the authority transfer test).
 
 Two consequences to keep in mind:
 

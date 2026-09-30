@@ -87,8 +87,6 @@ pub enum PAError {
     Unauthorized,
     #[msg("Protocol adapter is already stopped")]
     AlreadyStopped,
-    #[msg("No pending authority transfer to accept")]
-    NoPendingAuthority,
     #[msg("Operation requires the PA to be stopped")]
     NotStopped,
 
@@ -127,6 +125,14 @@ pub enum PAError {
     LogicRefAlreadyDenied,
     #[msg("A resource carries a denied logic ref")]
     DeniedLogicRef,
+
+    // Initialization and authority, as pa-evm's zero-value rejections
+    #[msg("Zero authority not allowed; renounce_authority gives the authority up")]
+    ZeroAuthorityNotAllowed,
+    #[msg("Zero verifier router not allowed")]
+    ZeroVerifierRouterNotAllowed,
+    #[msg("Zero proof selector not allowed")]
+    ZeroProofSelectorNotAllowed,
 }
 
 impl From<SolanaArmError> for PAError {

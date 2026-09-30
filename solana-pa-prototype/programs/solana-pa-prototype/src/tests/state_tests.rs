@@ -26,16 +26,11 @@ fn schema_version_is_byte_eight_of_the_account_data() {
 }
 
 #[test]
-fn initial_space_reserves_the_maximal_pending_authority_encoding() {
-    // `Option<Pubkey>` encodes `Some` as 33 bytes, the size INITIAL_SPACE reserves.
-    let state = PAStateAccount {
-        pending_authority: Some(Pubkey::new_unique()),
-        ..create_test_pa_state()
-    };
+fn initial_space_is_the_initial_states_encoding() {
     assert_eq!(
-        serialized(&state).len(),
+        serialized(&create_test_pa_state()).len(),
         PAStateAccount::INITIAL_SPACE,
-        "serialized state with a pending authority must fill exactly INITIAL_SPACE"
+        "the state initialize writes must fill exactly INITIAL_SPACE"
     );
 }
 

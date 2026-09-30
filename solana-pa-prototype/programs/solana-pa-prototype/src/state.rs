@@ -115,8 +115,6 @@ pub struct PAStateAccount {
     /// accepts (sha256 of the concatenated entries; the empty table hashes
     /// to sha256 of zero bytes).
     pub kind_table_commitment: [u8; 32],
-    /// Pending authority for two-step transfer (propose + accept).
-    pub pending_authority: Option<Pubkey>,
     /// Lifecycle state. One-way transition: Running → Stopped.
     pub lifecycle: PALifecycle,
     /// Cached tree root (updated on every append). Avoids recomputing from frontier.
@@ -143,9 +141,8 @@ impl PAStateAccount {
     pub const MAX_SPACE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
 
     /// The account at `depth` with no denied logic ref: full size less the
-    /// frontier levels not yet reached. Every other field is sized for its
-    /// largest encoding, so the account grows only with the frontier and the
-    /// denylist.
+    /// frontier levels not yet reached. Every other field has a fixed size,
+    /// so the account grows only with the frontier and the denylist.
     pub const fn space_for_depth(depth: usize) -> usize {
         Self::MAX_SPACE - size_of::<[u8; 32]>() * (MAX_TREE_DEPTH - depth)
     }
@@ -214,7 +211,6 @@ impl PAStateAccount {
             verifier_router,
             proof_selector,
             kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
-            pending_authority: None,
             lifecycle: PALifecycle::Running,
             root: EMPTY_TREE_ROOT_INITIAL.into(),
             next_index: 0,
@@ -250,7 +246,9 @@ pub struct PreviousPAState {
 }
 
 impl From<PreviousPAState> for PAStateAccount {
-    /// This layout with the previous fields and an empty denylist.
+    /// This layout with the previous fields, less the pending authority of
+    /// the previous two-step transfer (a proposal never accepted is
+    /// discarded; this layout transfers in one step), and an empty denylist.
     fn from(previous: PreviousPAState) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
@@ -259,7 +257,6 @@ impl From<PreviousPAState> for PAStateAccount {
             verifier_router: previous.verifier_router,
             proof_selector: previous.proof_selector,
             kind_table_commitment: previous.kind_table_commitment,
-            pending_authority: previous.pending_authority,
             lifecycle: previous.lifecycle,
             root: previous.root,
             next_index: previous.next_index,

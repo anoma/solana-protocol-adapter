@@ -35,14 +35,15 @@ mod governance_tests {
 
     #[test]
     fn test_pa_state_account_space_calculation() {
-        // Schema version 2: the denylist's 4-byte length after the fields.
-        assert_eq!(PAStateAccount::INITIAL_SPACE, 241);
-        assert_eq!(PAStateAccount::MAX_SPACE, 1233);
-        assert_eq!(PAStateAccount::space_for_depth(1), 241);
-        assert_eq!(PAStateAccount::space_for_depth(2), 273);
-        assert_eq!(PAStateAccount::space_for_depth(32), 1233);
+        // Schema version 2: no pending authority (single-step transfer), and
+        // the denylist's 4-byte length after the fields.
+        assert_eq!(PAStateAccount::INITIAL_SPACE, 208);
+        assert_eq!(PAStateAccount::MAX_SPACE, 1200);
+        assert_eq!(PAStateAccount::space_for_depth(1), 208);
+        assert_eq!(PAStateAccount::space_for_depth(2), 240);
+        assert_eq!(PAStateAccount::space_for_depth(32), 1200);
         // Each denied logic ref adds its 32 bytes.
-        assert_eq!(PAStateAccount::space(1, 2), 241 + 64);
+        assert_eq!(PAStateAccount::space(1, 2), 208 + 64);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 import * as anchor from "@anchor-lang/core";
 import { AccountMeta, PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { setKindTableCommitment } from "../client/instructions";
+import { denyLogicRef, renounceAuthority, setKindTableCommitment, transferAuthority } from "../client/instructions";
 import { closeMarkersBatch } from "../client/devTeardown";
 import { loadFixture } from "./utils/fixtures";
 import { randomRef, assertFails } from "./utils/helpers";
@@ -114,29 +114,20 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
         run: () => setExpiryBounds(1, 2),
       },
       {
-        name: "propose_authority",
-        run: () =>
-          program.methods
-            .proposeAuthority(Keypair.generate().publicKey)
-            .accountsPartial({ paState, authority: provider.wallet.publicKey })
-            .rpc(),
+        name: "transfer_authority",
+        run: () => transferAuthority(program, provider.wallet.publicKey, Keypair.generate().publicKey).rpc(),
       },
       {
-        name: "accept_authority",
-        run: () =>
-          program.methods.acceptAuthority().accountsPartial({ paState, newAuthority: provider.wallet.publicKey }).rpc(),
+        name: "renounce_authority",
+        run: () => renounceAuthority(program, provider.wallet.publicKey).rpc(),
       },
       {
         name: "set_kind_table_commitment",
         run: () => setKindTableCommitment(program, provider.wallet.publicKey, randomRef()).rpc(),
       },
       {
-        name: "cancel_authority_transfer",
-        run: () =>
-          program.methods
-            .cancelAuthorityTransfer()
-            .accountsPartial({ paState, authority: provider.wallet.publicKey })
-            .rpc(),
+        name: "deny_logic_ref",
+        run: () => denyLogicRef(program, provider.wallet.publicKey, randomRef()).rpc(),
       },
       {
         name: "settle",

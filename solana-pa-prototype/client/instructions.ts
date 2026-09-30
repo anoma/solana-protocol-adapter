@@ -35,6 +35,20 @@ export function initializeAdapter(
   });
 }
 
+/** `transfer_authority` by the adapter authority: effective at once. */
+export function transferAuthority(program: Program<ProtocolAdapter>, authority: PublicKey, newAuthority: PublicKey) {
+  return program.methods
+    .transferAuthority(newAuthority)
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/** `renounce_authority` by the adapter authority: no one holds it afterwards. */
+export function renounceAuthority(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  return program.methods
+    .renounceAuthority()
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
 /** `deny_logic_ref` by the adapter authority, which pays for the entry. */
 export function denyLogicRef(program: Program<ProtocolAdapter>, authority: PublicKey, logicRef: number[]) {
   return program.methods
