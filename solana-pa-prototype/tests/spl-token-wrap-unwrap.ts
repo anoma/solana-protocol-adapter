@@ -358,11 +358,12 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
     // Both resources carry the AnomaPay transfer logic the forwarder config
     // pins: the wrap settled under the real verifying key.
-    const txEvents = (await cpiEventsOf(sig)).events.filter((e) => e.name === "transactionExecutedEvent");
-    assert.equal(txEvents.length, 1, "one transactionExecutedEvent");
+    const actionEvents = (await cpiEventsOf(sig)).events.filter((e) => e.name === "actionExecutedEvent");
+    assert.equal(actionEvents.length, 1, "one actionExecutedEvent");
     const logicRef = Array.from(Buffer.from(wrap.logic_ref_b64, "base64"));
+    const { consumedLogicRefs, createdLogicRefs } = actionEvents[0].data;
     assert.deepEqual(
-      txEvents[0].data.logicRefs.map((r: number[]) => Array.from(r)),
+      [...consumedLogicRefs, ...createdLogicRefs].map((r: number[]) => Array.from(r)),
       [logicRef, logicRef],
       "the consumed and created resources carry the AnomaPay transfer logic",
     );

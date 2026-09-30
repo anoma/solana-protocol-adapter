@@ -43,16 +43,6 @@ pub fn action_resources(action: &ActionAggregated) -> impl Iterator<Item = Resou
         }))
 }
 
-/// Number of resources (consumed + created) in one action.
-pub fn action_resource_count(action: &ActionAggregated) -> usize {
-    action.consumed_publics.len() + action.created_publics.len()
-}
-
-/// Total number of resources (consumed + created) across the instance.
-pub fn total_resource_count(instance: &AggregationInstance) -> usize {
-    instance.actions.iter().map(action_resource_count).sum()
-}
-
 fn consumed(instance: &AggregationInstance) -> impl Iterator<Item = &ConsumedResourceAggregated> {
     instance.actions.iter().flat_map(|a| &a.consumed_publics)
 }

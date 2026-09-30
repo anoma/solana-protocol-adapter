@@ -56,8 +56,8 @@ describe("protocol-adapter (logic-ref denylist)", () => {
   // reports it.
   it("rejects a settlement whose resources carry a denied logic ref", async () => {
     const sig = await settleUnsettledFixture("batch_groth16_v2.json");
-    const [executed] = (await cpiEventsOf(sig)).events.filter((e) => e.name === "transactionExecutedEvent");
-    const passthrough: number[] = Array.from(executed.data.logicRefs[0]);
+    const [action] = (await cpiEventsOf(sig)).events.filter((e) => e.name === "actionExecutedEvent");
+    const passthrough: number[] = Array.from(action.data.consumedLogicRefs[0]);
 
     await denyLogicRef(program, authority, passthrough).rpc();
     await assertFails(settleUnsettledFixture("batch_groth16.json"), { program, error: "DeniedLogicRef" });

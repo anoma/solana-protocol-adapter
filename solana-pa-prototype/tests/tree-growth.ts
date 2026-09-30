@@ -6,7 +6,7 @@ import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
 import { RESULT_LT } from "../client/constants";
 import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
-import { assertFails } from "./utils/helpers";
+import { assertFails, transactionIdOf } from "./utils/helpers";
 import {
   provider,
   program,
@@ -65,24 +65,27 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
       "CommitmentTreeRootAdded carries the root the settlement produced",
     );
 
-    const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
-    assert.isAtLeast(actionEvents.length, 1, "Should emit actionExecutedEvent");
-    assert.ok(
-      Array.isArray(actionEvents[0].data.actionTreeRoot) && actionEvents[0].data.actionTreeRoot.length === 32,
-      "action_tree_root should be 32 bytes",
-    );
-    assert.equal(actionEvents[0].data.actionTagCount, 2, "action_tag_count should be 2 (consumed + created)");
-
-    const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
-    assert.equal(txEvents.length, 1, "Should emit exactly one transactionExecutedEvent");
-    assert.equal(txEvents[0].data.tags.length, 2, "Should have 2 tags");
-    assert.equal(txEvents[0].data.logicRefs.length, 2, "Should have 2 logic_refs");
-    // Instance order is consumed-then-created per action; is_consumed states
-    // each tag's role explicitly (indexers must not infer it from position).
+    // pa-evm's ActionExecuted carries the action's nullifiers and commitments
+    // with their logic refs; TransactionExecuted carries the transaction id.
+    const fixture = loadFixture("batch_groth16_v2.json");
+    const [, action, , executed] = events;
+    const hex = (values: number[][]) => values.map((v) => Buffer.from(v).toString("hex"));
     assert.deepEqual(
-      txEvents[0].data.isConsumed,
-      [true, false],
-      "is_consumed should mark the nullifier then the commitment",
+      hex(action.data.nullifiers),
+      fixture.consumed_nullifiers_b64.map((b: string) => Buffer.from(b, "base64").toString("hex")),
+      "ActionExecuted lists the action's nullifiers",
+    );
+    assert.deepEqual(
+      hex(action.data.commitments),
+      commitmentsOf(fixture).map((c) => c.toString("hex")),
+      "ActionExecuted lists the action's commitments",
+    );
+    assert.lengthOf(action.data.consumedLogicRefs, 1);
+    assert.lengthOf(action.data.createdLogicRefs, 1);
+    assert.deepEqual(
+      Buffer.from(executed.data.transactionId),
+      transactionIdOf([action.data.actionTreeRoot]),
+      "TransactionExecuted carries the keccak of the action tree roots",
     );
 
     const fwdEvents = events.filter((e) => e.name === "forwarderCallExecutedEvent");
@@ -191,8 +194,9 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
       "the consumed resource's nullifier is recorded",
     );
     const { events } = await cpiEventsOf(sig);
-    const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
-    assert.deepEqual(txEvents[0].data.isConsumed, [true], "the transaction's one tag is a consumed resource");
+    const [action] = events.filter((e) => e.name === "actionExecutedEvent");
+    assert.lengthOf(action.data.nullifiers, 1, "the action consumes one resource");
+    assert.lengthOf(action.data.commitments, 0, "and creates none");
     assert.notInclude(
       events.map((e) => e.name),
       "commitmentTreeRootAddedEvent",

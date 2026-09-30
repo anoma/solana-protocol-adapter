@@ -786,12 +786,15 @@ fn execute_settlement(
     )?;
 
     let ml = marker_lamports(&Rent::get()?);
-    let total_tag_count = settle::total_resource_count(instance);
-    let mut all_tags: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
-    let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
-    let mut all_is_consumed: Vec<bool> = Vec::with_capacity(total_tag_count);
 
     for action in &instance.actions {
+        let mut executed = ActionExecutedEvent {
+            action_tree_root: action.action_tree_root.into(),
+            nullifiers: Vec::with_capacity(action.consumed_publics.len()),
+            consumed_logic_refs: Vec::with_capacity(action.consumed_publics.len()),
+            commitments: Vec::with_capacity(action.created_publics.len()),
+            created_logic_refs: Vec::with_capacity(action.created_publics.len()),
+        };
         for resource in settle::action_resources(action) {
             if resource.is_consumed {
                 let marker = nullifier_markers
@@ -819,15 +822,16 @@ fn execute_settlement(
             }
             emit_app_data_events(events, &resource.tag, resource.app_data)?;
 
-            all_tags.push(resource.tag.into());
-            all_logic_refs.push(resource.logic_ref.into());
-            all_is_consumed.push(resource.is_consumed);
+            if resource.is_consumed {
+                executed.nullifiers.push(resource.tag.into());
+                executed.consumed_logic_refs.push(resource.logic_ref.into());
+            } else {
+                executed.commitments.push(resource.tag.into());
+                executed.created_logic_refs.push(resource.logic_ref.into());
+            }
         }
 
-        events.emit(&ActionExecutedEvent {
-            action_tree_root: action.action_tree_root.into(),
-            action_tag_count: settle::action_resource_count(action) as u32,
-        })?;
+        events.emit(&executed)?;
     }
 
     let prepared = prepare_proof_for_verification(aggregation, state.proof_selector)
@@ -878,13 +882,10 @@ fn execute_settlement(
         events.emit(&CommitmentTreeRootAddedEvent { root: new_root })?;
     }
 
-    // `is_consumed` states each tag's role explicitly — consumed and created
-    // resources are grouped per action rather than alternating, so parity
-    // cannot infer it.
     events.emit(&TransactionExecutedEvent {
-        tags: all_tags,
-        logic_refs: all_logic_refs,
-        is_consumed: all_is_consumed,
+        transaction_id: arm_solana::delta::compute_delta_msg_hash(
+            &arm_solana::delta::collect_roots(instance),
+        ),
     })?;
     Ok(())
 }
@@ -1314,20 +1315,26 @@ pub struct LogicRefDeniedEvent {
     pub logic_ref: [u8; 32],
 }
 
+/// Mirrors pa-evm: `event ActionExecuted(bytes32 actionTreeRoot,
+/// bytes32[] nullifiers, bytes32[] consumedLogicRefs, bytes32[] commitments,
+/// bytes32[] createdLogicRefs);`. The commitments are appended to the tree in
+/// the order listed, action after action.
 #[event]
 pub struct ActionExecutedEvent {
     pub action_tree_root: [u8; 32],
-    pub action_tag_count: u32,
+    pub nullifiers: Vec<[u8; 32]>,
+    pub consumed_logic_refs: Vec<[u8; 32]>,
+    pub commitments: Vec<[u8; 32]>,
+    pub created_logic_refs: Vec<[u8; 32]>,
 }
 
-/// Matches EVM PA's TransactionExecuted event, with each tag's role stated
-/// explicitly: `is_consumed[i]` is true when `tags[i]` is a nullifier and
-/// false when it is a commitment.
+/// Mirrors pa-evm: `event TransactionExecuted(bytes32 indexed transactionId);`,
+/// the Keccak-256 hash of the concatenated action tree roots: the message the
+/// delta proof signs, unique per transaction and known to the sender before
+/// submission.
 #[event]
 pub struct TransactionExecutedEvent {
-    pub tags: Vec<[u8; 32]>,
-    pub logic_refs: Vec<[u8; 32]>,
-    pub is_consumed: Vec<bool>,
+    pub transaction_id: [u8; 32],
 }
 
 /// Matches EVM PA's ForwarderCallExecuted event.
