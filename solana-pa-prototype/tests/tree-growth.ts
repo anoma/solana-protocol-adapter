@@ -4,9 +4,9 @@
  */
 import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import { assertFails } from "./utils/helpers";
 import { RESULT_LT } from "../client/constants";
 import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
+import { assertFails } from "./utils/helpers";
 import {
   provider,
   program,

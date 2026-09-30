@@ -68,9 +68,9 @@ function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
  * The marker PDA of the root the adapter will hold after appending
  * `createdCommitments`, or null when there are none: a settlement that
  * creates nothing produces no root and takes no marker. The produced root is
- * only known after the append,
- * so a submitter fetches the tree state and replays the append locally
- * (merkle.rs `append_to_tree`, including the expand-after-fill growth step).
+ * only known after the append, so a submitter fetches the tree state and
+ * replays the append locally (merkle.rs `append_to_tree`, including the
+ * expand-after-fill growth step).
  * A wrong prediction cannot settle: the program rejects it with
  * RootPdaMismatch, so the on-chain check keeps this replica honest.
  */

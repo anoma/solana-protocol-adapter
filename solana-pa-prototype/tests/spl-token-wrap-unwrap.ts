@@ -350,8 +350,6 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     // Mirrors ERC20Forwarder's `Wrapped` event. It travels in the program
     // log, which the runtime truncates past 10,000 bytes per transaction.
     const logs = (await confirmedTransaction(provider.connection, sig)).meta!.logMessages!;
-    const logBytes = logs.reduce((n, line) => n + Buffer.byteLength(line), 0);
-    console.log(`      wrap settlement log: ${logs.length} lines, ${logBytes} bytes`);
     const wrapped = [
       ...new anchor.EventParser(forwarderProgram.programId, forwarderProgram.coder).parseLogs(logs),
     ].filter((e) => e.name === "wrapped");

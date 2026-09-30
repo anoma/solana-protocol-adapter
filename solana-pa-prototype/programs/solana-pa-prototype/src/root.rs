@@ -53,8 +53,8 @@ pub fn create_root_marker<'info>(
 
     // A repeated produced root is unreachable in normal operation: a root is
     // recorded only by a settlement that appends commitments, and next_index
-    // strictly increases. Reaching this means a hash collision or a tree-accounting bug,
-    // both of which must surface rather than pass quietly.
+    // strictly increases. Reaching this means a hash collision or a
+    // tree-accounting bug, both of which must surface rather than pass quietly.
     if marker.owner == program_id {
         return err!(PAError::RootMarkerAlreadyExists);
     }

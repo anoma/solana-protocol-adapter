@@ -106,9 +106,9 @@ export function deriveRootPda(root: Buffer): PublicKey {
 }
 
 // Tests that expect settlement to fail before `newRootMarker` is read still
-// pass a marker, as a settlement that creates resources must. `initialize` never creates a root marker for the
-// empty-tree root — `is_root_valid` accepts it directly, without a marker —
-// so this PDA never exists on-chain. It's used purely as a syntactically
+// pass a marker, as a settlement that creates resources must. `initialize`
+// never creates a root marker for the empty-tree root — `is_root_valid`
+// accepts it directly, without a marker — so this PDA never exists on-chain. It's used purely as a syntactically
 // valid placeholder address; its value is irrelevant for those tests since
 // the instruction fails earlier.
 export const DUMMY_ROOT_MARKER = deriveRootPda(EMPTY_TREE_ROOT_INITIAL);

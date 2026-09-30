@@ -120,27 +120,17 @@ async function init() {
 
   const existing = await forwarder.account.config.fetchNullable(configPda);
   if (existing) {
-    const stored = {
-      adapter: existing.protocolAdapter.toBase58(),
-      "logic ref": Buffer.from(existing.logicRef).toString("hex"),
-      committee: existing.emergencyCommittee.toBase58(),
-    };
-    const requested = {
-      adapter: adapter.programId.toBase58(),
-      "logic ref": Buffer.from(logicRef).toString("hex"),
-      committee: committee.toBase58(),
-    };
-    const mismatches = Object.keys(stored).filter(
-      (k) => stored[k as keyof typeof stored] !== requested[k as keyof typeof requested],
-    );
+    // (field, stored, requested)
+    const fields: [string, string, string][] = [
+      ["adapter", existing.protocolAdapter.toBase58(), adapter.programId.toBase58()],
+      ["logic ref", Buffer.from(existing.logicRef).toString("hex"), Buffer.from(logicRef).toString("hex")],
+      ["committee", existing.emergencyCommittee.toBase58(), committee.toBase58()],
+    ];
+    const mismatches = fields.filter(([, stored, requested]) => stored !== requested);
     if (mismatches.length > 0) {
       fail(
-        `config ${configPda.toBase58()} already exists with a different ${mismatches.join(", ")}: ` +
-          mismatches
-            .map(
-              (k) => `${k} ${stored[k as keyof typeof stored]} (requested ${requested[k as keyof typeof requested]})`,
-            )
-            .join("; "),
+        `config ${configPda.toBase58()} already exists with a different ${mismatches.map(([k]) => k).join(", ")}: ` +
+          mismatches.map(([k, stored, requested]) => `${k} ${stored} (requested ${requested})`).join("; "),
       );
     }
     console.log(`Config ${configPda.toBase58()} already initialized with the requested values`);

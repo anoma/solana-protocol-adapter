@@ -791,8 +791,6 @@ fn execute_settlement<'info>(
     // advances. Solana cannot create an undeclared account, so the marker is
     // required and a settlement that omits it is rejected.
     let new_root_marker = new_root_marker.ok_or(PAError::RootPdaMismatch)?;
-    let (expected_pda, _) = root::derive_root_pda(&crate::ID, pa_state_key, &new_root);
-    require_keys_eq!(expected_pda, *new_root_marker.key, PAError::RootPdaMismatch);
     root::create_root_marker(
         &crate::ID,
         pa_state_key,

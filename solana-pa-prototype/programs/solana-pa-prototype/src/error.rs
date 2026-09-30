@@ -15,7 +15,7 @@ pub enum PAError {
     // Root marker errors
     #[msg("Commitment tree root does not exist in historical set")]
     NonExistingRoot,
-    #[msg("Root marker does not match the root this settlement produces, or is passed when it produces none")]
+    #[msg("Root marker is missing for, does not match, or is passed without a root this settlement produces")]
     RootPdaMismatch,
 
     // TxData errors
