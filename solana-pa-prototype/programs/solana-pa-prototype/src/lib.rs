@@ -4,7 +4,7 @@ use anchor_lang::prelude::*;
 declare_id!("28Hvr1YFv2ouGN2fS99aF3ZzYXzkncJVVaHcZNhquLFT");
 
 // CPI client and types of the RISC Zero verifier router, generated from
-// idls/verifier_router.json: the IDL of risc0/risc0-solana v3.0.0 (ee41593),
+// idls/verifier_router.json: the IDL of risc0/risc0-solana v3.0.0 (ee415935),
 // the release the deployed verifiers run, built from that source with its
 // Anchor 0.31.1 (the IDL committed in that repository is stale). The
 // real-mode suite exercises it against the deployed router.
@@ -168,7 +168,7 @@ pub mod protocol_adapter {
             &ctx.accounts.system_program.to_account_info(),
             &ctx.accounts.new_root_marker.to_account_info(),
             VerifierAccounts {
-                router_program: ctx.accounts.verifier_router_program.key(),
+                router_program_id: ctx.accounts.verifier_router_program.key(),
                 router: ctx.accounts.router.to_account_info(),
                 verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
                 verifier_program: ctx.accounts.verifier_program.to_account_info(),
@@ -350,7 +350,7 @@ pub mod protocol_adapter {
             &ctx.accounts.system_program.to_account_info(),
             &ctx.accounts.new_root_marker.to_account_info(),
             VerifierAccounts {
-                router_program: ctx.accounts.verifier_router_program.key(),
+                router_program_id: ctx.accounts.verifier_router_program.key(),
                 router: ctx.accounts.router.to_account_info(),
                 verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
                 verifier_program: ctx.accounts.verifier_program.to_account_info(),
@@ -511,7 +511,7 @@ fn marker_lamports(rent: &Rent) -> u64 {
 
 /// Accounts needed for the verifier_router CPI.
 struct VerifierAccounts<'info> {
-    router_program: Pubkey,
+    router_program_id: Pubkey,
     router: AccountInfo<'info>,
     verifier_entry: AccountInfo<'info>,
     verifier_program: AccountInfo<'info>,
@@ -679,7 +679,7 @@ fn execute_settlement<'info>(
             verifier_program: verifier.verifier_program.clone(),
             system_program: system_program.clone(),
         };
-        let cpi_ctx = CpiContext::new(verifier.router_program, cpi_accounts);
+        let cpi_ctx = CpiContext::new(verifier.router_program_id, cpi_accounts);
         verifier_router::cpi::verify(
             cpi_ctx,
             prepared.seal,

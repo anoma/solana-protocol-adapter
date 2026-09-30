@@ -405,8 +405,7 @@ build_programs_dev() {
   anchor_build -p protocol_adapter ${idl_flag} -- --features dev-teardown
   anchor_build -p block_time_forwarder ${idl_flag}
   anchor_build -p spl_token_forwarder ${idl_flag}
-  # Nothing consumes the test-only programs' IDLs — skip that extra
-  # IDL compile pass unconditionally.
+  # Nothing consumes the test-only programs' IDLs; always skip their IDL pass.
   anchor_build -p test_forwarder --no-idl
   anchor_build -p mock_verifier --no-idl
 }

@@ -54,7 +54,7 @@ pub fn prepare_proof_for_verification(
 /// Coordinates must be canonical base-field elements. Curve and subgroup
 /// membership are not checked here: the verifier's pairing syscall checks
 /// them.
-pub fn negate_g1(point: &[u8; 64]) -> Result<[u8; 64], PAError> {
+pub(crate) fn negate_g1(point: &[u8; 64]) -> Result<[u8; 64], PAError> {
     let (x, y) = point.split_at(32);
     let x = fq_from_be_bytes(x).ok_or(PAError::InvalidProof)?;
     let y = fq_from_be_bytes(y).ok_or(PAError::InvalidProof)?;

@@ -27,14 +27,12 @@
           # Rust 1.93.0: pinned to match CI exactly; Anchor 1.2.0 needs 1.89+.
           rustToolchain = pkgs.rust-bin.stable."1.93.0".default;
 
-          rustPlatform = pkgs.makeRustPlatform {
-            cargo = rustToolchain;
-            rustc = rustToolchain;
-          };
-
           # nixos-25.05 ships anchor 0.31.1, and its rustc is below Anchor
           # 1.2.0's MSRV, so the CLI is built here with the pinned toolchain.
-          anchorCli = rustPlatform.buildRustPackage (finalAttrs: {
+          anchorCli = (pkgs.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          }).buildRustPackage (finalAttrs: {
             pname = "anchor";
             version = "1.2.0";
 
@@ -50,13 +48,6 @@
 
             cargoBuildFlags = [ "-p" "anchor-cli" ];
             cargoTestFlags = [ "-p" "anchor-cli" ];
-
-            meta = {
-              description = "Solana Sealevel Framework";
-              homepage = "https://github.com/otter-sec/anchor";
-              license = lib.licenses.asl20;
-              mainProgram = "anchor";
-            };
           });
 
           solanaRelease = {

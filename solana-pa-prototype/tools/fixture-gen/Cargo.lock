@@ -4144,7 +4144,6 @@ dependencies = [
  "hex-literal",
  "serde",
  "solana-sha256-hasher 3.1.0",
- "solana-system-interface 2.0.0",
 ]
 
 [[package]]

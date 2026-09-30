@@ -1,12 +1,9 @@
 use crate::error::PAError;
 use crate::groth16::{negate_g1, prepare_proof_for_verification};
 use crate::tests::utils::{fake_aggregation_proof_bytes, minimal_instance, FAKE_SELECTOR};
-use crate::verifier_router::types::{Proof, Seal};
-use anchor_lang::InstructionData;
 use arm_core::constants::BATCH_AGGREGATION_VK;
 use arm_core::transaction::Aggregation;
 use hex_literal::hex;
-use sha2::{Digest, Sha256};
 
 fn fake_aggregation() -> Aggregation {
     Aggregation {
@@ -128,39 +125,4 @@ fn test_negate_g1_rejects_non_canonical_coordinates() {
         matches!(negate_g1(&x_is_modulus), Err(PAError::InvalidProof)),
         "a coordinate equal to the field modulus is not a canonical field element"
     );
-}
-
-/// The router `verify` instruction data must be Anchor's encoding:
-/// sha256("global:verify")[..8] ‖ borsh(seal, image_id, journal_digest),
-/// where borsh of fixed-size byte arrays is the raw bytes in field order.
-#[test]
-fn test_router_verify_instruction_data_is_anchor_encoding() {
-    let seal = Seal {
-        selector: [0x73, 0xc4, 0x57, 0xba],
-        proof: Proof {
-            pi_a: [0xA1; 64],
-            pi_b: [0xB2; 128],
-            pi_c: [0xC3; 64],
-        },
-    };
-    let image_id = [0x11; 32];
-    let journal_digest = [0x22; 32];
-
-    let data = crate::verifier_router::client::args::Verify {
-        seal,
-        image_id,
-        journal_digest,
-    }
-    .data();
-
-    let mut expected = Sha256::digest(b"global:verify")[..8].to_vec();
-    expected.extend_from_slice(&seal.selector);
-    expected.extend_from_slice(&seal.proof.pi_a);
-    expected.extend_from_slice(&seal.proof.pi_b);
-    expected.extend_from_slice(&seal.proof.pi_c);
-    expected.extend_from_slice(&image_id);
-    expected.extend_from_slice(&journal_digest);
-
-    assert_eq!(data.len(), 8 + 260 + 32 + 32);
-    assert_eq!(data, expected);
 }

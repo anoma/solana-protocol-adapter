@@ -4,7 +4,7 @@ use crate::state::{
     base64_of_hash, nonce_to_word_and_bit, pa_is_stopped, NonceBitmap, UnwrapInput, WrapInput,
     WrapMessage, NONCES_PER_WORD, SIGNED_MESSAGE_LEN,
 };
-use anchor_lang::prelude::Pubkey;
+use anchor_lang::prelude::{borsh, Pubkey};
 use anchor_lang::AccountSerialize;
 use protocol_adapter::state::{PALifecycle, PAStateAccount};
 
@@ -19,7 +19,7 @@ fn wrap_message_hash_is_sha256_of_its_borsh_encoding() {
         deadline: -1_700_000_000,
         action_tree_root: [2u8; 32],
     };
-    let encoded = anchor_lang::prelude::borsh::to_vec(&msg).unwrap();
+    let encoded = borsh::to_vec(&msg).unwrap();
     assert_eq!(encoded.len(), WrapMessage::SIZE);
     assert_eq!(msg.hash(), solana_sha256_hasher::hash(&encoded).to_bytes());
 }
