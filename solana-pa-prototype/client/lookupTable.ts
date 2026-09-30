@@ -14,7 +14,7 @@ import {
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { getRouterPda, getVerifierEntryPda } from "./verifier";
 import { escrowAccounts } from "./instructions";
-import { deriveConfigPda, deriveEscrowPda, deriveEventAuthorityPda, derivePaStatePda } from "./pda";
+import { deriveConfigPda, deriveEscrowAuthority, deriveEventAuthorityPda, derivePaStatePda } from "./pda";
 
 /** What fixes a deployment's settlement key set. */
 export interface SettlementKeySources {
@@ -52,7 +52,7 @@ export function settlementLookupKeys(s: SettlementKeySources): PublicKey[] {
     s.blockTimeForwarder,
     s.splTokenForwarder,
     forwarderConfig,
-    deriveEscrowPda(s.splTokenForwarder),
+    deriveEscrowAuthority(s.splTokenForwarder),
     TOKEN_PROGRAM_ID,
     ...s.mints.map((mint) => escrowAccounts(s.splTokenForwarder, mint).escrowAta),
   ];
@@ -108,9 +108,9 @@ export async function ensureSettlementLookupTable(
   let signature: string | undefined;
   if (instructions.length > 0) {
     signature = await sendAndConfirmTransaction(connection, new Transaction().add(...instructions), [payer], {
-      commitment: "confirmed",
+      preflightCommitment: "confirmed",
+      commitment: "finalized",
     });
-    await connection.confirmTransaction(signature, "finalized");
   }
   return { table: await fetchLookupTable(connection, address), added, signature };
 }

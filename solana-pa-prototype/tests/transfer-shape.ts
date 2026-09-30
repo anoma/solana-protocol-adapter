@@ -2,7 +2,6 @@
  * The three-action transfer-shape fixture: it exhausts the default heap and
  * settles within the extended one.
  */
-import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
 import { assertFails } from "./utils/helpers";
@@ -11,7 +10,6 @@ import {
   paState,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
-  ensureAdapterInitialized,
   cpiEventsOf,
   settleFromTxDataBuilder,
   useAdapterSuite,
@@ -19,10 +17,6 @@ import {
 
 describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   const { funder, uploadTxData, settleFixtureViaTxData } = useAdapterSuite();
-
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
 
   // Successor of the imported-mainnet-transfer OOM regression: a synthetic
   // three-action transaction at least as large on the wire as the captured
@@ -40,8 +34,7 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   it("cannot settle the transfer-shape fixture without the extended heap budget", async () => {
     const fx = loadFixture("batch_groth16_transfer_shape.json");
     const payload = Buffer.from(fx.tx_b64, "base64");
-    const authority = Keypair.generate();
-    await funder.fund(authority, 2);
+    const authority = await funder.fresh(2);
     const { uploadId, txData } = await uploadTxData(authority, payload);
     const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
 

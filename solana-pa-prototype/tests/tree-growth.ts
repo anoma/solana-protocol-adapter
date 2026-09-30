@@ -13,36 +13,21 @@ import {
   blockTimeForwarderId,
   deriveRootPda,
   deriveNullifierAccounts,
-  ensureAdapterInitialized,
   assertFixtureUnsettled,
-  buildSettleRemainingAccounts,
   cpiEventsOf,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
 describe("protocol-adapter (Tree growth and multi-settlement)", () => {
-  const { settleFixtureViaTxData } = useAdapterSuite();
-
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
+  const { settleFixtureViaTxData, settleUnsettledFixture } = useAdapterSuite();
 
   let v2TxSig: string;
 
   it("settles v2 fixture (appends one leaf)", async () => {
-    await assertFixtureUnsettled("batch_groth16_v2.json");
-
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
-    const v2Fixture = loadFixture("batch_groth16_v2.json");
-    const payload = Buffer.from(v2Fixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(v2Fixture.consumed_nullifiers_b64);
-    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
-
-    v2TxSig = await settleFixtureViaTxData(payload, remainingAccounts, {
-      createdCommitments: commitmentsOf(v2Fixture),
-    });
+    v2TxSig = await settleUnsettledFixture("batch_groth16_v2.json");
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
@@ -102,19 +87,10 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
   });
 
   it("settles v3 fixture (appends one leaf)", async () => {
-    await assertFixtureUnsettled("batch_groth16_v3.json");
-
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
-    const v3Fixture = loadFixture("batch_groth16_v3.json");
-    const payload = Buffer.from(v3Fixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(v3Fixture.consumed_nullifiers_b64);
-    const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
-
-    await settleFixtureViaTxData(payload, remainingAccounts, {
-      createdCommitments: commitmentsOf(v3Fixture),
-    });
+    await settleUnsettledFixture("batch_groth16_v3.json");
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);

@@ -4,7 +4,6 @@
  * forwarder is deployed nowhere else).
  */
 import { Keypair } from "@solana/web3.js";
-import { assert } from "chai";
 import { loadFixture } from "./utils/fixtures";
 import { assertFails } from "./utils/helpers";
 import {
@@ -15,16 +14,11 @@ import {
   testForwarderId,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
-  ensureAdapterInitialized,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
 describe("protocol-adapter (External call error paths)", () => {
   const { settleFixtureViaTxData } = useAdapterSuite();
-
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
 
   it("rejects settlement when forwarder CPI accounts are wrong", async () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).

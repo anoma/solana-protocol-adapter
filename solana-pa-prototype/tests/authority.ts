@@ -7,14 +7,10 @@ import { PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { emergencyStop } from "../client/instructions";
 import { assertFails } from "./utils/helpers";
-import { provider, program, paState, ensureAdapterInitialized, useAdapterSuite } from "./utils/adapterSuite";
+import { provider, program, paState, useAdapterSuite } from "./utils/adapterSuite";
 
 describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   const { funder } = useAdapterSuite();
-
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
 
   it("stores authority on PAStateAccount after initialize", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
@@ -34,8 +30,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   });
 
   it("rejects emergency_stop from non-authority", async () => {
-    const nonAuthority = Keypair.generate();
-    await funder.fund(nonAuthority, 1);
+    const nonAuthority = await funder.fresh(1);
 
     await assertFails(emergencyStop(program, nonAuthority.publicKey).signers([nonAuthority]).rpc(), {
       program,
@@ -44,9 +39,8 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   });
 
   it("rejects propose_authority from non-authority", async () => {
-    const nonAuthority = Keypair.generate();
+    const nonAuthority = await funder.fresh(1);
     const newAuthority = Keypair.generate();
-    await funder.fund(nonAuthority, 1);
 
     await assertFails(
       program.methods
@@ -65,8 +59,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const currentAuthority = stateBefore.authority;
 
-    const newAuthority = Keypair.generate();
-    await funder.fund(newAuthority, 1);
+    const newAuthority = await funder.fresh(1);
 
     // Step 1: propose
     await program.methods
@@ -120,8 +113,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const originalAuthority = stateBefore.authority;
 
-    const newAuthority = Keypair.generate();
-    await funder.fund(newAuthority, 1);
+    const newAuthority = await funder.fresh(1);
 
     // Two-step transfer
     await program.methods
@@ -175,8 +167,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
     assert.ok(state.authority.equals(provider.wallet.publicKey), "Authority should still be provider after propose");
 
     // Overwrite with a real candidate, complete transfer, then restore
-    const realCandidate = Keypair.generate();
-    await funder.fund(realCandidate, 1);
+    const realCandidate = await funder.fresh(1);
 
     await program.methods
       .proposeAuthority(realCandidate.publicKey)
@@ -217,8 +208,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   });
 
   it("accept_authority fails without a pending proposal", async () => {
-    const random = Keypair.generate();
-    await funder.fund(random, 1);
+    const random = await funder.fresh(1);
 
     await assertFails(
       program.methods
@@ -235,8 +225,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
 
   it("wrong signer cannot accept a pending proposal", async () => {
     const intended = Keypair.generate();
-    const attacker = Keypair.generate();
-    await funder.fund(attacker, 1);
+    const attacker = await funder.fresh(1);
 
     // Propose the intended authority
     await program.methods
@@ -271,10 +260,8 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   });
 
   it("overwrite invalidates previous proposal", async () => {
-    const firstCandidate = Keypair.generate();
-    const secondCandidate = Keypair.generate();
-    await funder.fund(firstCandidate, 1);
-    await funder.fund(secondCandidate, 1);
+    const firstCandidate = await funder.fresh(1);
+    const secondCandidate = await funder.fresh(1);
 
     // Propose first candidate
     await program.methods
@@ -318,8 +305,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   });
 
   it("pending_authority is cleared after accept", async () => {
-    const candidate = Keypair.generate();
-    await funder.fund(candidate, 1);
+    const candidate = await funder.fresh(1);
 
     await program.methods
       .proposeAuthority(candidate.publicKey)
@@ -370,8 +356,7 @@ describe("protocol-adapter (Issue #6: Emergency Stop)", () => {
   });
 
   it("cancel_authority_transfer clears pending proposal", async () => {
-    const candidate = Keypair.generate();
-    await funder.fund(candidate, 1);
+    const candidate = await funder.fresh(1);
 
     await program.methods
       .proposeAuthority(candidate.publicKey)

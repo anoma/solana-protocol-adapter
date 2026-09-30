@@ -3,41 +3,31 @@
  * and extend, closing, and the authority and bounds constraints.
  */
 import * as anchor from "@anchor-lang/core";
-import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
+import { SystemProgram, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS } from "../client/constants";
 import { deriveTxDataPda } from "../client/pda";
-import { VERIFIER_ROUTER_ID } from "../client/verifier";
 import { freshUploadId, assertFails } from "./utils/helpers";
 import {
   provider,
   program,
   paState,
-  VERIFIER_PROGRAM_ID,
-  routerPda,
-  verifierEntryPda,
   DUMMY_ROOT_MARKER,
-  ensureAdapterInitialized,
   setExpiryBounds,
+  settleFromTxDataBuilder,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
 describe("TxData lifecycle", () => {
   const { funder, initTxData } = useAdapterSuite();
 
-  before(async () => {
-    await ensureAdapterInitialized();
-    await setExpiryBounds(MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS);
-  });
+  before(() => setExpiryBounds(MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS));
 
   describe("protocol-adapter (TxData Expiration)", () => {
     it("rejects txdata_init with expires_slot too soon", async () => {
-      const authority = Keypair.generate();
-      await funder.fund(authority, 1);
+      const authority = await funder.fresh(1);
 
-      const { uploadId, uploadIdLe } = freshUploadId();
-
-      const txData = deriveTxDataPda(program.programId, authority.publicKey, uploadIdLe);
+      const { uploadId, txData } = freshUploadId(program.programId, authority.publicKey);
 
       const slot = await provider.connection.getSlot("confirmed");
       // Set expiry too soon (only 50 slots from now, MIN is 100)
@@ -59,12 +49,9 @@ describe("TxData lifecycle", () => {
     });
 
     it("rejects txdata_init with expires_slot too late", async () => {
-      const authority = Keypair.generate();
-      await funder.fund(authority, 1);
+      const authority = await funder.fresh(1);
 
-      const { uploadId, uploadIdLe } = freshUploadId();
-
-      const txData = deriveTxDataPda(program.programId, authority.publicKey, uploadIdLe);
+      const { uploadId, txData } = freshUploadId(program.programId, authority.publicKey);
 
       const slot = await provider.connection.getSlot("confirmed");
       // Set expiry too late (MAX + 1000 slots from now)
@@ -86,8 +73,7 @@ describe("TxData lifecycle", () => {
     });
 
     it("accepts txdata_init with valid expires_slot", async () => {
-      const authority = Keypair.generate();
-      await funder.fund(authority, 1);
+      const authority = await funder.fresh(1);
 
       const slot = await provider.connection.getSlot("confirmed");
       const expiresSlot = new anchor.BN(slot + Math.floor((MIN_EXPIRY_SLOTS + MAX_EXPIRY_SLOTS) / 2));
@@ -102,8 +88,7 @@ describe("TxData lifecycle", () => {
     });
 
     it("allows authority to close TxData anytime", async () => {
-      const authority = Keypair.generate();
-      await funder.fund(authority, 2);
+      const authority = await funder.fresh(2);
 
       const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -137,9 +122,7 @@ describe("TxData lifecycle", () => {
       // SCENARIO: Attacker derives their OWN PDA (using their pubkey in seeds).
       // Since they never created a TxData at that address, it doesn't exist.
       // This tests Anchor's account existence check.
-      const authority = Keypair.generate();
-      const attacker = Keypair.generate();
-      await Promise.all([funder.fund(authority, 2), funder.fund(attacker, 1)]);
+      const [authority, attacker] = await Promise.all([funder.fresh(2), funder.fresh(1)]);
 
       const { uploadId, uploadIdLe } = await initTxData(authority, 100);
 
@@ -166,9 +149,7 @@ describe("TxData lifecycle", () => {
       // But Anchor's seeds constraint computes [TX_DATA_SEED, signer.key(), upload_id].
       // Since signer is attacker, computed PDA != authority's PDA → ConstraintSeeds error.
       // This tests Anchor's PDA seed verification.
-      const authority = Keypair.generate();
-      const attacker = Keypair.generate();
-      await Promise.all([funder.fund(authority, 2), funder.fund(attacker, 1)]);
+      const [authority, attacker] = await Promise.all([funder.fresh(2), funder.fresh(1)]);
 
       const { uploadId, txData: authorityTxData } = await initTxData(authority, 100);
 
@@ -189,8 +170,7 @@ describe("TxData lifecycle", () => {
     });
 
     it("extends TxData expiration deadline successfully", async () => {
-      const authority = Keypair.generate();
-      await funder.fund(authority, 2);
+      const authority = await funder.fresh(2);
 
       const slot = await provider.connection.getSlot("confirmed");
       const initialExpiry = new anchor.BN(slot + 1000);
@@ -217,8 +197,7 @@ describe("TxData lifecycle", () => {
     });
 
     it("rejects txdata_extend that doesn't increase expires_slot", async () => {
-      const authority = Keypair.generate();
-      await funder.fund(authority, 2);
+      const authority = await funder.fresh(2);
 
       const slot = await provider.connection.getSlot("confirmed");
       const initialExpiry = new anchor.BN(slot + 10000);
@@ -242,9 +221,7 @@ describe("TxData lifecycle", () => {
     });
 
     it("rejects txdata_close_expired for non-expired TxData", async () => {
-      const authority = Keypair.generate();
-      const cleaner = Keypair.generate();
-      await Promise.all([funder.fund(authority, 2), funder.fund(cleaner, 1)]);
+      const [authority, cleaner] = await Promise.all([funder.fresh(2), funder.fresh(1)]);
 
       const slot = await provider.connection.getSlot("confirmed");
       const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50000));
@@ -266,8 +243,7 @@ describe("TxData lifecycle", () => {
 
   describe("protocol-adapter (TxData authority and bounds checks)", () => {
     it("rejects txdata_write that exceeds payload capacity", async () => {
-      const authority = Keypair.generate();
-      await funder.fund(authority, 2);
+      const authority = await funder.fresh(2);
 
       const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -285,9 +261,7 @@ describe("TxData lifecycle", () => {
     });
 
     it("rejects txdata_write from wrong authority", async () => {
-      const authority = Keypair.generate();
-      const wrongAuthority = Keypair.generate();
-      await Promise.all([funder.fund(authority, 2), funder.fund(wrongAuthority, 1)]);
+      const [authority, wrongAuthority] = await Promise.all([funder.fresh(2), funder.fresh(1)]);
 
       const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -307,9 +281,7 @@ describe("TxData lifecycle", () => {
     });
 
     it("rejects settle_from_txdata from wrong authority", async () => {
-      const authority = Keypair.generate();
-      const wrongAuthority = Keypair.generate();
-      await Promise.all([funder.fund(authority, 2), funder.fund(wrongAuthority, 2)]);
+      const [authority, wrongAuthority] = await Promise.all([funder.fresh(2), funder.fresh(2)]);
 
       const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -323,20 +295,7 @@ describe("TxData lifecycle", () => {
         .rpc();
 
       await assertFails(
-        program.methods
-          .settleFromTxdata(uploadId)
-          .accountsPartial({
-            paState,
-            txData,
-            authority: wrongAuthority.publicKey,
-            systemProgram: SystemProgram.programId,
-            newRootMarker: DUMMY_ROOT_MARKER,
-            verifierRouterProgram: VERIFIER_ROUTER_ID,
-            router: routerPda,
-            verifierEntry: verifierEntryPda,
-            verifierProgram: VERIFIER_PROGRAM_ID,
-          })
-          .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })])
+        settleFromTxDataBuilder(wrongAuthority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, [], false)
           .signers([wrongAuthority])
           .rpc(),
         { program, error: "ConstraintSeeds" },
@@ -344,9 +303,8 @@ describe("TxData lifecycle", () => {
     });
 
     it("rejects txdata_close with wrong refund address", async () => {
-      const authority = Keypair.generate();
+      const authority = await funder.fresh(2);
       const otherPubkey = Keypair.generate().publicKey;
-      await funder.fund(authority, 2);
 
       const { uploadId, txData } = await initTxData(authority, 100);
 
@@ -365,10 +323,8 @@ describe("TxData lifecycle", () => {
     });
 
     it("rejects txdata_close_expired with wrong refund address", async () => {
-      const authority = Keypair.generate();
-      const cleaner = Keypair.generate();
+      const [authority, cleaner] = await Promise.all([funder.fresh(2), funder.fresh(1)]);
       const wrongRefund = Keypair.generate().publicKey;
-      await Promise.all([funder.fund(authority, 2), funder.fund(cleaner, 1)]);
 
       const slot = await provider.connection.getSlot("confirmed");
       const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50_000));

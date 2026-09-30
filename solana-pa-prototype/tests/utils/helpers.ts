@@ -82,10 +82,17 @@ export async function drainKeypairs(
 /** A funder that remembers what it funded, so a suite can drain it all in `after`. */
 export function makeFunder(provider: anchor.AnchorProvider) {
   const funded: Keypair[] = [];
+  async function fund(kp: Keypair, sol: number) {
+    await fundKeypair(provider, kp, sol);
+    funded.push(kp);
+  }
   return {
-    async fund(kp: Keypair, sol: number) {
-      await fundKeypair(provider, kp, sol);
-      funded.push(kp);
+    fund,
+    /** A new keypair holding `sol`. */
+    async fresh(sol: number): Promise<Keypair> {
+      const kp = Keypair.generate();
+      await fund(kp, sol);
+      return kp;
     },
     async drainAll() {
       const drained = await drainKeypairs(provider, funded);
@@ -108,8 +115,7 @@ export async function approvedTokenAccount(
   delegate: PublicKey,
   amount: number | bigint,
 ): Promise<PublicKey> {
-  const owner = Keypair.generate();
-  await funder.fund(owner, 1);
+  const owner = await funder.fresh(1);
   const ata = (await getOrCreateAssociatedTokenAccount(connection, owner, mint, owner.publicKey)).address;
   await mintTo(connection, mintAuthority, mint, ata, mintAuthority, amount);
   await approve(connection, owner, ata, delegate, owner, amount);
@@ -129,7 +135,7 @@ export function seededKeypair(label: string): Keypair {
  * same error on its own line. `frameLogs` are the lines the raising frame
  * logged itself, without its callees' lines.
  */
-type TransactionFailure = { program: PublicKey; reason: string; frameLogs: string[] };
+type TransactionFailure = { program: string; reason: string; frameLogs: string[] };
 
 /**
  * An expected failure: the program whose frame raises it, and either `error`,
@@ -169,7 +175,7 @@ function transactionFailureOf(logs: string[]): TransactionFailure {
     if (failed) {
       const frame = frames[frames.length - 1];
       assert.equal(frame?.program, failed[1], `failure line outside its program's frame: ${line}`);
-      return { program: new PublicKey(failed[1]), reason: failed[2], frameLogs: frame.logs };
+      return { program: failed[1], reason: failed[2], frameLogs: frame.logs };
     }
     frames[frames.length - 1]?.logs.push(line);
   }
@@ -208,7 +214,7 @@ export async function assertFails(action: Promise<unknown>, expected: ExpectedFa
   const program = "error" in expected ? expected.program.programId : expected.program;
   const reason = expectedReasonOf(expected);
   const context = `\nLogs:\n${logs.join("\n")}`;
-  assert.equal(failure.program.toBase58(), program.toBase58(), `failing program${context}`);
+  assert.equal(failure.program, program.toBase58(), `failing program${context}`);
   assert.match(failure.reason, reason, `failure reason of ${program.toBase58()}${context}`);
   if ("error" in expected && expected.account !== undefined) {
     const origin = failure.frameLogs
@@ -218,15 +224,19 @@ export async function assertFails(action: Promise<unknown>, expected: ExpectedFa
   }
 }
 
+/** A TxData upload: its id, the id's little-endian seed bytes, its account, and the slot it expires at. */
+export type TxDataUpload = { uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN };
+
 /**
- * A TxData upload id and its little-endian seed bytes. The id is the wall
- * clock so consecutive uploads by one authority never collide.
+ * A new TxData upload id under `authority`, its little-endian seed bytes and
+ * the upload's account. The id is the wall clock so consecutive uploads by
+ * one authority never collide.
  */
-export function freshUploadId(): { uploadId: anchor.BN; uploadIdLe: Buffer } {
+export function freshUploadId(paProgramId: PublicKey, authority: PublicKey): Omit<TxDataUpload, "expiresSlot"> {
   const uploadId = new anchor.BN(Date.now());
   const uploadIdLe = Buffer.alloc(8);
   uploadIdLe.writeBigUInt64LE(BigInt(uploadId.toString()));
-  return { uploadId, uploadIdLe };
+  return { uploadId, uploadIdLe, txData: deriveTxDataPda(paProgramId, authority, uploadIdLe) };
 }
 
 /**
@@ -239,9 +249,8 @@ export async function initTxData(
   authority: Keypair,
   payloadSize: number,
   expiresSlotOverride?: anchor.BN,
-): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
-  const { uploadId, uploadIdLe } = freshUploadId();
-  const txData = deriveTxDataPda(program.programId, authority.publicKey, uploadIdLe);
+): Promise<TxDataUpload> {
+  const { uploadId, uploadIdLe, txData } = freshUploadId(program.programId, authority.publicKey);
   const expiresSlot =
     expiresSlotOverride ?? new anchor.BN((await program.provider.connection.getSlot("confirmed")) + 10_000);
   await program.methods
@@ -264,7 +273,7 @@ export async function uploadTxData(
   authority: Keypair,
   payload: Buffer,
   expiresSlotOverride?: anchor.BN,
-): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
+): Promise<TxDataUpload> {
   const upload = await initTxData(program, paState, authority, payload.length, expiresSlotOverride);
   const { uploadId, txData } = upload;
   const chunkSize = 700;
@@ -288,12 +297,12 @@ export async function createFundedEscrow(
   forwarderProgramId: PublicKey,
   payer: Keypair,
   amount: bigint,
-): Promise<{ mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey }> {
+): Promise<{ mint: PublicKey; escrowAuthority: PublicKey; escrowAta: PublicKey }> {
   const mint = await createMint(provider.connection, payer, payer.publicKey, null, 6);
-  const { escrowPda, escrowAta } = escrowAccounts(forwarderProgramId, mint);
-  await getOrCreateAssociatedTokenAccount(provider.connection, payer, mint, escrowPda, true);
+  const { escrowAuthority, escrowAta } = escrowAccounts(forwarderProgramId, mint);
+  await getOrCreateAssociatedTokenAccount(provider.connection, payer, mint, escrowAuthority, true);
   await mintTo(provider.connection, payer, mint, escrowAta, payer, Number(amount));
-  return { mint, escrowPda, escrowAta };
+  return { mint, escrowAuthority, escrowAta };
 }
 
 /** Any 32 bytes that are not a real logic ref. */

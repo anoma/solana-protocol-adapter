@@ -3,27 +3,16 @@
  * their limits.
  */
 import * as anchor from "@anchor-lang/core";
-import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { MAX_EXPIRY_SLOTS, MIN_ALLOWED_EXPIRY, MIN_EXPIRY_SLOTS, SEVEN_DAYS_SLOTS } from "../client/constants";
 import { assertFails } from "./utils/helpers";
-import { provider, program, paState, ensureAdapterInitialized, useAdapterSuite } from "./utils/adapterSuite";
+import { program, paState, setExpiryBounds, useAdapterSuite } from "./utils/adapterSuite";
 
 describe("protocol-adapter (update_expiry_config)", () => {
   const { funder } = useAdapterSuite();
 
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
-
   it("updates expiry config successfully", async () => {
-    await program.methods
-      .updateExpiryConfig(new anchor.BN(50), new anchor.BN(5000))
-      .accountsPartial({
-        paState,
-        authority: provider.wallet.publicKey,
-      })
-      .rpc();
+    await setExpiryBounds(50, 5000);
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.minExpirySlots.toNumber(), 50, "min_expiry_slots should be 50");
@@ -31,47 +20,19 @@ describe("protocol-adapter (update_expiry_config)", () => {
   });
 
   it("rejects min >= max", async () => {
-    await assertFails(
-      program.methods
-        .updateExpiryConfig(new anchor.BN(5000), new anchor.BN(100))
-        .accountsPartial({
-          paState,
-          authority: provider.wallet.publicKey,
-        })
-        .rpc(),
-      { program, error: "InvalidExpiryConfig" },
-    );
+    await assertFails(setExpiryBounds(5000, 100), { program, error: "InvalidExpiryConfig" });
   });
 
   it("rejects min < MIN_ALLOWED_EXPIRY", async () => {
-    await assertFails(
-      program.methods
-        .updateExpiryConfig(new anchor.BN(MIN_ALLOWED_EXPIRY - 1), new anchor.BN(1000))
-        .accountsPartial({
-          paState,
-          authority: provider.wallet.publicKey,
-        })
-        .rpc(),
-      { program, error: "InvalidExpiryConfig" },
-    );
+    await assertFails(setExpiryBounds(MIN_ALLOWED_EXPIRY - 1, 1000), { program, error: "InvalidExpiryConfig" });
   });
 
   it("rejects max > SEVEN_DAYS_SLOTS", async () => {
-    await assertFails(
-      program.methods
-        .updateExpiryConfig(new anchor.BN(50), new anchor.BN(SEVEN_DAYS_SLOTS + 1))
-        .accountsPartial({
-          paState,
-          authority: provider.wallet.publicKey,
-        })
-        .rpc(),
-      { program, error: "InvalidExpiryConfig" },
-    );
+    await assertFails(setExpiryBounds(50, SEVEN_DAYS_SLOTS + 1), { program, error: "InvalidExpiryConfig" });
   });
 
   it("rejects wrong authority", async () => {
-    const nonAuthority = Keypair.generate();
-    await funder.fund(nonAuthority, 1);
+    const nonAuthority = await funder.fresh(1);
 
     await assertFails(
       program.methods
@@ -87,13 +48,7 @@ describe("protocol-adapter (update_expiry_config)", () => {
   });
 
   it("restores default config", async () => {
-    await program.methods
-      .updateExpiryConfig(new anchor.BN(MIN_EXPIRY_SLOTS), new anchor.BN(MAX_EXPIRY_SLOTS))
-      .accountsPartial({
-        paState,
-        authority: provider.wallet.publicKey,
-      })
-      .rpc();
+    await setExpiryBounds(MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS);
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(

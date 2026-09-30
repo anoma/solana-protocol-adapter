@@ -8,7 +8,7 @@ import * as anchor from "@anchor-lang/core";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { getAccount, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { assert } from "chai";
-import { closeAllNonceBitmaps, closeEscrow, closeConfig } from "../client/instructions";
+import { closeAllNonceBitmaps, closeEscrow, closeConfig, closeNonceBitmapsBatch } from "../client/instructions";
 import { deriveConfigPda, deriveNonceBitmapPda } from "../client/pda";
 import { createFundedEscrow, makeFunder, randomRef, assertFails } from "./utils/helpers";
 import {
@@ -27,7 +27,7 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
   const emergencyCommittee = Keypair.generate();
   const impostor = Keypair.generate();
 
-  let escrow: { mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey };
+  let escrow: { mint: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey };
   const ESCROW_FUNDING = 500_000_000n;
 
   before(async () => {
@@ -81,10 +81,7 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
   it("close_nonce_bitmaps_batch rejects a program account that is not a bitmap", () =>
     // The config PDA is program-owned but is not a nonce bitmap.
     assertFails(
-      forwarderProgram.methods
-        .closeNonceBitmapsBatch()
-        .accountsPartial({ authority: emergencyCommittee.publicKey, config: configPda, paState })
-        .remainingAccounts([{ pubkey: configPda, isWritable: true, isSigner: false }])
+      closeNonceBitmapsBatch(forwarderProgram, emergencyCommittee.publicKey, paState, [configPda])
         .signers([emergencyCommittee])
         .rpc(),
       { program: forwarderProgram, error: "InvalidNonceBitmapPda" },

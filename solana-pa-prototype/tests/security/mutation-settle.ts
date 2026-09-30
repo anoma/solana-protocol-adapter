@@ -4,25 +4,18 @@
  * that malformation. Payloads that fit a transaction go inline through
  * `settle`; the full-size ones go through a TxData upload.
  */
-import { ComputeBudgetProgram, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
-import { VERIFIER_ROUTER_ID } from "../../client/verifier";
+import { AccountMeta, Keypair } from "@solana/web3.js";
 import { loadFixture } from "../utils/fixtures";
 import { assertFails } from "../utils/helpers";
 import {
   DUMMY_ROOT_MARKER,
   VERIFIER,
-  VERIFIER_PROGRAM_ID,
   deriveNullifierAccounts,
-  ensureAdapterInitialized,
   fixture,
-  paState,
   program,
-  routerPda,
+  settleBuilder,
   useAdapterSuite,
-  verifierEntryPda,
 } from "../utils/adapterSuite";
-
-type Meta = { pubkey: PublicKey; isWritable: boolean; isSigner: boolean };
 
 /** Truncate a buffer. Returns a new buffer. */
 function truncate(buf: Buffer, len: number): Buffer {
@@ -32,40 +25,17 @@ function truncate(buf: Buffer, len: number): Buffer {
 describe("Security: mutation-based settle tests", () => {
   const { funder, settleFixtureViaTxData } = useAdapterSuite();
 
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
-
   const validTx = Buffer.from(fixture.tx_b64, "base64");
   const nullifierAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
 
   /** Submit `payload` inline via `settle`. */
-  async function settleInline(payload: Buffer, remainingAccounts: Meta[] = []): Promise<string> {
-    const payer = Keypair.generate();
-    await funder.fund(payer, 2);
-    return program.methods
-      .settle(payload)
-      .accountsPartial({
-        paState,
-        payer: payer.publicKey,
-        systemProgram: SystemProgram.programId,
-        newRootMarker: DUMMY_ROOT_MARKER,
-        verifierRouterProgram: VERIFIER_ROUTER_ID,
-        router: routerPda,
-        verifierEntry: verifierEntryPda,
-        verifierProgram: VERIFIER_PROGRAM_ID,
-      })
-      .remainingAccounts(remainingAccounts)
-      .preInstructions([
-        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-        ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-      ])
-      .signers([payer])
-      .rpc();
+  async function settleInline(payload: Buffer, remainingAccounts: AccountMeta[] = []): Promise<string> {
+    const payer = await funder.fresh(2);
+    return settleBuilder(payer.publicKey, payload, remainingAccounts).signers([payer]).rpc();
   }
 
   /** Upload `payload` to TxData and settle it: full-size payloads exceed an inline `settle`. */
-  const settleUploaded = (payload: Buffer, remainingAccounts: Meta[]) =>
+  const settleUploaded = (payload: Buffer, remainingAccounts: AccountMeta[]) =>
     settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
 
   // --- Empty / truncated payloads ---
@@ -96,7 +66,7 @@ describe("Security: mutation-based settle tests", () => {
     const corrupt = loadFixture("corrupt_seal.json");
     return assertFails(
       settleUploaded(Buffer.from(corrupt.tx_b64, "base64"), deriveNullifierAccounts(corrupt.consumed_nullifiers_b64)),
-      { program: VERIFIER.program, code: VERIFIER.malformedProofCode },
+      VERIFIER.malformedProof,
     );
   });
 

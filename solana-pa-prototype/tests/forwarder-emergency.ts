@@ -29,7 +29,7 @@ describe("forwarder emergency (adapter stopped)", () => {
   const recipient = Keypair.generate();
 
   let mint: PublicKey;
-  let escrowPda: PublicKey;
+  let escrowAuthority: PublicKey;
   let escrowAta: PublicKey;
   let recipientAta: PublicKey;
 
@@ -43,7 +43,7 @@ describe("forwarder emergency (adapter stopped)", () => {
     await initForwarderConfig(randomRef(), emergencyCommittee.publicKey);
     await stopAdapter();
 
-    ({ mint, escrowPda, escrowAta } = await createFundedEscrow(
+    ({ mint, escrowAuthority, escrowAta } = await createFundedEscrow(
       provider,
       forwarderProgram.programId,
       authority,
@@ -62,7 +62,7 @@ describe("forwarder emergency (adapter stopped)", () => {
       paState,
       caller.publicKey,
       { mint, amount, recipient: recipient.publicKey },
-      { escrowAta, recipientAta, escrowPda, ...accounts },
+      { escrowAta, recipientAta, ...accounts },
     )
       .signers([caller])
       .rpc();
@@ -103,8 +103,7 @@ describe("forwarder emergency (adapter stopped)", () => {
 
   // Mirrors: test_forwardEmergencyCall_reverts_if_the_pa_is_stopped_but_the_caller_is_not_the_emergency_caller
   it("rejects forward_emergency_call from anyone but the emergency caller", async () => {
-    const wrongCaller = Keypair.generate();
-    await funder.fund(wrongCaller, 1);
+    const wrongCaller = await funder.fresh(1);
     await assertFails(withdraw(wrongCaller, 1000n), { program: forwarderProgram, error: "UnauthorizedCaller" });
   });
 
@@ -117,9 +116,9 @@ describe("forwarder emergency (adapter stopped)", () => {
     });
   });
 
-  // The escrow PDA signs the withdrawal; it pays only from an account the escrow owns.
+  // The escrow authority signs the withdrawal; it pays only from an account the escrow owns.
   it("rejects a withdrawal whose source the escrow does not own", async () => {
-    const otherAta = await approvedTokenAccount(provider.connection, funder, mint, authority, escrowPda, 1000);
+    const otherAta = await approvedTokenAccount(provider.connection, funder, mint, authority, escrowAuthority, 1000);
     await assertFails(withdraw(emergencyCaller, 1000n, { escrowAta: otherAta }), {
       program: forwarderProgram,
       error: "WrongTokenAccountOwner",

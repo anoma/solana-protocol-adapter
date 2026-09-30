@@ -9,7 +9,7 @@ import { AccountMeta, Keypair, PublicKey, SystemProgram } from "@solana/web3.js"
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
-import { deriveConfigPda, deriveEscrowPda, derivePaStatePda, deriveProgramDataPda } from "./pda";
+import { deriveEscrowAuthority, derivePaStatePda, deriveProgramDataPda } from "./pda";
 
 // Protocol adapter governance
 
@@ -62,9 +62,9 @@ export function encodeUnwrapInput(tokenMint: PublicKey, amount: bigint, recipien
 export function escrowAccounts(
   forwarderProgramId: PublicKey,
   mint: PublicKey,
-): { escrowPda: PublicKey; escrowAta: PublicKey } {
-  const escrowPda = deriveEscrowPda(forwarderProgramId);
-  return { escrowPda, escrowAta: getAssociatedTokenAddressSync(mint, escrowPda, true) };
+): { escrowAuthority: PublicKey; escrowAta: PublicKey } {
+  const escrowAuthority = deriveEscrowAuthority(forwarderProgramId);
+  return { escrowAuthority, escrowAta: getAssociatedTokenAddressSync(mint, escrowAuthority, true) };
 }
 
 /**
@@ -75,12 +75,12 @@ export function escrowAccounts(
 export function escrowTransferAccounts(
   escrowAta: PublicKey,
   recipientAta: PublicKey,
-  escrowPda: PublicKey,
+  escrowAuthority: PublicKey,
 ): AccountMeta[] {
   return [
     { pubkey: escrowAta, isSigner: false, isWritable: true },
     { pubkey: recipientAta, isSigner: false, isWritable: true },
-    { pubkey: escrowPda, isSigner: false, isWritable: false },
+    { pubkey: escrowAuthority, isSigner: false, isWritable: false },
     { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
   ];
 }
@@ -116,12 +116,14 @@ export function emergencyWithdraw(
   paState: PublicKey,
   caller: PublicKey,
   withdrawal: { mint: PublicKey; amount: bigint; recipient: PublicKey },
-  accounts: { escrowAta: PublicKey; recipientAta: PublicKey; escrowPda: PublicKey },
+  accounts: { escrowAta: PublicKey; recipientAta: PublicKey },
 ) {
   return forwarder.methods
     .forwardEmergencyCall(encodeUnwrapInput(withdrawal.mint, withdrawal.amount, withdrawal.recipient))
     .accounts({ caller, paState })
-    .remainingAccounts(escrowTransferAccounts(accounts.escrowAta, accounts.recipientAta, accounts.escrowPda));
+    .remainingAccounts(
+      escrowTransferAccounts(accounts.escrowAta, accounts.recipientAta, deriveEscrowAuthority(forwarder.programId)),
+    );
 }
 
 /**
@@ -132,16 +134,13 @@ export function closeEscrow(
   forwarder: Program<SplTokenForwarder>,
   authority: PublicKey,
   paState: PublicKey,
-  accounts: { mint: PublicKey; escrowPda: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey },
+  accounts: { mint: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey },
 ) {
-  return forwarder.methods.closeEscrow().accountsPartial({
+  return forwarder.methods.closeEscrow().accounts({
     authority,
-    config: deriveConfigPda(forwarder.programId)[0],
     escrowAta: accounts.escrowAta,
-    escrowPda: accounts.escrowPda,
     recipientAta: accounts.recipientAta,
     tokenMint: accounts.mint,
-    tokenProgram: TOKEN_PROGRAM_ID,
     paState,
   });
 }
@@ -158,9 +157,20 @@ export function setEmergencyCaller(
 
 /** `close_config` by the committee `authority`; requires the adapter at `paState` to be stopped. */
 export function closeConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey, paState: PublicKey) {
+  return forwarder.methods.closeConfig().accounts({ authority, paState });
+}
+
+/** `close_nonce_bitmaps_batch` by the committee `authority` over `bitmaps`; requires the adapter at `paState` to be stopped. */
+export function closeNonceBitmapsBatch(
+  forwarder: Program<SplTokenForwarder>,
+  authority: PublicKey,
+  paState: PublicKey,
+  bitmaps: PublicKey[],
+) {
   return forwarder.methods
-    .closeConfig()
-    .accountsPartial({ authority, config: deriveConfigPda(forwarder.programId)[0], paState });
+    .closeNonceBitmapsBatch()
+    .accounts({ authority, paState })
+    .remainingAccounts(bitmaps.map((pubkey) => ({ pubkey, isWritable: true, isSigner: false })));
 }
 
 /**
@@ -176,19 +186,23 @@ export async function closeAllNonceBitmaps(
   signers: Keypair[],
 ): Promise<number> {
   const bitmaps = await forwarder.account.nonceBitmap.all();
-  const config = deriveConfigPda(forwarder.programId)[0];
   const BATCH_SIZE = 20;
-  for (let i = 0; i < bitmaps.length; i += BATCH_SIZE) {
-    await forwarder.methods
-      .closeNonceBitmapsBatch()
-      .accountsPartial({ authority, config, paState })
-      .remainingAccounts(
-        bitmaps
-          .slice(i, i + BATCH_SIZE)
-          .map(({ publicKey }) => ({ pubkey: publicKey, isWritable: true, isSigner: false })),
-      )
+  for (const batch of chunks(bitmaps, BATCH_SIZE)) {
+    await closeNonceBitmapsBatch(
+      forwarder,
+      authority,
+      paState,
+      batch.map(({ publicKey }) => publicKey),
+    )
       .signers(signers)
       .rpc();
   }
   return bitmaps.length;
+}
+
+/** `items` split, in order, into runs of at most `size`. */
+export function chunks<T>(items: readonly T[], size: number): T[][] {
+  const runs: T[][] = [];
+  for (let i = 0; i < items.length; i += size) runs.push(items.slice(i, i + size));
+  return runs;
 }

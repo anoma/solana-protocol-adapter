@@ -8,6 +8,7 @@
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import {
+  AccountMeta,
   AddressLookupTableAccount,
   ComputeBudgetProgram,
   Keypair,
@@ -29,19 +30,25 @@ import {
   derivePaStatePda,
   deriveRootMarkerPda,
 } from "../../client/pda";
-import { getRouterPda, getVerifierEntryPda, GROTH16_VERIFIER_ID, VERIFIER_ROUTER_ID } from "../../client/verifier";
+import {
+  getRouterPda,
+  getVerifierEntryPda,
+  GROTH16_VERIFIER_ID,
+  MOCK_SELECTOR,
+  VERIFIER_ROUTER_ID,
+} from "../../client/verifier";
 import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
 import { createdCommitmentsOf, loadFixture, parseSelectorFromFixture } from "./fixtures";
 import {
   confirmedTransaction,
+  ExpectedFailure,
   initTxData as initTxDataOf,
   makeFunder,
   sendV0,
+  TxDataUpload,
   uploadTxData as uploadTxDataTo,
 } from "./helpers";
 import { predictRootMarkerPda as predictRootMarkerPdaOf } from "./merkle";
-
-type Meta = { pubkey: PublicKey; isWritable: boolean; isSigner: boolean };
 
 export const provider = anchor.AnchorProvider.env();
 anchor.setProvider(provider);
@@ -54,27 +61,31 @@ export const [paState] = derivePaStatePda(program.programId);
 export const fixture = loadFixture("batch_groth16.json");
 
 // Verifiers by router selector. Fixtures carry their selector, so tests
-// derive the verifier program and its error codes from the fixture instead
-// of hardcoding one. `rejectionCode` rejects a well-formed proof that does not
-// verify; `malformedProofCode` rejects proof bytes that are not valid curve
+// derive the verifier program and its failures from the fixture instead of
+// hardcoding one. `rejection` rejects a well-formed proof that does not
+// verify; `malformedProof` rejects proof bytes that are not valid curve
 // points. Unknown selectors fail loudly rather than silently defaulting to
 // some verifier.
-type Verifier = { program: PublicKey; rejectionCode: number; malformedProofCode: number };
+type Verifier = { program: PublicKey; rejection: ExpectedFailure; malformedProof: ExpectedFailure };
+
+function verifierOf(program: PublicKey, rejectionCode: number, malformedProofCode: number): Verifier {
+  return {
+    program,
+    rejection: { program, code: rejectionCode },
+    malformedProof: { program, code: malformedProofCode },
+  };
+}
 
 function verifierForSelector(selector: Buffer): Verifier {
   const hex = selector.toString("hex");
   switch (hex) {
     // groth_16_verifier: VerificationError, PairingError
     case "73c457ba":
-      return { program: GROTH16_VERIFIER_ID, rejectionCode: 6000, malformedProofCode: 6003 };
+      return verifierOf(GROTH16_VERIFIER_ID, 6000, 6003);
     // mock-verifier (programs/mock-verifier, localnet only): ClaimDigestMismatch
     // for both (it checks no curve points; offset 6600 keeps it disjoint)
-    case "ffffffff":
-      return {
-        program: (anchor.workspace.MockVerifier as Program<MockVerifier>).programId,
-        rejectionCode: 6600,
-        malformedProofCode: 6600,
-      };
+    case MOCK_SELECTOR.toString("hex"):
+      return verifierOf((anchor.workspace.MockVerifier as Program<MockVerifier>).programId, 6600, 6600);
     default:
       throw new Error(`no verifier registered for selector 0x${hex}`);
   }
@@ -82,7 +93,6 @@ function verifierForSelector(selector: Buffer): Verifier {
 
 export const PROOF_SELECTOR = parseSelectorFromFixture(fixture.selector);
 export const VERIFIER = verifierForSelector(PROOF_SELECTOR);
-export const VERIFIER_PROGRAM_ID = VERIFIER.program;
 export const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
 export const [verifierEntryPda] = getVerifierEntryPda(PROOF_SELECTOR, VERIFIER_ROUTER_ID);
 
@@ -108,7 +118,7 @@ export function predictRootMarkerPda(createdCommitments: Buffer[]): Promise<Publ
   return predictRootMarkerPdaOf(program, paState, createdCommitments);
 }
 
-export function deriveNullifierAccounts(nullifierB64s: string[]): Meta[] {
+export function deriveNullifierAccounts(nullifierB64s: string[]): AccountMeta[] {
   return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
 }
 
@@ -164,31 +174,27 @@ export async function initForwarderConfig(logicRef: number[], committee: PublicK
  * weakened one reports as passing while verifying materially less.
  */
 export async function assertFixtureUnsettled(fixtureName: string): Promise<void> {
-  const f = loadFixture(fixtureName);
-  const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
-  const info = await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey);
-  assert.isNull(
-    info,
+  assert.isFalse(
+    await fixtureSettled(fixtureName),
     `${fixtureName} is already settled on this validator (its first nullifier ` +
       `marker exists). These tests require a fresh ledger: run them through ` +
       `'./scripts/dev.sh anchor-test', which gives every spec file its own, or deploy to a fresh devnet.`,
   );
 }
 
-/** The fixture's nullifier markers followed by the block-time forwarder's call segment and any historical root markers. */
-export function buildSettleRemainingAccounts(
-  nullifierAccounts: Meta[],
-  options?: { additionalHistoricalRootMarkers?: PublicKey[] },
-): Meta[] {
-  const accounts = [
+/** Whether `fixtureName` is settled on this validator: its first nullifier marker exists. */
+export async function fixtureSettled(fixtureName: string): Promise<boolean> {
+  const [first] = deriveNullifierAccounts(loadFixture(fixtureName).consumed_nullifiers_b64);
+  return (await provider.connection.getAccountInfo(first.pubkey)) !== null;
+}
+
+/** The fixture's nullifier markers followed by the block-time forwarder's call segment. */
+export function buildSettleRemainingAccounts(nullifierAccounts: AccountMeta[]): AccountMeta[] {
+  return [
     ...nullifierAccounts,
     { pubkey: blockTimeForwarderId, isWritable: false, isSigner: false },
     { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
   ];
-  for (const marker of options?.additionalHistoricalRootMarkers ?? []) {
-    accounts.push({ pubkey: marker, isWritable: false, isSigner: false });
-  }
-  return accounts;
 }
 
 /** Anchor's CPI event tag: the fixed 8-byte `EVENT_IX_TAG_LE`, the little-endian encoding of the u64 0x1d9acb512ea545e4. */
@@ -223,6 +229,14 @@ export async function cpiEventsOf(sig: string) {
   return { tx, events: parseCpiEvents(tx) };
 }
 
+/** The full CU budget and, unless `heapFrame` is false, the 256 KiB heap frame settlement needs. */
+function settleBudget(heapFrame: boolean) {
+  return [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+    ...(heapFrame ? [ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })] : []),
+  ];
+}
+
 /**
  * `settle_from_txdata` with the full CU budget and, unless `heapFrame` is
  * false, the 256 KiB heap frame settlement needs.
@@ -232,7 +246,7 @@ export function settleFromTxDataBuilder(
   uploadId: anchor.BN,
   txData: PublicKey,
   newRootMarker: PublicKey,
-  remainingAccounts: Meta[],
+  remainingAccounts: AccountMeta[],
   heapFrame = true,
 ) {
   return program.methods
@@ -246,21 +260,38 @@ export function settleFromTxDataBuilder(
       verifierRouterProgram: VERIFIER_ROUTER_ID,
       router: routerPda,
       verifierEntry: verifierEntryPda,
-      verifierProgram: VERIFIER_PROGRAM_ID,
+      verifierProgram: VERIFIER.program,
     })
     .remainingAccounts(remainingAccounts)
-    .preInstructions([
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-      ...(heapFrame ? [ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })] : []),
-    ]);
+    .preInstructions(settleBudget(heapFrame));
 }
 
-// A settlement expected to succeed must predict its produced-root marker from
-// the transaction's created commitments; one expected to fail passes an
-// explicit (dummy) marker instead.
-function requireCommitments(createdCommitments?: Buffer[]): Buffer[] {
-  assert.ok(createdCommitments, "settlement without an explicit newRootMarker needs createdCommitments to predict it");
-  return createdCommitments!;
+/**
+ * `settle` of the inline `payload`, paid by `payer`, with the full CU budget
+ * and, unless `heapFrame` is false, the 256 KiB heap frame. Its produced-root
+ * marker is the dummy one: every inline settlement the suite sends is one
+ * expected to be rejected.
+ */
+export function settleBuilder(
+  payer: PublicKey,
+  payload: Buffer,
+  remainingAccounts: AccountMeta[] = [],
+  heapFrame = true,
+) {
+  return program.methods
+    .settle(payload)
+    .accountsPartial({
+      paState,
+      payer,
+      systemProgram: SystemProgram.programId,
+      newRootMarker: DUMMY_ROOT_MARKER,
+      verifierRouterProgram: VERIFIER_ROUTER_ID,
+      router: routerPda,
+      verifierEntry: verifierEntryPda,
+      verifierProgram: VERIFIER.program,
+    })
+    .remainingAccounts(remainingAccounts)
+    .preInstructions(settleBudget(heapFrame));
 }
 
 type TxDataEntry = { uploadId: anchor.BN; txData: PublicKey; authority: Keypair };
@@ -268,11 +299,13 @@ type TxDataEntry = { uploadId: anchor.BN; txData: PublicKey; authority: Keypair 
 /**
  * Install the adapter suite's hooks in the calling describe block and return
  * the file's handles. Call it once, first thing inside a spec file's
- * top-level describe. After each test it closes the TxData uploads the test
- * opened (recovering their rent) and drains the keypairs it funded back to
- * the provider wallet, so the same SOL circulates across a cluster run.
+ * top-level describe. Before the file's tests it initializes the adapter
+ * unless `initialize` is false (for a file that needs it uninitialized).
+ * After each test it closes the TxData uploads the test opened (recovering
+ * their rent) and drains the keypairs it funded back to the provider wallet,
+ * so the same SOL circulates across a cluster run.
  */
-export function useAdapterSuite() {
+export function useAdapterSuite(options: { initialize?: boolean } = {}) {
   const funder = makeFunder(provider);
   // TxData accounts this file's tests opened, closed after each test.
   const openTxData: TxDataEntry[] = [];
@@ -299,7 +332,7 @@ export function useAdapterSuite() {
         paProgram: program.programId,
         verifierRouter: VERIFIER_ROUTER_ID,
         proofSelector: PROOF_SELECTOR,
-        verifierProgram: VERIFIER_PROGRAM_ID,
+        verifierProgram: VERIFIER.program,
         blockTimeForwarder: blockTimeForwarderId,
         splTokenForwarder: forwarderProgram.programId,
         mints,
@@ -313,7 +346,7 @@ export function useAdapterSuite() {
     authority: Keypair,
     payload: Buffer,
     expiresSlotOverride?: anchor.BN,
-  ): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey }> {
+  ): Promise<TxDataUpload> {
     const upload = await uploadTxDataTo(program, paState, authority, payload, expiresSlotOverride);
     openTxData.push({ uploadId: upload.uploadId, txData: upload.txData, authority });
     return upload;
@@ -323,7 +356,7 @@ export function useAdapterSuite() {
     authority: Keypair,
     payloadSize: number,
     expiresSlotOverride?: anchor.BN,
-  ): Promise<{ uploadId: anchor.BN; uploadIdLe: Buffer; txData: PublicKey; expiresSlot: anchor.BN }> {
+  ): Promise<TxDataUpload> {
     const init = await initTxDataOf(program, paState, authority, payloadSize, expiresSlotOverride);
     openTxData.push({ uploadId: init.uploadId, txData: init.txData, authority });
     return init;
@@ -363,13 +396,22 @@ export function useAdapterSuite() {
   async function uploadAndSettleV0(
     authority: Keypair,
     payload: Buffer,
-    remainingAccounts: Meta[],
+    remainingAccounts: AccountMeta[],
     options?: { newRootMarker?: PublicKey; createdCommitments?: Buffer[] },
     preInstructions: anchor.web3.TransactionInstruction[] = [],
   ): Promise<string> {
     const { uploadId, txData } = await uploadTxData(authority, payload);
-    const newRootMarker =
-      options?.newRootMarker ?? (await predictRootMarkerPda(requireCommitments(options?.createdCommitments)));
+    // A settlement expected to succeed must predict its produced-root marker
+    // from the transaction's created commitments; one expected to fail passes
+    // an explicit (dummy) marker instead.
+    let newRootMarker = options?.newRootMarker;
+    if (newRootMarker === undefined) {
+      assert.ok(
+        options?.createdCommitments,
+        "settlement without an explicit newRootMarker needs createdCommitments to predict it",
+      );
+      newRootMarker = await predictRootMarkerPda(options.createdCommitments);
+    }
     const settle = await settleFromTxDataBuilder(
       authority.publicKey,
       uploadId,
@@ -382,33 +424,42 @@ export function useAdapterSuite() {
 
   async function settleFixtureViaTxData(
     payload: Buffer,
-    remainingAccounts: Meta[],
+    remainingAccounts: AccountMeta[],
     options?: { newRootMarker?: PublicKey; createdCommitments?: Buffer[] },
   ): Promise<string> {
-    const authority = Keypair.generate();
-    await funder.fund(authority, 2);
-    return uploadAndSettleV0(authority, payload, remainingAccounts, options);
+    return uploadAndSettleV0(await funder.fresh(2), payload, remainingAccounts, options);
   }
 
   /**
    * Settle the fixture `fixtureName`, whose one external call is the
-   * block-time forwarder's, unless its nullifiers are already consumed. A
-   * fresh validator never has them; a cluster run shares one deployment
-   * across spec files, so another file may have settled it already.
+   * block-time forwarder's, asserting first that it is unsettled. Returns the
+   * settlement's signature.
+   */
+  async function settleUnsettledFixture(fixtureName: string): Promise<string> {
+    await assertFixtureUnsettled(fixtureName);
+    const f = loadFixture(fixtureName);
+    return settleFixtureViaTxData(
+      Buffer.from(f.tx_b64, "base64"),
+      buildSettleRemainingAccounts(deriveNullifierAccounts(f.consumed_nullifiers_b64)),
+      { createdCommitments: createdCommitmentsOf(f) },
+    );
+  }
+
+  /**
+   * Settle the fixture `fixtureName` unless it is already settled. A fresh
+   * validator never has it; a cluster run shares one deployment across spec
+   * files, so another file may have settled it already.
    */
   async function settleFixture(fixtureName: string): Promise<void> {
-    const f = loadFixture(fixtureName);
-    const nullifierAccounts = deriveNullifierAccounts(f.consumed_nullifiers_b64);
-    if (await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey)) return;
-    await settleFixtureViaTxData(Buffer.from(f.tx_b64, "base64"), buildSettleRemainingAccounts(nullifierAccounts), {
-      createdCommitments: createdCommitmentsOf(f),
-    });
+    if (!(await fixtureSettled(fixtureName))) await settleUnsettledFixture(fixtureName);
   }
 
   before(async () => {
     suiteStartBalance = await provider.connection.getBalance(provider.wallet.publicKey);
     console.log(`  [sol] suite start: wallet ${(suiteStartBalance / LAMPORTS_PER_SOL).toFixed(4)} SOL`);
   });
+
+  if (options.initialize !== false) before(ensureAdapterInitialized);
 
   beforeEach(async () => {
     testStartBalance = await provider.connection.getBalance(provider.wallet.publicKey);
@@ -463,20 +514,16 @@ export function useAdapterSuite() {
     console.log(`  [sol]   end balance:       ${sol(suiteEndBalance)} SOL`);
     console.log(`  [sol]   total spent:       ${sol(totalSpent)} SOL`);
     console.log(`  [sol]   breakdown:`);
-    console.log(
-      `  [sol]     PAState rent:    ${sol(paStateRent)} SOL (${allAccounts.length - markerCount - txdataCount} accounts)`,
-    );
+    console.log(`  [sol]     PAState rent:    ${sol(paStateRent)} SOL`);
     console.log(
       `  [sol]     marker rent:     ${sol(markerRent)} SOL (${markerCount} nullifier/root markers × ${markerLamports} lamports each)`,
     );
     console.log(`  [sol]     unclosed TxData: ${sol(txdataRent)} SOL (${txdataCount} accounts)`);
     console.log(`  [sol]     tx fees + dust:  ${sol(txFees)} SOL`);
-    console.log(`  [sol]   total accounted:   ${sol(accountRent + txFees)} SOL`);
   });
 
   return {
     funder,
-    settlementTable,
     extendSettlementTable,
     uploadTxData,
     initTxData,
@@ -484,6 +531,7 @@ export function useAdapterSuite() {
     keepTxData,
     uploadAndSettleV0,
     settleFixtureViaTxData,
+    settleUnsettledFixture,
     settleFixture,
   };
 }

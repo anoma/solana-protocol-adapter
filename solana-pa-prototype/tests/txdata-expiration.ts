@@ -4,24 +4,19 @@
  * before hook lowers min_expiry_slots so uploads can expire within a test.
  */
 import * as anchor from "@anchor-lang/core";
-import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { MAX_EXPIRY_SLOTS, MIN_ALLOWED_EXPIRY } from "../client/constants";
-import { VERIFIER_ROUTER_ID } from "../client/verifier";
 import { waitForSlotPast, assertFails } from "./utils/helpers";
 import {
   provider,
   program,
   paState,
   fixture,
-  VERIFIER_PROGRAM_ID,
-  routerPda,
-  verifierEntryPda,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
-  ensureAdapterInitialized,
   setExpiryBounds,
   buildSettleRemainingAccounts,
+  settleFromTxDataBuilder,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
@@ -29,7 +24,6 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
   const { funder, uploadTxData, initTxData } = useAdapterSuite();
 
   before(async () => {
-    await ensureAdapterInitialized();
     // Lower min_expiry_slots so we can create short-lived TxData
     await setExpiryBounds(MIN_ALLOWED_EXPIRY, MAX_EXPIRY_SLOTS);
   });
@@ -39,8 +33,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
   const EXPIRY_OFFSET = 30;
 
   it("rejects txdata_write on expired TxData", async () => {
-    const authority = Keypair.generate();
-    await funder.fund(authority, 2);
+    const authority = await funder.fresh(2);
 
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + EXPIRY_OFFSET);
@@ -71,8 +64,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
   });
 
   it("rejects settle_from_txdata on expired TxData", async () => {
-    const authority = Keypair.generate();
-    await funder.fund(authority, 2);
+    const authority = await funder.fresh(2);
 
     const tx = Buffer.from(fixture.tx_b64, "base64");
     const slot = await provider.connection.getSlot("confirmed");
@@ -86,24 +78,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
     const allRemainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
     await assertFails(
-      program.methods
-        .settleFromTxdata(uploadId)
-        .accountsPartial({
-          paState,
-          txData,
-          authority: authority.publicKey,
-          systemProgram: SystemProgram.programId,
-          newRootMarker: DUMMY_ROOT_MARKER,
-          verifierRouterProgram: VERIFIER_ROUTER_ID,
-          router: routerPda,
-          verifierEntry: verifierEntryPda,
-          verifierProgram: VERIFIER_PROGRAM_ID,
-        })
-        .remainingAccounts(allRemainingAccounts)
-        .preInstructions([
-          ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-          ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-        ])
+      settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, allRemainingAccounts)
         .signers([authority])
         .rpc(),
       { program, error: "TxDataExpired" },
@@ -111,9 +86,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
   });
 
   it("allows permissionless close of expired TxData", async () => {
-    const authority = Keypair.generate();
-    const cleaner = Keypair.generate();
-    await Promise.all([funder.fund(authority, 2), funder.fund(cleaner, 1)]);
+    const [authority, cleaner] = await Promise.all([funder.fresh(2), funder.fresh(1)]);
 
     const slot = await provider.connection.getSlot("confirmed");
     const expiresSlot = new anchor.BN(slot + EXPIRY_OFFSET);
@@ -148,8 +121,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
   });
 
   it("rejects txdata_extend with expires_slot too soon", async () => {
-    const authority = Keypair.generate();
-    await funder.fund(authority, 2);
+    const authority = await funder.fresh(2);
 
     const { uploadId, txData, expiresSlot } = await initTxData(
       authority,
@@ -180,8 +152,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
   });
 
   it("rejects txdata_extend with expires_slot too late", async () => {
-    const authority = Keypair.generate();
-    await funder.fund(authority, 2);
+    const authority = await funder.fresh(2);
 
     const { uploadId, txData } = await initTxData(
       authority,

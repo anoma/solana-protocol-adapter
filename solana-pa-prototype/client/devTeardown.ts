@@ -8,6 +8,7 @@
 import { Program } from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
+import { chunks } from "./instructions";
 import { derivePaStatePda } from "./pda";
 
 /**
@@ -39,11 +40,11 @@ export async function closeAllMarkers(program: Program<ProtocolAdapter>, authori
     filters: [{ dataSize: 0 }],
   });
   const BATCH_SIZE = 20;
-  for (let i = 0; i < markers.length; i += BATCH_SIZE) {
+  for (const batch of chunks(markers, BATCH_SIZE)) {
     await closeMarkersBatch(
       program,
       authority,
-      markers.slice(i, i + BATCH_SIZE).map(({ pubkey }) => pubkey),
+      batch.map(({ pubkey }) => pubkey),
     ).rpc();
   }
   return markers.length;

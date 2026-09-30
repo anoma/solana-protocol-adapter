@@ -3,7 +3,6 @@
  * fixture, so a re-submission of it reaches nullifier creation exactly when
  * the stored commitment matches its instance.
  */
-import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { setKindTableCommitment } from "../client/instructions";
 import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
@@ -15,7 +14,6 @@ import {
   fixture,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
-  ensureAdapterInitialized,
   buildSettleRemainingAccounts,
   cpiEventsOf,
   settleFromTxDataBuilder,
@@ -25,10 +23,7 @@ import {
 describe("protocol-adapter (kind table commitment)", () => {
   const { funder, uploadTxData, settleFixture } = useAdapterSuite();
 
-  before(async () => {
-    await ensureAdapterInitialized();
-    await settleFixture("batch_groth16.json");
-  });
+  before(() => settleFixture("batch_groth16.json"));
 
   // Mirrors pa-evm ProtocolAdapter.setKindTableCommitment: owner-only, zero
   // rejected, KindTableCommitmentUpdated emitted. The stored commitment is
@@ -41,8 +36,7 @@ describe("protocol-adapter (kind table commitment)", () => {
   // check on the instance; under the right one it reaches nullifier creation
   // and fails there, which is what tells the two rejections apart.
   const resettlePrimaryFixture = async () => {
-    const authority = Keypair.generate();
-    await funder.fund(authority, 2);
+    const authority = await funder.fresh(2);
     const { uploadId, txData } = await uploadTxData(authority, Buffer.from(fixture.tx_b64, "base64"));
     return settleFromTxDataBuilder(
       authority.publicKey,
@@ -56,8 +50,7 @@ describe("protocol-adapter (kind table commitment)", () => {
   };
 
   it("rejects set_kind_table_commitment from a non-authority signer", async () => {
-    const stranger = Keypair.generate();
-    await funder.fund(stranger, 1);
+    const stranger = await funder.fresh(1);
     await assertFails(setKindTableCommitment(program, stranger.publicKey, randomRef()).signers([stranger]).rpc(), {
       program,
       error: "Unauthorized",

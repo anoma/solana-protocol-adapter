@@ -59,7 +59,7 @@ export function deriveConfigPda(forwarderProgramId: PublicKey): [PublicKey, numb
 }
 
 /** The escrow authority: the one PDA that owns every mint's escrow token account. */
-export function deriveEscrowPda(forwarderProgramId: PublicKey): PublicKey {
+export function deriveEscrowAuthority(forwarderProgramId: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([ESCROW_SEED], forwarderProgramId)[0];
 }
 

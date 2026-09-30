@@ -3,10 +3,9 @@
  * the re-initialization guard, and the rejections that fire before any
  * nullifier is consumed.
  */
-import { PublicKey, SystemProgram, Keypair, ComputeBudgetProgram, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
+import { AccountMeta, PublicKey, SystemProgram, Keypair, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
 import { SCHEMA_VERSION } from "../client/constants";
-import { VERIFIER_ROUTER_ID } from "../client/verifier";
 import { EMPTY_TREE_ROOT_INITIAL } from "./utils/constants";
 import { loadFixture, createdCommitmentsOf as commitmentsOf, tamperedTxOf } from "./utils/fixtures";
 import { assertFails } from "./utils/helpers";
@@ -16,24 +15,19 @@ import {
   paState,
   fixture,
   VERIFIER,
-  VERIFIER_PROGRAM_ID,
-  routerPda,
-  verifierEntryPda,
   blockTimeForwarderId,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
   buildInitialize,
-  ensureAdapterInitialized,
+  assertFixtureUnsettled,
   buildSettleRemainingAccounts,
+  settleBuilder,
+  settleFromTxDataBuilder,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
 describe("settlement", () => {
   const { funder, uploadTxData, uploadAndSettleV0, settleFixtureViaTxData } = useAdapterSuite();
-
-  before(async () => {
-    await ensureAdapterInitialized();
-  });
 
   describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
     const tx = Buffer.from(fixture.tx_b64, "base64");
@@ -43,20 +37,17 @@ describe("settlement", () => {
     const nullifierPdas = remainingAccounts.map((a) => a.pubkey);
 
     async function settleViaTxData(
-      authority: Keypair,
       payload: Buffer,
       options?: {
-        nullifierAccounts?: { pubkey: PublicKey; isWritable: boolean; isSigner: boolean }[];
+        nullifierAccounts?: AccountMeta[];
         newRootMarker?: PublicKey;
         createdCommitments?: Buffer[];
-        additionalHistoricalRootMarkers?: PublicKey[];
       },
     ) {
-      await funder.fund(authority, 2);
       return uploadAndSettleV0(
-        authority,
+        await funder.fresh(2),
         payload,
-        buildSettleRemainingAccounts(options?.nullifierAccounts ?? remainingAccounts, options),
+        buildSettleRemainingAccounts(options?.nullifierAccounts ?? remainingAccounts),
         options,
       );
     }
@@ -102,7 +93,7 @@ describe("settlement", () => {
       const fx = loadFixture("witness_delta.json");
       const txWitness = Buffer.from(fx.tx_b64, "base64");
 
-      await assertFails(settleViaTxData(Keypair.generate(), txWitness, { newRootMarker: DUMMY_ROOT_MARKER }), {
+      await assertFails(settleViaTxData(txWitness, { newRootMarker: DUMMY_ROOT_MARKER }), {
         program,
         error: "ExpectedDeltaProof",
       });
@@ -111,10 +102,7 @@ describe("settlement", () => {
     it("rejects a tampered tx (proof binding)", async () => {
       // The adapter calls the verifier router, which calls the verifier the
       // fixture's selector routes to: that verifier rejects the proof.
-      await assertFails(settleViaTxData(Keypair.generate(), txTampered, { newRootMarker: DUMMY_ROOT_MARKER }), {
-        program: VERIFIER.program,
-        code: VERIFIER.rejectionCode,
-      });
+      await assertFails(settleViaTxData(txTampered, { newRootMarker: DUMMY_ROOT_MARKER }), VERIFIER.rejection);
     });
 
     it("accepts a valid Groth16 batch aggregation tx and creates root marker", async () => {
@@ -127,20 +115,14 @@ describe("settlement", () => {
 
       // Requires a fresh ledger: the assertions below pin an exact state
       // transition, which a prior settlement would invalidate.
-      const firstNullifier = await provider.connection.getAccountInfo(nullifierPdas[0]);
-      assert.isNull(
-        firstNullifier,
-        "batch_groth16.json is already settled on this validator (its first " +
-          "nullifier marker exists). These tests require a fresh ledger. Reset it " +
-          "with './scripts/dev.sh clean' and re-run, or deploy to a fresh devnet.",
-      );
+      await assertFixtureUnsettled("batch_groth16.json");
 
       // Get the current state before settlement to know the pre-settlement root
       const stateBefore = await program.account.paStateAccount.fetch(paState);
       const rootBeforeBytes = Buffer.from(stateBefore.root as number[]);
       const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
-      await settleViaTxData(Keypair.generate(), tx, { createdCommitments: commitmentsOf(fixture) });
+      await settleViaTxData(tx, { createdCommitments: commitmentsOf(fixture) });
 
       // Verify nullifier PDAs exist
       for (const pda of nullifierPdas) {
@@ -168,7 +150,7 @@ describe("settlement", () => {
       const mismatchNullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
 
       await assertFails(
-        settleViaTxData(Keypair.generate(), mismatchTx, {
+        settleViaTxData(mismatchTx, {
           nullifierAccounts: mismatchNullifierAccounts,
           newRootMarker: DUMMY_ROOT_MARKER,
         }),
@@ -179,7 +161,7 @@ describe("settlement", () => {
 
   describe("protocol-adapter (Re-initialization guard)", () => {
     it("rejects re-initialization of PAState", async () => {
-      // The file's before hook initialized PAState.
+      // The suite initialized PAState before the file's tests.
       // A second initialize call must fail because the account already exists.
       await assertFails(buildInitialize(provider.wallet.publicKey).rpc(), {
         program: SystemProgram.programId,
@@ -190,25 +172,13 @@ describe("settlement", () => {
 
   describe("protocol-adapter (Settle error paths)", () => {
     it("rejects wrong verifier_router_program address", async () => {
-      const payer = Keypair.generate();
-      await funder.fund(payer, 2);
+      const payer = await funder.fresh(2);
 
       const fakeRouter = Keypair.generate().publicKey;
 
       await assertFails(
-        program.methods
-          .settle(Buffer.from([0, 1, 2, 3]))
-          .accountsPartial({
-            paState,
-            payer: payer.publicKey,
-            systemProgram: SystemProgram.programId,
-            newRootMarker: DUMMY_ROOT_MARKER,
-            verifierRouterProgram: fakeRouter,
-            router: routerPda,
-            verifierEntry: verifierEntryPda,
-            verifierProgram: VERIFIER_PROGRAM_ID,
-          })
-          .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })])
+        settleBuilder(payer.publicKey, Buffer.from([0, 1, 2, 3]), [], false)
+          .accountsPartial({ verifierRouterProgram: fakeRouter })
           .signers([payer])
           .rpc(),
         { program, error: "VerifierRouterFailed" },
@@ -218,8 +188,7 @@ describe("settlement", () => {
     it("rejects insufficient remaining_accounts for nullifiers", async () => {
       // Upload the fixture but pass zero nullifier accounts.
       // The program expects 1 nullifier PDA in remaining_accounts.
-      const authority = Keypair.generate();
-      await funder.fund(authority, 2);
+      const authority = await funder.fresh(2);
 
       const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
       const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
@@ -232,24 +201,7 @@ describe("settlement", () => {
       const allRemainingAccounts = buildSettleRemainingAccounts([]);
 
       await assertFails(
-        program.methods
-          .settleFromTxdata(uploadId)
-          .accountsPartial({
-            paState,
-            txData,
-            authority: authority.publicKey,
-            systemProgram: SystemProgram.programId,
-            newRootMarker: DUMMY_ROOT_MARKER,
-            verifierRouterProgram: VERIFIER_ROUTER_ID,
-            router: routerPda,
-            verifierEntry: verifierEntryPda,
-            verifierProgram: VERIFIER_PROGRAM_ID,
-          })
-          .remainingAccounts(allRemainingAccounts)
-          .preInstructions([
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-            ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-          ])
+        settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, allRemainingAccounts)
           .signers([authority])
           .rpc(),
         { program, error: "InvalidTransactionData" },
@@ -261,8 +213,7 @@ describe("settlement", () => {
       // a random pubkey. The program searches external_accounts (everything
       // after the nullifier slots) for the forwarder and fails with
       // UnregisteredForwarder when it can't find it.
-      const authority = Keypair.generate();
-      await funder.fund(authority, 2);
+      const authority = await funder.fresh(2);
 
       const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
       const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
@@ -281,24 +232,7 @@ describe("settlement", () => {
       ];
 
       await assertFails(
-        program.methods
-          .settleFromTxdata(uploadId)
-          .accountsPartial({
-            paState,
-            txData,
-            authority: authority.publicKey,
-            systemProgram: SystemProgram.programId,
-            newRootMarker: DUMMY_ROOT_MARKER,
-            verifierRouterProgram: VERIFIER_ROUTER_ID,
-            router: routerPda,
-            verifierEntry: verifierEntryPda,
-            verifierProgram: VERIFIER_PROGRAM_ID,
-          })
-          .remainingAccounts(remainingAccounts)
-          .preInstructions([
-            ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-            ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-          ])
+        settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, remainingAccounts)
           .signers([authority])
           .rpc(),
         { program, error: "UnregisteredForwarder" },

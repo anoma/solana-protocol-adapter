@@ -4,7 +4,6 @@
  * pa-evm's initializer does. Needs an adapter that was never initialized,
  * which the file's fresh validator provides.
  */
-import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
 import { assertFails } from "./utils/helpers";
@@ -19,7 +18,7 @@ import {
 } from "./utils/adapterSuite";
 
 describe("protocol-adapter (initialize)", () => {
-  const { funder } = useAdapterSuite();
+  const { funder } = useAdapterSuite({ initialize: false });
 
   it("rejects initialization by a non-upgrade-authority signer", async () => {
     // Needs an adapter that was never initialized — otherwise the `init`
@@ -32,8 +31,7 @@ describe("protocol-adapter (initialize)", () => {
         "validator on which the adapter was never initialized",
     );
 
-    const stranger = Keypair.generate();
-    await funder.fund(stranger, 2);
+    const stranger = await funder.fresh(2);
 
     // The error must be our Unauthorized code, raised by the adapter for the
     // `program_data` account's upgrade-authority constraint specifically —

@@ -34,8 +34,7 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
       assertFails(rotate(Array(32).fill(0)), { program: forwarderProgram, error: "ZeroAddressNotAllowed" }));
 
     it("rejects a signer that is not the program's upgrade authority", async () => {
-      const impostor = Keypair.generate();
-      await funder.fund(impostor, 1);
+      const impostor = await funder.fresh(1);
       await assertFails(setLogicRef(forwarderProgram, impostor.publicKey, randomRef()).signers([impostor]).rpc(), {
         program: forwarderProgram,
         error: "UnauthorizedCaller",
@@ -100,8 +99,7 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
 
     // Mirrors EmergencyMigratableForwarderBase.t.sol: test_setEmergencyCaller_reverts_if_the_caller_is_not_the_emergency_committee
     it("rejects set_emergency_caller from a non-committee signer", async () => {
-      const impostor = Keypair.generate();
-      await funder.fund(impostor, 1);
+      const impostor = await funder.fresh(1);
       await assertFails(
         setEmergencyCaller(forwarderProgram, impostor.publicKey, paState, Keypair.generate().publicKey)
           .signers([impostor])
