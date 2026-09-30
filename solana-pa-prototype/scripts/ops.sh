@@ -109,6 +109,7 @@ Initialization parameters (required by deploy/init when the PA is a target):
                        Devnet: ${VERIFIER_ROUTER}
   PA_PROOF_SELECTOR    4-byte Groth16 verifier selector (hex).
                        Devnet: ${GROTH16_SELECTOR}
+
 The PA starts on the empty kind table; set-kind-table installs another.
 
 Forwarder initialization parameters (required by deploy/forwarder init when
