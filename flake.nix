@@ -24,7 +24,7 @@
           };
           lib = pkgs.lib;
 
-          # Pinned to match CI exactly (dtolnay/rust-toolchain@<version> in ci.yml).
+          # Pinned to match CI exactly (RUST_VERSION in ci.yml).
           rustToolchain = pkgs.rust-bin.stable."1.98.1".default;
 
           # nixos-26.05 ships anchor 1.0.2, not the 1.2.0 the programs build
@@ -142,10 +142,9 @@
               tar -xjf "$src" --strip-components=1 -C "$out"
 
               # cargo-build-sbf only looks for platform-tools under
-              # $HOME/.cache/solana/<version>/platform-tools, so the wrapper
-              # links the Nix-built release there, then runs the real binary
-              # against it: no download, and the platform-tools rustc/cargo
-              # on PATH in place of a rustup toolchain.
+              # $HOME/.cache/solana/<version>/platform-tools; the wrapper
+              # links the Nix-built release there and runs the real binary
+              # with its rustc/cargo on PATH.
               mv "$out/bin/cargo-build-sbf" "$out/bin/cargo-build-sbf-real"
               cat > "$out/bin/cargo-build-sbf" <<'EOF'
 #!@bash@
@@ -214,7 +213,6 @@ EOF
               pkgs.udev
               pkgs.conmon
               pkgs.crun
-              pkgs.fuse-overlayfs
               pkgs.slirp4netns
             ];
 

@@ -4,10 +4,9 @@ members = [
 ]
 resolver = "2"
 
-# solana-verify picks its deterministic build image from this version; without
-# it the tool falls back to the solana-program crate version (2.x), whose
-# platform-tools cannot parse the edition-2024 manifests in our dependency
-# graph. Keep in lockstep with flake.nix's solanaVersion and CI.
+# solana-verify picks its deterministic build image from this version (see
+# ops.sh SOLANA_VERIFY_VERSION). Keep in lockstep with flake.nix's
+# solanaVersion and CI.
 [workspace.metadata.cli]
 solana = "4.3.0"
 
