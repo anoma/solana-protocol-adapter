@@ -7,7 +7,7 @@ import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { setKindTableCommitment } from "../client/instructions";
 import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
-import { AUTHORITY_MISMATCH_PATTERN, randomRef, assertRejects } from "./utils";
+import { randomRef, assertFails } from "./utils/helpers";
 import {
   provider,
   program,
@@ -58,10 +58,10 @@ describe("protocol-adapter (kind table commitment)", () => {
   it("rejects set_kind_table_commitment from a non-authority signer", async () => {
     const stranger = Keypair.generate();
     await funder.fund(stranger, 1);
-    await assertRejects(
-      setKindTableCommitment(program, stranger.publicKey, randomRef()).signers([stranger]).rpc(),
-      AUTHORITY_MISMATCH_PATTERN,
-    );
+    await assertFails(setKindTableCommitment(program, stranger.publicKey, randomRef()).signers([stranger]).rpc(), {
+      program,
+      error: "Unauthorized",
+    });
     assert.deepEqual(
       (await program.account.paStateAccount.fetch(paState)).kindTableCommitment,
       empty,
@@ -70,10 +70,10 @@ describe("protocol-adapter (kind table commitment)", () => {
   });
 
   it("rejects a zero commitment", () =>
-    assertRejects(
-      setKindTableCommitment(program, provider.wallet.publicKey, Array(32).fill(0)).rpc(),
-      /ZeroKindTableCommitment/,
-    ));
+    assertFails(setKindTableCommitment(program, provider.wallet.publicKey, Array(32).fill(0)).rpc(), {
+      program: program,
+      error: "ZeroKindTableCommitment",
+    }));
 
   it("stores a new commitment, emits KindTableCommitmentUpdated, and rejects transactions proven against the previous table until it is restored", async () => {
     const rotated = randomRef();
@@ -95,7 +95,7 @@ describe("protocol-adapter (kind table commitment)", () => {
       { kindTableCommitment: rotated },
       "the event carries exactly pa-evm's field, the new commitment",
     );
-    await assertRejects(resettlePrimaryFixture(), /KindTableCommitmentMismatch/);
+    await assertFails(resettlePrimaryFixture(), { program: program, error: "KindTableCommitmentMismatch" });
 
     await setKindTableCommitment(program, provider.wallet.publicKey, empty).rpc();
     assert.deepEqual(
@@ -103,6 +103,6 @@ describe("protocol-adapter (kind table commitment)", () => {
       empty,
       "the empty table's commitment is restored",
     );
-    await assertRejects(resettlePrimaryFixture(), /DuplicateNullifier/);
+    await assertFails(resettlePrimaryFixture(), { program: program, error: "DuplicateNullifier" });
   });
 });

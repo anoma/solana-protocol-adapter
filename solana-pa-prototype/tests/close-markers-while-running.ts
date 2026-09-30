@@ -4,14 +4,8 @@
  */
 import { assert } from "chai";
 import { closeMarkersBatch } from "../client/devTeardown";
-import {
-  provider,
-  program,
-  paState,
-  ensureAdapterInitialized,
-  assertPAError,
-  useAdapterSuite,
-} from "./utils/adapterSuite";
+import { assertFails } from "./utils/helpers";
+import { provider, program, paState, ensureAdapterInitialized, useAdapterSuite } from "./utils/adapterSuite";
 
 describe("protocol-adapter (close_markers_batch requires stopped state)", () => {
   const { settleFixture } = useAdapterSuite();
@@ -31,15 +25,13 @@ describe("protocol-adapter (close_markers_batch requires stopped state)", () => 
     });
     assert.ok(markers.length > 0, "Should have markers to close");
 
-    try {
-      await closeMarkersBatch(
+    await assertFails(
+      closeMarkersBatch(
         program,
         provider.wallet.publicKey,
         markers.map(({ pubkey }) => pubkey),
-      ).rpc();
-      assert.fail("close_markers_batch should fail when PA is not stopped");
-    } catch (e: any) {
-      assertPAError(e, "NotStopped");
-    }
+      ).rpc(),
+      { program, error: "NotStopped" },
+    );
   });
 });

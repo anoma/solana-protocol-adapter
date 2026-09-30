@@ -7,7 +7,7 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
 import { initializeForwarder } from "../client/instructions";
 import { deriveConfigPda } from "../client/pda";
-import { assertRejects, makeFunder, randomRef } from "./utils";
+import { makeFunder, randomRef, assertFails } from "./utils/helpers";
 import { forwarderProgram, program as paProgram, provider } from "./utils/adapterSuite";
 
 describe("forwarder initialize", () => {
@@ -30,7 +30,8 @@ describe("forwarder initialize", () => {
     ["logic ref", paProgram.programId, Array(32).fill(0), emergencyCommittee.publicKey],
     ["emergency committee", paProgram.programId, logicRef, PublicKey.default],
   ] as const) {
-    it(`rejects a zero ${name}`, () => assertRejects(initialize(adapter, ref, committee), /ZeroAddressNotAllowed/));
+    it(`rejects a zero ${name}`, () =>
+      assertFails(initialize(adapter, ref, committee), { program: forwarderProgram, error: "ZeroAddressNotAllowed" }));
   }
 
   // Mirrors ForwarderBase.t.sol getProtocolAdapter/getLogicRef and

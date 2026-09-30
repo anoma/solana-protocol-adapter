@@ -8,7 +8,7 @@ import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { MAX_EXPIRY_SLOTS, MIN_ALLOWED_EXPIRY } from "../client/constants";
 import { VERIFIER_ROUTER_ID } from "../client/verifier";
-import { waitForSlotPast } from "./utils";
+import { waitForSlotPast, assertFails } from "./utils/helpers";
 import {
   provider,
   program,
@@ -22,7 +22,6 @@ import {
   ensureAdapterInitialized,
   setExpiryBounds,
   buildSettleRemainingAccounts,
-  assertPAError,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
@@ -58,19 +57,17 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
 
     await waitForSlotPast(provider.connection, expiresSlot.toNumber());
 
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .txdataWrite(uploadId, 10, Buffer.alloc(10))
         .accountsPartial({
           txData,
           authority: authority.publicKey,
         })
         .signers([authority])
-        .rpc();
-      assert.fail("expected txdata_write on expired TxData to fail");
-    } catch (e: any) {
-      assertPAError(e, "TxDataExpired");
-    }
+        .rpc(),
+      { program, error: "TxDataExpired" },
+    );
   });
 
   it("rejects settle_from_txdata on expired TxData", async () => {
@@ -88,8 +85,8 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
     const nullifierAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
     const allRemainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .settleFromTxdata(uploadId)
         .accountsPartial({
           paState,
@@ -108,11 +105,9 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
           ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
         ])
         .signers([authority])
-        .rpc();
-      assert.fail("expected settle_from_txdata on expired TxData to fail");
-    } catch (e: any) {
-      assertPAError(e, "TxDataExpired");
-    }
+        .rpc(),
+      { program, error: "TxDataExpired" },
+    );
   });
 
   it("allows permissionless close of expired TxData", async () => {
@@ -170,8 +165,8 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
     const currentSlot = await provider.connection.getSlot("confirmed");
     const tooSoonExpiry = new anchor.BN(currentSlot + 5);
 
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .txdataExtend(uploadId, tooSoonExpiry)
         .accountsStrict({
           paState,
@@ -179,11 +174,9 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
           authority: authority.publicKey,
         })
         .signers([authority])
-        .rpc();
-      assert.fail("expected txdata_extend with expires_slot too soon to fail");
-    } catch (e: any) {
-      assertPAError(e, "TxDataExpiryTooSoon");
-    }
+        .rpc(),
+      { program, error: "TxDataExpiryTooSoon" },
+    );
   });
 
   it("rejects txdata_extend with expires_slot too late", async () => {
@@ -199,8 +192,8 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
     const currentSlot = await provider.connection.getSlot("confirmed");
     const tooLateExpiry = new anchor.BN(currentSlot + MAX_EXPIRY_SLOTS + 100_000);
 
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .txdataExtend(uploadId, tooLateExpiry)
         .accountsStrict({
           paState,
@@ -208,10 +201,8 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
           authority: authority.publicKey,
         })
         .signers([authority])
-        .rpc();
-      assert.fail("expected txdata_extend with expires_slot too late to fail");
-    } catch (e: any) {
-      assertPAError(e, "TxDataExpiryTooLate");
-    }
+        .rpc(),
+      { program, error: "TxDataExpiryTooLate" },
+    );
   });
 });

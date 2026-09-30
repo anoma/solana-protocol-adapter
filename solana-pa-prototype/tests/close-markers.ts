@@ -5,7 +5,7 @@
 import { Keypair, LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { assert } from "chai";
 import { closeAllMarkers, closeMarkersBatch } from "../client/devTeardown";
-import { AUTHORITY_MISMATCH_PATTERN } from "./utils";
+import { assertFails } from "./utils/helpers";
 import { provider, program, ensureAdapterInitialized, stopAdapter, useAdapterSuite } from "./utils/adapterSuite";
 
 // ── Close instruction tests ──────────────────────────────────────────────
@@ -47,11 +47,9 @@ describe("protocol-adapter (Close instructions)", () => {
     const fakeAuthority = Keypair.generate();
     await funder.fund(fakeAuthority, 1);
 
-    try {
-      await closeMarkersBatch(program, fakeAuthority.publicKey, []).signers([fakeAuthority]).rpc();
-      assert.fail("Expected unauthorized close to fail");
-    } catch (e: any) {
-      assert.match(e.toString(), AUTHORITY_MISMATCH_PATTERN);
-    }
+    await assertFails(closeMarkersBatch(program, fakeAuthority.publicKey, []).signers([fakeAuthority]).rpc(), {
+      program,
+      error: "Unauthorized",
+    });
   });
 });

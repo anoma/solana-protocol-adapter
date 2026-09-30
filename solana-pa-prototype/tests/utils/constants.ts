@@ -13,8 +13,3 @@ export const SOLANA_DEVNET_KIND_TABLE_COMMITMENT = Buffer.from(
   "f7205e227c4bbb3cf3c4a5228b806ec9aab3bb1926063543dff98169df4b68a5",
   "hex",
 );
-
-// Anchor constraint error patterns for assertion matching
-export const AUTHORITY_MISMATCH_PATTERN = /Unauthorized|has.?one.*constraint.*violated|ConstraintHasOne/i;
-export const SEED_MISMATCH_PATTERN = /ConstraintSeeds|ConstraintHasOne|has.?one|seeds constraint|Unauthorized/i;
-export const ADDRESS_MISMATCH_PATTERN = /ConstraintAddress|address constraint/i;

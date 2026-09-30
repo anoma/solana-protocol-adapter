@@ -8,7 +8,7 @@ import { assert } from "chai";
 import { MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS } from "../client/constants";
 import { deriveTxDataPda } from "../client/pda";
 import { VERIFIER_ROUTER_ID } from "../client/verifier";
-import { SEED_MISMATCH_PATTERN, ADDRESS_MISMATCH_PATTERN, errorHaystack, freshUploadId } from "./utils";
+import { freshUploadId, assertFails } from "./utils/helpers";
 import {
   provider,
   program,
@@ -19,7 +19,6 @@ import {
   DUMMY_ROOT_MARKER,
   ensureAdapterInitialized,
   setExpiryBounds,
-  assertPAError,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
@@ -44,8 +43,8 @@ describe("TxData lifecycle", () => {
       // Set expiry too soon (only 50 slots from now, MIN is 100)
       const expiresSlot = new anchor.BN(slot + 50);
 
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .txdataInit(uploadId, 100, expiresSlot)
           .accountsPartial({
             paState,
@@ -54,11 +53,9 @@ describe("TxData lifecycle", () => {
             systemProgram: SystemProgram.programId,
           })
           .signers([authority])
-          .rpc();
-        assert.fail("expected txdata_init to fail with TxDataExpiryTooSoon");
-      } catch (e: any) {
-        assertPAError(e, "TxDataExpiryTooSoon");
-      }
+          .rpc(),
+        { program, error: "TxDataExpiryTooSoon" },
+      );
     });
 
     it("rejects txdata_init with expires_slot too late", async () => {
@@ -73,8 +70,8 @@ describe("TxData lifecycle", () => {
       // Set expiry too late (MAX + 1000 slots from now)
       const expiresSlot = new anchor.BN(slot + MAX_EXPIRY_SLOTS + 1000);
 
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .txdataInit(uploadId, 100, expiresSlot)
           .accountsPartial({
             paState,
@@ -83,11 +80,9 @@ describe("TxData lifecycle", () => {
             systemProgram: SystemProgram.programId,
           })
           .signers([authority])
-          .rpc();
-        assert.fail("expected txdata_init to fail with TxDataExpiryTooLate");
-      } catch (e: any) {
-        assertPAError(e, "TxDataExpiryTooLate");
-      }
+          .rpc(),
+        { program, error: "TxDataExpiryTooLate" },
+      );
     });
 
     it("accepts txdata_init with valid expires_slot", async () => {
@@ -152,8 +147,8 @@ describe("TxData lifecycle", () => {
       const attackerTxData = deriveTxDataPda(program.programId, attacker.publicKey, uploadIdLe);
 
       // Attacker tries to close their own (non-existent) PDA
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .txdataClose(uploadId)
           .accountsPartial({
             txData: attackerTxData,
@@ -161,17 +156,9 @@ describe("TxData lifecycle", () => {
             refund: attacker.publicKey,
           })
           .signers([attacker])
-          .rpc();
-        assert.fail("should have failed - attackerTxData doesn't exist");
-      } catch (e: any) {
-        const haystack = errorHaystack(e);
-        // MUST be AccountNotInitialized - any other error indicates a different bug
-        assert.match(
-          haystack,
-          /AccountNotInitialized/,
-          `Expected AccountNotInitialized (account doesn't exist), got: ${haystack}`,
-        );
-      }
+          .rpc(),
+        { program, error: "AccountNotInitialized" },
+      );
     });
 
     it("rejects txdata_close when attacker passes authority's PDA directly (seed constraint)", async () => {
@@ -187,8 +174,8 @@ describe("TxData lifecycle", () => {
 
       // Attacker tries to close AUTHORITY'S TxData by passing the address directly
       // Anchor will compute seeds with attacker.pubkey → different PDA → constraint fails
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .txdataClose(uploadId)
           .accountsPartial({
             txData: authorityTxData, // <-- Attacker passes authority's actual TxData
@@ -196,13 +183,9 @@ describe("TxData lifecycle", () => {
             refund: attacker.publicKey,
           })
           .signers([attacker])
-          .rpc();
-        assert.fail("should have failed - seed constraint should reject");
-      } catch (e: any) {
-        const haystack = errorHaystack(e);
-        // MUST be ConstraintSeeds - Anchor computes PDA from signer, doesn't match passed account
-        assert.match(haystack, SEED_MISMATCH_PATTERN, `Expected ConstraintSeeds (PDA mismatch), got: ${haystack}`);
-      }
+          .rpc(),
+        { program, error: "ConstraintSeeds" },
+      );
     });
 
     it("extends TxData expiration deadline successfully", async () => {
@@ -244,8 +227,8 @@ describe("TxData lifecycle", () => {
       const currentSlot = await provider.connection.getSlot("confirmed");
       const lowerExpiry = new anchor.BN(currentSlot + 500); // Less than current expires_slot
 
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .txdataExtend(uploadId, lowerExpiry)
           .accountsStrict({
             paState,
@@ -253,11 +236,9 @@ describe("TxData lifecycle", () => {
             authority: authority.publicKey,
           })
           .signers([authority])
-          .rpc();
-        assert.fail("expected txdata_extend to fail with TxDataExtendMustIncrease");
-      } catch (e: any) {
-        assertPAError(e, "TxDataExtendMustIncrease");
-      }
+          .rpc(),
+        { program, error: "TxDataExtendMustIncrease" },
+      );
     });
 
     it("rejects txdata_close_expired for non-expired TxData", async () => {
@@ -268,8 +249,8 @@ describe("TxData lifecycle", () => {
       const slot = await provider.connection.getSlot("confirmed");
       const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50000));
 
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .txdataCloseExpired(uploadId, authority.publicKey)
           .accountsStrict({
             txData,
@@ -277,11 +258,9 @@ describe("TxData lifecycle", () => {
             refund: authority.publicKey,
           })
           .signers([cleaner])
-          .rpc();
-        assert.fail("expected txdata_close_expired to fail with TxDataNotExpired");
-      } catch (e: any) {
-        assertPAError(e, "TxDataNotExpired");
-      }
+          .rpc(),
+        { program, error: "TxDataNotExpired" },
+      );
     });
   });
 
@@ -292,19 +271,17 @@ describe("TxData lifecycle", () => {
 
       const { uploadId, txData } = await initTxData(authority, 100);
 
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .txdataWrite(uploadId, 0, Buffer.alloc(200))
           .accountsPartial({
             txData,
             authority: authority.publicKey,
           })
           .signers([authority])
-          .rpc();
-        assert.fail("expected txdata_write to fail with TxDataBoundsExceeded");
-      } catch (e: any) {
-        assertPAError(e, "TxDataBoundsExceeded");
-      }
+          .rpc(),
+        { program, error: "TxDataBoundsExceeded" },
+      );
     });
 
     it("rejects txdata_write from wrong authority", async () => {
@@ -316,20 +293,17 @@ describe("TxData lifecycle", () => {
 
       // Try to write as wrongAuthority — seed derivation uses signer's key,
       // which produces a different PDA, causing ConstraintSeeds
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .txdataWrite(uploadId, 0, Buffer.alloc(10))
           .accountsPartial({
             txData,
             authority: wrongAuthority.publicKey,
           })
           .signers([wrongAuthority])
-          .rpc();
-        assert.fail("expected txdata_write from wrong authority to fail");
-      } catch (e: any) {
-        const haystack = errorHaystack(e);
-        assert.match(haystack, SEED_MISMATCH_PATTERN, `Expected authority constraint error, got: ${haystack}`);
-      }
+          .rpc(),
+        { program, error: "ConstraintSeeds" },
+      );
     });
 
     it("rejects settle_from_txdata from wrong authority", async () => {
@@ -348,8 +322,8 @@ describe("TxData lifecycle", () => {
         .signers([authority])
         .rpc();
 
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .settleFromTxdata(uploadId)
           .accountsPartial({
             paState,
@@ -364,12 +338,9 @@ describe("TxData lifecycle", () => {
           })
           .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })])
           .signers([wrongAuthority])
-          .rpc();
-        assert.fail("expected settle_from_txdata from wrong authority to fail");
-      } catch (e: any) {
-        const haystack = errorHaystack(e);
-        assert.match(haystack, SEED_MISMATCH_PATTERN, `Expected authority constraint error, got: ${haystack}`);
-      }
+          .rpc(),
+        { program, error: "ConstraintSeeds" },
+      );
     });
 
     it("rejects txdata_close with wrong refund address", async () => {
@@ -379,8 +350,8 @@ describe("TxData lifecycle", () => {
 
       const { uploadId, txData } = await initTxData(authority, 100);
 
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .txdataClose(uploadId)
           .accountsPartial({
             txData,
@@ -388,12 +359,9 @@ describe("TxData lifecycle", () => {
             refund: otherPubkey,
           })
           .signers([authority])
-          .rpc();
-        assert.fail("expected txdata_close with wrong refund to fail");
-      } catch (e: any) {
-        const haystack = errorHaystack(e);
-        assert.match(haystack, ADDRESS_MISMATCH_PATTERN, `Expected ConstraintAddress, got: ${haystack}`);
-      }
+          .rpc(),
+        { program, error: "ConstraintAddress" },
+      );
     });
 
     it("rejects txdata_close_expired with wrong refund address", async () => {
@@ -407,8 +375,8 @@ describe("TxData lifecycle", () => {
 
       // Hits ConstraintAddress before TxDataNotExpired
       // because Anchor validates account constraints before running the handler body
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .txdataCloseExpired(uploadId, authority.publicKey)
           .accountsStrict({
             txData,
@@ -416,12 +384,9 @@ describe("TxData lifecycle", () => {
             refund: wrongRefund,
           })
           .signers([cleaner])
-          .rpc();
-        assert.fail("expected txdata_close_expired with wrong refund to fail");
-      } catch (e: any) {
-        const haystack = errorHaystack(e);
-        assert.match(haystack, ADDRESS_MISMATCH_PATTERN, `Expected ConstraintAddress, got: ${haystack}`);
-      }
+          .rpc(),
+        { program, error: "ConstraintAddress" },
+      );
     });
   });
 });

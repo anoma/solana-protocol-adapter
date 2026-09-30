@@ -9,7 +9,7 @@ import { createAccount, getAccount } from "@solana/spl-token";
 import { assert } from "chai";
 import { emergencyWithdraw, setEmergencyCaller } from "../client/instructions";
 import { deriveConfigPda } from "../client/pda";
-import { approvedTokenAccount, assertRejects, createFundedEscrow, makeFunder, randomRef } from "./utils";
+import { approvedTokenAccount, createFundedEscrow, makeFunder, randomRef, assertFails } from "./utils/helpers";
 import {
   ensureAdapterInitialized,
   forwarderProgram,
@@ -76,12 +76,15 @@ describe("forwarder emergency (adapter stopped)", () => {
   it("rejects forward_emergency_call before an emergency caller is set", async () => {
     const config = await forwarderProgram.account.config.fetch(configPda);
     assert.ok(config.emergencyCaller.equals(PublicKey.default), "no emergency caller yet");
-    await assertRejects(withdraw(emergencyCaller, 1000n), /EmergencyCallerNotSet/);
+    await assertFails(withdraw(emergencyCaller, 1000n), { program: forwarderProgram, error: "EmergencyCallerNotSet" });
   });
 
   // Mirrors: test_setEmergencyCaller_reverts_if_the_new_emergency_caller_is_the_zero_address
   it("rejects a zero emergency caller", () =>
-    assertRejects(setEmergencyCallerAsCommittee(PublicKey.default), /ZeroAddressNotAllowed/));
+    assertFails(setEmergencyCallerAsCommittee(PublicKey.default), {
+      program: forwarderProgram,
+      error: "ZeroAddressNotAllowed",
+    }));
 
   // Mirrors: test_setEmergencyCaller_sets_the_emergency_caller and
   // test_emergencyCaller_returns_the_emergency_caller_after_it_has_been_set
@@ -93,25 +96,34 @@ describe("forwarder emergency (adapter stopped)", () => {
 
   // Mirrors: test_setEmergencyCaller_reverts_if_the_emergency_caller_has_already_been_set
   it("rejects setting the emergency caller twice", () =>
-    assertRejects(setEmergencyCallerAsCommittee(Keypair.generate().publicKey), /EmergencyCallerAlreadySet/));
+    assertFails(setEmergencyCallerAsCommittee(Keypair.generate().publicKey), {
+      program: forwarderProgram,
+      error: "EmergencyCallerAlreadySet",
+    }));
 
   // Mirrors: test_forwardEmergencyCall_reverts_if_the_pa_is_stopped_but_the_caller_is_not_the_emergency_caller
   it("rejects forward_emergency_call from anyone but the emergency caller", async () => {
     const wrongCaller = Keypair.generate();
     await funder.fund(wrongCaller, 1);
-    await assertRejects(withdraw(wrongCaller, 1000n), /UnauthorizedCaller/);
+    await assertFails(withdraw(wrongCaller, 1000n), { program: forwarderProgram, error: "UnauthorizedCaller" });
   });
 
   // The destination is chosen by the caller, not by the input; it must be the recipient's.
   it("rejects a withdrawal to a token account the recipient does not own", async () => {
     const foreignAta = await createAccount(provider.connection, authority, mint, authority.publicKey);
-    await assertRejects(withdraw(emergencyCaller, 1000n, { recipientAta: foreignAta }), /WrongTokenAccountOwner/);
+    await assertFails(withdraw(emergencyCaller, 1000n, { recipientAta: foreignAta }), {
+      program: forwarderProgram,
+      error: "WrongTokenAccountOwner",
+    });
   });
 
   // The escrow PDA signs the withdrawal; it pays only from an account the escrow owns.
   it("rejects a withdrawal whose source the escrow does not own", async () => {
     const otherAta = await approvedTokenAccount(provider.connection, funder, mint, authority, escrowPda, 1000);
-    await assertRejects(withdraw(emergencyCaller, 1000n, { escrowAta: otherAta }), /WrongTokenAccountOwner/);
+    await assertFails(withdraw(emergencyCaller, 1000n, { escrowAta: otherAta }), {
+      program: forwarderProgram,
+      error: "WrongTokenAccountOwner",
+    });
     assert.equal((await getAccount(provider.connection, otherAta)).amount, 1000n, "no tokens move");
   });
 

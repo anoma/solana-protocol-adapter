@@ -8,7 +8,8 @@ import { assert } from "chai";
 import { emergencyStop, setKindTableCommitment } from "../client/instructions";
 import { closeMarkersBatch } from "../client/devTeardown";
 import { VERIFIER_ROUTER_ID } from "../client/verifier";
-import { loadFixture, randomRef } from "./utils";
+import { loadFixture } from "./utils/fixtures";
+import { randomRef, assertFails } from "./utils/helpers";
 import {
   provider,
   program,
@@ -20,7 +21,6 @@ import {
   deriveNullifierAccounts,
   ensureAdapterInitialized,
   buildSettleRemainingAccounts,
-  assertPAError,
   settleFromTxDataBuilder,
   useAdapterSuite,
 } from "./utils/adapterSuite";
@@ -42,16 +42,14 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
     const intruder = Keypair.generate();
     await funder.fund(intruder, 1);
     const before = await program.account.paStateAccount.fetch(paState);
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .devSetSchemaVersion(before.schemaVersion + 1)
         .accountsPartial({ paState, authority: intruder.publicKey })
         .signers([intruder])
-        .rpc();
-      assert.fail("dev_set_schema_version must require the PA authority");
-    } catch (e: any) {
-      assertPAError(e, "Unauthorized");
-    }
+        .rpc(),
+      { program, error: "Unauthorized" },
+    );
     const after = await program.account.paStateAccount.fetch(paState);
     assert.equal(after.schemaVersion, before.schemaVersion, "a rejected call must not change the version");
   });
@@ -227,12 +225,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
 
     for (const c of cases) {
       it(`${c.name} refuses a foreign schema version`, async () => {
-        try {
-          await c.run();
-          assert.fail(`${c.name} must refuse an account whose schema version is not this binary's`);
-        } catch (e: any) {
-          assertPAError(e, "UnsupportedStateSchema");
-        }
+        await assertFails(c.run(), { program, error: "UnsupportedStateSchema" });
       });
     }
   });

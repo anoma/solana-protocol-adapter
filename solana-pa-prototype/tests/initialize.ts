@@ -7,7 +7,7 @@
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
-import { errorHaystack } from "./utils";
+import { assertFails } from "./utils/helpers";
 import {
   buildInitialize,
   cpiEventsOf,
@@ -15,7 +15,6 @@ import {
   paStateExists,
   program,
   provider,
-  assertPAError,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
@@ -36,27 +35,17 @@ describe("protocol-adapter (initialize)", () => {
     const stranger = Keypair.generate();
     await funder.fund(stranger, 2);
 
-    let caught: any = null;
-    try {
-      await buildInitialize(stranger.publicKey).signers([stranger]).rpc();
-    } catch (e: any) {
-      caught = e;
-    }
-    assert.isNotNull(caught, "expected initialization by a non-upgrade-authority signer to fail");
-
-    // The error must be our Unauthorized code, and it must have been raised by
-    // the `program_data` account's upgrade-authority constraint specifically —
+    // The error must be our Unauthorized code, raised by the adapter for the
+    // `program_data` account's upgrade-authority constraint specifically —
     // not by account resolution, not by the `program` constraint, and not by
     // any earlier check. Anchor names the offending account in its log line,
     // which is what distinguishes "rejected for the right reason" from
     // "rejected before the constraint was ever evaluated".
-    assertPAError(caught, "Unauthorized");
-    assert.match(
-      errorHaystack(caught),
-      /AnchorError caused by account: program_data/,
-      "Unauthorized must originate from the program_data upgrade-authority " +
-        `constraint. Got:\n${errorHaystack(caught)}`,
-    );
+    await assertFails(buildInitialize(stranger.publicKey).signers([stranger]).rpc(), {
+      program,
+      error: "Unauthorized",
+      account: "program_data",
+    });
 
     // The rejected transaction must not have left PAState initialized.
     assert.isFalse(await paStateExists(), "PAState must remain uninitialized after the rejected call");

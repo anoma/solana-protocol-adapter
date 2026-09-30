@@ -54,7 +54,7 @@ export type Fixture = {
   spl_token_unwrap?: SplTokenUnwrapMetadata;
 };
 
-export function readJson<T>(filePath: string): T {
+function readJson<T>(filePath: string): T {
   return JSON.parse(readFileSync(filePath, "utf8")) as T;
 }
 

@@ -3,7 +3,7 @@
  * TxData uploads, fixture actors, and v0 transaction sending.
  */
 import * as anchor from "@anchor-lang/core";
-import { Program } from "@anchor-lang/core";
+import { Idl, Program } from "@anchor-lang/core";
 import {
   AddressLookupTableAccount,
   Connection,
@@ -11,6 +11,7 @@ import {
   LAMPORTS_PER_SOL,
   MessageV0,
   PublicKey,
+  SendTransactionError,
   SystemProgram,
   Transaction,
   TransactionInstruction,
@@ -120,28 +121,101 @@ export function seededKeypair(label: string): Keypair {
   return Keypair.fromSeed(createHash("sha256").update(label).digest());
 }
 
-/** Everything an error carries that names the failure: message, Anchor code, and program logs. */
-export function errorHaystack(e: any): string {
-  const parts: string[] = [];
-  if (e?.message) parts.push(e.message);
-  if (e?.error?.errorMessage) parts.push(e.error.errorMessage);
-  if (e?.error?.errorCode?.code) parts.push(e.error.errorCode.code);
-  const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-  parts.push(...logs);
-  return parts.join("\n");
+/**
+ * How a transaction failed, read from its logs: the program whose frame
+ * raised the error and the reason that frame's `Program <id> failed: <reason>`
+ * line gives. The raising frame is the innermost failing one: a failed CPI
+ * logs its own failure line first, and every caller frame then repeats the
+ * same error on its own line. `frameLogs` are the lines the raising frame
+ * logged itself, without its callees' lines.
+ */
+type TransactionFailure = { program: PublicKey; reason: string; frameLogs: string[] };
+
+/**
+ * An expected failure: the program whose frame raises it, and either `error`,
+ * a custom error named as the program's raw IDL names it, or one of Anchor's
+ * framework errors (which every Anchor program raises from its own frame),
+ * with optionally the `account` an Anchor constraint error names; or `code`,
+ * a custom error number, for programs without an IDL here; or `reason`, a
+ * pattern for a runtime failure that carries no custom code, whose text
+ * embeds per-run data such as addresses.
+ */
+export type ExpectedFailure =
+  | { program: { programId: PublicKey; rawIdl: Idl }; error: string; account?: string }
+  | { program: PublicKey; code: number }
+  | { program: PublicKey; reason: RegExp };
+
+/** The logs a rejected send or `.rpc()` carries: web3's `SendTransactionError`, or Anchor's translated errors. */
+function transactionLogsOf(e: any): string[] {
+  const logs = e instanceof SendTransactionError ? e.transactionError.logs : e?.logs;
+  assert.isTrue(Array.isArray(logs), `rejection carries no transaction logs:\n${e}`);
+  return logs;
 }
 
-/** Assert that `action` rejects with an error naming `expected` somewhere in its message, code or logs. */
-export async function assertRejects(action: Promise<unknown>, expected: RegExp | string): Promise<void> {
+/** The failure `logs` record; fails if no program frame failed. */
+function transactionFailureOf(logs: string[]): TransactionFailure {
+  const frames: { program: string; logs: string[] }[] = [];
+  for (const line of logs) {
+    const invoke = /^Program (\w+) invoke \[\d+\]$/.exec(line);
+    if (invoke) {
+      frames.push({ program: invoke[1], logs: [] });
+      continue;
+    }
+    if (/^Program \w+ success$/.test(line)) {
+      frames.pop();
+      continue;
+    }
+    const failed = /^Program (\w+) failed: (.*)$/.exec(line);
+    if (failed) {
+      const frame = frames[frames.length - 1];
+      assert.equal(frame?.program, failed[1], `failure line outside its program's frame: ${line}`);
+      return { program: new PublicKey(failed[1]), reason: failed[2], frameLogs: frame.logs };
+    }
+    frames[frames.length - 1]?.logs.push(line);
+  }
+  assert.fail(`no program frame failed in the logs:\n${logs.join("\n")}`);
+}
+
+/** The error number of `name`: an IDL error of `program`, else an Anchor framework error. */
+function errorCodeOf(program: { rawIdl: Idl }, name: string): number {
+  const code =
+    program.rawIdl.errors?.find((e) => e.name === name)?.code ?? (anchor.LangErrorCode as Record<string, number>)[name];
+  assert.isDefined(
+    code,
+    `${name} is neither an error of ${program.rawIdl.metadata.name} nor an Anchor framework error`,
+  );
+  return code;
+}
+
+/** The failure reason `expected` names, as a pattern over the whole reason. */
+function expectedReasonOf(expected: ExpectedFailure): RegExp {
+  if ("reason" in expected) return expected.reason;
+  const code = "error" in expected ? errorCodeOf(expected.program, expected.error) : expected.code;
+  return new RegExp(`^custom program error: 0x${code.toString(16)}$`);
+}
+
+/** Assert that `action` rejects with the transaction failure `expected`. */
+export async function assertFails(action: Promise<unknown>, expected: ExpectedFailure): Promise<void> {
+  let error: unknown;
   try {
     await action;
-  } catch (e: any) {
-    const pattern = expected instanceof RegExp ? expected : new RegExp(expected);
-    const haystack = errorHaystack(e);
-    assert.isTrue(pattern.test(haystack), `expected rejection matching ${pattern}, got:\n${haystack}`);
-    return;
+  } catch (e) {
+    error = e;
   }
-  assert.fail(`expected rejection matching ${expected}`);
+  assert.isDefined(error, "expected the transaction to fail");
+  const logs = transactionLogsOf(error);
+  const failure = transactionFailureOf(logs);
+  const program = "error" in expected ? expected.program.programId : expected.program;
+  const reason = expectedReasonOf(expected);
+  const context = `\nLogs:\n${logs.join("\n")}`;
+  assert.equal(failure.program.toBase58(), program.toBase58(), `failing program${context}`);
+  assert.match(failure.reason, reason, `failure reason of ${program.toBase58()}${context}`);
+  if ("error" in expected && expected.account !== undefined) {
+    const origin = failure.frameLogs
+      .map((l) => /^Program log: AnchorError caused by account: (\w+)\./.exec(l)?.[1])
+      .find((a) => a !== undefined);
+    assert.equal(origin, expected.account, `account the error names${context}`);
+  }
 }
 
 /**

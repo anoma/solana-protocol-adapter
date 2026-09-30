@@ -7,13 +7,9 @@ import { PublicKey, SystemProgram, Keypair, ComputeBudgetProgram, SYSVAR_CLOCK_P
 import { assert } from "chai";
 import { SCHEMA_VERSION } from "../client/constants";
 import { VERIFIER_ROUTER_ID } from "../client/verifier";
-import {
-  EMPTY_TREE_ROOT_INITIAL,
-  loadFixture,
-  errorHaystack,
-  createdCommitmentsOf as commitmentsOf,
-  tamperedTxOf,
-} from "./utils";
+import { EMPTY_TREE_ROOT_INITIAL } from "./utils/constants";
+import { loadFixture, createdCommitmentsOf as commitmentsOf, tamperedTxOf } from "./utils/fixtures";
+import { assertFails } from "./utils/helpers";
 import {
   provider,
   program,
@@ -29,9 +25,6 @@ import {
   buildInitialize,
   ensureAdapterInitialized,
   buildSettleRemainingAccounts,
-  PA_ERROR_NAMES,
-  extractPAErrorCode,
-  assertPAError,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
@@ -109,31 +102,19 @@ describe("settlement", () => {
       const fx = loadFixture("witness_delta.json");
       const txWitness = Buffer.from(fx.tx_b64, "base64");
 
-      try {
-        await settleViaTxData(Keypair.generate(), txWitness, { newRootMarker: DUMMY_ROOT_MARKER });
-        assert.fail("expected settle to fail");
-      } catch (e: any) {
-        assertPAError(e, "ExpectedDeltaProof");
-      }
+      await assertFails(settleViaTxData(Keypair.generate(), txWitness, { newRootMarker: DUMMY_ROOT_MARKER }), {
+        program,
+        error: "ExpectedDeltaProof",
+      });
     });
 
     it("rejects a tampered tx (proof binding)", async () => {
-      try {
-        await settleViaTxData(Keypair.generate(), txTampered, { newRootMarker: DUMMY_ROOT_MARKER });
-        assert.fail("expected settle to fail");
-      } catch (e: any) {
-        // The PA calls the verifier router via CPI, which calls the verifier the
-        // fixture's selector routes to. Solana's CPI error propagation records
-        // the INNER program's error code in the PA's failure line — so we see
-        // the verifier's code instead of the PA's VerifierRouterFailed (6013).
-        const code = extractPAErrorCode(e);
-        assert.isNotNull(code, "Expected a program error code in logs");
-        assert.equal(
-          code,
-          VERIFIER.rejectionCode,
-          `the fixture selector's verifier rejection code (${VERIFIER.rejectionCode}) should propagate through CPI`,
-        );
-      }
+      // The adapter calls the verifier router, which calls the verifier the
+      // fixture's selector routes to: that verifier rejects the proof.
+      await assertFails(settleViaTxData(Keypair.generate(), txTampered, { newRootMarker: DUMMY_ROOT_MARKER }), {
+        program: VERIFIER.program,
+        code: VERIFIER.rejectionCode,
+      });
     });
 
     it("accepts a valid Groth16 batch aggregation tx and creates root marker", async () => {
@@ -186,15 +167,13 @@ describe("settlement", () => {
 
       const mismatchNullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
 
-      try {
-        await settleViaTxData(Keypair.generate(), mismatchTx, {
+      await assertFails(
+        settleViaTxData(Keypair.generate(), mismatchTx, {
           nullifierAccounts: mismatchNullifierAccounts,
           newRootMarker: DUMMY_ROOT_MARKER,
-        });
-        assert.fail("expected settle to fail with ExternalCallOutputMismatch");
-      } catch (e: any) {
-        assertPAError(e, "ExternalCallOutputMismatch");
-      }
+        }),
+        { program, error: "ExternalCallOutputMismatch" },
+      );
     });
   });
 
@@ -202,18 +181,10 @@ describe("settlement", () => {
     it("rejects re-initialization of PAState", async () => {
       // The file's before hook initialized PAState.
       // A second initialize call must fail because the account already exists.
-      try {
-        await buildInitialize(provider.wallet.publicKey).rpc();
-        assert.fail("expected re-initialization to fail");
-      } catch (e: any) {
-        const haystack = errorHaystack(e);
-        // Anchor's init constraint rejects when the account already exists
-        assert.match(
-          haystack,
-          /already in use|already been initialized|0x0/i,
-          `Expected 'already in use' error, got: ${haystack}`,
-        );
-      }
+      await assertFails(buildInitialize(provider.wallet.publicKey).rpc(), {
+        program: SystemProgram.programId,
+        code: 0,
+      });
     });
   });
 
@@ -224,8 +195,8 @@ describe("settlement", () => {
 
       const fakeRouter = Keypair.generate().publicKey;
 
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .settle(Buffer.from([0, 1, 2, 3]))
           .accountsPartial({
             paState,
@@ -239,11 +210,9 @@ describe("settlement", () => {
           })
           .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })])
           .signers([payer])
-          .rpc();
-        assert.fail("expected wrong verifier_router_program to fail");
-      } catch (e: any) {
-        assertPAError(e, "VerifierRouterFailed");
-      }
+          .rpc(),
+        { program, error: "VerifierRouterFailed" },
+      );
     });
 
     it("rejects insufficient remaining_accounts for nullifiers", async () => {
@@ -257,11 +226,13 @@ describe("settlement", () => {
 
       const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
 
-      // Pass ZERO nullifier accounts but still include forwarder+clock
+      // Pass ZERO nullifier accounts but still include forwarder+clock: the
+      // fixture's one nullifier claims the forwarder slot, leaving too few
+      // accounts for the forwarder's call segment, a malformed settlement.
       const allRemainingAccounts = buildSettleRemainingAccounts([]);
 
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .settleFromTxdata(uploadId)
           .accountsPartial({
             paState,
@@ -280,19 +251,9 @@ describe("settlement", () => {
             ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
           ])
           .signers([authority])
-          .rpc();
-        assert.fail("expected insufficient remaining_accounts to fail");
-      } catch (e: any) {
-        // With zero nullifier accounts, the program consumes what would be
-        // the forwarder/clock slots as nullifier PDAs, then can't find the
-        // forwarder in the remaining accounts. The exact error depends on
-        // which check fails first.
-        const code = extractPAErrorCode(e);
-        const name = code !== null ? PA_ERROR_NAMES.get(code) : null;
-        const validErrors = ["NullifierPdaMismatch", "UnregisteredForwarder", "InvalidTransactionData"];
-        assert.isNotNull(code, "Expected a PA error code");
-        assert.include(validErrors, name, `Expected one of ${validErrors.join("|")}, got ${name} (${code})`);
-      }
+          .rpc(),
+        { program, error: "InvalidTransactionData" },
+      );
     });
 
     it("rejects unregistered forwarder program in remaining_accounts", async () => {
@@ -319,8 +280,8 @@ describe("settlement", () => {
         { pubkey: SYSVAR_CLOCK_PUBKEY, isWritable: false, isSigner: false },
       ];
 
-      try {
-        await program.methods
+      await assertFails(
+        program.methods
           .settleFromTxdata(uploadId)
           .accountsPartial({
             paState,
@@ -339,11 +300,9 @@ describe("settlement", () => {
             ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
           ])
           .signers([authority])
-          .rpc();
-        assert.fail("expected unregistered forwarder to fail");
-      } catch (e: any) {
-        assertPAError(e, "UnregisteredForwarder");
-      }
+          .rpc(),
+        { program, error: "UnregisteredForwarder" },
+      );
     });
   });
 
@@ -354,12 +313,10 @@ describe("settlement", () => {
       const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
       const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
-      try {
-        await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
-        assert.fail(`expected ${expectedError} error`);
-      } catch (e: any) {
-        assertPAError(e, expectedError);
-      }
+      await assertFails(settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER }), {
+        program,
+        error: expectedError,
+      });
     }
 
     it("rejects NonExistingRoot (wrong commitment tree root)", async () => {

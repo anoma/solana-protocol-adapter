@@ -10,7 +10,7 @@ import { getAccount, getOrCreateAssociatedTokenAccount } from "@solana/spl-token
 import { assert } from "chai";
 import { closeAllNonceBitmaps, closeEscrow, closeConfig } from "../client/instructions";
 import { deriveConfigPda, deriveNonceBitmapPda } from "../client/pda";
-import { assertRejects, createFundedEscrow, makeFunder, randomRef } from "./utils";
+import { createFundedEscrow, makeFunder, randomRef, assertFails } from "./utils/helpers";
 import {
   ensureAdapterInitialized,
   forwarderProgram,
@@ -67,27 +67,27 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
     closeConfig(forwarderProgram, authority.publicKey, paState).signers([authority]).rpc();
 
   it("close_escrow rejects a non-committee authority", () =>
-    assertRejects(closeEscrowAs(impostor), /UnauthorizedCaller/));
+    assertFails(closeEscrowAs(impostor), { program: forwarderProgram, error: "UnauthorizedCaller" }));
 
   it("close_nonce_bitmaps_batch rejects a non-committee authority", () =>
-    assertRejects(
-      closeAllNonceBitmaps(forwarderProgram, impostor.publicKey, paState, [impostor]),
-      /UnauthorizedCaller/,
-    ));
+    assertFails(closeAllNonceBitmaps(forwarderProgram, impostor.publicKey, paState, [impostor]), {
+      program: forwarderProgram,
+      error: "UnauthorizedCaller",
+    }));
 
   it("close_config rejects a non-committee authority", () =>
-    assertRejects(closeConfigAs(impostor), /UnauthorizedCaller/));
+    assertFails(closeConfigAs(impostor), { program: forwarderProgram, error: "UnauthorizedCaller" }));
 
   it("close_nonce_bitmaps_batch rejects a program account that is not a bitmap", () =>
     // The config PDA is program-owned but is not a nonce bitmap.
-    assertRejects(
+    assertFails(
       forwarderProgram.methods
         .closeNonceBitmapsBatch()
         .accountsPartial({ authority: emergencyCommittee.publicKey, config: configPda, paState })
         .remainingAccounts([{ pubkey: configPda, isWritable: true, isSigner: false }])
         .signers([emergencyCommittee])
         .rpc(),
-      /InvalidNonceBitmapPda/,
+      { program: forwarderProgram, error: "InvalidNonceBitmapPda" },
     ));
 
   it("closes every nonce bitmap and refunds their rent", async () => {

@@ -1,6 +1,6 @@
 /**
  * The protocol adapter as the spec files drive it: program handles, the
- * settlement builders, error assertions, precondition helpers, and
+ * settlement builders, precondition helpers, and
  * `useAdapterSuite`, the hooks a spec file installs inside its own top-level
  * describe. Only spec files import this module: it resolves the workspace
  * programs when loaded.
@@ -17,7 +17,6 @@ import {
   SYSVAR_CLOCK_PUBKEY,
 } from "@solana/web3.js";
 import { assert } from "chai";
-import path from "path";
 import { BlockTimeForwarder } from "../../target/types/block_time_forwarder";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
@@ -32,7 +31,7 @@ import {
 } from "../../client/pda";
 import { getRouterPda, getVerifierEntryPda, GROTH16_VERIFIER_ID, VERIFIER_ROUTER_ID } from "../../client/verifier";
 import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
-import { createdCommitmentsOf, loadFixture, parseSelectorFromFixture, readJson } from "./fixtures";
+import { createdCommitmentsOf, loadFixture, parseSelectorFromFixture } from "./fixtures";
 import {
   confirmedTransaction,
   initTxData as initTxDataOf,
@@ -87,8 +86,10 @@ export const VERIFIER_PROGRAM_ID = VERIFIER.program;
 export const [routerPda] = getRouterPda(VERIFIER_ROUTER_ID);
 export const [verifierEntryPda] = getVerifierEntryPda(PROOF_SELECTOR, VERIFIER_ROUTER_ID);
 
-export const blockTimeForwarderId = (anchor.workspace.BlockTimeForwarder as Program<BlockTimeForwarder>).programId;
-export const testForwarderId = (anchor.workspace.TestForwarder as Program<TestForwarder>).programId;
+export const blockTimeForwarderProgram = anchor.workspace.BlockTimeForwarder as Program<BlockTimeForwarder>;
+export const testForwarderProgram = anchor.workspace.TestForwarder as Program<TestForwarder>;
+export const blockTimeForwarderId = blockTimeForwarderProgram.programId;
+export const testForwarderId = testForwarderProgram.programId;
 
 export function deriveRootPda(root: Buffer): PublicKey {
   return deriveRootMarkerPda(paState, root, program.programId);
@@ -188,53 +189,6 @@ export function buildSettleRemainingAccounts(
     accounts.push({ pubkey: marker, isWritable: false, isSigner: false });
   }
   return accounts;
-}
-
-// Anchor assigns 6000 + enum_variant_index.
-const IDL_PATH = path.resolve(process.cwd(), "target", "idl", "protocol_adapter.json");
-export const PA_ERRORS: Record<string, number> = Object.fromEntries(
-  (readJson<{ errors?: { name: string; code: number }[] }>(IDL_PATH).errors ?? []).map((e) => [e.name, e.code]),
-);
-
-export const PA_ERROR_NAMES = new Map(Object.entries(PA_ERRORS).map(([k, v]) => [v, k]));
-
-// For CPI errors, Solana propagates the inner program's error code —
-// the PA's failure line shows the inner code, not the PA's own error.
-export function extractPAErrorCode(e: any): number | null {
-  const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-  const paId = program.programId.toBase58();
-  // Find the PA's own failure line (not inner CPI programs)
-  for (let i = logs.length - 1; i >= 0; i--) {
-    if (!logs[i].includes(paId)) continue;
-    const match = logs[i].match(/failed: custom program error: 0x([0-9a-fA-F]+)/);
-    if (match) return parseInt(match[1], 16);
-  }
-  return null;
-}
-
-export function assertPAError(e: any, errorName: string): void {
-  const expectedCode = PA_ERRORS[errorName];
-  assert.isDefined(expectedCode, `Unknown PA error name: ${errorName}`);
-
-  const actualCode = extractPAErrorCode(e);
-  const actualName = actualCode !== null ? PA_ERROR_NAMES.get(actualCode) : null;
-  const logs: string[] = e?.logs ?? e?.error?.logs ?? [];
-
-  assert.strictEqual(
-    actualCode,
-    expectedCode,
-    `Expected PA error ${errorName} (${expectedCode}), ` +
-      `got ${actualName ?? "unknown"} (${actualCode})` +
-      `\nLogs:\n${logs.slice(-15).join("\n")}`,
-  );
-}
-
-/** The adapter's own failure line for `code`: an adapter error, or an inner program's code propagated through a CPI. */
-export function paFailurePattern(code: number): RegExp {
-  return new RegExp(
-    `Program ${program.programId.toBase58()} failed: custom program error: 0x${code.toString(16)}$`,
-    "m",
-  );
 }
 
 /** Anchor's CPI event tag: the fixed 8-byte `EVENT_IX_TAG_LE`, the little-endian encoding of the u64 0x1d9acb512ea545e4. */

@@ -6,7 +6,9 @@
  */
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { EMPTY_TREE_ROOT_INITIAL, loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils";
+import { EMPTY_TREE_ROOT_INITIAL } from "./utils/constants";
+import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
+import { assertFails } from "./utils/helpers";
 import {
   provider,
   program,
@@ -17,7 +19,6 @@ import {
   ensureAdapterInitialized,
   assertFixtureUnsettled,
   buildSettleRemainingAccounts,
-  assertPAError,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
@@ -88,12 +89,10 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
     // Deliberately no additionalHistoricalRootMarkers.
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
-    try {
-      await settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER });
-      assert.fail("expected settle to fail with NonExistingRoot");
-    } catch (e: any) {
-      assertPAError(e, "NonExistingRoot");
-    }
+    await assertFails(settleFixtureViaTxData(payload, remainingAccounts, { newRootMarker: DUMMY_ROOT_MARKER }), {
+      program,
+      error: "NonExistingRoot",
+    });
   });
 
   it("settles the consumer when its historical root marker is supplied (retention works)", async () => {

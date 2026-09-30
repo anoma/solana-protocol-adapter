@@ -6,6 +6,7 @@ import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { emergencyStop } from "../client/instructions";
 import { VERIFIER_ROUTER_ID } from "../client/verifier";
+import { assertFails } from "./utils/helpers";
 import {
   provider,
   program,
@@ -15,7 +16,6 @@ import {
   verifierEntryPda,
   DUMMY_ROOT_MARKER,
   ensureAdapterInitialized,
-  assertPAError,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
@@ -45,12 +45,7 @@ describe("protocol-adapter (Emergency Stop E2E)", () => {
   });
 
   it("rejects emergency_stop when already paused", async () => {
-    try {
-      await emergencyStop(program, provider.wallet.publicKey).rpc();
-      assert.fail("expected emergency_stop to fail when already paused");
-    } catch (e: any) {
-      assertPAError(e, "AlreadyStopped");
-    }
+    await assertFails(emergencyStop(program, provider.wallet.publicKey).rpc(), { program, error: "AlreadyStopped" });
   });
 
   it("rejects settle when paused", async () => {
@@ -59,8 +54,8 @@ describe("protocol-adapter (Emergency Stop E2E)", () => {
 
     // Use a small garbage payload — the paused check fires before deserialization,
     // so any payload suffices. The full fixture is too large for a single settle instruction.
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .settle(Buffer.from([0, 1, 2, 3]))
         .accountsPartial({
           paState,
@@ -74,11 +69,9 @@ describe("protocol-adapter (Emergency Stop E2E)", () => {
         })
         .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 })])
         .signers([payer])
-        .rpc();
-      assert.fail("expected settle to fail when paused");
-    } catch (e: any) {
-      assertPAError(e, "Stopped");
-    }
+        .rpc(),
+      { program, error: "Stopped" },
+    );
   });
 
   it("rejects settle_from_txdata when paused", async () => {
@@ -88,8 +81,8 @@ describe("protocol-adapter (Emergency Stop E2E)", () => {
     // Paused check fires before deserialization — minimal payload suffices
     const { uploadId, txData } = await uploadTxData(authority, Buffer.from([0, 1, 2, 3]));
 
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .settleFromTxdata(uploadId)
         .accountsPartial({
           paState,
@@ -107,10 +100,8 @@ describe("protocol-adapter (Emergency Stop E2E)", () => {
           ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
         ])
         .signers([authority])
-        .rpc();
-      assert.fail("expected settle_from_txdata to fail when paused");
-    } catch (e: any) {
-      assertPAError(e, "Stopped");
-    }
+        .rpc(),
+      { program, error: "Stopped" },
+    );
   });
 });

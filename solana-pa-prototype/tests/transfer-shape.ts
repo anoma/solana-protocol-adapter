@@ -4,14 +4,14 @@
  */
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils";
+import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
+import { assertFails } from "./utils/helpers";
 import {
   program,
   paState,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
   ensureAdapterInitialized,
-  extractPAErrorCode,
   cpiEventsOf,
   settleFromTxDataBuilder,
   useAdapterSuite,
@@ -45,36 +45,19 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     const { uploadId, txData } = await uploadTxData(authority, payload);
     const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
 
-    let caught: any = null;
-    try {
-      // Full CU budget but NO requestHeapFrame: only the default heap.
-      await settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, nullifierAccounts, false)
+    // Full CU budget but NO requestHeapFrame: only the default heap. The
+    // adapter must fail on memory exhaustion — its allocator writing past the
+    // default heap into the unallocated region — not at a later check (e.g. the
+    // dummy root marker) reached after the heap survived: that would mean
+    // the fixture no longer exhausts the default heap and must grow.
+    await assertFails(
+      settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, nullifierAccounts, false)
         .signers([authority])
-        .rpc();
-    } catch (e: any) {
-      caught = e;
-    }
-    assert.isNotNull(
-      caught,
-      "transfer-shape settlement succeeded in the default heap — the fixture no " +
-        "longer exercises the OOM regression; increase its payload sizes",
-    );
-
-    // The failure must be genuine memory exhaustion, not a later check
-    // (e.g. the dummy root marker) reached after the heap survived: a PA
-    // error code would mean the program ran to a logic check, so the
-    // fixture did NOT exhaust the default heap.
-    const code = extractPAErrorCode(caught);
-    const logs: string[] = caught?.logs ?? caught?.error?.logs ?? [];
-    assert.isNull(
-      code,
-      `expected a runtime memory failure, got PA error code ${code} — the ` +
-        "fixture settled past the heap in the default budget; increase its " +
-        `payload sizes\nLogs:\n${logs.slice(-15).join("\n")}`,
-    );
-    assert.ok(
-      logs.some((l) => /memory allocation failed|out of memory|Access violation/i.test(l)),
-      `expected a memory-exhaustion log line\nLogs:\n${logs.slice(-15).join("\n")}`,
+        .rpc(),
+      {
+        program: program.programId,
+        reason: /^Access violation writing \d+ bytes at address 0x[0-9a-f]+ \(in unallocated region\)$/,
+      },
     );
   });
 

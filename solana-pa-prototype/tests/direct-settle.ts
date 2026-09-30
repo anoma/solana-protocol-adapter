@@ -6,7 +6,8 @@
 import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { VERIFIER_ROUTER_ID } from "../client/verifier";
-import { loadFixture } from "./utils";
+import { loadFixture } from "./utils/fixtures";
+import { assertFails } from "./utils/helpers";
 import {
   program,
   paState,
@@ -18,7 +19,6 @@ import {
   deriveNullifierAccounts,
   ensureAdapterInitialized,
   buildSettleRemainingAccounts,
-  assertPAError,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
@@ -34,8 +34,8 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
     const payer = Keypair.generate();
     await funder.fund(payer, 2);
 
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .settle(Buffer.from([0, 1, 2, 3]))
         .accountsPartial({
           paState,
@@ -52,11 +52,9 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
           ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
         ])
         .signers([payer])
-        .rpc();
-      assert.fail("expected settle with garbage data to fail");
-    } catch (e: any) {
-      assertPAError(e, "InvalidTransactionData");
-    }
+        .rpc(),
+      { program, error: "InvalidTransactionData" },
+    );
   });
 
   it("rejects empty transaction (zero actions) via settle", async () => {
@@ -69,8 +67,8 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
     // check.
     const emptyTx = Buffer.from(loadFixture("zero_action.json").tx_b64, "base64");
 
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .settle(emptyTx)
         .accountsPartial({
           paState,
@@ -87,11 +85,9 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
           ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
         ])
         .signers([payer])
-        .rpc();
-      assert.fail("expected settle with empty transaction to fail");
-    } catch (e: any) {
-      assertPAError(e, "InvalidTransactionData");
-    }
+        .rpc(),
+      { program, error: "InvalidTransactionData" },
+    );
   });
 
   it("rejects duplicate nullifier (double-spend) via settle_from_txdata", async () => {
@@ -108,8 +104,8 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
     const nullifierAccounts = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
     const allRemainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
-    try {
-      await program.methods
+    await assertFails(
+      program.methods
         .settleFromTxdata(uploadId)
         .accountsPartial({
           paState,
@@ -128,10 +124,8 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
           ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
         ])
         .signers([authority])
-        .rpc();
-      assert.fail("expected duplicate nullifier to fail");
-    } catch (e: any) {
-      assertPAError(e, "DuplicateNullifier");
-    }
+        .rpc(),
+      { program, error: "DuplicateNullifier" },
+    );
   });
 });
