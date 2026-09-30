@@ -751,7 +751,7 @@ cmd_verify_build() {
     exit 1
   fi
 
-  solana-verify build --library-name protocol_adapter
+  checked_sbf_build solana-verify build --library-name protocol_adapter
 
   local built
   built="$(solana-verify get-executable-hash target/deploy/protocol_adapter.so)"

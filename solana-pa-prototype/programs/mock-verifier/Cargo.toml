@@ -20,8 +20,15 @@ custom-panic = []
 
 [dependencies]
 anchor-lang = { workspace = true }
-# RISC Zero's own receipt-claim digest: the claim the Groth16 verifier's
-# public inputs commit to.
+# RISC Zero's claim hashing (tagged structs, SystemState, ExitCode). The
+# ReceiptClaim type itself lives in risc0-zkvm, which always links the
+# Groth16 prover/verifier, whose functions overflow the SBF stack frame; the
+# claim digest is composed here from these parts and checked against
+# risc0-zkvm's ReceiptClaim in the host tests.
+risc0-binfmt = { version = "3.0.4", default-features = false }
+risc0-zkp = { version = "3.0.4", default-features = false }
+
+[dev-dependencies]
 risc0-zkvm = { version = "3.0.3", default-features = false }
 
 [lints.rust]

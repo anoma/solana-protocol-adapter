@@ -1644,6 +1644,8 @@ name = "mock-verifier"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
+ "risc0-binfmt",
+ "risc0-zkp",
  "risc0-zkvm",
 ]
 

@@ -15,8 +15,9 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::log::sol_log_data;
 use anchor_lang::system_program;
-use risc0_zkvm::sha::{Digest, Digestible};
-use risc0_zkvm::{MaybePruned, ReceiptClaim};
+use risc0_binfmt::{tagged_struct, Digestible, ExitCode, SystemState};
+use risc0_zkp::core::digest::Digest;
+use risc0_zkp::core::hash::sha::cpu::Impl as Sha256;
 
 declare_id!("H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKvgDhrvVVHvHf");
 
@@ -27,13 +28,28 @@ use verifier_router::types::Proof;
 
 /// Digest of the receipt claim of a successful (halted, exit code 0) run of
 /// `image_id` whose journal hashes to `journal_digest`, with no input and no
-/// assumptions.
+/// assumptions: risc0-zkvm's `ReceiptClaim::ok(image_id, journal).digest()`,
+/// composed from its fields' digests.
 pub fn claim_digest(image_id: &[u8; 32], journal_digest: &[u8; 32]) -> [u8; 32] {
-    let claim = ReceiptClaim::ok(
-        Digest::from(*image_id),
-        MaybePruned::Pruned(Digest::from(*journal_digest)),
+    let input = Digest::ZERO;
+    let post = SystemState {
+        pc: 0,
+        merkle_root: Digest::ZERO,
+    }
+    .digest::<Sha256>();
+    let assumptions = Digest::ZERO;
+    let output = tagged_struct::<Sha256>(
+        "risc0.Output",
+        &[Digest::from(*journal_digest), assumptions],
+        &[],
     );
-    claim.digest().into()
+    let (sys_exit, user_exit) = ExitCode::Halted(0).into_pair();
+    tagged_struct::<Sha256>(
+        "risc0.ReceiptClaim",
+        &[input, Digest::from(*image_id), post, output],
+        &[sys_exit, user_exit],
+    )
+    .into()
 }
 
 #[derive(Accounts)]
@@ -90,6 +106,30 @@ mod tests {
         0x18, 0x52, 0x33, 0x01, 0x0a, 0x23, 0x80, 0xde, 0x19, 0x5e, 0x41, 0x04, 0x16, 0xb2, 0x43,
         0x7e, 0xc8,
     ];
+
+    /// risc0-zkvm's own claim digest for a halted-ok run.
+    fn zkvm_claim_digest(image_id: &[u8; 32], journal_digest: &[u8; 32]) -> [u8; 32] {
+        let claim = risc0_zkvm::ReceiptClaim::ok(
+            risc0_zkvm::sha::Digest::from(*image_id),
+            risc0_zkvm::MaybePruned::Pruned(risc0_zkvm::sha::Digest::from(*journal_digest)),
+        );
+        risc0_zkvm::sha::Digestible::digest(&claim).into()
+    }
+
+    #[test]
+    fn claim_digest_equals_risc0_zkvm_receipt_claim_digest() {
+        for seed in 0u8..=255 {
+            let image_id: [u8; 32] =
+                std::array::from_fn(|i| seed.wrapping_mul(31).wrapping_add(i as u8));
+            let journal_digest: [u8; 32] =
+                std::array::from_fn(|i| seed ^ (i as u8).wrapping_mul(7));
+            assert_eq!(
+                claim_digest(&image_id, &journal_digest),
+                zkvm_claim_digest(&image_id, &journal_digest),
+                "claim digest diverges from risc0-zkvm's ReceiptClaim for seed {seed}"
+            );
+        }
+    }
 
     #[test]
     fn claim_digest_matches_risc0_solana_hash_claim() {

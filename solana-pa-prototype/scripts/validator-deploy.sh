@@ -103,7 +103,35 @@ ensure_wallet() {
 # release flake.nix ships, so local, CI, and deployed builds use one compiler.
 # Keep the tools version in lockstep with flake.nix's platform-tools.
 anchor_build() {
-  anchor build --arch v0 --tools-version v1.52 "$@"
+  checked_sbf_build anchor build --arch v0 --tools-version v1.52 "$@"
+}
+
+# Run an SBF build command and fail if it failed or reported a stack-frame
+# overflow. The SBF backend reports a function whose frame exceeds the 4 KiB
+# limit as an "Error: Function ... overflows the maximum allowed frame space"
+# line yet still exits 0; such a function corrupts memory when it runs on
+# chain.
+checked_sbf_build() {
+  local build_log build_status=0 grep_status=0
+  build_log="$(mktemp)"
+  "$@" 2>&1 | tee "$build_log" || build_status=$?
+  grep -E "overflows the maximum allowed frame space|Stack offset of .* exceeded max offset" "$build_log" || grep_status=$?
+  rm "$build_log"
+  if ((build_status != 0)); then
+    echo "❌ $* exited with status ${build_status}." >&2
+    exit "$build_status"
+  fi
+  case "$grep_status" in
+    0)
+      echo "❌ The SBF build reported stack-frame overflows (above); a program would crash on chain." >&2
+      exit 1
+      ;;
+    1) ;; # grep found no overflow report
+    *)
+      echo "❌ Could not scan the build log for stack-frame overflows (grep status ${grep_status})." >&2
+      exit 1
+      ;;
+  esac
 }
 
 fixture_matches_program_id() {
