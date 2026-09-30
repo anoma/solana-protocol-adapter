@@ -194,7 +194,8 @@ pub mod spl_token_forwarder {
         require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         let withdraw = UnwrapInput::try_from_bytes(&input)?;
 
-        let [escrow_ata, recipient_ata, escrow_pda, token_program, ..] = ctx.remaining_accounts
+        let [escrow_ata, recipient_ata, escrow_authority, token_program, ..] =
+            ctx.remaining_accounts
         else {
             msg!(
                 "Expected 4 remaining accounts for emergency withdraw, got {}",
@@ -203,12 +204,12 @@ pub mod spl_token_forwarder {
             return Err(ErrorCode::InsufficientRemainingAccounts.into());
         };
 
-        require_token_account(escrow_ata, &withdraw.token_mint, escrow_pda.key)?;
+        require_token_account(escrow_ata, &withdraw.token_mint, escrow_authority.key)?;
         require_token_account(recipient_ata, &withdraw.token_mint, &withdraw.recipient)?;
         transfer_signed_by_escrow(
             escrow_ata,
             recipient_ata,
-            escrow_pda,
+            escrow_authority,
             token_program,
             withdraw.amount,
         )?;
@@ -256,14 +257,14 @@ pub mod spl_token_forwarder {
         require_token_account(
             &ctx.accounts.escrow_ata,
             &token_mint_key,
-            ctx.accounts.escrow_pda.key,
+            ctx.accounts.escrow_authority.key,
         )?;
         let balance = token_account_amount(&ctx.accounts.escrow_ata)?;
         if balance > 0 {
             transfer_signed_by_escrow(
                 &ctx.accounts.escrow_ata,
                 &ctx.accounts.recipient_ata,
-                &ctx.accounts.escrow_pda,
+                &ctx.accounts.escrow_authority,
                 &ctx.accounts.token_program,
                 balance,
             )?;
@@ -272,14 +273,14 @@ pub mod spl_token_forwarder {
         let close_ix = spl_close_account_ix(
             ctx.accounts.escrow_ata.key,
             ctx.accounts.authority.key,
-            ctx.accounts.escrow_pda.key,
+            ctx.accounts.escrow_authority.key,
         );
         invoke_signed(
             &close_ix,
             &[
                 ctx.accounts.escrow_ata.to_account_info(),
                 ctx.accounts.authority.to_account_info(),
-                ctx.accounts.escrow_pda.to_account_info(),
+                ctx.accounts.escrow_authority.to_account_info(),
             ],
             &[ESCROW_SIGNER_SEEDS],
         )?;
@@ -407,9 +408,6 @@ fn spl_close_account_ix(
     }
 }
 
-/// The escrow authority's signer seeds, with its compile-time bump.
-const ESCROW_SIGNER_SEEDS: &[&[u8]] = &[ESCROW_SEED, &[ESCROW_AUTHORITY_BUMP]];
-
 /// Transfer `amount` from `source` to `destination` with the escrow
 /// authority as the signer: as the user's delegate on a wrap, as the escrow
 /// account's owner on an unwrap or emergency withdraw. The SPL Token program
@@ -419,7 +417,7 @@ const ESCROW_SIGNER_SEEDS: &[&[u8]] = &[ESCROW_SEED, &[ESCROW_AUTHORITY_BUMP]];
 fn transfer_signed_by_escrow<'info>(
     source: &AccountInfo<'info>,
     destination: &AccountInfo<'info>,
-    escrow_pda: &AccountInfo<'info>,
+    escrow_authority: &AccountInfo<'info>,
     token_program: &AccountInfo<'info>,
     amount: u64,
 ) -> Result<()> {
@@ -428,17 +426,17 @@ fn transfer_signed_by_escrow<'info>(
         ErrorCode::InvalidTokenProgram
     );
     require!(
-        escrow_pda.key() == ESCROW_AUTHORITY,
-        ErrorCode::InvalidEscrowPda
+        escrow_authority.key() == ESCROW_AUTHORITY,
+        ErrorCode::InvalidEscrowAuthority
     );
 
-    let transfer_ix = spl_transfer_ix(source.key, destination.key, escrow_pda.key, amount);
+    let transfer_ix = spl_transfer_ix(source.key, destination.key, escrow_authority.key, amount);
     invoke_signed(
         &transfer_ix,
         &[
             source.clone(),
             destination.clone(),
-            escrow_pda.clone(),
+            escrow_authority.clone(),
             token_program.clone(),
         ],
         &[ESCROW_SIGNER_SEEDS],
@@ -464,7 +462,7 @@ fn execute_wrap<'info>(ctx: &Context<'info, ForwardCall<'info>>, input: &[u8]) -
         return Err(ErrorCode::DeadlineExpired.into());
     }
 
-    let [user_ata, escrow_ata, escrow_pda, nonce_bitmap_pda, token_program, ..] =
+    let [user_ata, escrow_ata, escrow_authority, nonce_bitmap_pda, token_program, ..] =
         ctx.remaining_accounts
     else {
         msg!(
@@ -500,7 +498,7 @@ fn execute_wrap<'info>(ctx: &Context<'info, ForwardCall<'info>>, input: &[u8]) -
     // user, as Permit2 transfers from the signing owner; the destination to
     // the escrow.
     require_token_account(user_ata, &wrap.token_mint, &wrap.user)?;
-    require_token_account(escrow_ata, &wrap.token_mint, escrow_pda.key)?;
+    require_token_account(escrow_ata, &wrap.token_mint, escrow_authority.key)?;
 
     ed25519::verify_ed25519_instruction(
         &ctx.accounts.ix_sysvar,
@@ -509,7 +507,13 @@ fn execute_wrap<'info>(ctx: &Context<'info, ForwardCall<'info>>, input: &[u8]) -
         &wrap.to_message(ctx.program_id).signed_message(),
     )?;
 
-    transfer_signed_by_escrow(user_ata, escrow_ata, escrow_pda, token_program, wrap.amount)?;
+    transfer_signed_by_escrow(
+        user_ata,
+        escrow_ata,
+        escrow_authority,
+        token_program,
+        wrap.amount,
+    )?;
 
     nonce_bitmap.mark_used(bit_position);
     nonce_bitmap.exit(ctx.program_id)?;
@@ -527,7 +531,8 @@ fn execute_wrap<'info>(ctx: &Context<'info, ForwardCall<'info>>, input: &[u8]) -
 fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let unwrap = UnwrapInput::try_from_bytes(input)?;
 
-    let [escrow_ata, recipient_ata, escrow_pda, token_program, ..] = ctx.remaining_accounts else {
+    let [escrow_ata, recipient_ata, escrow_authority, token_program, ..] = ctx.remaining_accounts
+    else {
         msg!(
             "Expected 4 remaining accounts for unwrap, got {}",
             ctx.remaining_accounts.len()
@@ -535,12 +540,12 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         return Err(ErrorCode::InsufficientRemainingAccounts.into());
     };
 
-    require_token_account(escrow_ata, &unwrap.token_mint, escrow_pda.key)?;
+    require_token_account(escrow_ata, &unwrap.token_mint, escrow_authority.key)?;
     require_token_account(recipient_ata, &unwrap.token_mint, &unwrap.recipient)?;
     transfer_signed_by_escrow(
         escrow_ata,
         recipient_ata,
-        escrow_pda,
+        escrow_authority,
         token_program,
         unwrap.amount,
     )?;
@@ -666,8 +671,8 @@ pub struct CloseEscrow<'info> {
     pub escrow_ata: AccountInfo<'info>,
 
     /// CHECK: The escrow authority, verified by address constraint; it signs the drain and the close.
-    #[account(address = ESCROW_AUTHORITY @ ErrorCode::InvalidEscrowPda)]
-    pub escrow_pda: AccountInfo<'info>,
+    #[account(address = ESCROW_AUTHORITY @ ErrorCode::InvalidEscrowAuthority)]
+    pub escrow_authority: AccountInfo<'info>,
 
     /// CHECK: Passed to the SPL Token transfer CPI.
     #[account(mut)]

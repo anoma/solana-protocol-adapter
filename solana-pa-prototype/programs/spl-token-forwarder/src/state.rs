@@ -56,6 +56,8 @@ const ESCROW_AUTHORITY_DERIVATION: ([u8; 32], u8) =
 pub const ESCROW_AUTHORITY: Pubkey = Pubkey::new_from_array(ESCROW_AUTHORITY_DERIVATION.0);
 /// The escrow authority's canonical bump, with which it signs.
 pub const ESCROW_AUTHORITY_BUMP: u8 = ESCROW_AUTHORITY_DERIVATION.1;
+/// The escrow authority's signer seeds, with its compile-time bump.
+pub(crate) const ESCROW_SIGNER_SEEDS: &[&[u8]] = &[ESCROW_SEED, &[ESCROW_AUTHORITY_BUMP]];
 /// Nonce bitmap PDA, one per user per 256-nonce word.
 #[constant]
 pub const NONCE_BITMAP_SEED: &[u8] = b"nonce_bitmap";

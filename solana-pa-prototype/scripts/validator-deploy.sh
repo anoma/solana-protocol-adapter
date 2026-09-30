@@ -87,6 +87,8 @@ parse_program_table() {
   done <<<"$PROGRAM_TABLE"
 }
 parse_program_table
+# The deploy targets as a usage alternation, e.g. "pa|btf|stf".
+DEPLOY_TARGETS="$(IFS='|'; echo "${PROGRAM_TARGETS[*]}")"
 
 # Per program name, from cargo metadata: its Cargo package name and the path
 # of its lib.rs (directory names do not track program names — the PA's is

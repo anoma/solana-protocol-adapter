@@ -15,10 +15,6 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=validator-deploy.sh
 source "${SCRIPT_DIR}/validator-deploy.sh"
 
-# Deploy targets, their programs, and which programs are localnet-only come
-# from PROGRAM_TABLE (validator-deploy.sh).
-DEPLOY_TARGETS="$(IFS='|'; echo "${PROGRAM_TARGETS[*]}")"
-
 usage() {
   cat <<USAGE
 Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]

@@ -69,7 +69,7 @@ gen historical-root "$OUT_DIR/batch_groth16.json" \
 gen spl-token-wrap "${MOCK_FLAG[@]}" "$OUT_DIR/spl_token_wrap.json"
 gen spl-token-wrap "${MOCK_FLAG[@]}" "$OUT_DIR/spl_token_wrap_replay.json"
 gen spl-token-unwrap "${MOCK_FLAG[@]}" \
-  --settled="$OUT_DIR/spl_token_wrap.json" \
+  --wrap "$OUT_DIR/spl_token_wrap.json" \
   "$OUT_DIR/spl_token_unwrap.json"
 
 # A second wrap (forwarder nonce 2) proven against the solana-devnet kind
