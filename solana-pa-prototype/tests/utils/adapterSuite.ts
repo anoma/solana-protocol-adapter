@@ -2,8 +2,9 @@
  * The protocol adapter as the spec files drive it: program handles, the
  * settlement builders, precondition helpers, and
  * `useAdapterSuite`, the hooks a spec file installs inside its own top-level
- * describe. Only spec files import this module: it resolves the workspace
- * programs when loaded.
+ * describe. Spec files, and genesis-settlement-table.ts for the suite's
+ * settlement keys, import this module: it resolves the workspace programs
+ * when loaded.
  */
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
@@ -24,7 +25,7 @@ import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { TestForwarder } from "../../target/types/test_forwarder";
 import { MockVerifier } from "../../target/types/mock_verifier";
 import { emergencyStop, initializeAdapter, initializeForwarder } from "../../client/instructions";
-import { ensureSettlementLookupTable, settlementLookupKeys } from "../../client/lookupTable";
+import { ensureSettlementLookupTable, fetchLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
   derivePaStatePda,
@@ -335,9 +336,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
     if (table) return table;
     const genesis = process.env.PA_SETTLEMENT_TABLE;
     if (!genesis) return extendSettlementTable([]);
-    const { value } = await provider.connection.getAddressLookupTable(new PublicKey(genesis));
-    if (!value) throw new Error(`PA_SETTLEMENT_TABLE ${genesis} is not a lookup table on this validator`);
-    return (table = value);
+    return (table = await fetchLookupTable(provider.connection, new PublicKey(genesis)));
   }
 
   /** Add `mints`' escrow token accounts to the settlement table: they are fixed for the deployment once the mint is supported. */

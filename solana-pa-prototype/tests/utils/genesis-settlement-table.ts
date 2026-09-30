@@ -22,7 +22,7 @@ if (args.length !== 1) {
   throw new Error("usage: genesis-settlement-table.ts <output directory>");
 }
 
-const U64_MAX = BigInt("18446744073709551615");
+const U64_MAX = 0xffffffffffffffffn;
 
 /**
  * The address lookup table program's account: ProgramState::LookupTable

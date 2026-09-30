@@ -58,7 +58,8 @@ export function settlementLookupKeys(s: SettlementKeySources): PublicKey[] {
   ];
 }
 
-async function fetchLookupTable(connection: Connection, address: PublicKey): Promise<AddressLookupTableAccount> {
+/** The lookup table at `address`; a missing table is an error. */
+export async function fetchLookupTable(connection: Connection, address: PublicKey): Promise<AddressLookupTableAccount> {
   const { value } = await connection.getAddressLookupTable(address);
   if (!value) throw new Error(`lookup table ${address.toBase58()} does not exist`);
   return value;
