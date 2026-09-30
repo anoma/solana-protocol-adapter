@@ -132,9 +132,8 @@ pub mod spl_token_forwarder {
             config.data_len() as u64 == PREVIOUS_CONFIG_SIZE,
             ErrorCode::NotPreviousLayout
         );
-        let size = Config::DISCRIMINATOR.len() + Config::INIT_SPACE;
-        config.resize(size)?;
-        let surplus = config.lamports() - Rent::get()?.minimum_balance(size);
+        config.resize(Config::ACCOUNT_SIZE)?;
+        let surplus = config.lamports() - Rent::get()?.minimum_balance(Config::ACCOUNT_SIZE);
         **config.try_borrow_mut_lamports()? -= surplus;
         **ctx.accounts.authority.try_borrow_mut_lamports()? += surplus;
         Ok(())
@@ -669,7 +668,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = authority,
-        space = Config::DISCRIMINATOR.len() + Config::INIT_SPACE,
+        space = Config::ACCOUNT_SIZE,
         seeds = [CONFIG_SEED],
         bump
     )]

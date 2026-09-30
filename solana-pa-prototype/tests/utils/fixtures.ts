@@ -1,5 +1,6 @@
 import { readFileSync } from "fs";
 import path from "path";
+import { Ed25519Program, PublicKey } from "@solana/web3.js";
 
 // PA_TEST_MODE selects which fixture set the suite runs against:
 // tests/fixtures/ (real Groth16 proofs, selector 0x73c457ba) or
@@ -94,4 +95,13 @@ export function tamperedTxOf(fixture: Fixture): Buffer {
     throw new Error("fixture is missing tx_tampered_b64 — regenerate it with ./scripts/dev.sh regen-fixtures");
   }
   return Buffer.from(fixture.tx_tampered_b64, "base64");
+}
+
+/** The ed25519 instruction carrying a wrap fixture's signature, by `signer`, over its signed message. */
+export function wrapAuthorizationIx(signer: PublicKey, fixture: Fixture) {
+  return Ed25519Program.createInstructionWithPublicKey({
+    publicKey: signer.toBytes(),
+    message: Buffer.from(fixture.spl_token_wrap!.signed_message_b64, "base64"),
+    signature: Buffer.from(fixture.spl_token_wrap!.signature_b64, "base64"),
+  });
 }

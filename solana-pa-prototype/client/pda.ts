@@ -81,11 +81,11 @@ export function nonceWordIndex(nonce: bigint): bigint {
 export function deriveNonceBitmapPda(
   forwarderProgramId: PublicKey,
   user: PublicKey,
-  nonce: bigint,
+  wordIndex: bigint,
 ): [PublicKey, number] {
-  const wordIndex = Buffer.alloc(8);
-  wordIndex.writeBigUInt64LE(nonceWordIndex(nonce));
-  return PublicKey.findProgramAddressSync([NONCE_BITMAP_SEED, user.toBuffer(), wordIndex], forwarderProgramId);
+  const word = Buffer.alloc(8);
+  word.writeBigUInt64LE(wordIndex);
+  return PublicKey.findProgramAddressSync([NONCE_BITMAP_SEED, user.toBuffer(), word], forwarderProgramId);
 }
 
 /** The adapter's event authority PDA, the signer of its `#[event_cpi]` self-invocations. Seed: `["__event_authority"]`. */

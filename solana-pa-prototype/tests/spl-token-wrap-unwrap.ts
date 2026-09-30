@@ -10,19 +10,10 @@ import {
   PublicKey,
   SystemProgram,
   Keypair,
-  Ed25519Program,
   PACKET_DATA_SIZE,
-  SYSVAR_INSTRUCTIONS_PUBKEY,
   VersionedTransaction,
 } from "@solana/web3.js";
-import {
-  approve,
-  createMint,
-  getAccount,
-  getOrCreateAssociatedTokenAccount,
-  mintTo,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { approve, createMint, getAccount, getOrCreateAssociatedTokenAccount, mintTo } from "@solana/spl-token";
 import { assert } from "chai";
 import {
   escrowAccounts,
@@ -33,11 +24,13 @@ import {
   closeEscrow,
   setEmergencyCaller,
   setKindTableCommitment,
+  forwarderSegmentHead,
+  wrapTransferAccounts,
 } from "../client/instructions";
 import { EMPTY_KIND_TABLE_COMMITMENT, NONCES_PER_WORD } from "../client/constants";
 import { deriveConfigPda, deriveNonceBitmapPda, nonceWordIndex } from "../client/pda";
 import { SOLANA_DEVNET_KIND_TABLE_COMMITMENT } from "./utils/constants";
-import { requireFixture, type Fixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
+import { requireFixture, createdCommitmentsOf as commitmentsOf, wrapAuthorizationIx } from "./utils/fixtures";
 import {
   randomRef,
   approvedTokenAccount,
@@ -67,7 +60,7 @@ import {
 // fixture's seeded user, mint and recipient and supply the accounts the call
 // names.
 describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
-  const { extendSettlementTable, uploadAndSettleV0 } = useAdapterSuite();
+  const { extendSettlementTable, settleForwarderFixture } = useAdapterSuite();
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
   // The block's actors hold their SOL across tests, out of the suite's
   // after-each drain.
@@ -98,7 +91,11 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   const wrapAmount = BigInt(wrap.amount);
   const wrapNonce = BigInt(wrap.nonce);
   const unwrapAmount = BigInt(unwrap.amount);
-  const [nonceBitmapPda, nonceBitmapBump] = deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, wrapNonce);
+  const [nonceBitmapPda, nonceBitmapBump] = deriveNonceBitmapPda(
+    forwarderProgram.programId,
+    user.publicKey,
+    nonceWordIndex(wrapNonce),
+  );
   assert.equal(wrapReplayFixture.spl_token_wrap!.nonce, wrap.nonce, "the replay fixture reuses the wrap nonce");
   assert.equal(wrap.mint_seed_label, unwrap.mint_seed_label, "both fixtures must name the same mint");
 
@@ -133,39 +130,11 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     settlementTable = await extendSettlementTable([mint]);
   });
 
-  /**
-   * Settle `fx` from a TxData upload with the forwarder's account segment
-   * after the nullifier markers. `preInstructions` are prepended so an
-   * ed25519 instruction lands at index 0, where the wrap input points.
-   */
-  async function settleForwarderFixture(
-    fx: Fixture,
-    forwarderAccounts: AccountMeta[],
-    preInstructions: anchor.web3.TransactionInstruction[],
-  ): Promise<string> {
-    const authority = await funder.fresh(2);
-    return uploadAndSettleV0(
-      authority,
-      Buffer.from(fx.tx_b64, "base64"),
-      [...deriveNullifierAccounts(fx.consumed_nullifiers_b64), ...forwarderAccounts],
-      { createdCommitments: commitmentsOf(fx) },
-      preInstructions,
-    );
-  }
-
-  const segmentHead: AccountMeta[] = [
-    { pubkey: forwarderProgram.programId, isWritable: false, isSigner: false },
-    { pubkey: configPda, isWritable: false, isSigner: false },
-    { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
-  ];
+  const segmentHead = forwarderSegmentHead(forwarderProgram.programId);
 
   const wrapSegment = (destination = escrowAta, source = userAta): AccountMeta[] => [
     ...segmentHead,
-    { pubkey: source, isWritable: true, isSigner: false },
-    { pubkey: destination, isWritable: true, isSigner: false },
-    { pubkey: escrowAuthority, isWritable: false, isSigner: false },
-    { pubkey: nonceBitmapPda, isWritable: true, isSigner: false },
-    { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+    ...wrapTransferAccounts(source, destination, escrowAuthority, nonceBitmapPda),
   ];
 
   const unwrapSegment = (destination = recipientAta, source = escrowAta): AccountMeta[] => [
@@ -178,14 +147,6 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     ...segmentHead,
     ...escrowTransferAccounts(escrowAta, recipientAta, escrowAuthority),
   ];
-
-  /** The ed25519 instruction carrying the fixture's signature over its signed message. */
-  const wrapAuthorizationIx = (fx: Fixture) =>
-    Ed25519Program.createInstructionWithPublicKey({
-      publicKey: user.publicKey.toBytes(),
-      message: Buffer.from(fx.spl_token_wrap!.signed_message_b64, "base64"),
-      signature: Buffer.from(fx.spl_token_wrap!.signature_b64, "base64"),
-    });
 
   /** The permissionless instruction that creates the user's bitmap for the wrap nonce's word. */
   const initNonceBitmapIx = () =>
@@ -230,7 +191,11 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       ...nullifierAccounts,
       ...wrapSegment(),
     ]).transaction();
-    const instructions = [wrapAuthorizationIx(wrapFixture), await initNonceBitmapIx(), ...settle.instructions];
+    const instructions = [
+      wrapAuthorizationIx(user.publicKey, wrapFixture),
+      await initNonceBitmapIx(),
+      ...settle.instructions,
+    ];
     const message = await compileV0(provider, instructions, settlementTable);
     const size = new VersionedTransaction(message).serialize().length;
     const lookedUp = message.addressTableLookups.reduce(
@@ -267,10 +232,13 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // create the bitmap during the wrap; a wrap on a word without one fails.
   it("rejects a wrap whose nonce bitmap does not exist", async () => {
     assert.isNull(await provider.connection.getAccountInfo(nonceBitmapPda), "no bitmap yet for this word");
-    await assertFails(settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]), {
-      program: forwarderProgram,
-      error: "NonceBitmapMissing",
-    });
+    await assertFails(
+      settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(user.publicKey, wrapFixture)]),
+      {
+        program: forwarderProgram,
+        error: "NonceBitmapMissing",
+      },
+    );
   });
 
   // Mirrors ForwarderBase.t.sol: test_forwardCall_reverts_if_the_logic_ref_is_wrong,
@@ -283,10 +251,13 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
     await rotate(randomRef());
     try {
-      await assertFails(settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(wrapFixture)]), {
-        program: forwarderProgram,
-        error: "UnauthorizedLogicRef",
-      });
+      await assertFails(
+        settleForwarderFixture(wrapFixture, wrapSegment(), [wrapAuthorizationIx(user.publicKey, wrapFixture)]),
+        {
+          program: forwarderProgram,
+          error: "UnauthorizedLogicRef",
+        },
+      );
     } finally {
       await rotate(fixtureRef);
     }
@@ -301,7 +272,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("rejects a wrap whose destination the escrow does not own", async () => {
     await assertFails(
       settleForwarderFixture(wrapFixture, wrapSegment(recipientAta), [
-        wrapAuthorizationIx(wrapFixture),
+        wrapAuthorizationIx(user.publicKey, wrapFixture),
         await initNonceBitmapIx(),
       ]),
       { program: forwarderProgram, error: "WrongTokenAccountOwner" },
@@ -324,7 +295,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
     await assertFails(
       settleForwarderFixture(wrapFixture, wrapSegment(escrowAta, otherAta), [
-        wrapAuthorizationIx(wrapFixture),
+        wrapAuthorizationIx(user.publicKey, wrapFixture),
         await initNonceBitmapIx(),
       ]),
       { program: forwarderProgram, error: "WrongTokenAccountOwner" },
@@ -349,7 +320,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
     await assertFails(
       settleForwarderFixture(wrapFixture, wrapSegment(escrowOwnedOtherAta, userOtherAta), [
-        wrapAuthorizationIx(wrapFixture),
+        wrapAuthorizationIx(user.publicKey, wrapFixture),
         await initNonceBitmapIx(),
       ]),
       { program: forwarderProgram, error: "WrongTokenAccountMint" },
@@ -365,7 +336,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const [userBefore, escrowBefore] = await balances(userAta, escrowAta);
 
     const sig = await settleForwarderFixture(wrapFixture, wrapSegment(), [
-      wrapAuthorizationIx(wrapFixture),
+      wrapAuthorizationIx(user.publicKey, wrapFixture),
       await initNonceBitmapIx(),
     ]);
 
@@ -395,7 +366,9 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     await approve(provider.connection, user, userAta, escrowAuthority, user, Number(wrapAmount));
     const [escrowBefore] = await balances(escrowAta);
     await assertFails(
-      settleForwarderFixture(wrapReplayFixture, wrapSegment(), [wrapAuthorizationIx(wrapReplayFixture)]),
+      settleForwarderFixture(wrapReplayFixture, wrapSegment(), [
+        wrapAuthorizationIx(user.publicKey, wrapReplayFixture),
+      ]),
       { program: forwarderProgram, error: "NonceAlreadyUsed" },
     );
     assert.deepEqual(await balances(escrowAta), [escrowBefore], "escrow is unchanged");
@@ -469,14 +442,16 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const devnetWrap = devnetTableWrapFixture.spl_token_wrap!;
     const amount = BigInt(devnetWrap.amount);
     assert.deepEqual(
-      deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, BigInt(devnetWrap.nonce))[0],
+      deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, nonceWordIndex(BigInt(devnetWrap.nonce)))[0],
       nonceBitmapPda,
       "the nonce shares the main wrap's bitmap word, which the main wrap created",
     );
     await mintTo(provider.connection, user, mint, userAta, user, Number(amount));
     await approve(provider.connection, user, userAta, escrowAuthority, user, Number(amount));
     const settleDevnetWrap = () =>
-      settleForwarderFixture(devnetTableWrapFixture, wrapSegment(), [wrapAuthorizationIx(devnetTableWrapFixture)]);
+      settleForwarderFixture(devnetTableWrapFixture, wrapSegment(), [
+        wrapAuthorizationIx(user.publicKey, devnetTableWrapFixture),
+      ]);
 
     await assertFails(settleDevnetWrap(), { program: program, error: "KindTableCommitmentMismatch" });
 

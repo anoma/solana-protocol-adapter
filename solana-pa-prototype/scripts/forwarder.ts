@@ -50,7 +50,7 @@
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
-import { getAssociatedTokenAddressSync, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
+import { getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
@@ -63,11 +63,12 @@ import {
   migrateConfig,
   migrateEscrow,
   migrateNonceBitmap,
+  previousEscrowAccounts,
   setEmergencyCaller,
   setLogicRef,
 } from "../client/instructions";
-import { NONCE_BITMAP_SEED, PREVIOUS_CONFIG_SIZE, PREVIOUS_NONCE_BITMAP_SIZE } from "../client/constants";
-import { deriveConfigPda, derivePaStatePda, derivePreviousEscrowAuthority } from "../client/pda";
+import { PREVIOUS_CONFIG_SIZE, PREVIOUS_NONCE_BITMAP_SIZE } from "../client/constants";
+import { deriveConfigPda, deriveNonceBitmapPda, derivePaStatePda } from "../client/pda";
 import { fail, pubkeyList, requireHexBytes, requirePubkey, requireRawAmount } from "./cli-utils";
 
 const provider = anchor.AnchorProvider.env();
@@ -208,13 +209,14 @@ async function teardown() {
   await closeConfigCommand();
 }
 
+const instructionCoder = new anchor.BorshInstructionCoder(forwarder.idl);
+
 /**
  * The (user, word index) a previous-layout bitmap belongs to: a bitmap
  * stores only its bits, and its address is a PDA of those two, so they are
  * read from the init_nonce_bitmap instruction that created it, its oldest
  * transaction.
  */
-const instructionCoder = new anchor.BorshInstructionCoder(forwarder.idl);
 
 async function bitmapOwner(bitmap: PublicKey): Promise<{ user: PublicKey; wordIndex: bigint }> {
   let oldest: string | undefined;
@@ -249,12 +251,9 @@ async function bitmapOwner(bitmap: PublicKey): Promise<{ user: PublicKey; wordIn
     if (!keys.get(ix.programIdIndex)!.equals(forwarder.programId)) continue;
     const decoded = instructionCoder.decode(ix.data, "base58");
     if (decoded?.name !== "initNonceBitmap") continue;
-    const { user, wordIndex } = decoded.data as { user: PublicKey; wordIndex: anchor.BN };
-    const [derived] = PublicKey.findProgramAddressSync(
-      [NONCE_BITMAP_SEED, user.toBuffer(), wordIndex.toArrayLike(Buffer, "le", 8)],
-      forwarder.programId,
-    );
-    if (derived.equals(bitmap)) return { user, wordIndex: BigInt(wordIndex.toString()) };
+    const { user, wordIndex: word } = decoded.data as { user: PublicKey; wordIndex: anchor.BN };
+    const wordIndex = BigInt(word.toString());
+    if (deriveNonceBitmapPda(forwarder.programId, user, wordIndex)[0].equals(bitmap)) return { user, wordIndex };
   }
   throw new Error(`transaction ${oldest}, the oldest touching ${bitmap.toBase58()}, has no init_nonce_bitmap for it`);
 }
@@ -282,11 +281,7 @@ async function migrate() {
   console.log(`${previousBitmaps.length} nonce bitmap(s) were in the previous layout`);
 
   for (const mint of mints) {
-    const previousEscrowAta = getAssociatedTokenAddressSync(
-      mint,
-      derivePreviousEscrowAuthority(forwarder.programId, mint),
-      true,
-    );
+    const { previousEscrowAta } = previousEscrowAccounts(forwarder.programId, mint);
     if ((await connection.getAccountInfo(previousEscrowAta)) === null) {
       console.log(`${mint.toBase58()} has no previous-build escrow ${previousEscrowAta.toBase58()}`);
       continue;

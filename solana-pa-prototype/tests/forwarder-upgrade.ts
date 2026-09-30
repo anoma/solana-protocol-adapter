@@ -8,16 +8,8 @@
  */
 import * as anchor from "@anchor-lang/core";
 import { execFileSync } from "child_process";
-import { AccountMeta, Ed25519Program, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
-import {
-  approve,
-  createMint,
-  getAccount,
-  getAssociatedTokenAddressSync,
-  getOrCreateAssociatedTokenAccount,
-  mintTo,
-  TOKEN_PROGRAM_ID,
-} from "@solana/spl-token";
+import { AccountMeta, PublicKey, SystemProgram } from "@solana/web3.js";
+import { approve, createMint, getAccount, getOrCreateAssociatedTokenAccount, mintTo } from "@solana/spl-token";
 import { assert } from "chai";
 import {
   escrowAccounts,
@@ -25,21 +17,18 @@ import {
   migrateConfig,
   migrateEscrow,
   migrateNonceBitmap,
+  previousEscrowAccounts,
+  forwarderSegmentHead,
+  wrapTransferAccounts,
 } from "../client/instructions";
-import { NONCES_PER_WORD } from "../client/constants";
-import { deriveConfigPda, deriveNonceBitmapPda, derivePreviousEscrowAuthority, nonceWordIndex } from "../client/pda";
-import { requireFixture, type Fixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
+import { NONCES_PER_WORD, PREVIOUS_NONCE_BITMAP_SIZE } from "../client/constants";
+import { deriveConfigPda, deriveNonceBitmapPda, nonceWordIndex } from "../client/pda";
+import { requireFixture, wrapAuthorizationIx } from "./utils/fixtures";
 import { makeFunder, seededKeypair, assertFails } from "./utils/helpers";
-import {
-  provider,
-  forwarderProgram,
-  deriveNullifierAccounts,
-  initForwarderConfig,
-  useAdapterSuite,
-} from "./utils/adapterSuite";
+import { provider, forwarderProgram, initForwarderConfig, useAdapterSuite } from "./utils/adapterSuite";
 
 describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
-  const { extendSettlementTable, uploadAndSettleV0 } = useAdapterSuite();
+  const { extendSettlementTable, settleForwarderFixture } = useAdapterSuite();
   const funder = makeFunder(provider);
   const forwarderId = forwarderProgram.programId;
   const [configPda] = deriveConfigPda(forwarderId);
@@ -57,12 +46,15 @@ describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
   const wrapAmount = BigInt(wrap.amount);
   const wrapNonce = BigInt(wrap.nonce);
   const unwrapAmount = BigInt(unwrap.amount);
-  const [nonceBitmapPda, nonceBitmapBump] = deriveNonceBitmapPda(forwarderId, user.publicKey, wrapNonce);
+  const [nonceBitmapPda, nonceBitmapBump] = deriveNonceBitmapPda(
+    forwarderId,
+    user.publicKey,
+    nonceWordIndex(wrapNonce),
+  );
 
   // The previous build held each mint's escrow under its own authority,
   // ["escrow", mint]; this build holds every mint's under ["escrow"].
-  const previousEscrowAuthority = derivePreviousEscrowAuthority(forwarderId, mint);
-  const previousEscrowAta = getAssociatedTokenAddressSync(mint, previousEscrowAuthority, true);
+  const { previousEscrowAuthority, previousEscrowAta } = previousEscrowAccounts(forwarderId, mint);
   const { escrowAuthority, escrowAta } = escrowAccounts(forwarderId, mint);
 
   let userAta: PublicKey;
@@ -70,41 +62,12 @@ describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
 
   const balance = async (ata: PublicKey) => (await getAccount(provider.connection, ata)).amount;
 
-  const segmentHead: AccountMeta[] = [
-    { pubkey: forwarderId, isWritable: false, isSigner: false },
-    { pubkey: configPda, isWritable: false, isSigner: false },
-    { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isWritable: false, isSigner: false },
-  ];
+  const segmentHead = forwarderSegmentHead(forwarderId);
 
   const wrapSegment = (authority: PublicKey, destination: PublicKey): AccountMeta[] => [
     ...segmentHead,
-    { pubkey: userAta, isWritable: true, isSigner: false },
-    { pubkey: destination, isWritable: true, isSigner: false },
-    { pubkey: authority, isWritable: false, isSigner: false },
-    { pubkey: nonceBitmapPda, isWritable: true, isSigner: false },
-    { pubkey: TOKEN_PROGRAM_ID, isWritable: false, isSigner: false },
+    ...wrapTransferAccounts(userAta, destination, authority, nonceBitmapPda),
   ];
-
-  const wrapAuthorizationIx = (fx: Fixture) =>
-    Ed25519Program.createInstructionWithPublicKey({
-      publicKey: user.publicKey.toBytes(),
-      message: Buffer.from(fx.spl_token_wrap!.signed_message_b64, "base64"),
-      signature: Buffer.from(fx.spl_token_wrap!.signature_b64, "base64"),
-    });
-
-  async function settleForwarderFixture(
-    fx: Fixture,
-    forwarderAccounts: AccountMeta[],
-    preInstructions: anchor.web3.TransactionInstruction[],
-  ): Promise<string> {
-    return uploadAndSettleV0(
-      await funder.fresh(2),
-      Buffer.from(fx.tx_b64, "base64"),
-      [...deriveNullifierAccounts(fx.consumed_nullifiers_b64), ...forwarderAccounts],
-      { createdCommitments: commitmentsOf(fx) },
-      preInstructions,
-    );
-  }
 
   before(async () => {
     await funder.fund(user, 5);
@@ -133,13 +96,13 @@ describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
       .rpc();
 
     await settleForwarderFixture(wrapFixture, wrapSegment(previousEscrowAuthority, previousEscrowAta), [
-      wrapAuthorizationIx(wrapFixture),
+      wrapAuthorizationIx(user.publicKey, wrapFixture),
     ]);
 
     assert.equal(await balance(previousEscrowAta), wrapAmount, "the previous build's escrow holds the wrapped tokens");
     assert.equal(
       (await provider.connection.getAccountInfo(nonceBitmapPda))!.data.length,
-      40,
+      PREVIOUS_NONCE_BITMAP_SIZE,
       "the previous build's bitmap is the discriminator and the word",
     );
   });
@@ -233,7 +196,7 @@ describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
     await approve(provider.connection, user, userAta, escrowAuthority, user, Number(wrapAmount));
     await assertFails(
       settleForwarderFixture(wrapReplayFixture, wrapSegment(escrowAuthority, escrowAta), [
-        wrapAuthorizationIx(wrapReplayFixture),
+        wrapAuthorizationIx(user.publicKey, wrapReplayFixture),
       ]),
       { program: forwarderProgram, error: "NonceAlreadyUsed" },
     );

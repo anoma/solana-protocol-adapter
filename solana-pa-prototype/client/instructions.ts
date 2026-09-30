@@ -5,11 +5,17 @@
  * and send.
  */
 import { BN, Program } from "@anchor-lang/core";
-import { AccountMeta, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
+import { AccountMeta, Keypair, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
-import { deriveEscrowAuthority, derivePaStatePda, derivePreviousEscrowAuthority, deriveProgramDataPda } from "./pda";
+import {
+  deriveConfigPda,
+  deriveEscrowAuthority,
+  derivePaStatePda,
+  derivePreviousEscrowAuthority,
+  deriveProgramDataPda,
+} from "./pda";
 
 // Protocol adapter governance
 
@@ -65,6 +71,46 @@ export function escrowAccounts(
 ): { escrowAuthority: PublicKey; escrowAta: PublicKey } {
   const escrowAuthority = deriveEscrowAuthority(forwarderProgramId);
   return { escrowAuthority, escrowAta: getAssociatedTokenAddressSync(mint, escrowAuthority, true) };
+}
+
+/** A mint's escrow under the previous build: its per-mint escrow authority and that authority's token account. */
+export function previousEscrowAccounts(
+  forwarderProgramId: PublicKey,
+  mint: PublicKey,
+): { previousEscrowAuthority: PublicKey; previousEscrowAta: PublicKey } {
+  const previousEscrowAuthority = derivePreviousEscrowAuthority(forwarderProgramId, mint);
+  return {
+    previousEscrowAuthority,
+    previousEscrowAta: getAssociatedTokenAddressSync(mint, previousEscrowAuthority, true),
+  };
+}
+
+/** The head of every forwarder call segment: the forwarder, its config and the instructions sysvar. */
+export function forwarderSegmentHead(forwarderProgramId: PublicKey): AccountMeta[] {
+  return [
+    { pubkey: forwarderProgramId, isSigner: false, isWritable: false },
+    { pubkey: deriveConfigPda(forwarderProgramId)[0], isSigner: false, isWritable: false },
+    { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+  ];
+}
+
+/**
+ * The accounts of a wrap, in the order the program reads them: the wrap's
+ * remaining accounts after the segment head.
+ */
+export function wrapTransferAccounts(
+  source: PublicKey,
+  destination: PublicKey,
+  escrowAuthority: PublicKey,
+  nonceBitmap: PublicKey,
+): AccountMeta[] {
+  return [
+    { pubkey: source, isSigner: false, isWritable: true },
+    { pubkey: destination, isSigner: false, isWritable: true },
+    { pubkey: escrowAuthority, isSigner: false, isWritable: false },
+    { pubkey: nonceBitmap, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
 }
 
 /**
@@ -135,11 +181,10 @@ export function migrateNonceBitmap(
 
 /** Move `mint`'s escrow from its previous per-mint authority to the escrow authority. */
 export function migrateEscrow(forwarder: Program<SplTokenForwarder>, authority: PublicKey, mint: PublicKey) {
-  const previousEscrowAuthority = derivePreviousEscrowAuthority(forwarder.programId, mint);
   return forwarder.methods.migrateEscrow().accounts({
     authority,
     tokenMint: mint,
-    previousEscrowAta: getAssociatedTokenAddressSync(mint, previousEscrowAuthority, true),
+    previousEscrowAta: previousEscrowAccounts(forwarder.programId, mint).previousEscrowAta,
     escrowAta: escrowAccounts(forwarder.programId, mint).escrowAta,
     programData: deriveProgramDataPda(forwarder.programId),
   });
