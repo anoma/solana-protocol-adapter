@@ -293,6 +293,19 @@ export function settleBuilder(
     .preInstructions(settleBudget(heapFrame));
 }
 
+/** The suite deployment's settlement keys, with `mints`' escrow token accounts. */
+export function suiteSettlementKeys(mints: PublicKey[]): PublicKey[] {
+  return settlementLookupKeys({
+    paProgram: program.programId,
+    verifierRouter: VERIFIER_ROUTER_ID,
+    proofSelector: PROOF_SELECTOR,
+    verifierProgram: VERIFIER.program,
+    blockTimeForwarder: blockTimeForwarderId,
+    splTokenForwarder: forwarderProgram.programId,
+    mints,
+  });
+}
+
 type TxDataEntry = { uploadId: anchor.BN; txData: PublicKey; authority: Keypair };
 
 /**
@@ -313,13 +326,18 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
   let testStartBalance = 0;
 
   /**
-   * The deployment's settlement lookup table, created on first use from the
-   * deployment's fixed keys: settlements are v0 transactions against it, the
-   * shape every submitter sends.
+   * The deployment's settlement lookup table: settlements are v0
+   * transactions against it, the shape every submitter sends. The local
+   * suite's validator starts with it (PA_SETTLEMENT_TABLE, see
+   * genesis-settlement-table.ts); on a cluster it is created on first use.
    */
   async function settlementTable(): Promise<AddressLookupTableAccount> {
-    if (!table) table = await extendSettlementTable([]);
-    return table;
+    if (table) return table;
+    const genesis = process.env.PA_SETTLEMENT_TABLE;
+    if (!genesis) return extendSettlementTable([]);
+    const { value } = await provider.connection.getAddressLookupTable(new PublicKey(genesis));
+    if (!value) throw new Error(`PA_SETTLEMENT_TABLE ${genesis} is not a lookup table on this validator`);
+    return (table = value);
   }
 
   /** Add `mints`' escrow token accounts to the settlement table: they are fixed for the deployment once the mint is supported. */
@@ -327,15 +345,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
     ({ table } = await ensureSettlementLookupTable(
       provider.connection,
       (provider.wallet as anchor.Wallet).payer,
-      settlementLookupKeys({
-        paProgram: program.programId,
-        verifierRouter: VERIFIER_ROUTER_ID,
-        proofSelector: PROOF_SELECTOR,
-        verifierProgram: VERIFIER.program,
-        blockTimeForwarder: blockTimeForwarderId,
-        splTokenForwarder: forwarderProgram.programId,
-        mints,
-      }),
+      suiteSettlementKeys(mints),
       table?.key,
     ));
     return table;

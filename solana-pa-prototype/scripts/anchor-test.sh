@@ -80,6 +80,19 @@ yarn run tsc --noEmit -p ./tsconfig.json
 echo "==> (2/3) Preparing validator genesis"
 fetch_devnet_clones
 
+# The settlement lookup table every spec file's validator starts with (see
+# tests/utils/genesis-settlement-table.ts); its keys depend on the test mode.
+# A validator serves a table's keys only once its root is past the slot that
+# last extended the table, slot 0 for this one; each validator is warped to
+# slot 1 so its root starts there, instead of about 32 slots after startup.
+GENESIS_ACCOUNT_DIR="${PROJECT_DIR}/.cache/genesis-accounts"
+mkdir -p "$GENESIS_ACCOUNT_DIR"
+ANCHOR_PROVIDER_URL="$CLUSTER_URL" ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
+  npx ts-node -P tsconfig.json tests/utils/genesis-settlement-table.ts "$GENESIS_ACCOUNT_DIR"
+settlement_table_file=("$GENESIS_ACCOUNT_DIR"/settlement-table-*.json)
+PA_SETTLEMENT_TABLE="$(basename "${settlement_table_file[0]}" .json)"
+PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE#settlement-table-}"
+
 # Spec files that start on a cluster running a program's previous build,
 # which they upgrade in place: spec file -> program name.
 declare -A PREVIOUS_BUILD_SPECS=(
@@ -94,9 +107,10 @@ for i in "${!SPEC_FILES[@]}"; do
   spec="${SPEC_FILES[$i]}"
   echo "==> [$((i + 1))/${#SPEC_FILES[@]}] ${spec}"
   workspace_program_args "${PREVIOUS_BUILD_SPECS[$spec]:-}"
-  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
+  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}" --warp-slot 1 --account "$PA_SETTLEMENT_TABLE" "${settlement_table_file[0]}"
   if ! ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
     ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
+    PA_SETTLEMENT_TABLE="$PA_SETTLEMENT_TABLE" \
     yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 "$spec"; then
     echo "❌ ${spec} failed (validator log: ${VALIDATOR_LOG})" >&2
     exit 1
