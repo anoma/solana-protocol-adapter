@@ -29,7 +29,7 @@ fn event_instruction_data_is_tag_then_discriminator_then_borsh() {
 /// discriminator, byte-for-byte what Anchor's own `Event::data` produces.
 #[test]
 fn event_instruction_data_is_tag_then_anchor_event_data_for_a_blob_event() {
-    use anchor_lang::{AnchorSerialize, Event};
+    use anchor_lang::Event;
     let event = crate::ResourcePayloadEvent {
         tag: [9u8; 32],
         index: 2,
@@ -37,10 +37,9 @@ fn event_instruction_data_is_tag_then_anchor_event_data_for_a_blob_event() {
     };
     let data = event_instruction_data(&event).unwrap();
 
-    let mut expected = anchor_lang::event::EVENT_IX_TAG_LE.to_vec();
-    expected.extend_from_slice(crate::ResourcePayloadEvent::DISCRIMINATOR);
-    expected.extend_from_slice(&event.try_to_vec().unwrap());
-    assert_eq!(data, expected);
-    assert_eq!(&data[8..], event.data().as_slice());
+    assert_eq!(
+        data,
+        [anchor_lang::event::EVENT_IX_TAG_LE, &event.data()].concat()
+    );
     assert_eq!(data.len(), 8 + 8 + 32 + 4 + 4 + 201);
 }

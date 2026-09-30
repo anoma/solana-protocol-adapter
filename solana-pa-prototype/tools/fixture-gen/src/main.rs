@@ -1466,14 +1466,14 @@ fn build_historical_root_consumer_witness(
         .map_err(|e| anyhow!("compute consumer's consumed nullifier: {e:?}"))?;
 
     let output_nf_key = NullifierKey::default();
-    let mut created_resource = Resource {
+    let created_resource = Resource {
         logic_ref: passthrough_vk,
         nk_commitment: output_nf_key.commit(),
         quantity: 1,
         is_ephemeral: true,
+        nonce: first_created_nonce(consumed_nf)?,
         ..Default::default()
     };
-    created_resource.nonce = first_created_nonce(consumed_nf)?;
 
     Ok(single_action_compliance_witness(
         committed_resource,

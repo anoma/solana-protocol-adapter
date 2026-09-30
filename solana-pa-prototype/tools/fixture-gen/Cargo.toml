@@ -31,7 +31,6 @@ ed25519-dalek = "2.1"
 solana-pa = { package = "protocol-adapter", path = "../../programs/solana-pa-prototype", default-features = false, features = ["no-entrypoint"] }
 heliax-ap-orchestrator-sdk = { git = "https://github.com/anoma/anomapay-workers-queue.git", rev = "5cda5181ccff13e9b8204d3a8aa52ab50303aac1" }
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-futures = "0.3"
 
 [workspace]
 members = ["passthrough-logic/methods"]
