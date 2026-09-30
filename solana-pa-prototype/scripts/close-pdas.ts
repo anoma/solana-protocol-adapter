@@ -18,8 +18,8 @@
  * "remove close_pa_state ... preventing the reinit bypass"). Its rent is left
  * unrecovered on purpose.
  */
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
+import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { closeAllMarkers } from "../tests/utils/devTeardown";
 import { derivePaStatePda } from "../tests/utils/pda";

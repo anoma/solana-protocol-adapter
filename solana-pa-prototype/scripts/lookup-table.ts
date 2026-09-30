@@ -14,8 +14,8 @@
  *                    with the keys it lacks. Omit to create a new table.
  *   STF_TOKEN_MINTS  comma-separated base58 mints (optional)
  */
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
+import { Program } from "@anchor-lang/core";
 import { BlockTimeForwarder } from "../target/types/block_time_forwarder";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";

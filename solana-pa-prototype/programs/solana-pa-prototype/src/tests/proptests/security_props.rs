@@ -223,6 +223,6 @@ proptest! {
     #[test]
     fn seal_try_from_slice_no_panic(bytes in prop::collection::vec(any::<u8>(), 0..512)) {
         use anchor_lang::prelude::AnchorDeserialize;
-        let _ = verifier_router::Seal::try_from_slice(&bytes);
+        let _ = crate::verifier_router::types::Seal::try_from_slice(&bytes);
     }
 }

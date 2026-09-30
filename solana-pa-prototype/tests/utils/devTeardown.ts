@@ -5,7 +5,7 @@
  * naming one of these instructions there would stop them compiling against
  * production types. Only the suite and close-pdas.ts import this module.
  */
-import { Program } from "@coral-xyz/anchor";
+import { Program } from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { derivePaStatePda } from "./pda";

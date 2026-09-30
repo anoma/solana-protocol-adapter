@@ -2,7 +2,7 @@
  * TxData uploads under the default expiry bounds: expiry validation at init
  * and extend, closing, and the authority and bounds constraints.
  */
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";

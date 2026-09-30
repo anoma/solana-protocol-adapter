@@ -5,8 +5,8 @@
 //! A CPI event is the instruction data of a self-invocation; it is part of the
 //! transaction and cannot be truncated. The adapter emits from free functions
 //! that have no `ctx` in scope, so this module performs the same invocation
-//! Anchor's `emit_cpi!` macro expands to, with the authority and bump captured
-//! once per instruction.
+//! Anchor's `emit_cpi!` macro expands to, with the authority captured once per
+//! instruction.
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
@@ -41,10 +41,9 @@ impl std::io::Write for ByteCount {
     }
 }
 
-/// The event authority PDA and its bump, as `#[event_cpi]` derives them.
+/// The event authority PDA, as `#[event_cpi]` validates it.
 pub struct EventCpi<'info> {
     pub authority: AccountInfo<'info>,
-    pub bump: u8,
 }
 
 impl EventCpi<'_> {
@@ -58,7 +57,7 @@ impl EventCpi<'_> {
         invoke_signed(
             &ix,
             std::slice::from_ref(&self.authority),
-            &[&[b"__event_authority", &[self.bump]]],
+            &[&[b"__event_authority", &[crate::EVENT_AUTHORITY_AND_BUMP.1]]],
         )
         .map_err(Error::from)
     }

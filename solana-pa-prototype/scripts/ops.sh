@@ -65,9 +65,10 @@ Commands:
                          Requires --yes.
   status                 Show deployment status + wallet balance
   balance                Show wallet address and balance
-  idl-publish            Publish the PA's production IDL on chain (init or
-                         upgrade the Anchor IDL account; signer must be the
-                         upgrade authority)
+  idl-publish            Publish the PA's production IDL on chain (the
+                         program's canonical Program Metadata IDL account;
+                         devnet/mainnet only; signer must be the upgrade
+                         authority)
   test [--cluster <c>] [spec file...]
                          No cluster (or localnet): full deterministic local
                          integration flow, each spec file on its own fresh
@@ -750,7 +751,7 @@ cmd_verify_build() {
     exit 1
   fi
 
-  solana-verify build --library-name protocol_adapter
+  checked_sbf_build solana-verify build --library-name protocol_adapter
 
   local built
   built="$(solana-verify get-executable-hash target/deploy/protocol_adapter.so)"
@@ -771,14 +772,24 @@ cmd_verify_build() {
   fi
 }
 
-# Publish the PA's production IDL on chain (Anchor's IDL account, derived
-# from the program ID), so explorers and generic Anchor clients decode the
-# program's instructions, accounts, and events straight from the cluster.
-# Builds the production IDL first — the build self-checks that the dev-only
-# instructions are absent, so a dev IDL cannot be published by accident.
-# Signer must be the program's upgrade authority.
+# Publish the PA's production IDL on chain as the program's canonical
+# Program Metadata "idl" account (derived from the program ID), so explorers
+# and generic Anchor clients decode the program's instructions, accounts, and
+# events straight from the cluster. Builds the production IDL first — the
+# build self-checks that the dev-only instructions are absent, so a dev IDL
+# cannot be published by accident. Signer must be the program's upgrade
+# authority.
 cmd_idl_publish() {
   require_cmd anchor
+  # anchor idl runs the Program Metadata client through npx.
+  require_cmd npx
+
+  # The Anchor CLI skips IDL writes against a localhost RPC and exits 0, and
+  # a local validator has no Program Metadata program to write to.
+  if [[ "$CLUSTER" == "localnet" ]]; then
+    echo "❌ idl-publish targets devnet or mainnet; a local validator has no Program Metadata program." >&2
+    exit 1
+  fi
 
   local pid idl_path="target/idl/protocol_adapter.json"
   pid="$(get_program_id "protocol_adapter")"
@@ -786,26 +797,19 @@ cmd_idl_publish() {
 
   build_programs_release
 
-  if anchor idl fetch "$pid" --provider.cluster "$RPC_URL" >/dev/null 2>&1; then
-    echo "IDL account exists — upgrading..."
-    anchor idl upgrade "$pid" \
-      --filepath "$idl_path" \
-      --provider.cluster "$RPC_URL" \
-      --provider.wallet "$WALLET"
-  else
-    echo "No IDL account — initializing..."
-    anchor idl init "$pid" \
-      --filepath "$idl_path" \
-      --provider.cluster "$RPC_URL" \
-      --provider.wallet "$WALLET"
-  fi
+  # Program Metadata `write idl`: creates the canonical IDL account on first
+  # publish and overwrites it afterwards.
+  anchor idl upgrade "$pid" \
+    --filepath "$idl_path" \
+    --provider.cluster "$RPC_URL" \
+    --provider.wallet "$WALLET"
 
   # Read back what the cluster now serves rather than assuming the write
-  # landed; a mismatch here must fail loudly. `anchor idl fetch`
-  # re-serializes with sorted keys, so compare canonicalized JSON, not text.
+  # landed; a mismatch here must fail loudly. The fetched document need not
+  # keep the file's key order or whitespace, so compare canonicalized JSON.
   local fetched
   fetched="$(mktemp)"
-  anchor idl fetch "$pid" --provider.cluster "$RPC_URL" > "$fetched"
+  anchor idl fetch "$pid" --provider.cluster "$RPC_URL" --out "$fetched"
   if ! node -e '
     const fs = require("fs");
     const canon = (v) =>

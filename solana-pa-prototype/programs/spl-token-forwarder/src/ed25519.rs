@@ -10,10 +10,8 @@
 //! Reference: https://rareskills.io/post/solana-signature-verification
 
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::ed25519_program;
-use anchor_lang::solana_program::sysvar::instructions::{
-    load_instruction_at_checked, ID as IX_SYSVAR_ID,
-};
+use solana_instructions_sysvar::{load_instruction_at_checked, ID as IX_SYSVAR_ID};
+use solana_sdk_ids::ed25519_program;
 
 use crate::ErrorCode;
 

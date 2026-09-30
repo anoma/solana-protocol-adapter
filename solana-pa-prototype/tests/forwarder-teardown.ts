@@ -4,7 +4,7 @@
  * initializes the adapter and the forwarder config, creates a nonce bitmap
  * (init_nonce_bitmap is permissionless) and an escrow, then stops the adapter.
  */
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { getAccount, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { assert } from "chai";

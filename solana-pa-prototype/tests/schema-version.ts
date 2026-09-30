@@ -2,7 +2,7 @@
  * dev_set_schema_version and the schema-version guard every instruction
  * that loads pa_state applies.
  */
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { PublicKey, SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";

@@ -3,7 +3,7 @@
  * and an extension must satisfy the bounds from the current slot. The
  * before hook lowers min_expiry_slots so uploads can expire within a test.
  */
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { SystemProgram, Keypair, ComputeBudgetProgram } from "@solana/web3.js";
 import { assert } from "chai";
 import { VERIFIER_ROUTER_ID } from "../scripts/verifier-utils";

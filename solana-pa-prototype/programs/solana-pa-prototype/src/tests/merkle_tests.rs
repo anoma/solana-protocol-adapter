@@ -1,9 +1,9 @@
 use crate::merkle::{append_to_tree, hash_two, EMPTY_TREE_ROOT_INITIAL, ZEROS};
 use crate::tests::utils::{assert_anchor_err, create_test_pa_state};
-use anchor_lang::solana_program::hash::hashv;
 use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
 use sha2::{Digest as Sha2Digest, Sha256};
+use solana_sha256_hasher::hashv;
 
 /// Switching from sha2 crate to syscall must not break arm-risc0 merkle tree compatibility.
 /// The cross-check against ZEROS[1] also confirms the precomputed table uses the same hash impl.

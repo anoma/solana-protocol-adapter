@@ -125,7 +125,7 @@ impl WrapMessage {
 
     /// sha256 of the Borsh encoding, hashed field by field in Borsh order.
     pub fn hash(&self) -> [u8; 32] {
-        anchor_lang::solana_program::hash::hashv(&[
+        solana_sha256_hasher::hashv(&[
             &self.forwarder_id,
             &self.token_mint,
             &self.amount.to_le_bytes(),
@@ -203,7 +203,6 @@ impl UnwrapInput {
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
-        self.try_to_vec()
-            .expect("serializing fixed-size fields into memory cannot fail")
+        borsh::to_vec(self).expect("serializing fixed-size fields into memory cannot fail")
     }
 }

@@ -150,7 +150,7 @@ case "${1:-}" in
     ;;
 
   clippy)
-    run_in_project "cargo clippy --workspace --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
+    run_in_project "cargo clippy --workspace --all-targets -- -D warnings && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings"
     ;;
 
   coverage)

@@ -98,8 +98,40 @@ ensure_wallet() {
   fi
 }
 
-build_with_filtered_output() {
-  "$@" 2>&1 | grep -v '^warning:\|^ *-->\|^ *[0-9]* |\|^ *|\|^ *=\|generated [0-9]* warning\|future-incompat-report' | cat -s
+# `anchor build` defaults to SBPF v3 and platform-tools v1.57. These programs
+# are built for SBPF v0 (cargo build-sbf's own default) with the platform-tools
+# release flake.nix ships, so local, CI, and deployed builds use one compiler.
+# Keep the tools version in lockstep with flake.nix's platform-tools.
+anchor_build() {
+  checked_sbf_build anchor build --arch v0 --tools-version v1.52 "$@"
+}
+
+# Run an SBF build command and fail if it failed or reported a stack-frame
+# overflow. The SBF backend reports a function whose frame exceeds the 4 KiB
+# limit as an "Error: Function ... overflows the maximum allowed frame space"
+# line yet still exits 0; such a function corrupts memory when it runs on
+# chain.
+checked_sbf_build() {
+  local build_log build_status=0 grep_status=0
+  build_log="$(mktemp)"
+  "$@" 2>&1 | tee "$build_log" || build_status=$?
+  grep -E "overflows the maximum allowed frame space|Stack offset of .* exceeded max offset" "$build_log" || grep_status=$?
+  rm "$build_log"
+  if ((build_status != 0)); then
+    echo "❌ $* exited with status ${build_status}." >&2
+    exit "$build_status"
+  fi
+  case "$grep_status" in
+    0)
+      echo "❌ The SBF build reported stack-frame overflows (above); a program would crash on chain." >&2
+      exit 1
+      ;;
+    1) ;; # grep found no overflow report
+    *)
+      echo "❌ Could not scan the build log for stack-frame overflows (grep status ${grep_status})." >&2
+      exit 1
+      ;;
+  esac
 }
 
 fixture_matches_program_id() {
@@ -383,15 +415,8 @@ sync_program_ids() {
   fi
 }
 
-# anchor build uses cargo +nightly for IDL generation, which is incompatible
-# with debug artifacts compiled by the stable toolchain (e.g. from cargo test).
-# Remove incremental build state and proc-macro artifacts to avoid ABI mismatch.
-clean_incremental_artifacts() {
-  rm -rf target/debug/incremental target/debug/build
-}
-
 build_programs_dev() {
-  # $1 = "noidl" skips IDL generation — a separate cargo +nightly compile
+  # $1 = "noidl" skips IDL generation — a separate host `cargo test` compile
   # pass per program that pure compile checks don't need. Anything that runs
   # the TS operator scripts or tests needs the IDL (and target/types).
   local idl_flag=""
@@ -400,19 +425,17 @@ build_programs_dev() {
   fi
 
   assert_known_programs
-  clean_incremental_artifacts
 
   echo "    Building programs (development build, dev-teardown enabled)..."
   # dev-teardown enables close_markers_batch (development-only marker PDA
   # reclamation). It's a protocol-adapter-only Cargo feature, so it must
   # be scoped with -p rather than passed to the whole-workspace build.
-  build_with_filtered_output anchor build -p protocol-adapter ${idl_flag} -- --features dev-teardown
-  build_with_filtered_output anchor build -p block-time-forwarder ${idl_flag}
-  build_with_filtered_output anchor build -p spl-token-forwarder ${idl_flag}
-  # Nothing consumes the test-only programs' IDLs — skip that extra
-  # cargo +nightly pass unconditionally.
-  build_with_filtered_output anchor build -p test-forwarder --no-idl
-  build_with_filtered_output anchor build -p mock-verifier --no-idl
+  anchor_build -p protocol_adapter ${idl_flag} -- --features dev-teardown
+  anchor_build -p block_time_forwarder ${idl_flag}
+  anchor_build -p spl_token_forwarder ${idl_flag}
+  # Nothing consumes the test-only programs' IDLs; always skip their IDL pass.
+  anchor_build -p test_forwarder --no-idl
+  anchor_build -p mock_verifier --no-idl
 }
 
 # Prints the names of instructions gated by a `#[cfg(...)]` attribute whose
@@ -461,19 +484,18 @@ dev_only_instructions() {
 # rather than a convention nothing enforces.
 build_programs_release() {
   assert_known_programs
-  clean_incremental_artifacts
 
   local idl_path="target/idl/protocol_adapter.json"
   rm -f "$idl_path"
 
   echo "    Building programs (production build)..."
-  build_with_filtered_output anchor build -p protocol-adapter
-  build_with_filtered_output anchor build -p block-time-forwarder --no-idl
+  anchor_build -p protocol_adapter
+  anchor_build -p block_time_forwarder --no-idl
   # The forwarder's operator script resolves the program through the Anchor
   # workspace, which needs its IDL and types.
-  build_with_filtered_output anchor build -p spl-token-forwarder
-  build_with_filtered_output anchor build -p test-forwarder --no-idl
-  build_with_filtered_output anchor build -p mock-verifier --no-idl
+  anchor_build -p spl_token_forwarder
+  anchor_build -p test_forwarder --no-idl
+  anchor_build -p mock_verifier --no-idl
 
   if [[ ! -f "$idl_path" ]]; then
     echo "❌ release build: anchor build did not produce an IDL at ${idl_path}" >&2

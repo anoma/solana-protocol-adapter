@@ -2,7 +2,7 @@
  * update_expiry_config: the authority sets the TxData expiry bounds within
  * their limits.
  */
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import {

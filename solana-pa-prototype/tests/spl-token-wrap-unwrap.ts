@@ -3,7 +3,7 @@
  * fixtures whose external calls target the forwarder, and the committee
  * operations it refuses while the adapter runs.
  */
-import * as anchor from "@coral-xyz/anchor";
+import * as anchor from "@anchor-lang/core";
 import { AccountMeta, AddressLookupTableAccount, PublicKey, SystemProgram, Keypair, Ed25519Program, PACKET_DATA_SIZE, SYSVAR_INSTRUCTIONS_PUBKEY, VersionedTransaction } from "@solana/web3.js";
 import { approve, createMint, getAccount, getOrCreateAssociatedTokenAccount, mintTo, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { assert } from "chai";

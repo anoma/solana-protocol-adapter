@@ -107,8 +107,8 @@ Inside the shell:
 ```bash
 cd solana-pa-prototype
 
-# Build programs
-anchor build
+# Build programs (SBPF v0 with the flake's platform-tools; see scripts/validator-deploy.sh)
+./scripts/ops.sh build-dev
 
 # Run tests (start validator separately first)
 yarn run ts-mocha -p ./tsconfig.json -t 1000000 'tests/**/*.ts'
