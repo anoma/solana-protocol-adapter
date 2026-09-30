@@ -487,7 +487,7 @@ pub mod protocol_adapter {
         };
         resize_state(
             &info,
-            state.current_space(),
+            PAStateAccount::space(state.depth(), state.denied_logic_refs.len()),
             &ctx.accounts.authority.to_account_info(),
             &ctx.accounts.system_program.to_account_info(),
         )?;
@@ -766,17 +766,17 @@ fn execute_settlement(
 
     validate_consumed_roots(instance, state, pa_state_key, accounts.remaining)?;
 
-    let nullifier_count = settle::extract_nullifiers(instance).len();
-    let (nullifier_markers, _) = accounts
+    let nullifier_count = settle::nullifier_count(instance);
+    let mut nullifier_markers = accounts
         .remaining
-        .split_at_checked(nullifier_count)
-        .ok_or(PAError::InvalidTransactionData)?;
-    let mut nullifier_markers = nullifier_markers.iter();
+        .get(..nullifier_count)
+        .ok_or(PAError::InvalidTransactionData)?
+        .iter();
     #[cfg(not(test))]
     let mut forwarder_segments =
         external_calls::ForwarderSegments::new(accounts.remaining, nullifier_count)?;
 
-    let created_count = settle::extract_commitments(instance).len();
+    let created_count = settle::commitment_count(instance);
     maybe_grow_account(
         &accounts.pa_state,
         state,
@@ -809,8 +809,12 @@ fn execute_settlement(
                     &accounts.system_program,
                     ml,
                 )?;
+                executed.nullifiers.push(resource.tag.into());
+                executed.consumed_logic_refs.push(resource.logic_ref.into());
             } else {
                 append_to_tree(state, resource.tag)?;
+                executed.commitments.push(resource.tag.into());
+                executed.created_logic_refs.push(resource.logic_ref.into());
             }
 
             #[cfg(not(test))]
@@ -821,14 +825,6 @@ fn execute_settlement(
                 events.emit(&event)?;
             }
             emit_app_data_events(events, &resource.tag, resource.app_data)?;
-
-            if resource.is_consumed {
-                executed.nullifiers.push(resource.tag.into());
-                executed.consumed_logic_refs.push(resource.logic_ref.into());
-            } else {
-                executed.commitments.push(resource.tag.into());
-                executed.created_logic_refs.push(resource.logic_ref.into());
-            }
         }
 
         events.emit(&executed)?;

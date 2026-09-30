@@ -140,28 +140,20 @@ impl PAStateAccount {
     /// denied logic ref.
     pub const MAX_SPACE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
 
-    /// The account at `depth` with no denied logic ref: full size less the
-    /// frontier levels not yet reached. Every other field has a fixed size,
-    /// so the account grows only with the frontier and the denylist.
-    pub const fn space_for_depth(depth: usize) -> usize {
-        Self::MAX_SPACE - size_of::<[u8; 32]>() * (MAX_TREE_DEPTH - depth)
-    }
-
-    /// The account at `depth` holding `denied` denied logic refs.
+    /// The account at `depth` holding `denied` denied logic refs: full size
+    /// less the frontier levels not yet reached, plus the denylist. Every
+    /// other field has a fixed size, so the account grows only with the
+    /// frontier and the denylist.
     pub const fn space(depth: usize, denied: usize) -> usize {
-        Self::space_for_depth(depth) + size_of::<[u8; 32]>() * denied
-    }
-
-    /// The account's size for its own depth and denylist.
-    pub fn current_space(&self) -> usize {
-        Self::space(self.depth(), self.denied_logic_refs.len())
+        Self::MAX_SPACE - size_of::<[u8; 32]>() * (MAX_TREE_DEPTH - depth)
+            + size_of::<[u8; 32]>() * denied
     }
 
     pub fn is_logic_ref_denied(&self, logic_ref: &[u8; 32]) -> bool {
         self.denied_logic_refs.contains(logic_ref)
     }
 
-    pub const INITIAL_SPACE: usize = Self::space_for_depth(INITIAL_TREE_DEPTH);
+    pub const INITIAL_SPACE: usize = Self::space(INITIAL_TREE_DEPTH, 0);
 
     pub fn depth(&self) -> usize {
         self.current_depth as usize

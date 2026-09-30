@@ -602,42 +602,32 @@ cmd_close_pdas() {
   run_ts scripts/close-pdas.ts
 }
 
-cmd_init() {
+# The adapter operations below run a TS script against the deployed PA.
+require_pa_deployed() {
   require_cmd npx
-
-  require_init_params
-
   local pid
   pid="$(get_program_id "protocol_adapter")"
   require_deployed "$pid" "PA" "deploy pa"
+}
 
+cmd_init() {
+  require_init_params
+  require_pa_deployed
   init_pa
 }
 
 cmd_set_kind_table() {
-  require_cmd npx
-
-  local pid
-  pid="$(get_program_id "protocol_adapter")"
-  require_deployed "$pid" "PA" "deploy pa"
+  require_pa_deployed
   run_ts scripts/set-kind-table.ts
 }
 
 cmd_deny_logic_ref() {
-  require_cmd npx
-
-  local pid
-  pid="$(get_program_id "protocol_adapter")"
-  require_deployed "$pid" "PA" "deploy pa"
+  require_pa_deployed
   run_ts scripts/deny-logic-ref.ts
 }
 
 cmd_migrate_state() {
-  require_cmd npx
-
-  local pid
-  pid="$(get_program_id "protocol_adapter")"
-  require_deployed "$pid" "PA" "deploy pa"
+  require_pa_deployed
   run_ts scripts/migrate-state.ts
 }
 
