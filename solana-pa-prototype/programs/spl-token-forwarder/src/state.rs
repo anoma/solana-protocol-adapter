@@ -37,6 +37,10 @@ impl Config {
 #[constant]
 pub const CONFIG_VERSION: u64 = 2;
 
+/// The release this build is, as the EVM forwarder's `VERSION`: the deployed
+/// program answers the `version` instruction with it.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Whether the Protocol Adapter is emergency stopped, read from its state
 /// account through the adapter's own account type. Data that is not a PA
 /// state account (wrong discriminator, truncated, unknown layout) is an

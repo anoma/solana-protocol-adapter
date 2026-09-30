@@ -4382,7 +4382,7 @@ dependencies = [
 
 [[package]]
 name = "protocol-adapter"
-version = "0.1.0"
+version = "2.0.0-rc.1"
 dependencies = [
  "anchor-lang",
  "anoma-rm-core",
@@ -7112,7 +7112,7 @@ dependencies = [
 
 [[package]]
 name = "spl-token-forwarder"
-version = "0.1.0"
+version = "2.0.0-rc.1"
 dependencies = [
  "anchor-lang",
  "base64 0.21.7",

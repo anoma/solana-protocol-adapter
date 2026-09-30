@@ -143,7 +143,6 @@ describe("protocol-adapter (upgraded in place across a state-layout change)", ()
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.schemaVersion, SCHEMA_VERSION, "the state is in this build's layout");
     assert.deepEqual(state.deniedLogicRefs, [], "no logic ref is denied");
-    assert.ok(state.authority.equals(authority), "the authority carries over");
     assert.ok(state.verifierRouter.equals(VERIFIER_ROUTER_ID), "the verifier router carries over");
     assert.deepEqual(Buffer.from(state.proofSelector), PROOF_SELECTOR, "the proof selector carries over");
     assert.deepEqual(Buffer.from(state.kindTableCommitment), EMPTY_KIND_TABLE_COMMITMENT);

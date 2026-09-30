@@ -10,7 +10,7 @@ import {
   TX_DATA_SEED,
 } from "./constants";
 
-const BPF_LOADER_UPGRADEABLE = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
+export const BPF_LOADER_UPGRADEABLE = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 
 // Protocol adapter PDAs
 

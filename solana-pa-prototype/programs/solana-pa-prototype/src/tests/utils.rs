@@ -72,7 +72,7 @@ macro_rules! assert_anchor_err {
 pub(crate) use assert_anchor_err;
 
 use crate::merkle::EMPTY_TREE_ROOT_INITIAL;
-use crate::state::{PALifecycle, PAStateAccount, EMPTY_KIND_TABLE_COMMITMENT};
+use crate::state::{PAStateAccount, EMPTY_KIND_TABLE_COMMITMENT};
 use crate::verifier_router::types::{Proof, Seal};
 use arm_core::aggregation_instance::{
     ActionAggregated, AggregationInstance, ConsumedResourceAggregated, CreatedResourceAggregated,
@@ -170,13 +170,5 @@ pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
 
 /// Variable-depth tree starting at depth 1 (capacity = 2 leaves).
 pub fn create_test_pa_state() -> PAStateAccount {
-    create_test_pa_state_with(Pubkey::default(), false)
-}
-
-pub fn create_test_pa_state_with(authority: Pubkey, stopped: bool) -> PAStateAccount {
-    let mut state = PAStateAccount::running(0, authority, Pubkey::default(), FAKE_SELECTOR);
-    if stopped {
-        state.lifecycle = PALifecycle::Stopped;
-    }
-    state
+    PAStateAccount::running(0, Pubkey::default(), FAKE_SELECTOR)
 }

@@ -1,26 +1,24 @@
 # Operating a Protocol Adapter Deployment
 
-This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, run it, stop it in an emergency, and retire it permanently. The one fact that shapes everything here: **Solana programs are upgradeable, so "stopped forever" is not enforced by the chain — it is enforced by how you handle two keys.** The EVM Protocol Adapter gets finality for free because its contract is immutable — its `emergencyStop()` has no unpause, no key can resurrect a stopped instance, and its only operational document is a deploy/release checklist. On Solana the equivalent finality is an operator action (burning the upgrade authority), it must come last, and the stop/retire half of the lifecycle below is the part EVM immutability does automatically.
+This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, run it, stop it in an emergency, and retire it permanently. The one fact that shapes everything here: **Solana programs are upgradeable, so "stopped forever" is not enforced by the chain — it is enforced by how you handle the upgrade authority.** The EVM Protocol Adapter gets finality for free because its contract is immutable — its `emergencyStop()` has no unpause, no key can resurrect a stopped instance, and its only operational document is a deploy/release checklist. On Solana the equivalent finality is an operator action (burning the upgrade authority), it must come last, and the stop/retire half of the lifecycle below is the part EVM immutability does automatically.
 
 All commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically. Every command takes `--cluster <localnet|devnet|mainnet>`; see `scripts/ops.sh` for all flags.
 
-## The two keys
+## The owner
 
-A deployment has two independent authorities:
+A deployment has one owner: each program's upgrade authority, which the BPF loader records in the program's ProgramData account. The adapter's owner-only instructions (`initialize`, `emergency_stop`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_ref`, `migrate_state`) and the forwarder's (`initialize`, `reinitialize`, the `migrate_*` instructions) require it as signer. This mirrors pa-evm, whose owner is also the one who authorizes its upgrades.
 
-| Authority | Lives in | Controls | Moved by |
-|---|---|---|---|
-| PA authority | `PAStateAccount.authority` | `emergency_stop`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_ref`, authority transfer | `transfer_authority` (one step, effective at once, as pa-evm's ownership transfer); `renounce_authority` gives it up for good. Each emits `AuthorityTransferredEvent`. |
-| Upgrade authority | BPF loader's ProgramData account | replacing the program binary; signing `initialize`; `migrate_state` after a layout-changing upgrade; final immutability | `solana program set-upgrade-authority` |
+Ownership moves with the upgrade authority, and is given up with it:
 
-They start as the same key: `initialize` requires its payer to be the program's upgrade authority, and records that payer as the initial PA authority (`programs/solana-pa-prototype/src/lib.rs`, the `Initialize` accounts constraint and handler). After initialization no instruction ever compares them, so they can be split freely — the integration suite exercises operation with them split (`tests/authority.ts`, the authority transfer test).
+```sh
+solana program set-upgrade-authority <program id> --new-upgrade-authority <new key>   # moves ownership, at once
+solana program set-upgrade-authority <program id> --final                             # renounces it for good
+```
 
-Two consequences to keep in mind:
+No program instruction or event is involved; the loader's ProgramData account is where the current owner is read. A final program can never be upgraded, initialized again, stopped or reconfigured.
 
-- The PA authority alone decides an emergency stop, regardless of who can upgrade the program.
-- Whoever holds the upgrade authority can replace the program binary — which means they could deploy code that undoes a stop. A stop is only as permanent as upgrade-authority custody.
+The owner can replace the program binary, which means it could deploy code that undoes a stop: a stop is only as permanent as upgrade-authority custody. Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
 
-Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
 
 ## Deploy and initialize
 
@@ -149,7 +147,7 @@ The stop exists for one scenario: the deployment can no longer be trusted — ty
 ./scripts/dev.sh estop --cluster devnet --yes  # executes
 ```
 
-The command must be signed by the PA authority. It flips the lifecycle flag from Running to Stopped and there is no instruction that flips it back.
+The command must be signed by the upgrade authority. It flips the lifecycle flag from Running to Stopped and there is no instruction that flips it back.
 
 What stops: `settle` and `settle_from_txdata` reject every transaction with `PAError::Stopped`. Those are the only two instructions gated on the lifecycle flag.
 

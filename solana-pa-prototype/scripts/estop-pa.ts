@@ -26,13 +26,6 @@ async function main() {
     process.exit(1);
   }
 
-  if (!provider.wallet.publicKey.equals(account.authority)) {
-    console.error(
-      `❌ Wallet ${provider.wallet.publicKey.toBase58()} is not the PA authority (${account.authority.toBase58()}).`,
-    );
-    process.exit(1);
-  }
-
   // Idempotent: a stopped PA is the requested end state.
   if (isStopped(account.lifecycle)) {
     console.log("PA is already stopped.");
