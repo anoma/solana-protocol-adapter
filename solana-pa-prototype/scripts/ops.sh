@@ -37,7 +37,7 @@ Commands:
                          PA_KIND_TABLE_COMMITMENT (authority wallet).
   forwarder <cmd>        SPL token forwarder operations: init, set-logic-ref,
                          close-config, set-emergency-caller, emergency-withdraw,
-                         drain-escrow, teardown. Parameters are STF_*
+                         drain-escrow, teardown, migrate. Parameters are STF_*
                          environment variables; see scripts/forwarder.ts.
   lookup-table           Create the deployment's settlement lookup table, or
                          extend the one in PA_LOOKUP_TABLE with any missing

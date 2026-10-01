@@ -79,7 +79,10 @@ yarn run tsc --noEmit -p ./tsconfig.json
 
 echo "==> (2/3) Preparing validator genesis"
 fetch_devnet_clones
-workspace_program_args
+
+# Spec files that start on a cluster running a program's previous build,
+# which they upgrade in place: spec file -> program name.
+declare -A PREVIOUS_BUILD_SPECS=([tests/forwarder-upgrade.ts]=spl_token_forwarder)
 
 trap 'stop_validator' EXIT
 
@@ -87,6 +90,7 @@ echo "==> (3/3) Running ${#SPEC_FILES[@]} spec file(s), each on a fresh validato
 for i in "${!SPEC_FILES[@]}"; do
   spec="${SPEC_FILES[$i]}"
   echo "==> [$((i + 1))/${#SPEC_FILES[@]}] ${spec}"
+  workspace_program_args "${PREVIOUS_BUILD_SPECS[$spec]:-}"
   start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
   if ! ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
     ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \

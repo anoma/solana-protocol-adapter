@@ -22,6 +22,11 @@ pub struct Config {
     pub emergency_caller: Pubkey,
 }
 
+impl Config {
+    /// The account's size: the discriminator and the fields.
+    pub const ACCOUNT_SIZE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
+}
+
 /// Whether the Protocol Adapter is emergency stopped, read from its state
 /// account through the adapter's own account type. Data that is not a PA
 /// state account (wrong discriminator, truncated, unknown layout) is an
@@ -110,6 +115,15 @@ impl NonceBitmap {
         self.bits[byte_index] |= 1 << bit_offset;
     }
 }
+
+/// Size of a config the previous build created: this build's fields, then
+/// the config's bump, which this build derives at compile time (CONFIG_PDA).
+#[constant]
+pub const PREVIOUS_CONFIG_SIZE: u64 = (Config::ACCOUNT_SIZE + 1) as u64;
+/// Size of a nonce bitmap the previous build created: the word, without the
+/// bump this build stores.
+#[constant]
+pub const PREVIOUS_NONCE_BITMAP_SIZE: u64 = (NonceBitmap::ACCOUNT_SIZE - 1) as u64;
 
 /// The bitmap word a nonce lives in and its bit within that word.
 #[inline]

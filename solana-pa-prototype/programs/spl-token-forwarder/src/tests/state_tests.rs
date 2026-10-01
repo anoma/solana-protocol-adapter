@@ -3,7 +3,8 @@
 use crate::state::{
     base64_of_hash, nonce_to_word_and_bit, pa_is_stopped, NonceBitmap, UnwrapInput, WrapInput,
     WrapMessage, CONFIG_PDA, CONFIG_SEED, ESCROW_AUTHORITY, ESCROW_AUTHORITY_BUMP, ESCROW_SEED,
-    NONCES_PER_WORD, NONCE_BITMAP_SEED, SIGNED_MESSAGE_LEN,
+    NONCES_PER_WORD, NONCE_BITMAP_SEED, PREVIOUS_CONFIG_SIZE, PREVIOUS_NONCE_BITMAP_SIZE,
+    SIGNED_MESSAGE_LEN,
 };
 use anchor_lang::prelude::{borsh, Pubkey};
 use anchor_lang::AccountSerialize;
@@ -368,4 +369,13 @@ fn pa_is_stopped_rejects_truncated_data() {
     let data = serialized_pa_state(PALifecycle::Stopped, None);
     assert!(pa_is_stopped(&data[..40]).is_err());
     assert!(pa_is_stopped(&[]).is_err());
+}
+
+/// The previous build's account sizes the migrations require, as its devnet
+/// deployment holds them (config `8woJSG…`, 137 bytes; nonce bitmap
+/// `Ge6BSx…`, 40 bytes).
+#[test]
+fn previous_layout_sizes_are_the_deployed_builds() {
+    assert_eq!(PREVIOUS_CONFIG_SIZE, 137);
+    assert_eq!(PREVIOUS_NONCE_BITMAP_SIZE, 40);
 }

@@ -4,12 +4,18 @@
  * both send. Builders return an Anchor method builder; callers add signers
  * and send.
  */
-import { Program } from "@anchor-lang/core";
-import { AccountMeta, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
+import { BN, Program } from "@anchor-lang/core";
+import { AccountMeta, Keypair, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
-import { deriveEscrowAuthority, derivePaStatePda, deriveProgramDataPda } from "./pda";
+import {
+  deriveConfigPda,
+  deriveEscrowAuthority,
+  derivePaStatePda,
+  derivePreviousEscrowAuthority,
+  deriveProgramDataPda,
+} from "./pda";
 
 // Protocol adapter governance
 
@@ -67,6 +73,46 @@ export function escrowAccounts(
   return { escrowAuthority, escrowAta: getAssociatedTokenAddressSync(mint, escrowAuthority, true) };
 }
 
+/** A mint's escrow under the previous build: its per-mint escrow authority and that authority's token account. */
+export function previousEscrowAccounts(
+  forwarderProgramId: PublicKey,
+  mint: PublicKey,
+): { previousEscrowAuthority: PublicKey; previousEscrowAta: PublicKey } {
+  const previousEscrowAuthority = derivePreviousEscrowAuthority(forwarderProgramId, mint);
+  return {
+    previousEscrowAuthority,
+    previousEscrowAta: getAssociatedTokenAddressSync(mint, previousEscrowAuthority, true),
+  };
+}
+
+/** The head of every forwarder call segment: the forwarder, its config and the instructions sysvar. */
+export function forwarderSegmentHead(forwarderProgramId: PublicKey): AccountMeta[] {
+  return [
+    { pubkey: forwarderProgramId, isSigner: false, isWritable: false },
+    { pubkey: deriveConfigPda(forwarderProgramId)[0], isSigner: false, isWritable: false },
+    { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+  ];
+}
+
+/**
+ * The accounts of a wrap, in the order the program reads them: the wrap's
+ * remaining accounts after the segment head.
+ */
+export function wrapTransferAccounts(
+  source: PublicKey,
+  destination: PublicKey,
+  escrowAuthority: PublicKey,
+  nonceBitmap: PublicKey,
+): AccountMeta[] {
+  return [
+    { pubkey: source, isSigner: false, isWritable: true },
+    { pubkey: destination, isSigner: false, isWritable: true },
+    { pubkey: escrowAuthority, isSigner: false, isWritable: false },
+    { pubkey: nonceBitmap, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+}
+
 /**
  * The accounts of an escrow release, in the order the program reads them:
  * the unwrap's remaining accounts after the segment head, and the whole of
@@ -108,6 +154,40 @@ export function setLogicRef(
   programData: PublicKey = deriveProgramDataPda(forwarder.programId),
 ) {
   return forwarder.methods.setLogicRef(logicRef).accounts({ authority, programData });
+}
+
+/**
+ * The migrations that bring the accounts of the forwarder's previous build
+ * to this build's layout, run once by the upgrade authority after upgrading
+ * the program in place.
+ */
+export function migrateConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey) {
+  return forwarder.methods
+    .migrateConfig()
+    .accounts({ authority, programData: deriveProgramDataPda(forwarder.programId) });
+}
+
+/** Migrate `user`'s nonce bitmap for the 256-nonce word `wordIndex`. */
+export function migrateNonceBitmap(
+  forwarder: Program<SplTokenForwarder>,
+  authority: PublicKey,
+  user: PublicKey,
+  wordIndex: bigint,
+) {
+  return forwarder.methods
+    .migrateNonceBitmap(user, new BN(wordIndex.toString()))
+    .accounts({ authority, programData: deriveProgramDataPda(forwarder.programId) });
+}
+
+/** Move `mint`'s escrow from its previous per-mint authority to the escrow authority. */
+export function migrateEscrow(forwarder: Program<SplTokenForwarder>, authority: PublicKey, mint: PublicKey) {
+  return forwarder.methods.migrateEscrow().accounts({
+    authority,
+    tokenMint: mint,
+    previousEscrowAta: previousEscrowAccounts(forwarder.programId, mint).previousEscrowAta,
+    escrowAta: escrowAccounts(forwarder.programId, mint).escrowAta,
+    programData: deriveProgramDataPda(forwarder.programId),
+  });
 }
 
 /** `forward_emergency_call` by `caller`; callers add signers and send. */

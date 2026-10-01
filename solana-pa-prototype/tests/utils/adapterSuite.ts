@@ -38,7 +38,7 @@ import {
   VERIFIER_ROUTER_ID,
 } from "../../client/verifier";
 import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
-import { createdCommitmentsOf, loadFixture, parseSelectorFromFixture } from "./fixtures";
+import { createdCommitmentsOf, type Fixture, loadFixture, parseSelectorFromFixture } from "./fixtures";
 import {
   confirmedTransaction,
   ExpectedFailure,
@@ -431,6 +431,26 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
   }
 
   /**
+   * Settle a fixture whose external calls are forwarder segments:
+   * `forwarderAccounts` follow the nullifier markers, and `preInstructions`
+   * are prepended, so an ed25519 instruction lands at index 0, where a wrap
+   * input points.
+   */
+  async function settleForwarderFixture(
+    fx: Fixture,
+    forwarderAccounts: AccountMeta[],
+    preInstructions: anchor.web3.TransactionInstruction[],
+  ): Promise<string> {
+    return uploadAndSettleV0(
+      await funder.fresh(2),
+      Buffer.from(fx.tx_b64, "base64"),
+      [...deriveNullifierAccounts(fx.consumed_nullifiers_b64), ...forwarderAccounts],
+      { createdCommitments: createdCommitmentsOf(fx) },
+      preInstructions,
+    );
+  }
+
+  /**
    * Settle the fixture `fixtureName`, whose one external call is the
    * block-time forwarder's, asserting first that it is unsettled. Returns the
    * settlement's signature.
@@ -531,6 +551,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
     keepTxData,
     uploadAndSettleV0,
     settleFixtureViaTxData,
+    settleForwarderFixture,
     settleUnsettledFixture,
     settleFixture,
   };

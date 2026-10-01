@@ -30,6 +30,14 @@ export function requirePubkey(name: string, what: string): PublicKey {
   return parsePubkey(name, requireEnv(name, what));
 }
 
+/** Variable `name` as comma-separated base58 pubkeys; unset or empty is the empty list. */
+export function pubkeyList(name: string): PublicKey[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .filter((s) => s.length > 0)
+    .map((s) => parsePubkey(name, s));
+}
+
 /** A fixed-width hex byte string (an optional 0x prefix is accepted), as the byte array Anchor takes. */
 export function requireHexBytes(name: string, byteLen: number, what: string): number[] {
   const hex = requireEnv(name, what).replace(/^0x/, "");

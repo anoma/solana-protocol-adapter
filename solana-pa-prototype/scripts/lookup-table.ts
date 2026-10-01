@@ -21,7 +21,7 @@ import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import { ensureSettlementLookupTable, settlementLookupKeys } from "../client/lookupTable";
 import { derivePaStatePda } from "../client/pda";
-import { parsePubkey, requirePubkey } from "./cli-utils";
+import { pubkeyList, requirePubkey } from "./cli-utils";
 import { getVerifierEntryPda, verifierOfEntry } from "../client/verifier";
 
 async function main() {
@@ -42,10 +42,7 @@ async function main() {
   if (!entry) throw new Error(`verifier entry ${verifierEntry.toBase58()} does not exist on this cluster`);
   const verifierProgram = verifierOfEntry(entry.data);
 
-  const mints = (process.env.STF_TOKEN_MINTS ?? "")
-    .split(",")
-    .filter((s) => s.length > 0)
-    .map((s) => parsePubkey("STF_TOKEN_MINTS", s));
+  const mints = pubkeyList("STF_TOKEN_MINTS");
   const existing = process.env.PA_LOOKUP_TABLE
     ? requirePubkey("PA_LOOKUP_TABLE", "the deployment's settlement lookup table, as a base58 pubkey")
     : undefined;
