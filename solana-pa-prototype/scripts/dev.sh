@@ -90,7 +90,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|sync-ids|idl-publish|verify-build)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|sync-ids|idl-publish|verify-build|refresh-devnet-verifier)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -258,6 +258,9 @@ PYEOF
     echo "  validator    Start a local Solana validator (verifier stack only)"
     echo "  validator-deploy Build, start a validator with every program loaded"
     echo "               at genesis, and keep it running"
+    echo "  refresh-devnet-verifier --url <rpc>"
+    echo "               Replace the committed copy of the devnet verifier stack"
+    echo "               (devnet-verifier/) with devnet's current state"
     echo "  update-deps  Regenerate yarn.lock"
     echo "  coverage     Run unit tests with kcov and report line coverage"
     echo "  clean        Remove local validator/test artifacts"

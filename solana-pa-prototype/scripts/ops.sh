@@ -68,6 +68,10 @@ Commands:
                          with a cluster, compares against the deployed hash
   validator              Start the local test validator (RISC0 verifier stack
                          copied from devnet, marker fixtures preloaded)
+  refresh-devnet-verifier --url <rpc>
+                         Replace the committed copy of the devnet RISC0
+                         verifier stack (devnet-verifier/) with devnet's
+                         current state
   validator-deploy       Sync IDs, build, start the validator with all
                          programs loaded at genesis, and keep it running
 
@@ -858,14 +862,21 @@ case "$COMMAND" in
     fi
     cmd_verify_build
     ;;
+  refresh-devnet-verifier)
+    if [[ -z "$RPC_OVERRIDE" ]]; then
+      echo "❌ refresh-devnet-verifier reads devnet through --url <rpc>; there is no default endpoint." >&2
+      exit 1
+    fi
+    require_cmd solana
+    require_cmd jq
+    refresh_devnet_verifier "$RPC_OVERRIDE"
+    ;;
   validator)
     require_cmd solana-test-validator
     # start_validator (validator-deploy.sh) preloads the RISC0 verifier stack
     # copied from devnet and the synthetic verifier-entry account fixtures
     # — a bare validator cannot settle anything.
     require_cmd solana
-    require_cmd jq
-    fetch_devnet_clones
     start_validator
     trap 'stop_validator' EXIT INT TERM
     echo "Validator running (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
@@ -880,7 +891,6 @@ case "$COMMAND" in
     ensure_lockfile_sync
     sync_program_ids
     build_programs_dev
-    fetch_devnet_clones
     workspace_program_args
     start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
     trap 'stop_validator' EXIT INT TERM

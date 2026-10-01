@@ -78,7 +78,6 @@ echo "==> Type-checking scripts and tests"
 yarn run tsc --noEmit -p ./tsconfig.json
 
 echo "==> (2/3) Preparing validator genesis"
-fetch_devnet_clones
 
 # The settlement lookup table every spec file's validator starts with (see
 # tests/utils/genesis-settlement-table.ts); its keys depend on the test mode.

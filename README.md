@@ -37,8 +37,7 @@ cd solana-protocol-adapter/solana-pa-prototype
 
 The script:
 1. Syncs the program IDs to the committed keypairs and builds the programs.
-2. Downloads the RISC0 verifier stack from devnet once (`.cache/devnet-clones/`).
-3. Runs each spec file under `tests/` on its own fresh validator, which starts with the programs, the verifier stack and the suite's settlement lookup table loaded at genesis, warped to slot 1.
+2. Runs each spec file under `tests/` on its own fresh validator, which starts with the programs, the devnet verifier stack (the committed copy in `devnet-verifier/`) and the suite's settlement lookup table loaded at genesis, warped to slot 1.
 
 ### Proof Modes
 
@@ -450,7 +449,7 @@ Fixtures embed program IDs (the block-time forwarder's, the SPL token forwarder'
 
 ### Local Testing
 
-The local validator does not fetch anything at startup. `fetch_devnet_clones` (`scripts/validator-deploy.sh`) downloads the RISC0 verifier router, the Groth16 verifier and their state accounts from devnet once into `.cache/devnet-clones/` (`DEVNET_CLONE_PROGRAMS`, `DEVNET_CLONE_ACCOUNTS`), and `start_validator` loads them at genesis:
+The local validator and the tests never touch the network. `devnet-verifier/` holds a committed copy of the RISC0 verifier router, the Groth16 verifier and their state accounts as they are on devnet (`DEVNET_CLONE_PROGRAMS`, `DEVNET_CLONE_ACCOUNTS` in `scripts/validator-deploy.sh`), and `start_validator` loads them at genesis. `./scripts/dev.sh refresh-devnet-verifier --url <devnet rpc>` replaces the copy with devnet's current state:
 
 | Address | Account |
 |---|---|
