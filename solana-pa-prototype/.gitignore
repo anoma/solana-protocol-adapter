@@ -13,6 +13,7 @@ proptest-regressions/
 
 # Devnet wallet (contains private keys)
 scripts/devnet-wallet.json
+scripts/devnet-test-wallet.json
 
 # Cache for downloaded devnet programs
 .cache/

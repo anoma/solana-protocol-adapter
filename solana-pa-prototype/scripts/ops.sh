@@ -771,6 +771,12 @@ cmd_test() {
   # A local validator's deployment is disposable and owned by the local wallet.
   if [[ "$CLUSTER" != "localnet" ]]; then
     run_ts scripts/cluster-test-guard.ts "${pids[@]}"
+    # Settlements go through the deployment's own lookup table; without it the
+    # suite would create a table of its own on the cluster, and leave it.
+    if [[ -z "${PA_SETTLEMENT_TABLE:-}" ]]; then
+      echo "❌ Set PA_SETTLEMENT_TABLE to the deployment's settlement lookup table (its deployment record names it)." >&2
+      exit 1
+    fi
   fi
 
   # Cluster-safe spec files (explicit allowlist): none needs the test

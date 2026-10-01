@@ -330,7 +330,8 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
    * The deployment's settlement lookup table: settlements are v0
    * transactions against it, the shape every submitter sends. The local
    * suite's validator starts with it (PA_SETTLEMENT_TABLE, see
-   * genesis-settlement-table.ts); on a cluster it is created on first use.
+   * genesis-settlement-table.ts); a cluster run names the deployment's own
+   * (ops.sh requires PA_SETTLEMENT_TABLE there).
    */
   async function settlementTable(): Promise<AddressLookupTableAccount> {
     if (table) return table;

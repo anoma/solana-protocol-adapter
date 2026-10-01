@@ -4,7 +4,7 @@ This document is the operator's procedure set for a Protocol Adapter (PA) deploy
 
 Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically; cluster operations take `--cluster <localnet|devnet|mainnet>` (see `scripts/ops.sh` for all flags). devnet and mainnet operations go through the operator's RPC provider: pass `--url <rpc>` or set `DEVNET_RPC_URL` / `MAINNET_RPC_URL`; there is no public-endpoint default. Commands shown as `solana`, `npx` or `solana-verify` run directly.
 
-`dev.sh anchor-test --cluster <devnet|mainnet>` runs a test subset against the live deployment. Its wallet must own nothing under test: the run refuses a wallet that is the upgrade authority of any deployed program, because a spec signing as the owner could pause the deployment, replace its kind table or renounce the authority, which makes the program final for good. Use a separate funded test wallet (`--wallet`).
+`dev.sh anchor-test --cluster <devnet|mainnet>` runs a test subset against the live deployment. Its wallet must own nothing under test: the run refuses a wallet that is the upgrade authority of any deployed program, because a spec signing as the owner could pause the deployment, replace its kind table or renounce the authority, which makes the program final for good. Use a separate funded test wallet (`--wallet`), and name the deployment's settlement lookup table in `PA_SETTLEMENT_TABLE` (without it the suite would create and leave a table of its own).
 
 ## The owner
 
