@@ -279,7 +279,7 @@ PYEOF
     echo "  migrate-state          Migrate PAState from the previous schema after an in-place upgrade"
     echo "  lookup-table           Create/extend the deployment's settlement lookup table"
     echo "  forwarder <cmd>        SPL token forwarder operations (init, reinitialize,"
-    echo "                         migrate, set-emergency-caller, emergency-withdraw,"
+    echo "                         migrate, emergency-withdraw,"
     echo "                         drain-escrow, close-config, teardown; STF_* env)"
     echo "  idl-publish            Publish the production IDL on chain"
     echo "  verify-build           Deterministic solana-verify build of the PA; with"

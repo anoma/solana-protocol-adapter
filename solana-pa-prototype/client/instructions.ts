@@ -254,16 +254,6 @@ export function closeEscrow(
   });
 }
 
-/** `set_emergency_caller` by the committee; only while the adapter at `paState` is paused. */
-export function setEmergencyCaller(
-  forwarder: Program<SplTokenForwarder>,
-  committee: PublicKey,
-  paState: PublicKey,
-  caller: PublicKey,
-) {
-  return forwarder.methods.setEmergencyCaller(caller).accounts({ committee, paState });
-}
-
 /** `close_config` by the committee `authority`; requires the adapter at `paState` to be paused. */
 export function closeConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey, paState: PublicKey) {
   return forwarder.methods.closeConfig().accounts({ authority, paState });

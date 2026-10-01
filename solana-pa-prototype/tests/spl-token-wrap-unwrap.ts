@@ -21,7 +21,6 @@ import {
   closeAllNonceBitmaps,
   closeConfig,
   closeEscrow,
-  setEmergencyCaller,
   setKindTableCommitment,
   forwarderSegmentHead,
   wrapTransferAccounts,
@@ -29,6 +28,7 @@ import {
 import { EMPTY_KIND_TABLE_COMMITMENT, NONCES_PER_WORD } from "../client/constants";
 import { deriveConfigPda, deriveNonceBitmapPda, nonceWordIndex } from "../client/pda";
 import { SOLANA_DEVNET_KIND_TABLE_COMMITMENT } from "./utils/constants";
+import { localSetEmergencyCaller } from "./utils/localOnly";
 import { requireFixture, createdCommitmentsOf as commitmentsOf, wrapAuthorizationIx } from "./utils/fixtures";
 import {
   approvedTokenAccount,
@@ -169,7 +169,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.isFalse(state.paused, "the adapter must not be paused here");
     await assertFails(
-      setEmergencyCaller(forwarderProgram, emergencyCommittee.publicKey, paState, Keypair.generate().publicKey)
+      localSetEmergencyCaller(provider.connection, forwarderProgram, emergencyCommittee.publicKey, paState, Keypair.generate().publicKey)
         .signers([emergencyCommittee])
         .rpc(),
       { program: forwarderProgram, error: "ProtocolAdapterNotPaused" },

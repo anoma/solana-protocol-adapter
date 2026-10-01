@@ -3,7 +3,7 @@
  * reclaiming their rent to the signing wallet, the program's upgrade authority.
  *
  * Usage:
- *   ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
+ *   ANCHOR_PROVIDER_URL=<rpc> \
  *   ANCHOR_WALLET=scripts/devnet-wallet.json \
  *   npx ts-node -P tsconfig.json scripts/close-pdas.ts
  *

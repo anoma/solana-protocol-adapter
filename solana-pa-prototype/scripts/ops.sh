@@ -42,7 +42,7 @@ Commands:
                          layout, migrate PAState from the previous schema
                          version. Idempotent (upgrade-authority wallet).
   forwarder <cmd>        SPL token forwarder operations: init, reinitialize,
-                         close-config, set-emergency-caller, emergency-withdraw,
+                         close-config, emergency-withdraw,
                          drain-escrow, teardown, migrate. Parameters are STF_*
                          environment variables; see scripts/forwarder.ts.
   lookup-table           Create the deployment's settlement lookup table, or
@@ -61,8 +61,10 @@ Commands:
                          No cluster (or localnet): full deterministic local
                          integration flow, each spec file on its own fresh
                          validator. devnet/mainnet: cluster-safe test subset
-                         against the programs deployed there. Spec files
-                         (paths under tests/) restrict the run to them.
+                         against the programs deployed there, refused when
+                         the wallet is any of their upgrade authorities
+                         (their owner). Spec files (paths under tests/)
+                         restrict the run to them.
   build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
   build-release          Build the production binaries, no deploy (verifies
                          each production IDL is its development IDL minus
@@ -86,7 +88,9 @@ Flags:
   --wallet <path>  Wallet keypair. Defaults: devnet → scripts/devnet-wallet.json,
                    localnet → ~/.config/solana/id.json, mainnet → none (required).
                    The wallet must exist; nothing is auto-generated.
-  --url <rpc>      Override the cluster's default RPC URL
+  --url <rpc>      The cluster's RPC endpoint. devnet and mainnet have no
+                   default: pass --url or set DEVNET_RPC_URL / MAINNET_RPC_URL
+                   (the operator's RPC provider, never the public endpoint)
   --no-idl         build-dev: skip IDL generation (faster compile check)
   --dev-teardown   deploy/upgrade: build with the dev-teardown feature
                    (close_markers_batch enabled). Refused on mainnet.
@@ -205,14 +209,14 @@ resolve_cluster() {
       ALLOW_DEV_TEARDOWN=true
       ;;
     devnet)
-      RPC_URL="https://api.devnet.solana.com"
+      RPC_URL="${DEVNET_RPC_URL:-}"
       EXPLORER_QS="?cluster=devnet"
       PRINT_EXPLORER=true
       ALLOW_DEV_TEARDOWN=true
       default_wallet="${PROJECT_DIR}/scripts/devnet-wallet.json"
       ;;
     mainnet)
-      RPC_URL="https://api.mainnet-beta.solana.com"
+      RPC_URL="${MAINNET_RPC_URL:-}"
       PRINT_EXPLORER=true
       ;;
     "")
@@ -227,6 +231,12 @@ resolve_cluster() {
 
   if [[ -n "$RPC_OVERRIDE" ]]; then
     RPC_URL="$RPC_OVERRIDE"
+  fi
+  # A cluster operation goes through the operator's RPC provider, never the
+  # rate-limited public endpoint.
+  if [[ -z "$RPC_URL" ]]; then
+    echo "❌ No RPC endpoint for ${CLUSTER}: pass --url <rpc> or set ${CLUSTER^^}_RPC_URL." >&2
+    exit 1
   fi
 
   WALLET="${WALLET_OVERRIDE:-$default_wallet}"
@@ -820,18 +830,28 @@ cmd_test() {
 
   ensure_node_modules
 
+  # The wallet must own none of the programs under test: their owner is their
+  # upgrade authority, and a spec signing as the owner could pause the
+  # deployment, replace its kind table, or renounce the authority for good.
+  # A local validator's deployment is disposable and owned by the local wallet.
+  if [[ "$CLUSTER" != "localnet" ]]; then
+    local pids=() t
+    for t in "${PROGRAM_TARGETS[@]}"; do
+      pids+=("$(get_program_id "${PROGRAM_BY_TARGET[$t]}")")
+    done
+    run_ts scripts/cluster-test-guard.ts "$(get_wallet_pubkey)" "${pids[@]}"
+  fi
+
   # Cluster-safe spec files (explicit allowlist): none needs the test
-  # forwarder, stops the adapter, or leaves state another file's tests
-  # cannot run on. Spec files given on the command line replace the list.
+  # forwarder or the owner, stops the adapter, or leaves state another file's
+  # tests cannot run on. Spec files given on the command line replace the list.
   # One mocha process runs them against the cluster's single deployment, in
   # list order: settle.ts asserts the primary fixture unsettled before
   # direct-settle.ts settles it.
   local specs=(
     tests/settle.ts
     tests/direct-settle.ts
-    tests/authority.ts
     tests/txdata-lifecycle.ts
-    tests/txdata-expiry-config.ts
     tests/txdata-expiration.ts
     tests/tree-growth.ts
   )
