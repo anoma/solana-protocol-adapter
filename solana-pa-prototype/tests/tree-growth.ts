@@ -6,6 +6,7 @@ import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
 import { RESULT_LT } from "../client/constants";
 import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
+import { assertFails } from "./utils/helpers";
 import {
   provider,
   program,
@@ -14,6 +15,7 @@ import {
   deriveRootPda,
   deriveNullifierAccounts,
   assertFixtureUnsettled,
+  buildSettleRemainingAccounts,
   cpiEventsOf,
   useAdapterSuite,
 } from "./utils/adapterSuite";
@@ -86,6 +88,19 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     assert.ok(info!.owner.equals(program.programId), "Root marker should be owned by the PA program");
   });
 
+  // A settlement that appends commitments must retain its resulting root.
+  it("rejects a settlement that creates resources but passes no root marker", async () => {
+    const fixture = loadFixture("batch_groth16_v3.json");
+    await assertFails(
+      settleFixtureViaTxData(
+        Buffer.from(fixture.tx_b64, "base64"),
+        buildSettleRemainingAccounts(deriveNullifierAccounts(fixture.consumed_nullifiers_b64)),
+        { newRootMarker: null },
+      ),
+      { program, error: "RootPdaMismatch" },
+    );
+  });
+
   it("settles v3 fixture (appends one leaf)", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
@@ -121,5 +136,44 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.nextIndex.toNumber(), nextIndexBefore + 1);
+  });
+
+  // A settlement that creates nothing produces no root, so no marker account
+  // belongs to it.
+  it("rejects a root marker passed with a settlement that creates nothing", async () => {
+    const fixture = loadFixture("batch_groth16_consume_only.json");
+    const { root } = await program.account.paStateAccount.fetch(paState);
+    await assertFails(
+      settleFixtureViaTxData(
+        Buffer.from(fixture.tx_b64, "base64"),
+        buildSettleRemainingAccounts(deriveNullifierAccounts(fixture.consumed_nullifiers_b64)),
+        { newRootMarker: deriveRootPda(Buffer.from(root)) },
+      ),
+      { program, error: "RootPdaMismatch" },
+    );
+  });
+
+  // A transaction that creates no resource appends nothing, so the tree and
+  // its latest root stay as they are and no root is recorded, as the EVM
+  // adapter skips adding a root when none was produced. Settled after the
+  // tree has grown, so the unchanged root is not the empty tree's.
+  it("settles a transaction that creates nothing, leaving the tree and its roots untouched", async () => {
+    const before = await program.account.paStateAccount.fetch(paState);
+    assert.isAbove(before.nextIndex.toNumber(), 0, "the tree has grown");
+
+    const sig = await settleUnsettledFixture("batch_groth16_consume_only.json");
+
+    const after = await program.account.paStateAccount.fetch(paState);
+    assert.equal(after.nextIndex.toNumber(), before.nextIndex.toNumber(), "no leaf is appended");
+    assert.deepEqual(after.root, before.root, "the latest root is unchanged");
+
+    const fixture = loadFixture("batch_groth16_consume_only.json");
+    const [nullifierMarker] = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
+    assert.isNotNull(
+      await provider.connection.getAccountInfo(nullifierMarker.pubkey),
+      "the consumed resource's nullifier is recorded",
+    );
+    const txEvents = (await cpiEventsOf(sig)).events.filter((e) => e.name === "transactionExecutedEvent");
+    assert.deepEqual(txEvents[0].data.isConsumed, [true], "the transaction's one tag is a consumed resource");
   });
 });

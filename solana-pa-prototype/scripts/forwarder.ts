@@ -5,9 +5,10 @@
  *   ./scripts/dev.sh forwarder <command> --cluster <c> [--wallet <path>]
  *
  * Commands (the wallet that must sign is in parentheses):
- *   init                  (deployer)  Initialize the config and, with
- *                                     STF_TOKEN_MINT, the mint's escrow ATA.
- *                                     Idempotent.
+ *   init                  (upgrade    Initialize the config and, with
+ *                          authority) STF_TOKEN_MINT, the mint's escrow ATA.
+ *                                     Idempotent; refuses an existing config
+ *                                     that differs from the request.
  *   set-logic-ref         (upgrade    Rotate the config's logic ref to
  *                          authority) STF_LOGIC_REF in place; escrow, nonce
  *                                     bitmaps and the committee are untouched.
@@ -119,10 +120,20 @@ async function init() {
 
   const existing = await forwarder.account.config.fetchNullable(configPda);
   if (existing) {
-    console.log(`Config ${configPda.toBase58()} already initialized`);
-    console.log(`  adapter:   ${existing.protocolAdapter.toBase58()}`);
-    console.log(`  logic ref: ${Buffer.from(existing.logicRef).toString("hex")}`);
-    console.log(`  committee: ${existing.emergencyCommittee.toBase58()}`);
+    // (field, stored, requested)
+    const fields: [string, string, string][] = [
+      ["adapter", existing.protocolAdapter.toBase58(), adapter.programId.toBase58()],
+      ["logic ref", Buffer.from(existing.logicRef).toString("hex"), Buffer.from(logicRef).toString("hex")],
+      ["committee", existing.emergencyCommittee.toBase58(), committee.toBase58()],
+    ];
+    const mismatches = fields.filter(([, stored, requested]) => stored !== requested);
+    if (mismatches.length > 0) {
+      fail(
+        `config ${configPda.toBase58()} already exists with a different ${mismatches.map(([k]) => k).join(", ")}: ` +
+          mismatches.map(([k, stored, requested]) => `${k} ${stored} (requested ${requested})`).join("; "),
+      );
+    }
+    console.log(`Config ${configPda.toBase58()} already initialized with the requested values`);
   } else {
     console.log(`Initializing config ${configPda.toBase58()}`);
     console.log(`  adapter:   ${adapter.programId.toBase58()}`);

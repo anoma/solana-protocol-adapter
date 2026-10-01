@@ -40,6 +40,7 @@ import {
   freshUploadId,
   createFundedEscrow,
   assertFails,
+  confirmedTransaction,
 } from "./utils/helpers";
 import { predictRootAfterAppend } from "./utils/merkle";
 import {
@@ -71,6 +72,8 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // nullifier: a replay of the nonce the adapter cannot catch.
   const wrapReplayFixture = requireFixture("spl_token_wrap_replay.json");
   const unwrapFixture = requireFixture("spl_token_unwrap.json");
+  // The same resource released to the forwarder's own escrow authority.
+  const unwrapToEscrowFixture = requireFixture("spl_token_unwrap_to_escrow.json");
   // A second wrap (forwarder nonce 2) proven against the solana-devnet kind
   // table, which lists this mint's transfer kind under the forwarder's label.
   const devnetTableWrapFixture = requireFixture("spl_token_wrap_devnet_kind_table.json");
@@ -83,7 +86,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // its own supply.
   const user = seededKeypair(wrap.user_seed_label);
   const mintKeypair = seededKeypair(wrap.mint_seed_label);
-  const recipient = seededKeypair(unwrap.recipient_seed_label);
+  const recipient = seededKeypair(unwrap.recipient_seed_label!);
   const mint = mintKeypair.publicKey;
   const { escrowAuthority, escrowAta } = escrowAccounts(forwarderProgram.programId, mint);
   const emergencyCommittee = Keypair.generate();
@@ -344,6 +347,15 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     assert.equal(userAfter, userBefore - wrapAmount, "user balance decreases by the wrap amount");
     assert.equal(escrowAfter, escrowBefore + wrapAmount, "escrow holds the wrapped tokens");
 
+    // Mirrors ERC20Forwarder's `Wrapped` event. It travels in the program
+    // log, which the runtime truncates past 10,000 bytes per transaction.
+    const logs = (await confirmedTransaction(provider.connection, sig)).meta!.logMessages!;
+    const wrapped = [
+      ...new anchor.EventParser(forwarderProgram.programId, forwarderProgram.coder).parseLogs(logs),
+    ].filter((e) => e.name === "wrapped");
+    assert.lengthOf(wrapped, 1, "the settlement emits one Wrapped event");
+    assert.equal(BigInt(wrapped[0].data.amount.toString()), wrapAmount);
+
     // Both resources carry the AnomaPay transfer logic the forwarder config
     // pins: the wrap settled under the real verifying key.
     const txEvents = (await cpiEventsOf(sig)).events.filter((e) => e.name === "transactionExecutedEvent");
@@ -420,6 +432,18 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     });
 
     assert.deepEqual(await balances(other.escrowAta, recipientOtherAta), before, "no tokens move");
+  });
+
+  // The EVM forwarder reverts an unwrap to itself (BalanceMismatch: its
+  // balance does not grow by the amount). Released to the escrow authority,
+  // the tokens would never leave custody while the resource is spent.
+  it("rejects an unwrap whose recipient is the escrow authority", async () => {
+    const [escrowBefore] = await balances(escrowAta);
+    await assertFails(settleForwarderFixture(unwrapToEscrowFixture, unwrapSegment(escrowAta), []), {
+      program: forwarderProgram,
+      error: "UnwrapToEscrow",
+    });
+    assert.deepEqual(await balances(escrowAta), [escrowBefore], "escrow is unchanged");
   });
 
   // Mirrors ERC20Forwarder.t.sol: test_unwrap_sends_funds_to_the_user

@@ -35,7 +35,8 @@ export type SplTokenWrapMetadata = {
 export type SplTokenUnwrapMetadata = {
   mint_seed_label: string;
   amount: number;
-  recipient_seed_label: string;
+  /** Absent when the unwrap releases to the forwarder's escrow authority. */
+  recipient_seed_label?: string;
   logic_ref_b64: string;
 };
 
@@ -83,7 +84,7 @@ export function parseSelectorFromFixture(selectorHex: string): Buffer {
 
 /** The created commitments a successful settlement of `fixture` appends. */
 export function createdCommitmentsOf(fixture: Fixture): Buffer[] {
-  if (!fixture.created_commitments_b64?.length) {
+  if (fixture.created_commitments_b64 === undefined) {
     throw new Error("fixture is missing created_commitments_b64 — regenerate it with ./scripts/dev.sh regen-fixtures");
   }
   return fixture.created_commitments_b64.map((b) => Buffer.from(b, "base64"));

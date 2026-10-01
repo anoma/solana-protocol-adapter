@@ -632,6 +632,13 @@ fn execute_wrap<'info>(ctx: &Context<'info, ForwardCall<'info>>, input: &[u8]) -
 
 fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     let unwrap = UnwrapInput::try_from_bytes(input)?;
+    // Released to the escrow authority, the tokens would never leave custody
+    // while the resource is spent; the EVM forwarder reverts an unwrap to
+    // itself (its balance does not grow by the amount).
+    require!(
+        unwrap.recipient != ESCROW_AUTHORITY,
+        ErrorCode::UnwrapToEscrow
+    );
 
     let [escrow_ata, recipient_ata, escrow_authority, token_program, ..] = ctx.remaining_accounts
     else {
@@ -660,6 +667,9 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// The upgrade authority initializes the config, as the EVM proxy runs its
+/// initializer atomically at deployment: whoever initializes names the
+/// adapter the forwarder obeys and the committee.
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
@@ -673,6 +683,15 @@ pub struct Initialize<'info> {
         bump
     )]
     pub config: Account<'info, Config>,
+
+    /// The program account proves `program_data` is this program's own
+    /// ProgramData address rather than any account shaped like one.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ ErrorCode::UnauthorizedCaller)]
+    pub program: Program<'info, crate::program::SplTokenForwarder>,
+
+    /// The loader records the upgrade authority here; it is the forwarder's owner.
+    #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::UnauthorizedCaller)]
+    pub program_data: Account<'info, ProgramData>,
 
     pub system_program: Program<'info, System>,
 }

@@ -8,7 +8,7 @@
  */
 import * as anchor from "@anchor-lang/core";
 import { execFileSync } from "child_process";
-import { AccountMeta, PublicKey, SystemProgram } from "@solana/web3.js";
+import { AccountMeta, PublicKey, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { approve, createMint, getAccount, getOrCreateAssociatedTokenAccount, mintTo } from "@solana/spl-token";
 import { assert } from "chai";
 import {
@@ -25,7 +25,7 @@ import { NONCES_PER_WORD, PREVIOUS_NONCE_BITMAP_SIZE } from "../client/constants
 import { deriveConfigPda, deriveNonceBitmapPda, nonceWordIndex } from "../client/pda";
 import { requireFixture, wrapAuthorizationIx } from "./utils/fixtures";
 import { makeFunder, seededKeypair, assertFails } from "./utils/helpers";
-import { provider, forwarderProgram, initForwarderConfig, useAdapterSuite } from "./utils/adapterSuite";
+import { provider, program, forwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
 
 describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
   const { extendSettlementTable, settleForwarderFixture } = useAdapterSuite();
@@ -41,7 +41,7 @@ describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
 
   const user = seededKeypair(wrap.user_seed_label);
   const mintKeypair = seededKeypair(wrap.mint_seed_label);
-  const recipient = seededKeypair(unwrap.recipient_seed_label);
+  const recipient = seededKeypair(unwrap.recipient_seed_label!);
   const mint = mintKeypair.publicKey;
   const wrapAmount = BigInt(wrap.amount);
   const wrapNonce = BigInt(wrap.nonce);
@@ -83,7 +83,22 @@ describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
   // The previous build's own instructions create its accounts: the config,
   // the user's nonce bitmap, and the per-mint escrow a wrap pays into.
   it("settles a wrap through the previous build", async () => {
-    await initForwarderConfig(Array.from(Buffer.from(wrap.logic_ref_b64, "base64")), provider.wallet.publicKey);
+    // The previous build's initialize takes the authority, the config and
+    // the system program; its arguments are this build's.
+    const initializePrevious = new TransactionInstruction({
+      programId: forwarderId,
+      keys: [
+        { pubkey: provider.wallet.publicKey, isSigner: true, isWritable: true },
+        { pubkey: configPda, isSigner: false, isWritable: true },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      ],
+      data: forwarderProgram.coder.instruction.encode("initialize", {
+        protocolAdapter: program.programId,
+        logicRef: Array.from(Buffer.from(wrap.logic_ref_b64, "base64")),
+        emergencyCommittee: provider.wallet.publicKey,
+      }),
+    });
+    await provider.sendAndConfirm(new Transaction().add(initializePrevious));
     await getOrCreateAssociatedTokenAccount(provider.connection, user, mint, previousEscrowAuthority, true);
     await approve(provider.connection, user, userAta, previousEscrowAuthority, user, Number(wrapAmount));
     await forwarderProgram.methods
