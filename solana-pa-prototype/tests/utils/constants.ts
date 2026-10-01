@@ -10,6 +10,6 @@ export const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
 // kind_table_solana_devnet.json holds, which spl_token_wrap_devnet_kind_table
 // is proven against.
 export const SOLANA_DEVNET_KIND_TABLE_COMMITMENT = Buffer.from(
-  "f7205e227c4bbb3cf3c4a5228b806ec9aab3bb1926063543dff98169df4b68a5",
+  "77376b24d04a17480764c7fd2549aa023781e0d90c625a29fe220b5f4c015ed9",
   "hex",
 );
