@@ -117,7 +117,10 @@ describe("TxData lifecycle", () => {
       assert.ok(!after, "TxData should not exist after close");
 
       const balanceAfter = await provider.connection.getBalance(authority.publicKey);
-      assert.ok(balanceAfter > balanceBefore, "Authority balance should increase after close (rent refund)");
+      assert.ok(
+        balanceAfter > balanceBefore,
+        `Authority balance should increase after close (rent refund): ${balanceBefore} -> ${balanceAfter} lamports, TxData rent ${before.lamports}`,
+      );
     });
 
     // Two-layer security model:
