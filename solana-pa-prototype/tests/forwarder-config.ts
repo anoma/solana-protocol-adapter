@@ -70,7 +70,10 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
         version: BN,
       ) => ReturnType<typeof forwarderProgram.methods.reinitialize>;
       await devSetConfigVersion(new BN(CONFIG_VERSION - 1))
-        .accounts({ authority: provider.wallet.publicKey, programData: deriveProgramDataPda(forwarderProgram.programId) })
+        .accounts({
+          authority: provider.wallet.publicKey,
+          programData: deriveProgramDataPda(forwarderProgram.programId),
+        })
         .rpc();
       const rotated = randomRef();
       await reinitialize(rotated);

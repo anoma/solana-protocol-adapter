@@ -41,12 +41,7 @@ import { PublicKey } from "@solana/web3.js";
 import { getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
-import {
-  emergencyWithdraw,
-  escrowAccounts,
-  initializeForwarder,
-  reinitializeForwarder,
-} from "../client/instructions";
+import { emergencyWithdraw, escrowAccounts, initializeForwarder, reinitializeForwarder } from "../client/instructions";
 import { deriveConfigPda, derivePaStatePda } from "../client/pda";
 import { fail, requireHexBytes, requirePubkey, requireRawAmount } from "./cli-utils";
 

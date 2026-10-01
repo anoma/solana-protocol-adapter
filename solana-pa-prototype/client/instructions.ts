@@ -10,12 +10,7 @@ import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-tok
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { getVerifierEntryPda } from "./verifier";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
-import {
-  deriveConfigPda,
-  deriveEscrowAuthority,
-  derivePaStatePda,
-  deriveProgramDataPda,
-} from "./pda";
+import { deriveConfigPda, deriveEscrowAuthority, derivePaStatePda, deriveProgramDataPda } from "./pda";
 
 // Protocol adapter governance
 
