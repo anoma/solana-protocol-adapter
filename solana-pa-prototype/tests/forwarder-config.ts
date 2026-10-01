@@ -5,11 +5,12 @@
  * caller, so those behaviours are tested through settlement
  * (spl-token-wrap-unwrap.ts); the emergency flow is forwarder-emergency.ts.
  */
+import { BN } from "@anchor-lang/core";
 import { Keypair, PublicKey, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
 import { encodeUnwrapInput, reinitializeForwarder } from "../client/instructions";
 import { localSetEmergencyCaller } from "./utils/localOnly";
-import { OP_UNWRAP } from "../client/constants";
+import { CONFIG_VERSION, OP_UNWRAP } from "../client/constants";
 import { deriveConfigPda, deriveProgramDataPda } from "../client/pda";
 import { makeFunder, randomRef, assertFails } from "./utils/helpers";
 import { forwarderProgram, initForwarderConfig, paState, program as paProgram, provider } from "./utils/adapterSuite";
@@ -50,8 +51,7 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
 
     // Mirrors OpenZeppelin's reinitializer(n): InvalidInitialization once the
     // version is n. A config this build initialized is at its version, so
-    // rotating it takes a build that raises CONFIG_VERSION
-    // (forwarder-upgrade.ts rotates one).
+    // rotating it takes a build that raises CONFIG_VERSION.
     it("rejects a config already at this build's version", async () => {
       await assertFails(reinitialize(randomRef()), { program: forwarderProgram, error: "InvalidInitialization" });
       assert.deepEqual(
@@ -59,6 +59,25 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
         logicRef,
         "the config is untouched",
       );
+    });
+
+    // A config an earlier build initialized sits below this build's
+    // CONFIG_VERSION; the development build's dev_set_config_version puts
+    // this one there (looked up untyped, as production types lack it).
+    // reinitialize then rotates the ref and records the version, once.
+    it("rotates the logic ref once for a config below this build's version", async () => {
+      const devSetConfigVersion = (forwarderProgram.methods as Record<string, unknown>).devSetConfigVersion as (
+        version: BN,
+      ) => ReturnType<typeof forwarderProgram.methods.reinitialize>;
+      await devSetConfigVersion(new BN(CONFIG_VERSION - 1))
+        .accounts({ authority: provider.wallet.publicKey, programData: deriveProgramDataPda(forwarderProgram.programId) })
+        .rpc();
+      const rotated = randomRef();
+      await reinitialize(rotated);
+      const config = await forwarderProgram.account.config.fetch(configPda);
+      assert.deepEqual(config.logicRef, rotated, "the logic ref is rotated");
+      assert.equal(config.version.toNumber(), CONFIG_VERSION, "the config records this build's version");
+      await assertFails(reinitialize(randomRef()), { program: forwarderProgram, error: "InvalidInitialization" });
     });
   });
 

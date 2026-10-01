@@ -32,7 +32,6 @@ export const NULLIFIER_SEED = idlBytes(paIdl, "NULLIFIER_SEED");
 export const TX_DATA_SEED = idlBytes(paIdl, "TX_DATA_SEED");
 export const ROOT_SEED = idlBytes(paIdl, "ROOT_SEED");
 export const SCHEMA_VERSION = idlNumber(paIdl, "SCHEMA_VERSION");
-export const PREVIOUS_SCHEMA_VERSION = idlNumber(paIdl, "PREVIOUS_SCHEMA_VERSION");
 export const EMPTY_KIND_TABLE_COMMITMENT = idlBytes(paIdl, "EMPTY_KIND_TABLE_COMMITMENT");
 export const MIN_ALLOWED_EXPIRY = idlNumber(paIdl, "MIN_ALLOWED_EXPIRY");
 export const MIN_EXPIRY_SLOTS = idlNumber(paIdl, "MIN_EXPIRY_SLOTS");
@@ -46,8 +45,6 @@ export const NONCE_BITMAP_SEED = idlBytes(forwarderIdl, "NONCE_BITMAP_SEED");
 export const NONCES_PER_WORD = BigInt(idlNumber(forwarderIdl, "NONCES_PER_WORD"));
 export const OP_UNWRAP = idlNumber(forwarderIdl, "OP_UNWRAP");
 export const CONFIG_VERSION = idlNumber(forwarderIdl, "CONFIG_VERSION");
-export const PREVIOUS_CONFIG_SIZE = idlNumber(forwarderIdl, "PREVIOUS_CONFIG_SIZE");
-export const PREVIOUS_NONCE_BITMAP_SIZE = idlNumber(forwarderIdl, "PREVIOUS_NONCE_BITMAP_SIZE");
 
 // Block-time forwarder
 export const RESULT_LT = idlNumber(blockTimeForwarderIdl, "RESULT_LT");

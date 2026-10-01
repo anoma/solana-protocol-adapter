@@ -32,11 +32,8 @@ Commands:
   deny-logic-ref         Deny PA_DENIED_LOGIC_REF: no settlement consumes or
                          creates a resource carrying it again. Cannot be
                          undone (authority wallet).
-  migrate-state          After an in-place upgrade to a build with a new state
-                         layout, migrate PAState from the previous schema
-                         version. Idempotent (upgrade-authority wallet).
   forwarder <cmd>        SPL token forwarder operations: init, reinitialize,
-                         emergency-withdraw, migrate. Parameters are STF_*
+                         emergency-withdraw. Parameters are STF_*
                          environment variables; see scripts/forwarder.ts.
   lookup-table           Create the deployment's settlement lookup table, or
                          extend the one in PA_LOOKUP_TABLE with any missing
@@ -576,11 +573,6 @@ cmd_deny_logic_ref() {
   run_ts scripts/deny-logic-ref.ts
 }
 
-cmd_migrate_state() {
-  require_pa_deployed
-  run_ts scripts/migrate-state.ts
-}
-
 cmd_forwarder() {
   require_cmd npx
 
@@ -913,7 +905,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

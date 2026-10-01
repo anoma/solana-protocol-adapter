@@ -17,6 +17,8 @@ idl-build = ["anchor-lang/idl-build", "protocol-adapter/idl-build"]
 anchor-debug = []
 custom-heap = []
 custom-panic = []
+# Development builds only: dev_set_config_version, for testing reinitialize.
+dev-config-version = []
 
 [dependencies]
 anchor-lang = { workspace = true }

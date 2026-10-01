@@ -93,20 +93,13 @@ settlement_table_file=("$GENESIS_ACCOUNT_DIR"/settlement-table-*.json)
 PA_SETTLEMENT_TABLE="$(basename "${settlement_table_file[0]}" .json)"
 PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE#settlement-table-}"
 
-# Spec files that start on a cluster running a program's previous build,
-# which they upgrade in place: spec file -> program name.
-declare -A PREVIOUS_BUILD_SPECS=(
-  [tests/adapter-upgrade.ts]=protocol_adapter
-  [tests/forwarder-upgrade.ts]=spl_token_forwarder
-)
-
 trap 'stop_validator' EXIT
 
 echo "==> (3/3) Running ${#SPEC_FILES[@]} spec file(s), each on a fresh validator"
 for i in "${!SPEC_FILES[@]}"; do
   spec="${SPEC_FILES[$i]}"
   echo "==> [$((i + 1))/${#SPEC_FILES[@]}] ${spec}"
-  workspace_program_args "${PREVIOUS_BUILD_SPECS[$spec]:-}"
+  workspace_program_args
   start_validator "${WORKSPACE_PROGRAM_ARGS[@]}" --warp-slot 1 --account "$PA_SETTLEMENT_TABLE" "${settlement_table_file[0]}"
   if ! ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
     ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \

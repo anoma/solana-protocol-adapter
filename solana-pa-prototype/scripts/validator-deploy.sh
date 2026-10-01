@@ -61,7 +61,7 @@ VALIDATOR_PID=""
 PROGRAM_TABLE="
 protocol_adapter      pa   5  dev-teardown  close_markers_batch,dev_set_schema_version
 block_time_forwarder  btf  2  -             -
-spl_token_forwarder   stf  3  -             -
+spl_token_forwarder   stf  3  dev-config-version  dev_set_config_version
 test_forwarder        -    -  -             -
 mock_verifier         -    -  -             -
 "
@@ -588,16 +588,11 @@ fetch_devnet_clones() {
 # Set WORKSPACE_PROGRAM_ARGS to the solana-test-validator arguments that load
 # every workspace program at genesis from target/deploy, upgradeable, with
 # the provider wallet as upgrade authority (what `anchor deploy` would set).
-# $1, if given, names a program to load at its previous build instead, from
-# tests/fixtures/previous/<name>.so: a cluster that has not been upgraded yet.
 workspace_program_args() {
-  local previous="${1:-}" name so
+  local name so
   WORKSPACE_PROGRAM_ARGS=()
   for name in "${PROGRAM_NAMES[@]}"; do
     so="target/deploy/${name}.so"
-    if [[ "$name" == "$previous" ]]; then
-      so="tests/fixtures/previous/${name}.so"
-    fi
     if [[ ! -f "$so" ]]; then
       echo "❌ ${so} is missing; build the programs first ('./scripts/anchor-test.sh build', or the default phase)." >&2
       exit 1

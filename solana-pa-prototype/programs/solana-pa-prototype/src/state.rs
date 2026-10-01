@@ -11,10 +11,6 @@ use arm_core::Digest;
 #[constant]
 pub const SCHEMA_VERSION: u8 = 2;
 
-/// The schema version `migrate_state` migrates from.
-#[constant]
-pub const PREVIOUS_SCHEMA_VERSION: u8 = 1;
-
 /// The commitment of the empty kind table, under which every resource
 /// kind is derived via hash-to-curve: the table every deployment starts
 /// on, as pa-evm's `_EMPTY_KIND_TABLE_COMMITMENT`.
@@ -32,11 +28,11 @@ pub struct PAStateAccount {
     /// every layout: a later binary that changes the layout reads this byte
     /// through an unchecked account to decide whether it may migrate. Every
     /// instruction that reads this account — all but `initialize`, which
-    /// creates it, `migrate_state`, which requires the previous version, and
-    /// the development-only `dev_set_schema_version` — refuses an account
-    /// whose version is not `SCHEMA_VERSION`. A layout change bumps the
-    /// constant and may add, remove or reorder the other fields:
-    /// `migrate_state` parses the previous layout explicitly.
+    /// creates it, and the development-only `dev_set_schema_version` —
+    /// refuses an account whose version is not `SCHEMA_VERSION`. A layout
+    /// change bumps the constant, may add, remove or reorder the other
+    /// fields, and ships a migration instruction that parses the previous
+    /// layout explicitly, run once right after the in-place upgrade.
     pub schema_version: u8,
     pub bump: u8,
     /// Verifier router program ID, set at initialization.
@@ -142,54 +138,6 @@ impl PAStateAccount {
             frontier: vec![PADDING_LEAF.into()],
             min_expiry_slots: MIN_EXPIRY_SLOTS,
             max_expiry_slots: MAX_EXPIRY_SLOTS,
-            denied_logic_refs: Vec::new(),
-        }
-    }
-}
-
-/// The state account in schema version 1 (`PREVIOUS_SCHEMA_VERSION`), which
-/// `migrate_state` reads: this layout without the denylist. Deserialized from
-/// the account's bytes after the discriminator; the bytes past its end are
-/// not part of it (a shorter re-serialization leaves earlier bytes there).
-#[derive(AnchorDeserialize)]
-pub struct PreviousPAState {
-    pub schema_version: u8,
-    pub bump: u8,
-    pub authority: Pubkey,
-    pub verifier_router: Pubkey,
-    pub proof_selector: [u8; 4],
-    pub kind_table_commitment: [u8; 32],
-    pub pending_authority: Option<Pubkey>,
-    /// The previous build's lifecycle byte, 0 running and 1 stopped: the
-    /// encoding of `paused`.
-    pub paused: bool,
-    pub root: [u8; 32],
-    pub next_index: u64,
-    pub current_depth: u8,
-    pub frontier: Vec<[u8; 32]>,
-    pub min_expiry_slots: u64,
-    pub max_expiry_slots: u64,
-}
-
-impl From<PreviousPAState> for PAStateAccount {
-    /// This layout with the previous fields, less its authority and pending
-    /// authority (this layout's owner is the program's upgrade authority, as
-    /// pa-evm's owner is the one who authorizes upgrades), and an empty
-    /// denylist.
-    fn from(previous: PreviousPAState) -> Self {
-        Self {
-            schema_version: SCHEMA_VERSION,
-            bump: previous.bump,
-            verifier_router: previous.verifier_router,
-            proof_selector: previous.proof_selector,
-            kind_table_commitment: previous.kind_table_commitment,
-            paused: previous.paused,
-            root: previous.root,
-            next_index: previous.next_index,
-            current_depth: previous.current_depth,
-            frontier: previous.frontier,
-            min_expiry_slots: previous.min_expiry_slots,
-            max_expiry_slots: previous.max_expiry_slots,
             denied_logic_refs: Vec::new(),
         }
     }

@@ -140,115 +140,21 @@ pub mod spl_token_forwarder {
         Ok(())
     }
 
+    /// Overwrite the config's version. Development builds only: lets the
+    /// integration suite put a config below this build's CONFIG_VERSION, as a
+    /// config an earlier build initialized is, and observe `reinitialize`
+    /// rotate it once.
+    #[cfg(feature = "dev-config-version")]
+    pub fn dev_set_config_version(ctx: Context<DevSetConfigVersion>, version: u64) -> Result<()> {
+        ctx.accounts.config.version = version;
+        Ok(())
+    }
+
     /// The release this build is. Mirrors the EVM forwarder's `VERSION`:
     /// read from the deployed program (by simulation), it names the code an
     /// address runs, which an in-place upgrade changes.
     pub fn version(_ctx: Context<Version>) -> Result<String> {
         Ok(env!("CARGO_PKG_VERSION").to_string())
-    }
-
-    /// Bring the config the previous build created to this build's layout:
-    /// the bump it stored after the fields gives way to the version, 1, the
-    /// previous build having initialized it once and never reinitialized it;
-    /// the owner pays the added bytes' rent. The migrations are the
-    /// counterpart of the call the EVM owner passes to `upgradeToAndCall`:
-    /// the upgrade authority runs them once, after upgrading the program in
-    /// place.
-    pub fn migrate_config(ctx: Context<MigrateConfig>) -> Result<()> {
-        let config = &ctx.accounts.config;
-        require!(
-            config.owner == ctx.program_id
-                && config.data_len() as u64 == PREVIOUS_CONFIG_SIZE
-                && config.try_borrow_data()?.starts_with(Config::DISCRIMINATOR),
-            ErrorCode::NotPreviousLayout
-        );
-        grow(
-            config,
-            &ctx.accounts.authority,
-            &ctx.accounts.system_program,
-            Config::ACCOUNT_SIZE,
-        )?;
-        let mut data = config.try_borrow_mut_data()?;
-        let mut migrated = Config::try_deserialize_unchecked(&mut &data[..])?;
-        migrated.version = 1;
-        migrated.try_serialize(&mut &mut data[..])?;
-        Ok(())
-    }
-
-    /// Bring a nonce bitmap the previous build created to this build's
-    /// layout: its used bits are kept and its canonical bump is appended,
-    /// the owner paying the added byte's rent.
-    pub fn migrate_nonce_bitmap(
-        ctx: Context<MigrateNonceBitmap>,
-        _user: Pubkey,
-        _word_index: u64,
-    ) -> Result<()> {
-        let bitmap = &ctx.accounts.nonce_bitmap;
-        require!(
-            bitmap.owner == ctx.program_id
-                && bitmap.data_len() as u64 == PREVIOUS_NONCE_BITMAP_SIZE
-                && bitmap
-                    .try_borrow_data()?
-                    .starts_with(NonceBitmap::DISCRIMINATOR),
-            ErrorCode::NotPreviousLayout
-        );
-        grow(
-            bitmap,
-            &ctx.accounts.authority,
-            &ctx.accounts.system_program,
-            NonceBitmap::ACCOUNT_SIZE,
-        )?;
-        bitmap.try_borrow_mut_data()?[NonceBitmap::ACCOUNT_SIZE - 1] = ctx.bumps.nonce_bitmap;
-        Ok(())
-    }
-
-    /// Move a mint's escrowed tokens from the previous build's escrow, held
-    /// by that mint's own authority `["escrow", mint]`, to the escrow of the
-    /// one authority this build holds every mint under, and close the
-    /// previous escrow account; its rent goes to the owner.
-    pub fn migrate_escrow(ctx: Context<MigrateEscrow>) -> Result<()> {
-        let mint = ctx.accounts.token_mint.key();
-        let previous_ata = &ctx.accounts.previous_escrow_ata;
-        let previous_authority = &ctx.accounts.previous_escrow_authority;
-        require_token_account(previous_ata, &mint, previous_authority.key)?;
-        require_token_account(&ctx.accounts.escrow_ata, &mint, &ESCROW_AUTHORITY)?;
-        let previous_signer_seeds: &[&[u8]] = &[
-            ESCROW_SEED,
-            mint.as_ref(),
-            &[ctx.bumps.previous_escrow_authority],
-        ];
-
-        let balance = token_account_amount(previous_ata)?;
-        if balance > 0 {
-            invoke_signed(
-                &spl_transfer_ix(
-                    previous_ata.key,
-                    ctx.accounts.escrow_ata.key,
-                    previous_authority.key,
-                    balance,
-                ),
-                &[
-                    previous_ata.to_account_info(),
-                    ctx.accounts.escrow_ata.to_account_info(),
-                    previous_authority.to_account_info(),
-                ],
-                &[previous_signer_seeds],
-            )?;
-        }
-        invoke_signed(
-            &spl_close_account_ix(
-                previous_ata.key,
-                ctx.accounts.authority.key,
-                previous_authority.key,
-            ),
-            &[
-                previous_ata.to_account_info(),
-                ctx.accounts.authority.to_account_info(),
-                previous_authority.to_account_info(),
-            ],
-            &[previous_signer_seeds],
-        )?;
-        Ok(())
     }
 
     /// Create the nonce bitmap for one 256-nonce word of `user`, paid by
@@ -437,33 +343,6 @@ pub mod spl_token_forwarder {
         }
         Ok(())
     }
-}
-
-/// Grow a migrated account to `size`, the upgrade authority paying any rent
-/// shortfall.
-fn grow<'info>(
-    account: &AccountInfo<'info>,
-    payer: &Signer<'info>,
-    system_program: &Program<'info, System>,
-    size: usize,
-) -> Result<()> {
-    let shortfall = Rent::get()?
-        .minimum_balance(size)
-        .saturating_sub(account.lamports());
-    if shortfall > 0 {
-        anchor_lang::system_program::transfer(
-            CpiContext::new(
-                system_program.key(),
-                anchor_lang::system_program::Transfer {
-                    from: payer.to_account_info(),
-                    to: account.clone(),
-                },
-            ),
-            shortfall,
-        )?;
-    }
-    account.resize(size)?;
-    Ok(())
 }
 
 fn token_account_amount(token_account: &AccountInfo) -> Result<u64> {
@@ -772,88 +651,18 @@ pub struct Reinitialize<'info> {
     pub program_data: Account<'info, ProgramData>,
 }
 
+#[cfg(feature = "dev-config-version")]
 #[derive(Accounts)]
-pub struct MigrateConfig<'info> {
-    #[account(mut)]
+pub struct DevSetConfigVersion<'info> {
     pub authority: Signer<'info>,
 
-    /// CHECK: Pinned to the config address; the handler requires the
-    /// previous build's config layout, owned by this program.
     #[account(mut, address = CONFIG_PDA)]
-    pub config: UncheckedAccount<'info>,
+    pub config: Account<'info, Config>,
 
-    /// The program account proves `program_data` is this program's own
-    /// ProgramData address rather than any account shaped like one.
     #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ ErrorCode::UnauthorizedCaller)]
     pub program: Program<'info, crate::program::SplTokenForwarder>,
 
-    /// The loader records the upgrade authority here; it is the forwarder's owner.
-    #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::UnauthorizedCaller)]
-    pub program_data: Account<'info, ProgramData>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-#[instruction(user: Pubkey, word_index: u64)]
-pub struct MigrateNonceBitmap<'info> {
-    #[account(mut)]
-    pub authority: Signer<'info>,
-
-    /// CHECK: The seeds pin it to `user`'s bitmap for `word_index`; the
-    /// handler requires the previous build's bitmap layout, owned by this program.
-    #[account(
-        mut,
-        seeds = [NONCE_BITMAP_SEED, user.as_ref(), &word_index.to_le_bytes()],
-        bump
-    )]
-    pub nonce_bitmap: UncheckedAccount<'info>,
-
-    /// The program account proves `program_data` is this program's own
-    /// ProgramData address rather than any account shaped like one.
-    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ ErrorCode::UnauthorizedCaller)]
-    pub program: Program<'info, crate::program::SplTokenForwarder>,
-
-    /// The loader records the upgrade authority here; it is the forwarder's owner.
-    #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::UnauthorizedCaller)]
-    pub program_data: Account<'info, ProgramData>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[derive(Accounts)]
-pub struct MigrateEscrow<'info> {
-    /// Receives the closed previous escrow account's rent.
-    #[account(mut)]
-    pub authority: Signer<'info>,
-
-    /// CHECK: The mint whose escrow moves; the handler requires both escrow
-    /// accounts to hold it.
-    pub token_mint: UncheckedAccount<'info>,
-
-    /// CHECK: The previous build's escrow authority for this mint, pinned by
-    /// its seeds; it signs the move and the close.
-    #[account(seeds = [ESCROW_SEED, token_mint.key().as_ref()], bump)]
-    pub previous_escrow_authority: UncheckedAccount<'info>,
-
-    /// CHECK: The handler requires it to hold the mint and belong to the previous escrow authority.
-    #[account(mut)]
-    pub previous_escrow_ata: UncheckedAccount<'info>,
-
-    /// CHECK: The handler requires it to hold the mint and belong to the escrow authority.
-    #[account(mut)]
-    pub escrow_ata: UncheckedAccount<'info>,
-
-    /// CHECK: Verified by address constraint.
-    #[account(address = SPL_TOKEN_PROGRAM_ID)]
-    pub token_program: UncheckedAccount<'info>,
-
-    /// The program account proves `program_data` is this program's own
-    /// ProgramData address rather than any account shaped like one.
-    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ ErrorCode::UnauthorizedCaller)]
-    pub program: Program<'info, crate::program::SplTokenForwarder>,
-
-    /// The loader records the upgrade authority here; it is the forwarder's owner.
+    /// Only the upgrade authority, the forwarder's owner.
     #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::UnauthorizedCaller)]
     pub program_data: Account<'info, ProgramData>,
 }
