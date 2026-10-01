@@ -758,11 +758,9 @@ cmd_verify_build() {
 # authority.
 cmd_idl_publish() {
   require_cmd anchor
-  # anchor idl runs the Program Metadata client through npx.
-  require_cmd npx
+  require_cmd yarn
 
-  # The Anchor CLI skips IDL writes against a localhost RPC and exits 0, and
-  # a local validator has no Program Metadata program to write to.
+  # A local validator has no Program Metadata program to write to.
   if [[ "$CLUSTER" == "localnet" ]]; then
     echo "❌ idl-publish targets devnet or mainnet; a local validator has no Program Metadata program." >&2
     exit 1
@@ -775,11 +773,14 @@ cmd_idl_publish() {
   build_programs_release
 
   # Program Metadata `write idl`: creates the canonical IDL account on first
-  # publish and overwrites it afterwards.
-  anchor idl upgrade "$pid" \
-    --filepath "$idl_path" \
-    --provider.cluster "$RPC_URL" \
-    --provider.wallet "$WALLET"
+  # publish and overwrites it afterwards. The client is the package.json pin,
+  # not the one `anchor idl upgrade` fetches: that one sends the IDL's write
+  # transactions in parallel with no retry, so a public RPC's rate limit
+  # (HTTP 429) stops it after the canonical account is created as a buffer
+  # and before it becomes metadata, and every later write is refused.
+  yarn --silent program-metadata write idl "$pid" "$idl_path" \
+    --rpc "$RPC_URL" \
+    --keypair "$WALLET"
 
   # Read back what the cluster now serves rather than assuming the write
   # landed; a mismatch here must fail loudly. The fetched document need not

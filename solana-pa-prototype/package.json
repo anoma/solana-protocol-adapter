@@ -12,6 +12,8 @@
   },
   "devDependencies": {
     "@noble/hashes": "1.8.0",
+    "@solana-program/program-metadata": "0.10.0",
+    "@solana/kit": "8.4.0",
     "@types/bn.js": "^5.2.0",
     "@types/chai": "^5.2.3",
     "@types/mocha": "^10.0.10",

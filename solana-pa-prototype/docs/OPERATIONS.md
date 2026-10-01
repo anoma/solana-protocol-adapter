@@ -46,12 +46,12 @@ Procedure:
 
 `deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which is the only build whose markers can later be reclaimed by `close-pdas`.
 
-`idl-publish` stores the production IDL in the program's canonical Program Metadata IDL account on chain (Anchor 1.x `anchor idl upgrade`, which runs the `@solana-program/program-metadata` client through `npx`; devnet and mainnet only), so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), then verifies the cluster serves exactly the published file. Rerun it after every `upgrade` that changes the interface.
+`idl-publish` stores the production IDL in the program's canonical Program Metadata IDL account on chain (the `@solana-program/program-metadata` client pinned in `package.json`, which retries a rate-limited RPC; devnet and mainnet only), so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), then verifies the cluster serves exactly the published file. Rerun it after every `upgrade` that changes the interface.
 
 The program's display metadata — name, icon, description, project links, and the security contact (`security@anoma.foundation`, same as the EVM PA's `@custom:security-contact`) — lives in `docs/program-metadata.json` and is published to the program-metadata PDA that Solana Explorer reads:
 
 ```sh
-npx @solana-program/program-metadata@latest write security <PROGRAM_ID> \
+yarn program-metadata write security <PROGRAM_ID> \
   docs/program-metadata.json --rpc <rpc-url> --keypair scripts/devnet-wallet.json
 ```
 
