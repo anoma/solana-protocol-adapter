@@ -46,7 +46,7 @@ Procedure:
 ./scripts/dev.sh idl-publish --cluster devnet      # put the production IDL on chain
 ```
 
-`deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which is the only build whose markers can later be reclaimed by `close-pdas`.
+`deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which carries `close_markers_batch`; it is refused on every cluster but localnet, so a live deployment never has an instruction that deletes replay protection.
 
 `idl-publish` stores the production IDL in the program's canonical Program Metadata IDL account on chain (Anchor 1.x `anchor idl upgrade`, which runs the `@solana-program/program-metadata` client through `npx`; devnet and mainnet only), so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), then verifies the cluster serves exactly the published file. Rerun it after every `upgrade` that changes the interface.
 
@@ -230,20 +230,20 @@ STF_TOKEN_MINT=<mint> STF_RECIPIENT=<owner> STF_AMOUNT=<raw units> \
   ./scripts/dev.sh forwarder emergency-withdraw --cluster <c>                                # caller wallet
 ```
 
-Naming the emergency caller grants a key the right to withdraw escrowed funds, so, like every authority change on a live cluster, it is done by hand: no repository command or script builds it. The committee constructs and signs the forwarder's `set_emergency_caller(caller)` itself from the IDL (accounts: the committee as signer, the config, the paused adapter's PAState). The program refuses it while the adapter is not paused and refuses a second one. The only builders of authority instructions in the repository are the tests' (`tests/utils/localOnly.ts`), which refuse any endpoint but a local validator. The committee can also drain and close an escrow outright with `drain-escrow`, but like every committee teardown command it refuses while the adapter is not paused.
+Naming the emergency caller grants a key the right to withdraw escrowed funds, so, like every authority change on a live cluster, it is done by hand: no repository command or script builds it. The committee constructs and signs the forwarder's `set_emergency_caller(caller)` itself from the IDL (accounts: the committee as signer, the config, the paused adapter's PAState). The program refuses it while the adapter is not paused and refuses a second one. The only builders of authority instructions in the repository are the tests' (`tests/utils/localOnly.ts`), which refuse any endpoint but a local validator. The forwarder's other committee instructions, `close_escrow` (drain an escrow to a recipient and close it), `close_nonce_bitmaps_batch` and `close_config`, refuse while the adapter is not paused, and are likewise made by hand.
 
 ### Retiring the forwarder
 
-Once the adapter is paused, `STF_TOKEN_MINT=<mint> ./scripts/dev.sh forwarder teardown --cluster <c>` (committee wallet) closes every nonce bitmap, drains and closes that mint's escrow to the committee, and closes the config, reclaiming their rent. Run it once per mint that has an escrow, then close the program with `teardown stf` (which first attempts `close-pdas` on the adapter, as every `teardown` does).
+Retirement closes accounts for good, so on a live cluster it is done by hand; no repository command or script does it, and the repository's only builders of these instructions are the tests' (`tests/utils/localOnly.ts`), which refuse any endpoint but a local validator. Once the adapter is paused, the committee signs, in order: `close_nonce_bitmaps_batch` over every nonce bitmap the forwarder owns (closing them ends wrap replay protection, so the forwarder must not be initialized again afterwards), `close_escrow` for each mint's escrow (drains it to the committee's token account and closes it), then `close_config`. Then the upgrade authority closes the program with `solana program close` (Sunsetting, step 3).
 
 ## Sunsetting
 
 Permanent retirement, in order. The order matters because `initialize` requires a live upgrade authority: once the authority is gone, that program ID can never host a PA again — which is the point, but only as the final step.
 
 1. **Pause settlement.** `./scripts/dev.sh pause --cluster <c>`.
-2. **Reclaim marker rent — development builds only.** `./scripts/dev.sh close-pdas --cluster <c>` closes nullifier and root markers via `close_markers_batch`, which requires a paused adapter and exists only in `--dev-teardown` builds. Production builds abandon marker rent by design; there is deliberately no production path that deletes replay-protection markers. The command validates the instruction against the locally built IDL, so run a development build first (`./scripts/dev.sh run "./scripts/ops.sh build-dev"`) if the last build was a production one.
-3. **End the program.** Two mutually exclusive options:
-   - `solana program close <PROGRAM_ID> --bypass-warning --keypair <upgrade authority keypair> --url <rpc>` — reclaims the program account's rent and burns the program ID permanently (`./scripts/dev.sh teardown --cluster <c>` does steps 2 and 3 together), or
+2. **Marker rent stays.** Nullifier and root markers are replay protection; no build deployed to a live cluster has an instruction that deletes them, so their rent is abandoned by design.
+3. **End the program, by hand.** No repository command closes a program or renounces its authority. Two mutually exclusive options:
+   - `solana program close <PROGRAM_ID> --bypass-warning --keypair <upgrade authority keypair> --url <rpc>` — reclaims the program data's rent and burns the program ID permanently, or
    - `solana program set-upgrade-authority <PROGRAM_ID> --final --upgrade-authority <upgrade authority keypair> --url <rpc>` — keeps the paused program on chain forever but makes it immutable: no one can unpause or upgrade it, and the state remains readable at its original addresses.
 
 For a beta deployment on devnet, closing the program (reclaiming rent) is the normal end. Immutability-by-burned-authority is the shape a mainnet retirement would take when the historical state should stay served at its known addresses.

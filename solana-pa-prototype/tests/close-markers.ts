@@ -5,7 +5,7 @@
  */
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { assert } from "chai";
-import { closeAllMarkers, closeMarkersBatch } from "../client/devTeardown";
+import { localCloseAllMarkers, localCloseMarkersBatch } from "./utils/localOnly";
 import { assertFails } from "./utils/helpers";
 import { provider, program, paState, pauseAsOwner, useAdapterSuite } from "./utils/adapterSuite";
 
@@ -27,7 +27,7 @@ describe("protocol-adapter (Close instructions)", () => {
     assert.ok(markers.length > 0, "Should have markers to close");
 
     await assertFails(
-      closeMarkersBatch(
+      localCloseMarkersBatch(
         program,
         provider.wallet.publicKey,
         markers.map(({ pubkey }) => pubkey),
@@ -48,7 +48,7 @@ describe("protocol-adapter (Close instructions)", () => {
       assert.isAbove(markersBefore, 0, "the before hook's settlement leaves markers to close");
       const balanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
 
-      assert.equal(await closeAllMarkers(program, provider.wallet.publicKey), markersBefore, "every marker is closed");
+      assert.equal(await localCloseAllMarkers(program, provider.wallet.publicKey), markersBefore, "every marker is closed");
 
       // Verify markers are gone
       const markersAfter = await provider.connection.getProgramAccounts(program.programId, {
@@ -66,7 +66,7 @@ describe("protocol-adapter (Close instructions)", () => {
     it("close_markers_batch rejects non-authority", async () => {
       const fakeAuthority = await funder.fresh(1);
 
-      await assertFails(closeMarkersBatch(program, fakeAuthority.publicKey, []).signers([fakeAuthority]).rpc(), {
+      await assertFails(localCloseMarkersBatch(program, fakeAuthority.publicKey, []).signers([fakeAuthority]).rpc(), {
         program,
         error: "Unauthorized",
       });

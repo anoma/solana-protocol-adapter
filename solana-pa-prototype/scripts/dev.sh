@@ -90,7 +90,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|teardown|close-pdas|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|pause|unpause|status|balance|sync-ids|idl-publish|verify-build)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|pause|unpause|status|balance|sync-ids|idl-publish|verify-build)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -270,8 +270,6 @@ PYEOF
     echo "see ./scripts/ops.sh for all flags, wallet defaults, and required env):"
     echo "  deploy [${DEPLOY_TARGETS}|all]    First-time deploy (production build; --dev-teardown opts in)"
     echo "  upgrade [${DEPLOY_TARGETS}|all]   Rebuild + deploy over existing programs"
-    echo "  teardown [${DEPLOY_TARGETS}|all]  PERMANENT: close programs, reclaim rent"
-    echo "  close-pdas             Close all PA marker PDAs (needs a dev-teardown build)"
     echo "  init                   Initialize PA state (idempotent; needs PA_VERIFIER_ROUTER"
     echo "                         and PA_PROOF_SELECTOR)"
     echo "  set-kind-table         Replace the PA's kind-table commitment (PA_KIND_TABLE_COMMITMENT)"
@@ -279,8 +277,7 @@ PYEOF
     echo "  migrate-state          Migrate PAState from the previous schema after an in-place upgrade"
     echo "  lookup-table           Create/extend the deployment's settlement lookup table"
     echo "  forwarder <cmd>        SPL token forwarder operations (init, reinitialize,"
-    echo "                         migrate, emergency-withdraw,"
-    echo "                         drain-escrow, close-config, teardown; STF_* env)"
+    echo "                         migrate, emergency-withdraw; STF_* env)"
     echo "  idl-publish            Publish the production IDL on chain"
     echo "  verify-build           Deterministic solana-verify build of the PA; with"
     echo "                         --cluster, compares against the deployed program"

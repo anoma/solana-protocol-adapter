@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cluster operations for the PA programs: build, deploy, initialize, status,
-# pause/unpause, teardown. One code path for every cluster — the target
+# pause/unpause. One code path for every cluster — the target
 # cluster is a flag, never baked into a script. All per-cluster differences
 # (RPC URL, explorer links, wallet default, dev-teardown policy) are data set
 # in resolve_cluster.
@@ -26,12 +26,6 @@ Commands:
                          token forwarder config if deployed.
   upgrade [${DEPLOY_TARGETS}|all]
                          Rebuild + deploy over existing programs
-  teardown [${DEPLOY_TARGETS}|all]
-                         PERMANENT: close programs, reclaim rent. Closed
-                         program IDs are burned forever.
-  close-pdas             Close all PA marker PDAs, reclaim rent. Requires the
-                         deployed PA to be a --dev-teardown build (the
-                         instruction is absent from production builds).
   init                   Initialize PA state (idempotent)
   set-kind-table         Replace the PA's kind-table commitment with
                          PA_KIND_TABLE_COMMITMENT (authority wallet).
@@ -42,8 +36,7 @@ Commands:
                          layout, migrate PAState from the previous schema
                          version. Idempotent (upgrade-authority wallet).
   forwarder <cmd>        SPL token forwarder operations: init, reinitialize,
-                         close-config, emergency-withdraw,
-                         drain-escrow, teardown, migrate. Parameters are STF_*
+                         emergency-withdraw, migrate. Parameters are STF_*
                          environment variables; see scripts/forwarder.ts.
   lookup-table           Create the deployment's settlement lookup table, or
                          extend the one in PA_LOOKUP_TABLE with any missing
@@ -93,7 +86,7 @@ Flags:
                    (the operator's RPC provider, never the public endpoint)
   --no-idl         build-dev: skip IDL generation (faster compile check)
   --dev-teardown   deploy/upgrade: build with the dev-teardown feature
-                   (close_markers_batch enabled). Refused on mainnet.
+                   (close_markers_batch enabled). Localnet only.
   --prebuilt       deploy/upgrade: ship the existing target/deploy artifacts
                    without rebuilding (for verify-build output); test: run the
                    cluster-safe subset against the programs already deployed
@@ -212,7 +205,6 @@ resolve_cluster() {
       RPC_URL="${DEVNET_RPC_URL:-}"
       EXPLORER_QS="?cluster=devnet"
       PRINT_EXPLORER=true
-      ALLOW_DEV_TEARDOWN=true
       default_wallet="${PROJECT_DIR}/scripts/devnet-wallet.json"
       ;;
     mainnet)
@@ -349,31 +341,13 @@ deploy_one() {
     --url "$RPC_URL" 2>&1; then
     echo ""
     echo "❌ Deploy failed for ${name}."
-    echo "If the program was previously closed (teardown), the ID is permanently burned."
+    echo "If the program was previously closed, the ID is permanently burned."
     echo "To recover: delete target/deploy/${name}-keypair.json, run 'anchor build --no-idl'"
     echo "to generate a new keypair, then deploy again."
     exit 1
   fi
   echo "  ✅ ${name} deployed: ${program_id}"
   print_explorer_link "$program_id"
-}
-
-close_one() {
-  local name="$1"
-  local program_id
-  program_id="$(get_program_id "$name")"
-
-  if ! is_deployed "$program_id"; then
-    echo "  ${name} (${program_id}): not deployed, skipping"
-    return 0
-  fi
-
-  echo "Closing ${name} (${program_id})..."
-  solana program close "$program_id" \
-    --keypair "$WALLET" \
-    --url "$RPC_URL" \
-    --bypass-warning
-  echo "  ✅ ${name} closed, rent reclaimed"
 }
 
 build_for_deploy() {
@@ -401,8 +375,8 @@ build_for_deploy() {
   if [[ "$DEV_TEARDOWN" == "true" ]]; then
     if [[ "$ALLOW_DEV_TEARDOWN" != "true" ]]; then
       echo "❌ --dev-teardown is refused on ${CLUSTER}: close_markers_batch deletes" >&2
-      echo "   nullifier markers (replay protection) and must never exist in a" >&2
-      echo "   production deployment." >&2
+      echo "   nullifier markers (replay protection) and never exists on a live" >&2
+      echo "   cluster." >&2
       exit 1
     fi
     build_programs_dev
@@ -576,38 +550,6 @@ cmd_upgrade() {
   for t in $targets; do
     echo "  ${t}: $(get_program_id "${PROGRAM_BY_TARGET[$t]}")"
   done
-}
-
-cmd_teardown() {
-  local targets
-  targets="$(resolve_targets "$TARGET")"
-
-  require_cmd npx
-
-  echo "⚠️  WARNING: solana program close is PERMANENT."
-  echo "Closed program IDs cannot be reused. You will need new keypairs to deploy again."
-  echo ""
-
-  # Close PDA accounts first (programs must still be deployed for close instructions to work)
-  echo "==> Closing PDA accounts before closing programs..."
-  cmd_close_pdas || echo "⚠ PDA close failed or partially completed — continuing with program close"
-  echo ""
-
-  for t in $targets; do
-    close_one "${PROGRAM_BY_TARGET[$t]}"
-  done
-
-  echo ""
-  echo "✅ Teardown complete (${CLUSTER})"
-}
-
-cmd_close_pdas() {
-  require_cmd npx
-
-  echo "Closing PA marker PDA accounts..."
-  # close-pdas.ts requires the deployed PA to expose close_markers_batch
-  # (a dev-teardown build) and errors with instructions if it doesn't.
-  run_ts scripts/close-pdas.ts
 }
 
 # The adapter operations below run a TS script against the deployed PA.
@@ -974,7 +916,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|teardown|close-pdas|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

@@ -81,7 +81,7 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
     it("rejects set_emergency_caller from a non-committee signer", async () => {
       const impostor = await funder.fresh(1);
       await assertFails(
-        localSetEmergencyCaller(provider.connection, forwarderProgram, impostor.publicKey, paState, Keypair.generate().publicKey)
+        localSetEmergencyCaller(forwarderProgram, impostor.publicKey, paState, Keypair.generate().publicKey)
           .signers([impostor])
           .rpc(),
         { program: forwarderProgram, error: "UnauthorizedCaller" },
