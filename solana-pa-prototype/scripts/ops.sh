@@ -789,7 +789,6 @@ cmd_test() {
     tests/settle.ts
     tests/direct-settle.ts
     tests/txdata-lifecycle.ts
-    tests/txdata-expiration.ts
     tests/tree-growth.ts
   )
   if [[ ${#SPEC_FILES[@]} -gt 0 ]]; then

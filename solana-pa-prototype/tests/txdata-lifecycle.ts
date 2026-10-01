@@ -13,7 +13,6 @@ import {
   program,
   paState,
   DUMMY_ROOT_MARKER,
-  setExpiryBounds,
   settleFromTxDataBuilder,
   useAdapterSuite,
 } from "./utils/adapterSuite";
@@ -21,7 +20,14 @@ import {
 describe("TxData lifecycle", () => {
   const { funder, initTxData } = useAdapterSuite();
 
-  before(() => setExpiryBounds(MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS));
+  // The tests below assume the expiry bounds initialize sets. They are read,
+  // not set: setting them is owner-only, and a cluster run's wallet owns
+  // nothing.
+  before(async () => {
+    const state = await program.account.paStateAccount.fetch(paState);
+    assert.equal(state.minExpirySlots.toNumber(), MIN_EXPIRY_SLOTS, "min_expiry_slots is the initial bound");
+    assert.equal(state.maxExpirySlots.toNumber(), MAX_EXPIRY_SLOTS, "max_expiry_slots is the initial bound");
+  });
 
   describe("protocol-adapter (TxData Expiration)", () => {
     it("rejects txdata_init with expires_slot too soon", async () => {
