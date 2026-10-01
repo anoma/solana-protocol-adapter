@@ -14,11 +14,17 @@ import { Program } from "@anchor-lang/core";
 import { Connection, Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
-import { chunks } from "../../client/instructions";
 import { BPF_LOADER_UPGRADEABLE, derivePaStatePda, deriveProgramDataPda } from "../../client/pda";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const BATCH_SIZE = 20;
+
+/** `items` split, in order, into runs of at most `size`. */
+function chunks<T>(items: readonly T[], size: number): T[][] {
+  const runs: T[][] = [];
+  for (let i = 0; i < items.length; i += size) runs.push(items.slice(i, i + size));
+  return runs;
+}
 
 /** Throw unless `connection` talks to a validator on this machine. */
 export function assertLocalValidator(connection: Connection): void {

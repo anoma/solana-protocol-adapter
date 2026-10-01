@@ -764,10 +764,11 @@ cmd_test() {
   ensure_balance 2
 
   # Verify the cluster programs are deployed
+  local pids=() t pid
   for t in "${PROGRAM_TARGETS[@]}"; do
-    local pid
     pid="$(get_program_id "${PROGRAM_BY_TARGET[$t]}")"
     require_deployed "$pid" "$t" "deploy"
+    pids+=("$pid")
   done
 
   ensure_node_modules
@@ -777,11 +778,7 @@ cmd_test() {
   # deployment, replace its kind table, or renounce the authority for good.
   # A local validator's deployment is disposable and owned by the local wallet.
   if [[ "$CLUSTER" != "localnet" ]]; then
-    local pids=() t
-    for t in "${PROGRAM_TARGETS[@]}"; do
-      pids+=("$(get_program_id "${PROGRAM_BY_TARGET[$t]}")")
-    done
-    run_ts scripts/cluster-test-guard.ts "$(get_wallet_pubkey)" "${pids[@]}"
+    run_ts scripts/cluster-test-guard.ts "${pids[@]}"
   fi
 
   # Cluster-safe spec files (explicit allowlist): none needs the test

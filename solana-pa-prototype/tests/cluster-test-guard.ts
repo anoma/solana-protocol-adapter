@@ -26,14 +26,15 @@ describe("cluster test guard", () => {
   });
 
   it("refuses a wallet that is a target program's upgrade authority, naming the program", async () => {
+    let error: Error | undefined;
     try {
       await refuseUpgradeAuthorityWallet(provider.connection, wallet, targets());
-      assert.fail("the guard accepted the upgrade-authority wallet");
     } catch (e) {
-      const message = (e as Error).message;
-      assert.include(message, wallet.toBase58());
-      assert.include(message, program.programId.toBase58());
+      error = e as Error;
     }
+    assert.isDefined(error, "the guard accepted the upgrade-authority wallet");
+    assert.include(error!.message, wallet.toBase58());
+    assert.include(error!.message, program.programId.toBase58());
   });
 
   it("accepts a wallet that is no target program's upgrade authority", async () => {

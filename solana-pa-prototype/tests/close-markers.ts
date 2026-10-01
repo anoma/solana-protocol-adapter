@@ -48,7 +48,11 @@ describe("protocol-adapter (Close instructions)", () => {
       assert.isAbove(markersBefore, 0, "the before hook's settlement leaves markers to close");
       const balanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
 
-      assert.equal(await localCloseAllMarkers(program, provider.wallet.publicKey), markersBefore, "every marker is closed");
+      assert.equal(
+        await localCloseAllMarkers(program, provider.wallet.publicKey),
+        markersBefore,
+        "every marker is closed",
+      );
 
       // Verify markers are gone
       const markersAfter = await provider.connection.getProgramAccounts(program.programId, {

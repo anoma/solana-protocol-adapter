@@ -5,7 +5,7 @@
  * and send.
  */
 import { BN, Program } from "@anchor-lang/core";
-import { AccountMeta, Keypair, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { AccountMeta, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { getVerifierEntryPda } from "./verifier";
@@ -233,11 +233,4 @@ export function emergencyWithdraw(
     .remainingAccounts(
       escrowTransferAccounts(accounts.escrowAta, accounts.recipientAta, deriveEscrowAuthority(forwarder.programId)),
     );
-}
-
-/** `items` split, in order, into runs of at most `size`. */
-export function chunks<T>(items: readonly T[], size: number): T[][] {
-  const runs: T[][] = [];
-  for (let i = 0; i < items.length; i += size) runs.push(items.slice(i, i + size));
-  return runs;
 }

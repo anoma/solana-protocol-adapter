@@ -25,7 +25,12 @@ import {
 import { EMPTY_KIND_TABLE_COMMITMENT, NONCES_PER_WORD } from "../client/constants";
 import { deriveConfigPda, deriveNonceBitmapPda, nonceWordIndex } from "../client/pda";
 import { SOLANA_DEVNET_KIND_TABLE_COMMITMENT } from "./utils/constants";
-import { localCloseAllNonceBitmaps, localCloseConfig, localCloseEscrow, localSetEmergencyCaller } from "./utils/localOnly";
+import {
+  localCloseAllNonceBitmaps,
+  localCloseConfig,
+  localCloseEscrow,
+  localSetEmergencyCaller,
+} from "./utils/localOnly";
 import { requireFixture, createdCommitmentsOf as commitmentsOf, wrapAuthorizationIx } from "./utils/fixtures";
 import {
   approvedTokenAccount,

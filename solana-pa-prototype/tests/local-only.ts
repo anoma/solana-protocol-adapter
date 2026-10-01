@@ -1,12 +1,4 @@
-/**
- * Authority changes and account closures on a live cluster are made by hand,
- * never by repository code: the instructions that move or renounce an upgrade
- * authority, name the forwarder's emergency caller, or close escrows, the
- * forwarder config, nonce bitmaps or adapter markers are built only by
- * tests/utils/localOnly.ts, which refuses any RPC endpoint that is not this
- * machine's. On 2026-10-01 a test pointed at devnet renounced the devnet
- * adapter's upgrade authority.
- */
+// Every builder in tests/utils/localOnly.ts refuses a non-local RPC endpoint and works against the local validator.
 import { AnchorProvider, Program } from "@anchor-lang/core";
 import { Connection, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
