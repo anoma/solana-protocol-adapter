@@ -42,7 +42,7 @@ Commands:
                          layout, migrate PAState from the previous schema
                          version. Idempotent (upgrade-authority wallet).
   forwarder <cmd>        SPL token forwarder operations: init, reinitialize,
-                         close-config, set-emergency-caller, emergency-withdraw,
+                         close-config, emergency-withdraw,
                          drain-escrow, teardown, migrate. Parameters are STF_*
                          environment variables; see scripts/forwarder.ts.
   lookup-table           Create the deployment's settlement lookup table, or

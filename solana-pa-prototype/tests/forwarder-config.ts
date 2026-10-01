@@ -7,7 +7,8 @@
  */
 import { Keypair, PublicKey, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import { encodeUnwrapInput, reinitializeForwarder, setEmergencyCaller } from "../client/instructions";
+import { encodeUnwrapInput, reinitializeForwarder } from "../client/instructions";
+import { localSetEmergencyCaller } from "./utils/localOnly";
 import { OP_UNWRAP } from "../client/constants";
 import { deriveConfigPda, deriveProgramDataPda } from "../client/pda";
 import { makeFunder, randomRef, assertFails } from "./utils/helpers";
@@ -80,7 +81,7 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
     it("rejects set_emergency_caller from a non-committee signer", async () => {
       const impostor = await funder.fresh(1);
       await assertFails(
-        setEmergencyCaller(forwarderProgram, impostor.publicKey, paState, Keypair.generate().publicKey)
+        localSetEmergencyCaller(provider.connection, forwarderProgram, impostor.publicKey, paState, Keypair.generate().publicKey)
           .signers([impostor])
           .rpc(),
         { program: forwarderProgram, error: "UnauthorizedCaller" },

@@ -7,7 +7,8 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { createAccount, getAccount } from "@solana/spl-token";
 import { assert } from "chai";
-import { emergencyWithdraw, setEmergencyCaller } from "../client/instructions";
+import { emergencyWithdraw } from "../client/instructions";
+import { localSetEmergencyCaller } from "./utils/localOnly";
 import { deriveConfigPda } from "../client/pda";
 import { approvedTokenAccount, createFundedEscrow, makeFunder, randomRef, assertFails } from "./utils/helpers";
 import {
@@ -68,7 +69,7 @@ describe("forwarder emergency (adapter paused)", () => {
       .rpc();
 
   const setEmergencyCallerAsCommittee = (caller: PublicKey) =>
-    setEmergencyCaller(forwarderProgram, emergencyCommittee.publicKey, paState, caller)
+    localSetEmergencyCaller(provider.connection, forwarderProgram, emergencyCommittee.publicKey, paState, caller)
       .signers([emergencyCommittee])
       .rpc();
 

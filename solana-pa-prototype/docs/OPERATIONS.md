@@ -19,7 +19,7 @@ solana program set-upgrade-authority <program id> --final \
   --upgrade-authority <current authority keypair> --url <rpc>                              # renounces it for good
 ```
 
-The new authority must sign unless `--skip-new-upgrade-authority-signer-check` is passed (for a key that cannot sign, such as a multisig vault). No program instruction or event is involved; the loader's ProgramData account is where the current owner is read. A final program can never be upgraded, initialized again, paused, unpaused or reconfigured.
+These are typed by hand: no repository command or script changes an authority on a live cluster, and the only builders of authority instructions in the repository (`tests/utils/localOnly.ts`) refuse any endpoint but a local validator. The new authority must sign unless `--skip-new-upgrade-authority-signer-check` is passed (for a key that cannot sign, such as a multisig vault). No program instruction or event is involved; the loader's ProgramData account is where the current owner is read. A final program can never be upgraded, initialized again, paused, unpaused or reconfigured.
 
 The owner can replace the program binary, which means it could deploy code that undoes a stop: a stop is only as permanent as upgrade-authority custody. Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
 
@@ -226,12 +226,11 @@ The committee and its emergency caller carry over the EVM V1 forwarder's emergen
 Once the adapter is paused (`pause`), the committee names an emergency caller, once, and that caller withdraws from escrow directly without going through the adapter:
 
 ```sh
-STF_EMERGENCY_CALLER=<pubkey> ./scripts/dev.sh forwarder set-emergency-caller --cluster <c>   # committee wallet
 STF_TOKEN_MINT=<mint> STF_RECIPIENT=<owner> STF_AMOUNT=<raw units> \
   ./scripts/dev.sh forwarder emergency-withdraw --cluster <c>                                # caller wallet
 ```
 
-`set-emergency-caller` refuses while the adapter is not paused and cannot be repeated. The committee can also drain and close an escrow outright with `drain-escrow`, but like every committee teardown command it refuses while the adapter is not paused.
+Naming the emergency caller grants a key the right to withdraw escrowed funds, so, like every authority change on a live cluster, it is done by hand: no repository command or script builds it. The committee constructs and signs the forwarder's `set_emergency_caller(caller)` itself from the IDL (accounts: the committee as signer, the config, the paused adapter's PAState). The program refuses it while the adapter is not paused and refuses a second one. The only builders of authority instructions in the repository are the tests' (`tests/utils/localOnly.ts`), which refuse any endpoint but a local validator. The committee can also drain and close an escrow outright with `drain-escrow`, but like every committee teardown command it refuses while the adapter is not paused.
 
 ### Retiring the forwarder
 

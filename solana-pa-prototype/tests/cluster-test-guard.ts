@@ -6,9 +6,9 @@
  * authority and leave the program final for good (scripts/cluster-test-guard.ts).
  * The guard refuses such a wallet before any spec runs.
  */
-import { Keypair, Transaction, TransactionInstruction } from "@solana/web3.js";
+import { Keypair, Transaction } from "@solana/web3.js";
 import { assert } from "chai";
-import { BPF_LOADER_UPGRADEABLE, deriveProgramDataPda } from "../client/pda";
+import { localSetUpgradeAuthority } from "./utils/localOnly";
 import { refuseUpgradeAuthorityWallet, upgradeAuthority } from "../scripts/cluster-test-guard";
 import { provider, program, forwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
 
@@ -41,17 +41,9 @@ describe("cluster test guard", () => {
   });
 
   it("reads no upgrade authority from a final program, and accepts any wallet against it", async () => {
-    // The loader's SetAuthority (instruction 4) with no new authority makes the
-    // program final.
-    const renounce = new TransactionInstruction({
-      programId: BPF_LOADER_UPGRADEABLE,
-      keys: [
-        { pubkey: deriveProgramDataPda(forwarderProgram.programId), isSigner: false, isWritable: true },
-        { pubkey: wallet, isSigner: true, isWritable: false },
-      ],
-      data: Buffer.from([4, 0, 0, 0]),
-    });
-    await provider.sendAndConfirm(new Transaction().add(renounce));
+    await provider.sendAndConfirm(
+      new Transaction().add(localSetUpgradeAuthority(provider.connection, forwarderProgram.programId, wallet, null)),
+    );
     assert.isNull(await upgradeAuthority(provider.connection, forwarderProgram.programId));
     await refuseUpgradeAuthorityWallet(provider.connection, wallet, [forwarderProgram.programId]);
   });

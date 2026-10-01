@@ -16,8 +16,6 @@
  *                                     bitmaps and the committee are untouched.
  *   close-config          (committee) Close only the config PDA (retirement).
  *                                     Requires the adapter to be paused.
- *   set-emergency-caller  (committee) Name STF_EMERGENCY_CALLER, once, while
- *                                     the adapter is paused.
  *   emergency-withdraw    (caller)    Move STF_AMOUNT of STF_TOKEN_MINT from
  *                                     escrow to STF_RECIPIENT.
  *   drain-escrow          (committee) Drain STF_TOKEN_MINT's escrow to
@@ -43,7 +41,6 @@
  *   STF_EMERGENCY_COMMITTEE base58 pubkey (init)
  *   STF_TOKEN_MINT          base58 mint (init optional; emergency-withdraw,
  *                           drain-escrow, teardown required)
- *   STF_EMERGENCY_CALLER    base58 pubkey (set-emergency-caller)
  *   STF_RECIPIENT           base58 owner of the receiving token account
  *                           (emergency-withdraw, drain-escrow)
  *   STF_AMOUNT              raw token units (emergency-withdraw)
@@ -67,7 +64,6 @@ import {
   migrateEscrow,
   migrateNonceBitmap,
   previousEscrowAccounts,
-  setEmergencyCaller,
   reinitializeForwarder,
 } from "../client/instructions";
 import { PREVIOUS_CONFIG_SIZE, PREVIOUS_NONCE_BITMAP_SIZE } from "../client/constants";
@@ -174,13 +170,6 @@ async function reinitializeCommand() {
   console.log(
     `✅ Logic ref rotated: ${previous} -> ${Buffer.from(config.logicRef).toString("hex")} (config version ${config.version})`,
   );
-}
-
-async function setEmergencyCallerCommand() {
-  const caller = requirePubkey("STF_EMERGENCY_CALLER", "the key that will be allowed to withdraw from escrow");
-  await requireConfig();
-  await setEmergencyCaller(forwarder, wallet.publicKey, paState, caller).rpc();
-  console.log(`✅ Emergency caller set to ${caller.toBase58()}`);
 }
 
 async function withdraw() {
@@ -316,7 +305,6 @@ const COMMANDS: Record<string, () => Promise<void>> = {
   init,
   reinitialize: reinitializeCommand,
   "close-config": closeConfigCommand,
-  "set-emergency-caller": setEmergencyCallerCommand,
   "emergency-withdraw": withdraw,
   "drain-escrow": drainEscrow,
   teardown,
