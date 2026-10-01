@@ -443,10 +443,15 @@ enum ShapeCommand {
     /// An AnomaPay unwrap: the owner spends the wrapped resource, releasing
     /// the escrow to the recipient.
     SplTokenUnwrap {
-        /// The wrap fixture, settled alone on a fresh adapter: its created
-        /// commitments are the tree the unwrap proves membership in.
+        /// The wrap fixture, settled after `--preceding-leaves`: its created
+        /// commitments end the tree the unwrap proves membership in.
         #[arg(long, value_name = "FIXTURE")]
         wrap: PathBuf,
+        /// The commitments the adapter's tree held before the wrap settled,
+        /// in leaf order: a JSON array of hex strings, as an indexer serves
+        /// them. Without it the wrap settled alone on a fresh adapter.
+        #[arg(long, value_name = "FILE")]
+        preceding_leaves: Option<PathBuf>,
         /// Release the tokens to the forwarder's own escrow authority: the
         /// unwrap the forwarder refuses, as the EVM forwarder reverts an
         /// unwrap to itself.
@@ -1568,6 +1573,30 @@ fn created_commitments_b64(tx: &Transaction) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Commitment-tree leaves from a JSON array of 32-byte hex strings, each
+/// with or without a `0x` prefix.
+fn parse_leaves(json: &str) -> Result<Vec<Digest>> {
+    let hexes: Vec<String> =
+        serde_json::from_str(json).context("leaves: a JSON array of hex strings")?;
+    hexes
+        .iter()
+        .enumerate()
+        .map(|(i, h)| {
+            let bytes: [u8; 32] = hex::decode(h.trim_start_matches("0x"))
+                .with_context(|| format!("leaf {i} is not hex: {h}"))?
+                .try_into()
+                .map_err(|b: Vec<u8>| anyhow!("leaf {i} is {} bytes, not 32: {h}", b.len()))?;
+            Ok(Digest::from_bytes(bytes))
+        })
+        .collect()
+}
+
+fn read_leaves(path: &Path) -> Result<Vec<Digest>> {
+    parse_leaves(
+        &std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
+    )
+}
+
 fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
     let roots: BTreeSet<[u8; 32]> = consumed_publics(tx)?
         .filter(|c| c.commitment_tree_root != INITIAL_ROOT)
@@ -2152,9 +2181,16 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             (tx, Some(metadata))
         }
         ShapeCommand::SplTokenUnwrap {
-            wrap, to_escrow, ..
+            wrap,
+            preceding_leaves,
+            to_escrow,
+            ..
         } => {
-            let leaves = created_commitments(&load_fixture_tx(wrap)?)?;
+            let mut leaves = match preceding_leaves {
+                Some(path) => read_leaves(path)?,
+                None => Vec::new(),
+            };
+            leaves.extend(created_commitments(&load_fixture_tx(wrap)?)?);
             let (tx, metadata) = generate_anomapay_unwrap_transaction(
                 &prover,
                 fixture_name(wrap)?,
@@ -2305,6 +2341,30 @@ mod tests {
                     .unwrap_or_else(|e| panic!("leaf {i} of {n}: {e}"));
             }
         }
+    }
+
+    /// `--preceding-leaves` reads an indexer's hex commitments, with or
+    /// without `0x`, in order, and refuses anything that is not 32 bytes.
+    #[test]
+    fn parse_leaves_reads_hex_commitments_in_order() {
+        let a = "01".repeat(32);
+        let b = "ab".repeat(32);
+        let leaves = parse_leaves(&format!(r#"["0x{a}", "{b}"]"#)).expect("two leaves");
+        assert_eq!(
+            leaves,
+            vec![
+                Digest::from_bytes([0x01; 32]),
+                Digest::from_bytes([0xab; 32])
+            ]
+        );
+        assert!(
+            parse_leaves(r#"["0x0102"]"#).is_err(),
+            "a 2-byte leaf must be refused"
+        );
+        assert!(
+            parse_leaves(r#"["zz"]"#).is_err(),
+            "non-hex must be refused"
+        );
     }
 
     /// The wrap creates the owner's resource, and an unwrap over a synthetic
