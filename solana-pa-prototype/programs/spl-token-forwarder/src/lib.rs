@@ -23,7 +23,7 @@ mod tests;
 pub use error::ErrorCode;
 pub use state::*;
 
-declare_id!("5CrHbBeHjg53UyL3Htn9dCYYTy68fMcrbDoeAdo4yQrx");
+declare_id!("BsfuXpxw8oCmZXnYijyQkUYNcCnuskFZbYizmWLnpSU7");
 
 /// Mirrors EVM: `event Wrapped(address indexed token, address indexed from, uint128 amount);`
 #[event]
