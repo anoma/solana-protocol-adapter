@@ -12,6 +12,7 @@ import {
   AccountMeta,
   AddressLookupTableAccount,
   ComputeBudgetProgram,
+  Connection,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
@@ -51,7 +52,16 @@ import {
 } from "./helpers";
 import { predictRootMarkerPda as predictRootMarkerPdaOf } from "./merkle";
 
-export const provider = anchor.AnchorProvider.env();
+// Every transaction is confirmed, and every read made, at `confirmed`: a
+// cluster's RPC endpoint serves reads from several nodes, and a write only
+// processed by one of them may not be visible yet on the one that answers the
+// next read. (Anchor's default, `processed`, is one node's unvoted view.)
+const envProvider = anchor.AnchorProvider.env();
+export const provider = new anchor.AnchorProvider(
+  new Connection(envProvider.connection.rpcEndpoint, "confirmed"),
+  envProvider.wallet,
+  { commitment: "confirmed", preflightCommitment: "confirmed" },
+);
 anchor.setProvider(provider);
 
 export const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
