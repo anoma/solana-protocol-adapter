@@ -1,122 +1,59 @@
 use crate::error::PAError;
 use crate::external_calls::{
     build_account_metas, build_forwarder_instruction_data, decode_external_call,
-    encode_external_call, extract_external_calls, FORWARD_CALL_DISCRIMINATOR,
+    decode_external_calls, encode_external_call, FORWARD_CALL_DISCRIMINATOR,
 };
-use crate::tests::utils::{
-    instance_with_consumed_and_created_payloads, instance_with_external_payload, make_account_info,
-    minimal_instance,
-};
+use crate::tests::utils::make_account_info;
 use crate::types::{OutputMode, SolanaExternalCall};
 use anchor_lang::prelude::Pubkey;
-use arm_core::logic_instance::ExpirableBlob;
-use arm_core::Digest;
+use arm_core::logic_instance::{AppData, ExpirableBlob};
+
+fn call(program_id: u8, instruction_data: Vec<u8>) -> SolanaExternalCall {
+    SolanaExternalCall {
+        program_id: [program_id; 32],
+        instruction_data,
+        expected_output: vec![0x00],
+        output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
+    }
+}
 
 #[test]
-fn test_extract_external_calls_empty() {
-    let instance = minimal_instance();
-    let calls = extract_external_calls(&instance).unwrap();
+fn decode_external_calls_of_app_data_without_calls_is_empty() {
+    let calls = decode_external_calls(&AppData::default()).unwrap();
     assert!(
         calls.is_empty(),
-        "Instance with no external_payload should return empty vec"
+        "app data with no external payload has no calls"
     );
 }
 
+/// A resource's calls run in the order its app data lists them, as pa-evm's
+/// `_executeForwarderCalls` iterates the external payload.
 #[test]
-fn test_extract_external_calls_single() {
-    let call = SolanaExternalCall {
-        program_id: [0xAA; 32],
-        instruction_data: vec![1, 2, 3, 4],
-        expected_output: vec![0x00],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
+fn decode_external_calls_keeps_the_listed_order() {
+    let (first, second) = (call(0xAA, vec![1]), call(0xBB, vec![2]));
+    let app_data = AppData {
+        external_payload: vec![encode_external_call(&first), encode_external_call(&second)],
+        ..AppData::default()
     };
-    let blob = encode_external_call(&call);
-
-    let instance = instance_with_external_payload(vec![blob]);
-
-    let extracted = extract_external_calls(&instance).unwrap();
-    assert_eq!(extracted.len(), 1, "Should extract exactly one call");
-
-    let (_, extracted_call) = &extracted[0];
-    assert_eq!(extracted_call.program_id, call.program_id);
-    assert_eq!(extracted_call.instruction_data, call.instruction_data);
-    assert_eq!(extracted_call.expected_output, call.expected_output);
-}
-
-/// Execution order is the instance order the proof commits to: consumed
-/// resources before created resources within each action.
-#[test]
-fn test_extract_external_calls_consumed_before_created() {
-    let call_a = SolanaExternalCall {
-        program_id: [0xAA; 32],
-        instruction_data: vec![0x01],
-        expected_output: vec![0x00],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    };
-    let call_b = SolanaExternalCall {
-        program_id: [0xBB; 32],
-        instruction_data: vec![0x02],
-        expected_output: vec![0x00],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    };
-
-    let instance = instance_with_consumed_and_created_payloads(
-        vec![encode_external_call(&call_a)],
-        vec![encode_external_call(&call_b)],
-    );
-    let ordered = extract_external_calls(&instance).expect("instance must extract");
-    assert_eq!(ordered.len(), 2);
-    assert_eq!(
-        ordered[0].1.instruction_data,
-        vec![0x01],
-        "first call must be the consumed resource's call"
-    );
-    assert_eq!(
-        ordered[1].1.instruction_data,
-        vec![0x02],
-        "second call must be the created resource's call"
-    );
+    let decoded = decode_external_calls(&app_data).unwrap();
+    assert_eq!(decoded.len(), 2);
+    assert_eq!(decoded[0].program_id, first.program_id);
+    assert_eq!(decoded[0].instruction_data, first.instruction_data);
+    assert_eq!(decoded[1].program_id, second.program_id);
+    assert_eq!(decoded[1].instruction_data, second.instruction_data);
 }
 
 #[test]
-fn test_extract_external_calls_invalid_blob() {
-    let invalid_blob = ExpirableBlob {
-        blob: vec![0xDEADBEEF], // Invalid data
-        deletion_criterion: 0,
+fn decode_external_calls_rejects_an_invalid_blob() {
+    let app_data = AppData {
+        external_payload: vec![ExpirableBlob {
+            blob: vec![0xDEADBEEF],
+            deletion_criterion: 0,
+        }],
+        ..AppData::default()
     };
-
-    let instance = instance_with_external_payload(vec![invalid_blob]);
-
-    let result = extract_external_calls(&instance);
-    assert!(result.is_err(), "Invalid blob should return error");
-}
-
-#[test]
-fn test_extract_external_calls_logic_ref_association() {
-    let call = SolanaExternalCall {
-        program_id: [0xAA; 32],
-        instruction_data: vec![1, 2, 3, 4],
-        expected_output: vec![0x00],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    };
-    let blob = encode_external_call(&call);
-
-    let logic_ref = Digest::from_bytes([0xBB; 32]);
-    let mut instance = instance_with_external_payload(vec![blob]);
-    instance.actions[0].consumed_publics[0].resource_logic_ref = logic_ref;
-
-    let extracted = extract_external_calls(&instance).unwrap();
-    assert_eq!(extracted.len(), 1);
-
-    let (extracted_logic_ref, _) = &extracted[0];
-    assert_eq!(
-        *extracted_logic_ref, logic_ref,
-        "Logic ref should match the resource's logic ref"
-    );
+    assert!(decode_external_calls(&app_data).is_err());
 }
 
 #[test]

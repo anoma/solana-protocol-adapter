@@ -90,7 +90,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|teardown|close-pdas|init|set-kind-table|forwarder|lookup-table|estop|status|balance|sync-ids|idl-publish|verify-build)
+  deploy|upgrade|teardown|close-pdas|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|estop|status|balance|sync-ids|idl-publish|verify-build)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -271,6 +271,8 @@ PYEOF
     echo "  init                   Initialize PA state (idempotent; needs PA_VERIFIER_ROUTER"
     echo "                         and PA_PROOF_SELECTOR)"
     echo "  set-kind-table         Replace the PA's kind-table commitment (PA_KIND_TABLE_COMMITMENT)"
+    echo "  deny-logic-ref         Deny a logic ref for good (PA_DENIED_LOGIC_REF)"
+    echo "  migrate-state          Migrate PAState from the previous schema after an in-place upgrade"
     echo "  lookup-table           Create/extend the deployment's settlement lookup table"
     echo "  estop                  EMERGENCY STOP the PA (terminal; requires --yes)"
     echo "  sync-ids               Sync declare_id!/Anchor.toml to the committed keypairs"

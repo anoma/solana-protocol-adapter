@@ -4,7 +4,7 @@
  */
 import { assert } from "chai";
 import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
-import { assertFails } from "./utils/helpers";
+import { assertFails, transactionIdOf } from "./utils/helpers";
 import {
   program,
   paState,
@@ -81,16 +81,16 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
     assert.equal(actionEvents.length, 3, "one actionExecutedEvent per action");
     for (const ev of actionEvents) {
-      assert.equal(ev.data.actionTagCount, 2, "each action has one consumed + one created");
+      assert.lengthOf(ev.data.nullifiers, 1, "each action consumes one resource");
+      assert.lengthOf(ev.data.commitments, 1, "and creates one");
     }
 
     const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
     assert.equal(txEvents.length, 1);
-    assert.equal(txEvents[0].data.tags.length, 6, "6 tags across 3 actions");
     assert.deepEqual(
-      txEvents[0].data.isConsumed,
-      [true, false, true, false, true, false],
-      "consumed-then-created per action, in instance order",
+      Buffer.from(txEvents[0].data.transactionId),
+      transactionIdOf(actionEvents.map((e) => e.data.actionTreeRoot)),
+      "the transaction id is the keccak of the action tree roots, in action order",
     );
 
     // Each created resource carries one resource payload (512 words) and one
@@ -100,7 +100,7 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     const discoveryEvents = events.filter((e) => e.name === "discoveryPayloadEvent");
     assert.equal(resourceEvents.length, 3, "one resource payload event per created resource");
     assert.equal(discoveryEvents.length, 3, "one discovery payload event per created resource");
-    const createdTags = txEvents[0].data.tags.filter((_: unknown, i: number) => !txEvents[0].data.isConsumed[i]);
+    const createdTags = actionEvents.flatMap((e) => e.data.commitments);
     for (const [evs, byteLen] of [
       [resourceEvents, 2048],
       [discoveryEvents, 768],

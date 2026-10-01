@@ -283,6 +283,8 @@ async fn aggregate_tx(prover: &Prover, tx: Transaction) -> Result<Transaction> {
 
 use block_time_forwarder::{RESULT_GT, RESULT_LT};
 use ed25519_dalek::{Signer, SigningKey};
+use rand_chacha::rand_core::SeedableRng;
+use rand_chacha::ChaCha20Rng;
 use solana_pa::external_calls::encode_external_call;
 use solana_pa::state::PAStateAccount;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
@@ -726,6 +728,15 @@ fn label_hash(label: &str) -> [u8; 32] {
     arm::utils::hash_bytes(label.as_bytes()).into()
 }
 
+/// The randomness a fixture's created resources encrypt with: a ChaCha20
+/// stream seeded from the fixture's name, so the fixture regenerates
+/// byte-identical.
+fn fixture_rng(fixture_name: &str) -> ChaCha20Rng {
+    ChaCha20Rng::from_seed(label_hash(&format!(
+        "solana-pa/fixture-gen/encryption-rng/{fixture_name}"
+    )))
+}
+
 /// A secp256k1 scalar from a label: its hash, which is a valid scalar.
 fn scalar_from_label(label: &str) -> Scalar {
     *k256::SecretKey::from_slice(&label_hash(label))
@@ -857,7 +868,12 @@ async fn generate_anomapay_wrap_transaction(
         .map_err(|e| anyhow!("derive the wrap's signed message: {e:?}"))?;
     let signature = actors.user.sign(signed_message.as_bytes()).to_bytes();
     let action = wrap
-        .action(auth, &discovery_pk(), anomapay_compliance_params())
+        .action(
+            auth,
+            &discovery_pk(),
+            anomapay_compliance_params(),
+            &mut fixture_rng(fixture_name),
+        )
         .map_err(|e| anyhow!("build the wrap's witnesses: {e:?}"))?;
     let tx = prove_anomapay_action(prover, action).await?;
 

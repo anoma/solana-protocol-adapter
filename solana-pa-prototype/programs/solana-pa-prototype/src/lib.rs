@@ -102,7 +102,7 @@ use arm_core::aggregation_instance::AggregationInstance;
 use arm_core::transaction::{Delta, Transaction};
 pub use error::PAError;
 use groth16::prepare_proof_for_verification;
-use merkle::{append_to_tree, required_depth_for_leaves, MAX_TREE_DEPTH};
+use merkle::{append_to_tree, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, MAX_TREE_DEPTH};
 use state::*;
 
 #[program]
@@ -121,6 +121,14 @@ pub mod protocol_adapter {
         verifier_router: Pubkey,
         proof_selector: [u8; 4],
     ) -> Result<()> {
+        require!(
+            verifier_router != Pubkey::default(),
+            PAError::ZeroVerifierRouterNotAllowed
+        );
+        require!(
+            proof_selector != [0u8; 4],
+            PAError::ZeroProofSelectorNotAllowed
+        );
         ctx.accounts.pa_state.set_inner(PAStateAccount::running(
             ctx.bumps.pa_state,
             ctx.accounts.payer.key(),
@@ -128,10 +136,19 @@ pub mod protocol_adapter {
             proof_selector,
         ));
 
-        events::EventCpi {
+        // pa-evm's initializer transfers ownership to the initial owner, adds
+        // the empty tree's root, then installs the empty kind table.
+        let events = events::EventCpi {
             authority: ctx.accounts.event_authority.to_account_info(),
-        }
-        .emit(&KindTableCommitmentUpdatedEvent {
+        };
+        events.emit(&AuthorityTransferredEvent {
+            previous_authority: Pubkey::default(),
+            new_authority: ctx.accounts.payer.key(),
+        })?;
+        events.emit(&CommitmentTreeRootAddedEvent {
+            root: EMPTY_TREE_ROOT_INITIAL.into(),
+        })?;
+        events.emit(&KindTableCommitmentUpdatedEvent {
             kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
         })?;
 
@@ -161,19 +178,21 @@ pub mod protocol_adapter {
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
-            &pa_state_info,
             &tx,
-            ctx.remaining_accounts,
-            &payer,
-            &ctx.accounts.system_program.to_account_info(),
-            ctx.accounts.new_root_marker.as_deref(),
-            VerifierAccounts {
-                router_program_id: ctx.accounts.verifier_router_program.key(),
-                router: ctx.accounts.router.to_account_info(),
-                verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
-                verifier_program: ctx.accounts.verifier_program.to_account_info(),
+            SettlementAccounts {
+                pa_state: pa_state_info,
+                payer,
+                system_program: ctx.accounts.system_program.to_account_info(),
+                new_root_marker: ctx.accounts.new_root_marker.as_deref(),
+                remaining: ctx.remaining_accounts,
+                verifier: VerifierAccounts {
+                    router_program_id: ctx.accounts.verifier_router_program.key(),
+                    router: ctx.accounts.router.to_account_info(),
+                    verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
+                    verifier_program: ctx.accounts.verifier_program.to_account_info(),
+                },
+                events,
             },
-            &events,
         )?;
 
         msg!("Settlement complete");
@@ -343,19 +362,21 @@ pub mod protocol_adapter {
 
         execute_settlement(
             &mut ctx.accounts.pa_state,
-            &pa_state_info,
             &tx,
-            ctx.remaining_accounts,
-            &payer,
-            &ctx.accounts.system_program.to_account_info(),
-            ctx.accounts.new_root_marker.as_deref(),
-            VerifierAccounts {
-                router_program_id: ctx.accounts.verifier_router_program.key(),
-                router: ctx.accounts.router.to_account_info(),
-                verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
-                verifier_program: ctx.accounts.verifier_program.to_account_info(),
+            SettlementAccounts {
+                pa_state: pa_state_info,
+                payer,
+                system_program: ctx.accounts.system_program.to_account_info(),
+                new_root_marker: ctx.accounts.new_root_marker.as_deref(),
+                remaining: ctx.remaining_accounts,
+                verifier: VerifierAccounts {
+                    router_program_id: ctx.accounts.verifier_router_program.key(),
+                    router: ctx.accounts.router.to_account_info(),
+                    verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
+                    verifier_program: ctx.accounts.verifier_program.to_account_info(),
+                },
+                events,
             },
-            &events,
         )?;
 
         msg!("Settlement from TxData complete");
@@ -418,48 +439,97 @@ pub mod protocol_adapter {
         Ok(())
     }
 
-    /// Propose a new authority. The transfer is not effective until the
-    /// proposed authority calls `accept_authority`.
-    pub fn propose_authority(ctx: Context<ProposeAuthority>, new_authority: Pubkey) -> Result<()> {
+    /// Deny a logic ref: no settlement consumes or creates a resource
+    /// carrying it again. Mirrors pa-evm's `denyLogicRef`: owner-only, the
+    /// zero ref and a ref already denied are rejected, and a denial cannot
+    /// be undone. The authority pays for the entry.
+    pub fn deny_logic_ref(ctx: Context<DenyLogicRef>, logic_ref: [u8; 32]) -> Result<()> {
+        require!(logic_ref != [0u8; 32], PAError::ZeroLogicRefNotAllowed);
         let state = &mut ctx.accounts.pa_state;
-        state.pending_authority = Some(new_authority);
-        msg!(
-            "Authority transfer proposed: {} -> {}",
-            state.authority,
-            new_authority
+        require!(
+            !state.is_logic_ref_denied(&logic_ref),
+            PAError::LogicRefAlreadyDenied
         );
+        resize_state(
+            &state.to_account_info(),
+            PAStateAccount::space(state.depth(), state.denied_logic_refs.len() + 1),
+            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+        state.denied_logic_refs.push(logic_ref);
+        emit_cpi!(LogicRefDeniedEvent { logic_ref });
         Ok(())
     }
 
-    /// Accept a pending authority transfer. Must be signed by the proposed
-    /// authority. Completes the two-step transfer.
-    pub fn accept_authority(ctx: Context<AcceptAuthority>) -> Result<()> {
-        let state = &mut ctx.accounts.pa_state;
-        let new_authority = state.pending_authority.ok_or(PAError::NoPendingAuthority)?;
+    /// Bring a state account in the previous schema version to this one:
+    /// the previous layout's fields and an empty denylist. The counterpart of
+    /// the call pa-evm's owner passes to `upgradeToAndCall`: the upgrade
+    /// authority runs it once, after upgrading the program in place and
+    /// before any other instruction, which all refuse the previous version.
+    /// It parses the previous layout rather than reinterpreting its bytes,
+    /// and pays for the account's growth.
+    pub fn migrate_state(ctx: Context<MigrateState>) -> Result<()> {
+        let info = ctx.accounts.pa_state.to_account_info();
+        require_keys_eq!(*info.owner, crate::ID, PAError::NotPreviousSchema);
+        let state = {
+            let data = info.try_borrow_data()?;
+            let body = data
+                .strip_prefix(PAStateAccount::DISCRIMINATOR)
+                .ok_or(PAError::NotPreviousSchema)?;
+            require!(
+                body.first() == Some(&PREVIOUS_SCHEMA_VERSION),
+                PAError::NotPreviousSchema
+            );
+            PAStateAccount::from(
+                PreviousPAState::deserialize(&mut &body[..])
+                    .map_err(|_| PAError::NotPreviousSchema)?,
+            )
+        };
+        resize_state(
+            &info,
+            PAStateAccount::space(state.depth(), state.denied_logic_refs.len()),
+            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+        let mut data = info.try_borrow_mut_data()?;
+        data.fill(0);
+        state.try_serialize(&mut &mut data[..])?;
+        Ok(())
+    }
+
+    /// Transfer the authority to `new_authority`, at once. Mirrors
+    /// OpenZeppelin's `OwnableUpgradeable.transferOwnership`, pa-evm's
+    /// ownership: authority only, the zero key rejected, announced with
+    /// AuthorityTransferred.
+    pub fn transfer_authority(
+        ctx: Context<TransferAuthority>,
+        new_authority: Pubkey,
+    ) -> Result<()> {
         require!(
-            ctx.accounts.new_authority.key() == new_authority,
-            PAError::Unauthorized
+            new_authority != Pubkey::default(),
+            PAError::ZeroAuthorityNotAllowed
         );
-        let old_authority = state.authority;
+        let state = &mut ctx.accounts.pa_state;
+        let previous_authority = state.authority;
         state.authority = new_authority;
-        state.pending_authority = None;
-        msg!(
-            "Authority transferred: {} -> {}",
-            old_authority,
-            new_authority
-        );
+        emit_cpi!(AuthorityTransferredEvent {
+            previous_authority,
+            new_authority,
+        });
         Ok(())
     }
 
-    /// Cancel a pending authority transfer. Only callable by the current authority.
-    pub fn cancel_authority_transfer(ctx: Context<CancelAuthorityTransfer>) -> Result<()> {
+    /// Give the authority up for good: it becomes the zero key, which no one
+    /// can sign as, so every authority instruction is closed. Mirrors
+    /// `OwnableUpgradeable.renounceOwnership`.
+    pub fn renounce_authority(ctx: Context<TransferAuthority>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
-        require!(
-            state.pending_authority.is_some(),
-            PAError::NoPendingAuthority
-        );
-        state.pending_authority = None;
-        msg!("Pending authority transfer cancelled");
+        let previous_authority = state.authority;
+        state.authority = Pubkey::default();
+        emit_cpi!(AuthorityTransferredEvent {
+            previous_authority,
+            new_authority: Pubkey::default(),
+        });
         Ok(())
     }
 
@@ -537,7 +607,6 @@ fn maybe_grow_account<'info>(
     num_commitments: usize,
     payer: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
-    rent: &Rent,
 ) -> Result<()> {
     let final_next_index = state.next_index.saturating_add(num_commitments as u64);
     let required_depth = required_depth_for_leaves(final_next_index);
@@ -549,13 +618,30 @@ fn maybe_grow_account<'info>(
         return Ok(());
     }
 
-    let new_size = PAStateAccount::space_for_depth(target_depth);
-    let new_minimum_balance = rent.minimum_balance(new_size);
-    let current_balance = pa_state_info.lamports();
+    resize_state(
+        pa_state_info,
+        PAStateAccount::space(target_depth, state.denied_logic_refs.len()),
+        payer,
+        system_program,
+    )?;
+    msg!(
+        "Reallocated PAState: depth {} -> {}",
+        state.depth(),
+        target_depth
+    );
+    Ok(())
+}
 
-    // Transfer additional lamports if needed (before realloc)
-    if new_minimum_balance > current_balance {
-        let lamports_needed = new_minimum_balance - current_balance;
+/// Resize the state account to `size`, `payer` topping up its rent first.
+fn resize_state<'info>(
+    pa_state_info: &AccountInfo<'info>,
+    size: usize,
+    payer: &AccountInfo<'info>,
+    system_program: &AccountInfo<'info>,
+) -> Result<()> {
+    let minimum_balance = Rent::get()?.minimum_balance(size);
+    let current_balance = pa_state_info.lamports();
+    if minimum_balance > current_balance {
         anchor_lang::system_program::transfer(
             CpiContext::new(
                 system_program.key(),
@@ -564,18 +650,10 @@ fn maybe_grow_account<'info>(
                     to: pa_state_info.clone(),
                 },
             ),
-            lamports_needed,
+            minimum_balance - current_balance,
         )?;
     }
-
-    // Resize the account data
-    pa_state_info.resize(new_size)?;
-
-    msg!(
-        "Reallocated PAState: depth {} -> {}",
-        state.depth(),
-        target_depth
-    );
+    pa_state_info.resize(size)?;
     Ok(())
 }
 
@@ -601,33 +679,44 @@ fn validate_consumed_roots(
     Ok(())
 }
 
-/// Shared settlement logic for both settle and settle_from_txdata.
+/// The accounts a settlement acts on.
 ///
-/// `remaining_accounts` layout:
-///   [0..nullifier_count]  — nullifier marker PDAs (created by this function)
-///   [nullifier_count..N]  — external call forwarder segments (program + CPI accounts)
+/// `remaining` layout:
+///   [0..nullifier_count]  — nullifier marker PDAs (created by the settlement)
+///   [nullifier_count..N]  — external call forwarder segments (program + CPI accounts),
+///                           in the order the resources' calls run
 ///
 /// Historical root marker PDAs are found by key scan, so they may appear at any index.
-/// The marker for the root this settlement produces is a separate named account
-/// (`new_root_marker`), not part of `remaining_accounts`; a settlement that creates
-/// nothing produces no root and takes no marker.
-///
-/// The account parameters are individually threaded (rather than grouped into a
-/// struct) because each is used independently and at a different point in the
-/// function body; grouping would not reduce the real complexity, only relocate it.
-#[allow(clippy::too_many_arguments)]
-fn execute_settlement<'info>(
-    state: &mut PAStateAccount,
-    pa_state_info: &AccountInfo<'info>,
-    tx: &Transaction,
-    remaining_accounts: &[AccountInfo<'info>],
-    payer: &AccountInfo<'info>,
-    system_program: &AccountInfo<'info>,
-    new_root_marker: Option<&AccountInfo<'info>>,
+/// The marker for the root the settlement produces is `new_root_marker`, not part of
+/// `remaining`; a settlement that creates nothing produces no root and takes no marker.
+struct SettlementAccounts<'a, 'info> {
+    pa_state: AccountInfo<'info>,
+    payer: AccountInfo<'info>,
+    system_program: AccountInfo<'info>,
+    new_root_marker: Option<&'a AccountInfo<'info>>,
+    remaining: &'a [AccountInfo<'info>],
     verifier: VerifierAccounts<'info>,
-    events: &events::EventCpi<'info>,
+    events: events::EventCpi<'info>,
+}
+
+/// Shared settlement logic for both settle and settle_from_txdata, in
+/// pa-evm's `_execute` order. For each action: each consumed resource's
+/// nullifier is recorded, then its forwarder calls run and its payload events
+/// are emitted; each created resource's commitment is appended, then its calls
+/// run and its events are emitted; then the action's ActionExecuted. After
+/// the actions the proofs are verified, the produced root (if any) is
+/// recorded with CommitmentTreeRootAdded, and TransactionExecuted closes the
+/// settlement. The checks that need no state change (the instance's shape,
+/// keys, kind table, denylist, duplicate nullifiers and consumed roots) run
+/// first: roots are checked against the tree as it stood before the
+/// transaction, as pa-evm's root set does not change until the end.
+fn execute_settlement(
+    state: &mut PAStateAccount,
+    tx: &Transaction,
+    accounts: SettlementAccounts<'_, '_>,
 ) -> Result<()> {
-    let pa_state_key = pa_state_info.key;
+    let pa_state_key = accounts.pa_state.key;
+    let events = &accounts.events;
 
     // The instance is the only proof-backed source of settlement data;
     // `require_aggregation` also rejects the ambiguous shape carrying both
@@ -661,24 +750,97 @@ fn execute_settlement<'info>(
         instance.kind_table_commitment == arm_core::Digest::from_bytes(state.kind_table_commitment),
         PAError::KindTableCommitmentMismatch
     );
+    // pa-evm refuses every consumed and created resource carrying a denied
+    // logic ref.
+    for action in &instance.actions {
+        for resource in settle::action_resources(action) {
+            require!(
+                !state.is_logic_ref_denied(&resource.logic_ref.into()),
+                PAError::DeniedLogicRef
+            );
+        }
+    }
     instance
         .nf_duplication_check()
         .map_err(|_| error!(PAError::NullifierDuplication))?;
 
-    validate_consumed_roots(instance, state, pa_state_key, remaining_accounts)?;
+    validate_consumed_roots(instance, state, pa_state_key, accounts.remaining)?;
 
-    let nullifiers = settle::extract_nullifiers(instance);
+    let nullifier_count = settle::nullifier_count(instance);
+    let mut nullifier_markers = accounts
+        .remaining
+        .get(..nullifier_count)
+        .ok_or(PAError::InvalidTransactionData)?
+        .iter();
+    #[cfg(not(test))]
+    let mut forwarder_segments =
+        external_calls::ForwarderSegments::new(accounts.remaining, nullifier_count)?;
+
+    let created_count = settle::commitment_count(instance);
+    maybe_grow_account(
+        &accounts.pa_state,
+        state,
+        created_count,
+        &accounts.payer,
+        &accounts.system_program,
+    )?;
+
+    let ml = marker_lamports(&Rent::get()?);
+
+    for action in &instance.actions {
+        let mut executed = ActionExecutedEvent {
+            action_tree_root: action.action_tree_root.into(),
+            nullifiers: Vec::with_capacity(action.consumed_publics.len()),
+            consumed_logic_refs: Vec::with_capacity(action.consumed_publics.len()),
+            commitments: Vec::with_capacity(action.created_publics.len()),
+            created_logic_refs: Vec::with_capacity(action.created_publics.len()),
+        };
+        for resource in settle::action_resources(action) {
+            if resource.is_consumed {
+                let marker = nullifier_markers
+                    .next()
+                    .ok_or(PAError::InvalidTransactionData)?;
+                nullifier::check_and_create_nullifier_marker(
+                    &crate::ID,
+                    pa_state_key,
+                    &resource.tag.into(),
+                    &accounts.payer,
+                    marker,
+                    &accounts.system_program,
+                    ml,
+                )?;
+                executed.nullifiers.push(resource.tag.into());
+                executed.consumed_logic_refs.push(resource.logic_ref.into());
+            } else {
+                append_to_tree(state, resource.tag)?;
+                executed.commitments.push(resource.tag.into());
+                executed.created_logic_refs.push(resource.logic_ref.into());
+            }
+
+            #[cfg(not(test))]
+            for event in forwarder_segments
+                .execute(&resource.logic_ref, resource.app_data)
+                .map_err(anchor_lang::error::Error::from)?
+            {
+                events.emit(&event)?;
+            }
+            emit_app_data_events(events, &resource.tag, resource.app_data)?;
+        }
+
+        events.emit(&executed)?;
+    }
 
     let prepared = prepare_proof_for_verification(aggregation, state.proof_selector)
         .map_err(|e| -> anchor_lang::error::Error { e.into() })?;
 
     msg!("Verifying aggregated proof via verifier_router");
     {
+        let verifier = &accounts.verifier;
         let cpi_accounts = verifier_router::cpi::accounts::Verify {
             router: verifier.router.clone(),
             verifier_entry: verifier.verifier_entry.clone(),
             verifier_program: verifier.verifier_program.clone(),
-            system_program: system_program.clone(),
+            system_program: accounts.system_program.clone(),
         };
         let cpi_ctx = CpiContext::new(verifier.router_program_id, cpi_accounts);
         verifier_router::cpi::verify(
@@ -693,115 +855,34 @@ fn execute_settlement<'info>(
     arm_solana::delta::verify_delta_proof_with_instance(delta_proof, instance)
         .map_err(PAError::from)?;
 
-    // Events enable off-chain indexers to reconstruct action/transaction data.
-    // Order is the instance order the proof commits to: actions in sequence,
-    // consumed resources before created resources within each action.
-    let total_tag_count = settle::total_resource_count(instance);
-    let mut all_tags: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
-    let mut all_logic_refs: Vec<[u8; 32]> = Vec::with_capacity(total_tag_count);
-    let mut all_is_consumed: Vec<bool> = Vec::with_capacity(total_tag_count);
-
-    for action in &instance.actions {
-        for resource in settle::action_resources(action) {
-            emit_app_data_events(events, &resource.tag, resource.app_data)?;
-            all_tags.push(resource.tag.into());
-            all_logic_refs.push(resource.logic_ref.into());
-            all_is_consumed.push(resource.is_consumed);
-        }
-
-        events.emit(&ActionExecutedEvent {
-            action_tree_root: action.action_tree_root.into(),
-            action_tag_count: settle::action_resource_count(action) as u32,
-        })?;
-    }
-
-    // Runs before nullifier and commitment state changes so that a forwarder
-    // cannot observe them. Solana reverts every account write when the
-    // instruction returns Err, so partial state on failure is impossible
-    // regardless of ordering — that is not what this ordering protects. The
-    // forwarder is chosen by the proof and runs while the transaction is still
-    // in flight, and it can read any account it is handed; running it first
-    // bounds what this settlement has written by the time it executes.
-    #[cfg(not(test))]
-    for event in
-        external_calls::execute_external_calls(instance, remaining_accounts, nullifiers.len())
-            .map_err(anchor_lang::error::Error::from)?
-    {
-        events.emit(&event)?;
-    }
-
-    // Emit TransactionExecuted event (EVM parity). `is_consumed` states each
-    // tag's role explicitly — consumed and created resources are grouped per
-    // action rather than alternating, so parity cannot infer it.
-    events.emit(&TransactionExecutedEvent {
-        tags: all_tags,
-        logic_refs: all_logic_refs,
-        is_consumed: all_is_consumed,
-    })?;
-
-    let rent = Rent::get()?;
-    let ml = marker_lamports(&rent);
-
-    if !nullifiers.is_empty() {
-        require!(
-            remaining_accounts.len() >= nullifiers.len(),
-            PAError::InvalidTransactionData
-        );
-
-        for (i, nullifier) in nullifiers.iter().enumerate() {
-            let marker = &remaining_accounts[i];
-            let nullifier_bytes: [u8; 32] = (*nullifier).into();
-            nullifier::check_and_create_nullifier_marker(
-                &crate::ID,
-                pa_state_key,
-                &nullifier_bytes,
-                payer,
-                marker,
-                system_program,
-                ml,
-            )?;
-        }
-        msg!("Created {} nullifier PDAs", nullifiers.len());
-    }
-
-    let commitments = settle::extract_commitments(instance);
     // A transaction that creates nothing leaves the tree, and so its latest
-    // root, untouched: there is no new root to record, as the EVM adapter
-    // adds no root when none was produced.
-    if commitments.is_empty() {
-        require!(new_root_marker.is_none(), PAError::RootPdaMismatch);
-        return Ok(());
+    // root, untouched: there is no new root to record, as pa-evm adds no root
+    // when none was produced. Every settlement that appends commitments
+    // retains its resulting root so that concurrently constructed
+    // transactions stay valid as the tree advances; Solana cannot create an
+    // undeclared account, so the marker is required then.
+    if created_count == 0 {
+        require!(accounts.new_root_marker.is_none(), PAError::RootPdaMismatch);
+    } else {
+        let new_root = state.root;
+        let new_root_marker = accounts.new_root_marker.ok_or(PAError::RootPdaMismatch)?;
+        root::create_root_marker(
+            &crate::ID,
+            pa_state_key,
+            &new_root,
+            &accounts.payer,
+            new_root_marker,
+            &accounts.system_program,
+            ml,
+        )?;
+        events.emit(&CommitmentTreeRootAddedEvent { root: new_root })?;
     }
-    maybe_grow_account(
-        pa_state_info,
-        state,
-        commitments.len(),
-        payer,
-        system_program,
-        &rent,
-    )?;
-    for commitment in commitments {
-        append_to_tree(state, commitment)?;
-    }
 
-    let new_root = state.root;
-
-    // Every settlement that appends commitments must retain its resulting root
-    // so that concurrently constructed transactions remain valid after the tree
-    // advances. Solana cannot create an undeclared account, so the marker is
-    // required and a settlement that omits it is rejected.
-    let new_root_marker = new_root_marker.ok_or(PAError::RootPdaMismatch)?;
-    root::create_root_marker(
-        &crate::ID,
-        pa_state_key,
-        &new_root,
-        payer,
-        new_root_marker,
-        system_program,
-        ml,
-    )?;
-    msg!("Created root marker for new root");
-
+    events.emit(&TransactionExecutedEvent {
+        transaction_id: arm_solana::delta::compute_delta_msg_hash(
+            &arm_solana::delta::collect_roots(instance),
+        ),
+    })?;
     Ok(())
 }
 
@@ -862,6 +943,54 @@ pub struct EmergencyStop<'info> {
 
 #[event_cpi]
 #[derive(Accounts)]
+pub struct DenyLogicRef<'info> {
+    #[account(
+        mut,
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        has_one = authority @ PAError::Unauthorized,
+        constraint = pa_state.schema_version == SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    /// The authority, which pays for the denylist's growth.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct MigrateState<'info> {
+    /// The upgrade authority, which pays for the account's growth.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: The seeds pin the address; the handler requires this program
+    /// as owner and the previous schema's layout, which the typed account
+    /// cannot read.
+    #[account(mut, seeds = [PA_STATE_SEED], bump)]
+    pub pa_state: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+
+    /// The program account proves `program_data` is this program's own
+    /// ProgramData address rather than any account shaped like one.
+    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ PAError::Unauthorized)]
+    pub program: Program<'info, crate::program::ProtocolAdapter>,
+
+    /// The loader records the upgrade authority here; it upgrades the program
+    /// and so migrates its state.
+    #[account(
+        constraint = program_data.upgrade_authority_address == Some(authority.key())
+            @ PAError::Unauthorized
+    )]
+    pub program_data: Account<'info, ProgramData>,
+}
+
+#[event_cpi]
+#[derive(Accounts)]
 pub struct SetKindTableCommitment<'info> {
     #[account(
         mut,
@@ -876,37 +1005,9 @@ pub struct SetKindTableCommitment<'info> {
     pub authority: Signer<'info>,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
-pub struct ProposeAuthority<'info> {
-    #[account(
-        mut,
-        seeds = [PA_STATE_SEED],
-        bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
-        constraint = pa_state.schema_version == SCHEMA_VERSION
-            @ PAError::UnsupportedStateSchema,
-    )]
-    pub pa_state: Account<'info, PAStateAccount>,
-
-    pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct AcceptAuthority<'info> {
-    #[account(
-        mut,
-        seeds = [PA_STATE_SEED],
-        bump = pa_state.bump,
-        constraint = pa_state.schema_version == SCHEMA_VERSION
-            @ PAError::UnsupportedStateSchema,
-    )]
-    pub pa_state: Account<'info, PAStateAccount>,
-
-    pub new_authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct CancelAuthorityTransfer<'info> {
+pub struct TransferAuthority<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
@@ -1181,27 +1282,55 @@ pub struct ApplicationPayloadEvent {
     pub blob: Vec<u8>,
 }
 
-/// Matches EVM PA's ActionExecuted event.
 /// Mirrors pa-evm: `event KindTableCommitmentUpdated(bytes32 kindTableCommitment);`
 #[event]
 pub struct KindTableCommitmentUpdatedEvent {
     pub kind_table_commitment: [u8; 32],
 }
 
+/// Mirrors OpenZeppelin's `event OwnershipTransferred(address indexed
+/// previousOwner, address indexed newOwner);`: at initialization (from the
+/// zero key), on every transfer, and on renouncement (to the zero key).
+#[event]
+pub struct AuthorityTransferredEvent {
+    pub previous_authority: Pubkey,
+    pub new_authority: Pubkey,
+}
+
+/// Mirrors pa-evm: `event CommitmentTreeRootAdded(bytes32 root);`: the
+/// empty tree's root at initialization, then the root each settlement that
+/// appends commitments produces.
+#[event]
+pub struct CommitmentTreeRootAddedEvent {
+    pub root: [u8; 32],
+}
+
+/// Mirrors pa-evm: `event LogicRefDenied(bytes32 indexed logicRef);`
+#[event]
+pub struct LogicRefDeniedEvent {
+    pub logic_ref: [u8; 32],
+}
+
+/// Mirrors pa-evm: `event ActionExecuted(bytes32 actionTreeRoot,
+/// bytes32[] nullifiers, bytes32[] consumedLogicRefs, bytes32[] commitments,
+/// bytes32[] createdLogicRefs);`. The commitments are appended to the tree in
+/// the order listed, action after action.
 #[event]
 pub struct ActionExecutedEvent {
     pub action_tree_root: [u8; 32],
-    pub action_tag_count: u32,
+    pub nullifiers: Vec<[u8; 32]>,
+    pub consumed_logic_refs: Vec<[u8; 32]>,
+    pub commitments: Vec<[u8; 32]>,
+    pub created_logic_refs: Vec<[u8; 32]>,
 }
 
-/// Matches EVM PA's TransactionExecuted event, with each tag's role stated
-/// explicitly: `is_consumed[i]` is true when `tags[i]` is a nullifier and
-/// false when it is a commitment.
+/// Mirrors pa-evm: `event TransactionExecuted(bytes32 indexed transactionId);`,
+/// the Keccak-256 hash of the concatenated action tree roots: the message the
+/// delta proof signs, unique per transaction and known to the sender before
+/// submission.
 #[event]
 pub struct TransactionExecutedEvent {
-    pub tags: Vec<[u8; 32]>,
-    pub logic_refs: Vec<[u8; 32]>,
-    pub is_consumed: Vec<bool>,
+    pub transaction_id: [u8; 32],
 }
 
 /// Matches EVM PA's ForwarderCallExecuted event.

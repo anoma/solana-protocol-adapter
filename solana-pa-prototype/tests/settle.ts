@@ -65,16 +65,14 @@ describe("settlement", () => {
     });
 
     it("account size matches expected size for current depth (no over-allocation)", async () => {
-      // The account holds the current frontier and every other field at its
-      // largest encoding (a pending authority set), and nothing more.
+      // The account holds the current frontier and the denylist, and nothing
+      // more.
       const state = await program.account.paStateAccount.fetch(paState);
       const accountInfo = await provider.connection.getAccountInfo(paState);
 
       assert.ok(accountInfo, "PAState account should exist");
 
-      const expectedSize = (
-        await program.coder.accounts.encode("paStateAccount", { ...state, pendingAuthority: PublicKey.default })
-      ).length;
+      const expectedSize = (await program.coder.accounts.encode("paStateAccount", state)).length;
       assert.equal(
         accountInfo!.data.length,
         expectedSize,
@@ -103,6 +101,20 @@ describe("settlement", () => {
       // The adapter calls the verifier router, which calls the verifier the
       // fixture's selector routes to: that verifier rejects the proof.
       await assertFails(settleViaTxData(txTampered, { newRootMarker: DUMMY_ROOT_MARKER }), VERIFIER.rejection);
+    });
+
+    // Proofs are verified after the nullifiers are recorded, as in pa-evm, so
+    // this runs while the fixture's nullifier is unspent: afterwards the
+    // settlement would stop at DuplicateNullifier before reaching the verifier.
+    it("rejects InvalidProof (garbage aggregation proof bytes)", async () => {
+      const fx = loadFixture("garbage_proof.json");
+      await assertFails(
+        settleViaTxData(Buffer.from(fx.tx_b64, "base64"), {
+          nullifierAccounts: deriveNullifierAccounts(fx.consumed_nullifiers_b64),
+          newRootMarker: DUMMY_ROOT_MARKER,
+        }),
+        { program, error: "InvalidProof" },
+      );
     });
 
     it("accepts a valid Groth16 batch aggregation tx and creates root marker", async () => {
@@ -195,10 +207,9 @@ describe("settlement", () => {
 
       const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
 
-      // Pass ZERO nullifier accounts but still include forwarder+clock: the
-      // fixture's one nullifier claims the forwarder slot, leaving too few
-      // accounts for the forwarder's call segment, a malformed settlement.
-      const allRemainingAccounts = buildSettleRemainingAccounts([]);
+      // Pass no remaining accounts at all: the fixture's one nullifier has no
+      // marker slot.
+      const allRemainingAccounts: AccountMeta[] = [];
 
       await assertFails(
         settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, allRemainingAccounts)
@@ -259,10 +270,6 @@ describe("settlement", () => {
 
     it("rejects AggregationRequired (no aggregation proof)", async () => {
       await expectSettleError("no_aggregation.json", "AggregationRequired");
-    });
-
-    it("rejects InvalidProof (garbage aggregation proof bytes)", async () => {
-      await expectSettleError("garbage_proof.json", "InvalidProof");
     });
   });
 });

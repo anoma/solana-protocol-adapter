@@ -1,5 +1,5 @@
 use crate::events::event_instruction_data;
-use crate::ActionExecutedEvent;
+use crate::TransactionExecutedEvent;
 use anchor_lang::Discriminator;
 
 /// The self-CPI instruction data is Anchor's 8-byte event tag, then the event's
@@ -7,9 +7,8 @@ use anchor_lang::Discriminator;
 /// `emit_cpi!` builds, so any consumer written against Anchor's layout decodes it.
 #[test]
 fn event_instruction_data_is_tag_then_discriminator_then_borsh() {
-    let event = ActionExecutedEvent {
-        action_tree_root: [7u8; 32],
-        action_tag_count: 3,
+    let event = TransactionExecutedEvent {
+        transaction_id: [7u8; 32],
     };
     let data = event_instruction_data(&event).unwrap();
 
@@ -18,11 +17,10 @@ fn event_instruction_data_is_tag_then_discriminator_then_borsh() {
         &data[..8],
         &[0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]
     );
-    assert_eq!(&data[8..16], ActionExecutedEvent::DISCRIMINATOR);
-    // Borsh body: 32 root bytes then the u32 count, little-endian.
+    assert_eq!(&data[8..16], TransactionExecutedEvent::DISCRIMINATOR);
+    // Borsh body: the 32 transaction-id bytes.
     assert_eq!(&data[16..48], &[7u8; 32]);
-    assert_eq!(&data[48..52], &3u32.to_le_bytes());
-    assert_eq!(data.len(), 52);
+    assert_eq!(data.len(), 48);
 }
 
 /// A variable-length event body is Borsh-encoded in place after the tag and

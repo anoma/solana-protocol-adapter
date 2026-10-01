@@ -10,8 +10,8 @@ anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-clien
 arm = { package = "anoma-rm-risc0", version = "=2.0.0-rc.6", default-features = false, features = ["aggregation", "prove"] }
 arm-gadgets = { package = "anoma-rm-risc0-gadgets", version = "=2.0.0-rc.6" }
 # The AnomaPay transfer resource: its logic proves the SPL forwarder fixtures.
-transfer_library = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "963d6cb574aa9bdecd167861acc20a3300712808" }
-transfer_witness = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "963d6cb574aa9bdecd167861acc20a3300712808" }
+transfer_library = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "f550cacad7dc176211db9e2990074c9e5df2e021" }
+transfer_witness = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "f550cacad7dc176211db9e2990074c9e5df2e021" }
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 anchor-lang = "1.2.0"
@@ -20,6 +20,8 @@ bincode = "1.3.3"
 hex = "0.4"
 # anoma-rm-risc0's Scalar/AffinePoint types; it pins the version (=0.13.3).
 k256 = "0.13"
+# Seeded randomness for the created resources' encryption (k256's rand_core 0.6).
+rand_chacha = "0.3"
 risc0-zkvm = "3.0.6"
 passthrough-logic-methods = { path = "passthrough-logic/methods" }
 serde = { version = "1.0", features = ["derive"] }

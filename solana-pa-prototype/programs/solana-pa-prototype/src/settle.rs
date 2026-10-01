@@ -43,16 +43,6 @@ pub fn action_resources(action: &ActionAggregated) -> impl Iterator<Item = Resou
         }))
 }
 
-/// Number of resources (consumed + created) in one action.
-pub fn action_resource_count(action: &ActionAggregated) -> usize {
-    action.consumed_publics.len() + action.created_publics.len()
-}
-
-/// Total number of resources (consumed + created) across the instance.
-pub fn total_resource_count(instance: &AggregationInstance) -> usize {
-    instance.actions.iter().map(action_resource_count).sum()
-}
-
 fn consumed(instance: &AggregationInstance) -> impl Iterator<Item = &ConsumedResourceAggregated> {
     instance.actions.iter().flat_map(|a| &a.consumed_publics)
 }
@@ -61,20 +51,14 @@ fn created(instance: &AggregationInstance) -> impl Iterator<Item = &CreatedResou
     instance.actions.iter().flat_map(|a| &a.created_publics)
 }
 
-/// Nullifiers of all consumed resources, in instance order.
-/// Pre-sized so the BPF bump allocator (no free) doesn't retain
-/// capacity-doubled buffers.
-pub fn extract_nullifiers(instance: &AggregationInstance) -> Vec<Digest> {
-    let mut out = Vec::with_capacity(consumed(instance).count());
-    out.extend(consumed(instance).map(|c| c.resource_nullifier));
-    out
+/// The number of consumed resources: the nullifier markers a settlement creates.
+pub fn nullifier_count(instance: &AggregationInstance) -> usize {
+    consumed(instance).count()
 }
 
-/// Commitments of all created resources, in instance order.
-pub fn extract_commitments(instance: &AggregationInstance) -> Vec<Digest> {
-    let mut out = Vec::with_capacity(created(instance).count());
-    out.extend(created(instance).map(|c| c.resource_commitment));
-    out
+/// The number of created resources: the commitments a settlement appends.
+pub fn commitment_count(instance: &AggregationInstance) -> usize {
+    created(instance).count()
 }
 
 /// Deduplicated commitment-tree roots consumed by the instance.

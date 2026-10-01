@@ -2,6 +2,7 @@
  * Test-suite helpers: funding and draining keypairs, error assertions,
  * TxData uploads, fixture actors, and v0 transaction sending.
  */
+import { keccak_256 } from "@noble/hashes/sha3";
 import * as anchor from "@anchor-lang/core";
 import { Idl, Program } from "@anchor-lang/core";
 import {
@@ -361,4 +362,12 @@ export async function sendV0(
 ): Promise<string> {
   const message = await compileV0(provider, instructions, table);
   return provider.sendAndConfirm(new VersionedTransaction(message), signers);
+}
+
+/**
+ * pa-evm's transaction id: the Keccak-256 hash of the concatenated action
+ * tree roots, the message the delta proof signs.
+ */
+export function transactionIdOf(actionTreeRoots: number[][]): Buffer {
+  return Buffer.from(keccak_256(Buffer.concat(actionTreeRoots.map((root) => Buffer.from(root)))));
 }

@@ -10,6 +10,7 @@ import { assertFails } from "../utils/helpers";
 import {
   DUMMY_ROOT_MARKER,
   VERIFIER,
+  buildSettleRemainingAccounts,
   deriveNullifierAccounts,
   fixture,
   program,
@@ -62,10 +63,16 @@ describe("Security: mutation-based settle tests", () => {
   // The primary fixture with its seal's pi_c[0] flipped and the selector
   // intact (fixture-gen's corrupt_seal.json variant): the router routes it
   // to the fixture's verifier, which rejects the malformed point.
+  // Every account the settlement needs is supplied, so the corrupted proof
+  // is the only defect: the forwarder call runs before verification, as in
+  // pa-evm, and the verifier rejects the seal.
   it("rejects transaction with corrupted proof bytes", () => {
     const corrupt = loadFixture("corrupt_seal.json");
     return assertFails(
-      settleUploaded(Buffer.from(corrupt.tx_b64, "base64"), deriveNullifierAccounts(corrupt.consumed_nullifiers_b64)),
+      settleUploaded(
+        Buffer.from(corrupt.tx_b64, "base64"),
+        buildSettleRemainingAccounts(deriveNullifierAccounts(corrupt.consumed_nullifiers_b64)),
+      ),
       VERIFIER.malformedProof,
     );
   });
@@ -81,12 +88,14 @@ describe("Security: mutation-based settle tests", () => {
   it("rejects settlement with no remaining accounts", () =>
     assertFails(settleUploaded(validTx, []), { program, error: "InvalidTransactionData" }));
 
+  // The first remaining account is read as the consumed resource's nullifier
+  // marker, before any forwarder segment (UnregisteredForwarder is settle.ts's).
   it("rejects settlement with random remaining accounts", () => {
     const randomAccounts = Array.from({ length: 3 }, () => ({
       pubkey: Keypair.generate().publicKey,
       isWritable: true,
       isSigner: false,
     }));
-    return assertFails(settleUploaded(validTx, randomAccounts), { program, error: "UnregisteredForwarder" });
+    return assertFails(settleUploaded(validTx, randomAccounts), { program, error: "NullifierPdaMismatch" });
   });
 });

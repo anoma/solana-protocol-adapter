@@ -35,6 +35,36 @@ export function initializeAdapter(
   });
 }
 
+/** `transfer_authority` by the adapter authority: effective at once. */
+export function transferAuthority(program: Program<ProtocolAdapter>, authority: PublicKey, newAuthority: PublicKey) {
+  return program.methods
+    .transferAuthority(newAuthority)
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/** `renounce_authority` by the adapter authority: no one holds it afterwards. */
+export function renounceAuthority(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  return program.methods
+    .renounceAuthority()
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/** `deny_logic_ref` by the adapter authority, which pays for the entry. */
+export function denyLogicRef(program: Program<ProtocolAdapter>, authority: PublicKey, logicRef: number[]) {
+  return program.methods
+    .denyLogicRef(logicRef)
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/**
+ * `migrate_state` by the program's upgrade authority: brings a state account
+ * in the previous schema version to this build's, once, after an in-place
+ * upgrade.
+ */
+export function migrateState(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  return program.methods.migrateState().accounts({ authority, programData: deriveProgramDataPda(program.programId) });
+}
+
 /** `emergency_stop` by `authority`. */
 export function emergencyStop(program: Program<ProtocolAdapter>, authority: PublicKey) {
   return program.methods

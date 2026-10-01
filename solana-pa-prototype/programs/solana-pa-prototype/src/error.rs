@@ -87,8 +87,6 @@ pub enum PAError {
     Unauthorized,
     #[msg("Protocol adapter is already stopped")]
     AlreadyStopped,
-    #[msg("No pending authority transfer to accept")]
-    NoPendingAuthority,
     #[msg("Operation requires the PA to be stopped")]
     NotStopped,
 
@@ -117,6 +115,24 @@ pub enum PAError {
     // State layout
     #[msg("PAState schema version is not the one this program binary reads; migrate the account first")]
     UnsupportedStateSchema,
+    #[msg("PAState is not in the previous schema version - it was migrated already")]
+    NotPreviousSchema,
+
+    // Logic-ref denylist
+    #[msg("Zero logic ref not allowed")]
+    ZeroLogicRefNotAllowed,
+    #[msg("Logic ref is already denied")]
+    LogicRefAlreadyDenied,
+    #[msg("A resource carries a denied logic ref")]
+    DeniedLogicRef,
+
+    // Initialization and authority, as pa-evm's zero-value rejections
+    #[msg("Zero authority not allowed; renounce_authority gives the authority up")]
+    ZeroAuthorityNotAllowed,
+    #[msg("Zero verifier router not allowed")]
+    ZeroVerifierRouterNotAllowed,
+    #[msg("Zero proof selector not allowed")]
+    ZeroProofSelectorNotAllowed,
 }
 
 impl From<SolanaArmError> for PAError {

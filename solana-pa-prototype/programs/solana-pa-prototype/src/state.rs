@@ -72,7 +72,11 @@ impl Space for PALifecycle {
 /// The layout number of `PAStateAccount` this binary reads and writes.
 /// Bumped on every change to the account layout; unrelated to release names.
 #[constant]
-pub const SCHEMA_VERSION: u8 = 1;
+pub const SCHEMA_VERSION: u8 = 2;
+
+/// The schema version `migrate_state` migrates from.
+#[constant]
+pub const PREVIOUS_SCHEMA_VERSION: u8 = 1;
 
 /// The commitment of the empty kind table, under which every resource
 /// kind is derived via hash-to-curve: the table every deployment starts
@@ -111,8 +115,6 @@ pub struct PAStateAccount {
     /// accepts (sha256 of the concatenated entries; the empty table hashes
     /// to sha256 of zero bytes).
     pub kind_table_commitment: [u8; 32],
-    /// Pending authority for two-step transfer (propose + accept).
-    pub pending_authority: Option<Pubkey>,
     /// Lifecycle state. One-way transition: Running → Stopped.
     pub lifecycle: PALifecycle,
     /// Cached tree root (updated on every append). Avoids recomputing from frontier.
@@ -125,20 +127,33 @@ pub struct PAStateAccount {
     pub frontier: Vec<[u8; 32]>,
     pub min_expiry_slots: u64,
     pub max_expiry_slots: u64,
+    /// Logic refs the authority denied (`deny_logic_ref`), as pa-evm's
+    /// logic-ref denylist: no settlement consumes or creates a resource
+    /// carrying one. Only ever grows; the account grows by one entry per
+    /// denial.
+    #[max_len(0)]
+    pub denied_logic_refs: Vec<[u8; 32]>,
 }
 
 impl PAStateAccount {
-    /// The account at full depth, every frontier level filled.
+    /// The account at full depth, every frontier level filled, with no
+    /// denied logic ref.
     pub const MAX_SPACE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
 
-    /// The account at `depth`: full size less the frontier levels not yet
-    /// reached. Every other field is sized for its largest encoding, so the
-    /// account never needs to grow for anything but the frontier.
-    pub const fn space_for_depth(depth: usize) -> usize {
+    /// The account at `depth` holding `denied` denied logic refs: full size
+    /// less the frontier levels not yet reached, plus the denylist. Every
+    /// other field has a fixed size, so the account grows only with the
+    /// frontier and the denylist.
+    pub const fn space(depth: usize, denied: usize) -> usize {
         Self::MAX_SPACE - size_of::<[u8; 32]>() * (MAX_TREE_DEPTH - depth)
+            + size_of::<[u8; 32]>() * denied
     }
 
-    pub const INITIAL_SPACE: usize = Self::space_for_depth(INITIAL_TREE_DEPTH);
+    pub fn is_logic_ref_denied(&self, logic_ref: &[u8; 32]) -> bool {
+        self.denied_logic_refs.contains(logic_ref)
+    }
+
+    pub const INITIAL_SPACE: usize = Self::space(INITIAL_TREE_DEPTH, 0);
 
     pub fn depth(&self) -> usize {
         self.current_depth as usize
@@ -188,7 +203,6 @@ impl PAStateAccount {
             verifier_router,
             proof_selector,
             kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
-            pending_authority: None,
             lifecycle: PALifecycle::Running,
             root: EMPTY_TREE_ROOT_INITIAL.into(),
             next_index: 0,
@@ -196,6 +210,53 @@ impl PAStateAccount {
             frontier: vec![PADDING_LEAF.into()],
             min_expiry_slots: MIN_EXPIRY_SLOTS,
             max_expiry_slots: MAX_EXPIRY_SLOTS,
+            denied_logic_refs: Vec::new(),
+        }
+    }
+}
+
+/// The state account in schema version 1 (`PREVIOUS_SCHEMA_VERSION`), which
+/// `migrate_state` reads: this layout without the denylist. Deserialized from
+/// the account's bytes after the discriminator; the bytes past its end are
+/// not part of it (a shorter re-serialization leaves earlier bytes there).
+#[derive(AnchorDeserialize)]
+pub struct PreviousPAState {
+    pub schema_version: u8,
+    pub bump: u8,
+    pub authority: Pubkey,
+    pub verifier_router: Pubkey,
+    pub proof_selector: [u8; 4],
+    pub kind_table_commitment: [u8; 32],
+    pub pending_authority: Option<Pubkey>,
+    pub lifecycle: PALifecycle,
+    pub root: [u8; 32],
+    pub next_index: u64,
+    pub current_depth: u8,
+    pub frontier: Vec<[u8; 32]>,
+    pub min_expiry_slots: u64,
+    pub max_expiry_slots: u64,
+}
+
+impl From<PreviousPAState> for PAStateAccount {
+    /// This layout with the previous fields, less the pending authority of
+    /// the previous two-step transfer (a proposal never accepted is
+    /// discarded; this layout transfers in one step), and an empty denylist.
+    fn from(previous: PreviousPAState) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            bump: previous.bump,
+            authority: previous.authority,
+            verifier_router: previous.verifier_router,
+            proof_selector: previous.proof_selector,
+            kind_table_commitment: previous.kind_table_commitment,
+            lifecycle: previous.lifecycle,
+            root: previous.root,
+            next_index: previous.next_index,
+            current_depth: previous.current_depth,
+            frontier: previous.frontier,
+            min_expiry_slots: previous.min_expiry_slots,
+            max_expiry_slots: previous.max_expiry_slots,
+            denied_logic_refs: Vec::new(),
         }
     }
 }
