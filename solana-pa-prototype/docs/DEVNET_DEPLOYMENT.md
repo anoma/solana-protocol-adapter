@@ -1,6 +1,6 @@
 # Devnet Deployment Record
 
-Live state is always what `./scripts/dev.sh status --cluster devnet` reports; this file records what was deployed, by whom, and when. Update it after every deploy, upgrade, estop, or teardown.
+Live state is always what `./scripts/dev.sh status --cluster devnet` reports; this file records what was deployed, by whom, and when. Update it after every deploy, upgrade, pause, unpause, or teardown.
 
 **Record last verified:** 2026-09-21
 

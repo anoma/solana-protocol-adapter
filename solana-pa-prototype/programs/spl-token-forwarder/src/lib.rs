@@ -269,7 +269,7 @@ pub mod spl_token_forwarder {
     /// Forward a wrap or unwrap call from the Protocol Adapter.
     ///
     /// Like the EVM V2 `ForwarderBaseUpgradeable.forwardCall()`, this does not check the
-    /// adapter's stopped state: the adapter does not call forwarders once stopped.
+    /// adapter's paused state: the adapter does not call forwarders while paused.
     pub fn forward_call<'info>(
         ctx: Context<'info, ForwardCall<'info>>,
         logic_ref: [u8; 32],
@@ -313,14 +313,14 @@ pub mod spl_token_forwarder {
         Ok(())
     }
 
-    /// Withdraw from escrow while the adapter is stopped, as the emergency
+    /// Withdraw from escrow while the adapter is paused, as the emergency
     /// caller. The operand is an `UnwrapInput`. The EVM V1 forwarder's
     /// forwardEmergencyCall(); V2 has no emergency path (anoma/dos-pm#86).
     pub fn forward_emergency_call(
         ctx: Context<ForwardEmergencyCall>,
         input: Vec<u8>,
     ) -> Result<()> {
-        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
+        require_paused_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         let withdraw = UnwrapInput::try_from_bytes(&input)?;
 
         let [escrow_ata, recipient_ata, escrow_authority, token_program, ..] =
@@ -353,13 +353,13 @@ pub mod spl_token_forwarder {
     }
 
     /// Set the emergency caller, once, by the committee while the adapter
-    /// is stopped. The EVM V1 forwarder's setEmergencyCaller(); V2 has no
+    /// is paused. The EVM V1 forwarder's setEmergencyCaller(); V2 has no
     /// emergency path (anoma/dos-pm#86).
     pub fn set_emergency_caller(
         ctx: Context<SetEmergencyCaller>,
         new_emergency_caller: Pubkey,
     ) -> Result<()> {
-        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
+        require_paused_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         require!(
             new_emergency_caller != Pubkey::default(),
             ErrorCode::ZeroAddressNotAllowed
@@ -380,9 +380,9 @@ pub mod spl_token_forwarder {
 
     /// Drain a mint's escrow to the recipient and close the escrow token
     /// account; its rent goes to the committee. Requires the adapter to be
-    /// stopped.
+    /// paused.
     pub fn close_escrow(ctx: Context<CloseEscrow>) -> Result<()> {
-        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
+        require_paused_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         let token_mint_key = ctx.accounts.token_mint.key();
         require_token_account(
             &ctx.accounts.escrow_ata,
@@ -418,18 +418,18 @@ pub mod spl_token_forwarder {
     }
 
     /// Close the config PDA; its rent goes to the committee. Call last.
-    /// Requires the adapter to be stopped.
+    /// Requires the adapter to be paused.
     pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {
-        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
+        require_paused_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         Ok(())
     }
 
     /// Close the nonce bitmaps passed as remaining accounts; their rent goes
-    /// to the committee. Requires the adapter to be stopped.
+    /// to the committee. Requires the adapter to be paused.
     pub fn close_nonce_bitmaps_batch<'info>(
         ctx: Context<'info, CloseNonceBitmaps<'info>>,
     ) -> Result<()> {
-        require_stopped_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
+        require_paused_adapter(&ctx.accounts.config, &ctx.accounts.pa_state)?;
         for bitmap in ctx.remaining_accounts {
             Account::<NonceBitmap>::try_from(bitmap)
                 .map_err(|_| ErrorCode::InvalidNonceBitmapPda)?
@@ -513,17 +513,18 @@ fn require_token_account(token_account: &AccountInfo, mint: &Pubkey, owner: &Pub
 }
 
 /// Every committee and emergency-caller instruction requires the adapter to
-/// be stopped, as the EVM V1 forwarder's _checkEmergencyStopped() did: the state account's
-/// address derives from the configured adapter, and the lifecycle is read
+/// be paused (the EVM V1 forwarder's _checkEmergencyStopped() required a
+/// stopped adapter): the state account's
+/// address derives from the configured adapter, and the paused flag is read
 /// through the adapter's type.
-fn require_stopped_adapter(config: &Config, pa_state: &AccountInfo) -> Result<()> {
+fn require_paused_adapter(config: &Config, pa_state: &AccountInfo) -> Result<()> {
     require!(
         pa_state.key() == derive_pa_state_pda(&config.protocol_adapter).0,
         ErrorCode::InvalidPaState
     );
     require!(
-        pa_is_stopped(&pa_state.try_borrow_data()?)?,
-        ErrorCode::ProtocolAdapterNotStopped
+        pa_is_paused(&pa_state.try_borrow_data()?)?,
+        ErrorCode::ProtocolAdapterNotPaused
     );
     Ok(())
 }
@@ -900,7 +901,7 @@ pub struct ForwardEmergencyCall<'info> {
     )]
     pub config: Account<'info, Config>,
 
-    /// CHECK: Checked by require_stopped_adapter in the handler.
+    /// CHECK: Checked by require_paused_adapter in the handler.
     pub pa_state: UncheckedAccount<'info>,
 }
 
@@ -915,7 +916,7 @@ pub struct SetEmergencyCaller<'info> {
     )]
     pub config: Account<'info, Config>,
 
-    /// CHECK: Checked by require_stopped_adapter in the handler.
+    /// CHECK: Checked by require_paused_adapter in the handler.
     pub pa_state: UncheckedAccount<'info>,
 }
 
@@ -950,7 +951,7 @@ pub struct CloseEscrow<'info> {
     #[account(address = SPL_TOKEN_PROGRAM_ID)]
     pub token_program: UncheckedAccount<'info>,
 
-    /// CHECK: Checked by require_stopped_adapter in the handler.
+    /// CHECK: Checked by require_paused_adapter in the handler.
     pub pa_state: UncheckedAccount<'info>,
 }
 
@@ -968,7 +969,7 @@ pub struct CloseConfig<'info> {
     )]
     pub config: Account<'info, Config>,
 
-    /// CHECK: Checked by require_stopped_adapter in the handler.
+    /// CHECK: Checked by require_paused_adapter in the handler.
     pub pa_state: UncheckedAccount<'info>,
 }
 
@@ -984,6 +985,6 @@ pub struct CloseNonceBitmaps<'info> {
     #[account(address = CONFIG_PDA)]
     pub config: Account<'info, Config>,
 
-    /// CHECK: Checked by require_stopped_adapter in the handler.
+    /// CHECK: Checked by require_paused_adapter in the handler.
     pub pa_state: UncheckedAccount<'info>,
 }

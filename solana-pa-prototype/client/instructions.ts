@@ -8,6 +8,7 @@ import { BN, Program } from "@anchor-lang/core";
 import { AccountMeta, Keypair, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
+import { getVerifierEntryPda } from "./verifier";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
   deriveConfigPda,
@@ -19,7 +20,11 @@ import {
 
 // Protocol adapter governance
 
-/** The adapter's `initialize`, paid by `payer`, pinning the verifier; it starts on the empty kind table. */
+/**
+ * The adapter's `initialize`, paid by `payer`, pinning the verifier; it
+ * starts on the empty kind table and refuses a verifier the router has paused,
+ * read from the router's verifier entry for `proofSelector`.
+ */
 export function initializeAdapter(
   program: Program<ProtocolAdapter>,
   payer: PublicKey,
@@ -28,6 +33,7 @@ export function initializeAdapter(
 ) {
   return program.methods.initialize(verifierRouter, proofSelector).accountsPartial({
     paState: derivePaStatePda(program.programId)[0],
+    verifierEntry: getVerifierEntryPda(Buffer.from(proofSelector), verifierRouter)[0],
     payer,
     systemProgram: SystemProgram.programId,
   });
@@ -53,11 +59,14 @@ export function migrateState(program: Program<ProtocolAdapter>, authority: Publi
   return program.methods.migrateState().accounts({ authority });
 }
 
-/** `emergency_stop` by the upgrade authority. */
-export function emergencyStop(program: Program<ProtocolAdapter>, authority: PublicKey) {
-  return program.methods
-    .emergencyStop()
-    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+/** `pause` by the upgrade authority: settlement stops until `unpause`. */
+export function pauseAdapter(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  return program.methods.pause().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/** `unpause` by the upgrade authority: settlement resumes. */
+export function unpauseAdapter(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  return program.methods.unpause().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
 }
 
 /** `set_kind_table_commitment` by the upgrade authority. */
@@ -228,7 +237,7 @@ export function emergencyWithdraw(
 
 /**
  * `close_escrow` by `authority`, draining the escrow to `recipientAta`;
- * requires the adapter at `paState` to be stopped. Callers add signers and send.
+ * requires the adapter at `paState` to be paused. Callers add signers and send.
  */
 export function closeEscrow(
   forwarder: Program<SplTokenForwarder>,
@@ -245,7 +254,7 @@ export function closeEscrow(
   });
 }
 
-/** `set_emergency_caller` by the committee; only while the adapter at `paState` is stopped. */
+/** `set_emergency_caller` by the committee; only while the adapter at `paState` is paused. */
 export function setEmergencyCaller(
   forwarder: Program<SplTokenForwarder>,
   committee: PublicKey,
@@ -255,12 +264,12 @@ export function setEmergencyCaller(
   return forwarder.methods.setEmergencyCaller(caller).accounts({ committee, paState });
 }
 
-/** `close_config` by the committee `authority`; requires the adapter at `paState` to be stopped. */
+/** `close_config` by the committee `authority`; requires the adapter at `paState` to be paused. */
 export function closeConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey, paState: PublicKey) {
   return forwarder.methods.closeConfig().accounts({ authority, paState });
 }
 
-/** `close_nonce_bitmaps_batch` by the committee `authority` over `bitmaps`; requires the adapter at `paState` to be stopped. */
+/** `close_nonce_bitmaps_batch` by the committee `authority` over `bitmaps`; requires the adapter at `paState` to be paused. */
 export function closeNonceBitmapsBatch(
   forwarder: Program<SplTokenForwarder>,
   authority: PublicKey,
@@ -276,7 +285,7 @@ export function closeNonceBitmapsBatch(
 /**
  * Close every nonce bitmap the forwarder owns, in batches, as the committee
  * `authority` (signing with `signers`, or the provider wallet when empty);
- * requires the adapter at `paState` to be stopped.
+ * requires the adapter at `paState` to be paused.
  * Returns how many were closed.
  */
 export async function closeAllNonceBitmaps(

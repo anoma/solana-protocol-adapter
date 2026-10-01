@@ -90,7 +90,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|teardown|close-pdas|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|estop|status|balance|sync-ids|idl-publish|verify-build)
+  deploy|upgrade|teardown|close-pdas|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|pause|unpause|status|balance|sync-ids|idl-publish|verify-build)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -284,7 +284,7 @@ PYEOF
     echo "  idl-publish            Publish the production IDL on chain"
     echo "  verify-build           Deterministic solana-verify build of the PA; with"
     echo "                         --cluster, compares against the deployed program"
-    echo "  estop                  EMERGENCY STOP the PA (terminal; requires --yes)"
+    echo "  pause / unpause        Pause or resume settlement (owner-only)"
     echo "  sync-ids               Sync declare_id!/Anchor.toml to the committed keypairs"
     echo "  status                 Show deployment status + wallet balance"
     echo "  balance                Show wallet address and balance"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cluster operations for the PA programs: build, deploy, initialize, status,
-# emergency stop, teardown. One code path for every cluster — the target
+# pause/unpause, teardown. One code path for every cluster — the target
 # cluster is a flag, never baked into a script. All per-cluster differences
 # (RPC URL, explorer links, wallet default, dev-teardown policy) are data set
 # in resolve_cluster.
@@ -49,8 +49,8 @@ Commands:
                          extend the one in PA_LOOKUP_TABLE with any missing
                          key; STF_TOKEN_MINTS adds mints' escrow accounts.
                          See scripts/lookup-table.ts.
-  estop                  EMERGENCY STOP the PA — terminal, no resume.
-                         Requires --yes.
+  pause                  Pause settlement (owner-only; pa-evm's pause())
+  unpause                Resume settlement (owner-only; pa-evm's unpause())
   status                 Show deployment status + wallet balance
   balance                Show wallet address and balance
   idl-publish            Publish the PA's production IDL on chain (the
@@ -98,7 +98,6 @@ Flags:
                    fixtures and the devnet-cloned verifier; mock runs it
                    against mock fixtures and the localnet mock verifier.
                    mock is localnet-only.
-  --yes            Confirm irreversible actions (estop)
 
 Initialization parameters (required by deploy/init when the PA is a target):
   PA_VERIFIER_ROUTER   RISC0 verifier router program ID (base58).
@@ -128,7 +127,6 @@ RPC_OVERRIDE=""
 NO_IDL=false
 DEV_TEARDOWN=false
 PREBUILT=false
-ASSUME_YES=false
 TEST_MODE="real"
 SPEC_FILES=()
 
@@ -166,10 +164,6 @@ while [[ $# -gt 0 ]]; do
       TEST_MODE="$2"
       validate_test_mode "$TEST_MODE"
       shift 2
-      ;;
-    --yes)
-      ASSUME_YES=true
-      shift
       ;;
     --*)
       echo "❌ Unknown flag: $1" >&2
@@ -653,27 +647,14 @@ cmd_lookup_table() {
   run_ts scripts/lookup-table.ts
 }
 
-cmd_estop() {
-  require_cmd npx
+cmd_pause() {
+  require_pa_deployed
+  run_ts scripts/pause-pa.ts pause
+}
 
-  local pid
-  pid="$(get_program_id "protocol_adapter")"
-  require_deployed "$pid" "PA"
-
-  if [[ "$ASSUME_YES" != "true" ]]; then
-    echo "Emergency stop is TERMINAL: there is no resume instruction, and the"
-    echo "PAState account for this program ID can never be re-initialized."
-    echo "Recovery is migration to a new deployment."
-    echo ""
-    echo "  Cluster: ${CLUSTER}"
-    echo "  PA program: ${pid}"
-    echo "  Authority wallet: $(get_wallet_pubkey)"
-    echo ""
-    echo "Re-run with --yes to execute."
-    exit 1
-  fi
-
-  run_ts scripts/estop-pa.ts
+cmd_unpause() {
+  require_pa_deployed
+  run_ts scripts/pause-pa.ts unpause
 }
 
 cmd_status() {
@@ -973,7 +954,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|teardown|close-pdas|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|estop|status|balance|idl-publish)
+  deploy|upgrade|teardown|close-pdas|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

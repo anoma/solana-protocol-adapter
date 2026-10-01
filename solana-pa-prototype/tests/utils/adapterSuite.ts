@@ -24,7 +24,7 @@ import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { TestForwarder } from "../../target/types/test_forwarder";
 import { MockVerifier } from "../../target/types/mock_verifier";
-import { emergencyStop, initializeAdapter, initializeForwarder } from "../../client/instructions";
+import { initializeAdapter, initializeForwarder, pauseAdapter } from "../../client/instructions";
 import { ensureSettlementLookupTable, fetchLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
@@ -142,9 +142,9 @@ export async function ensureAdapterInitialized(): Promise<void> {
   }
 }
 
-/** Stop the adapter as its authority, the provider wallet. */
-export async function stopAdapter(): Promise<void> {
-  await emergencyStop(program, provider.wallet.publicKey).rpc();
+/** Pause the adapter as its owner, the provider wallet. */
+export async function pauseAsOwner(): Promise<void> {
+  await pauseAdapter(program, provider.wallet.publicKey).rpc();
 }
 
 /** Set the TxData expiry bounds as the adapter authority. */

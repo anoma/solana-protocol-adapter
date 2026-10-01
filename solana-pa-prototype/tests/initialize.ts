@@ -8,7 +8,7 @@ import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
 import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
 import { initializeAdapter } from "../client/instructions";
-import { VERIFIER_ROUTER_ID } from "../client/verifier";
+import { PAUSED_MOCK_SELECTOR, VERIFIER_ROUTER_ID, getVerifierEntryPda } from "../client/verifier";
 import { EMPTY_TREE_ROOT_INITIAL } from "./utils/constants";
 import { assertFails } from "./utils/helpers";
 import {
@@ -66,6 +66,22 @@ describe("protocol-adapter (initialize)", () => {
       program,
       error: "ZeroProofSelectorNotAllowed",
     }));
+
+  // Mirrors pa-evm's initializer's sanity check: RiscZeroVerifierPaused. The
+  // localnet router registers PAUSED_MOCK_SELECTOR with its estop set.
+  it("rejects a verifier the router has paused", () =>
+    assertFails(
+      initializeAdapter(program, provider.wallet.publicKey, VERIFIER_ROUTER_ID, Array.from(PAUSED_MOCK_SELECTOR)).rpc(),
+      { program, error: "RiscZeroVerifierPaused" },
+    ));
+
+  it("rejects an account other than the router's verifier entry for the selector", () =>
+    assertFails(
+      initializeAdapter(program, provider.wallet.publicKey, VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR))
+        .accountsPartial({ verifierEntry: getVerifierEntryPda(PAUSED_MOCK_SELECTOR)[0] })
+        .rpc(),
+      { program, error: "InvalidVerifierEntry" },
+    ));
 
   it("stores the empty kind table and emits the initial root and the kind table, as pa-evm's initializer does", async () => {
     assert.isFalse(await paStateExists(), "this test initializes the adapter, so it must start uninitialized");

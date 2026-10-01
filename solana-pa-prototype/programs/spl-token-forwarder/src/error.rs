@@ -63,8 +63,8 @@ pub enum ErrorCode {
     #[msg("Emergency caller not set")]
     EmergencyCallerNotSet,
 
-    #[msg("Protocol Adapter not stopped - cannot perform emergency operations")]
-    ProtocolAdapterNotStopped,
+    #[msg("Protocol Adapter not paused - cannot perform emergency operations")]
+    ProtocolAdapterNotPaused,
 
     #[msg("Invalid PA state account - does not match derived PDA from protocol_adapter")]
     InvalidPaState,

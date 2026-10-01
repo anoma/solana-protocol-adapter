@@ -1,6 +1,4 @@
-use crate::state::{
-    PALifecycle, PAStateAccount, TxDataAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS,
-};
+use crate::state::{PAStateAccount, TxDataAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::tests::utils::create_minimal_transaction;
 use arm_core::transaction::Transaction;
 use arm_core::Digest;
@@ -34,25 +32,6 @@ mod fixture_tests {
 
 mod governance_tests {
     use super::*;
-
-    /// The lifecycle is one byte, 0 = Running and 1 = Stopped: the encoding
-    /// every deployed state account holds, which `migrate_state` decodes from
-    /// the previous build's bytes.
-    #[test]
-    fn lifecycle_encodes_as_one_byte() {
-        use anchor_lang::{AnchorDeserialize, AnchorSerialize, Space};
-        assert_eq!(PALifecycle::INIT_SPACE, 1);
-        for (lifecycle, byte) in [(PALifecycle::Running, 0u8), (PALifecycle::Stopped, 1u8)] {
-            let mut encoded = Vec::new();
-            lifecycle.serialize(&mut encoded).unwrap();
-            assert_eq!(encoded, vec![byte]);
-            assert_eq!(PALifecycle::try_from_slice(&[byte]).unwrap(), lifecycle);
-        }
-        assert!(
-            PALifecycle::try_from_slice(&[2]).is_err(),
-            "no other byte is a lifecycle"
-        );
-    }
 
     #[test]
     fn test_pa_state_account_space_calculation() {

@@ -1,5 +1,5 @@
 /**
- * SPL token forwarder teardown on a stopped adapter: the committee reclaims
+ * SPL token forwarder teardown on a paused adapter: the committee reclaims
  * rent from nonce bitmaps, escrows and finally the config. The before hook
  * initializes the adapter and the forwarder config, creates a nonce bitmap
  * (init_nonce_bitmap is permissionless) and an escrow, then stops the adapter.
@@ -17,7 +17,7 @@ import {
   initForwarderConfig,
   paState,
   provider,
-  stopAdapter,
+  pauseAsOwner,
 } from "./utils/adapterSuite";
 
 describe("forwarder teardown (reclaims forwarder rent)", () => {
@@ -57,7 +57,7 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
     ).address;
     escrow = { ...funded, recipientAta };
 
-    await stopAdapter();
+    await pauseAsOwner();
   });
 
   const closeEscrowAs = (authority: Keypair, accounts = escrow) =>

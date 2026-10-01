@@ -6,14 +6,6 @@ use anchor_lang::prelude::*;
 use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
 
-/// PA lifecycle: Running → Stopped (one-way, irreversible).
-/// Serialized as a single byte (0=Running, 1=Stopped).
-#[derive(AnchorSerialize, AnchorDeserialize, InitSpace, Clone, Copy, PartialEq, Eq, Debug)]
-pub enum PALifecycle {
-    Running,
-    Stopped,
-}
-
 /// The layout number of `PAStateAccount` this binary reads and writes.
 /// Bumped on every change to the account layout; unrelated to release names.
 #[constant]
@@ -60,8 +52,9 @@ pub struct PAStateAccount {
     /// accepts (sha256 of the concatenated entries; the empty table hashes
     /// to sha256 of zero bytes).
     pub kind_table_commitment: [u8; 32],
-    /// Lifecycle state. One-way transition: Running → Stopped.
-    pub lifecycle: PALifecycle,
+    /// Whether settlement is paused, as pa-evm's `paused()`: `pause` sets it
+    /// and `unpause` clears it, both owner-only.
+    pub paused: bool,
     /// Cached tree root (updated on every append). Avoids recomputing from frontier.
     pub root: [u8; 32],
     pub next_index: u64,
@@ -142,7 +135,7 @@ impl PAStateAccount {
             verifier_router,
             proof_selector,
             kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
-            lifecycle: PALifecycle::Running,
+            paused: false,
             root: EMPTY_TREE_ROOT_INITIAL.into(),
             next_index: 0,
             current_depth: INITIAL_TREE_DEPTH as u8,
@@ -167,7 +160,9 @@ pub struct PreviousPAState {
     pub proof_selector: [u8; 4],
     pub kind_table_commitment: [u8; 32],
     pub pending_authority: Option<Pubkey>,
-    pub lifecycle: PALifecycle,
+    /// The previous build's lifecycle byte, 0 running and 1 stopped: the
+    /// encoding of `paused`.
+    pub paused: bool,
     pub root: [u8; 32],
     pub next_index: u64,
     pub current_depth: u8,
@@ -188,7 +183,7 @@ impl From<PreviousPAState> for PAStateAccount {
             verifier_router: previous.verifier_router,
             proof_selector: previous.proof_selector,
             kind_table_commitment: previous.kind_table_commitment,
-            lifecycle: previous.lifecycle,
+            paused: previous.paused,
             root: previous.root,
             next_index: previous.next_index,
             current_depth: previous.current_depth,

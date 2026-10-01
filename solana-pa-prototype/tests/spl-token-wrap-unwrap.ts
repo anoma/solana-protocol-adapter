@@ -167,12 +167,12 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("rejects set_emergency_caller while the adapter is running", async () => {
     await funder.fund(emergencyCommittee, 1);
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.deepEqual(state.lifecycle, { running: {} }, "the adapter must be running here");
+    assert.isFalse(state.paused, "the adapter must not be paused here");
     await assertFails(
       setEmergencyCaller(forwarderProgram, emergencyCommittee.publicKey, paState, Keypair.generate().publicKey)
         .signers([emergencyCommittee])
         .rpc(),
-      { program: forwarderProgram, error: "ProtocolAdapterNotStopped" },
+      { program: forwarderProgram, error: "ProtocolAdapterNotPaused" },
     );
   });
 
@@ -488,7 +488,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   });
 
   // Mirrors EmergencyMigratableForwarderBase: the committee acts only once
-  // the adapter is stopped. Teardown while running would drain the escrow,
+  // the adapter is paused. Teardown while running would drain the escrow,
   // forget used nonces or disable the forwarder under live resources.
   it("rejects close_escrow while the adapter is running", async () => {
     const before = await balances(escrowAta, recipientAta);
@@ -496,7 +496,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       closeEscrow(forwarderProgram, emergencyCommittee.publicKey, paState, { mint, escrowAta, recipientAta })
         .signers([emergencyCommittee])
         .rpc(),
-      { program: forwarderProgram, error: "ProtocolAdapterNotStopped" },
+      { program: forwarderProgram, error: "ProtocolAdapterNotPaused" },
     );
     assert.deepEqual(await balances(escrowAta, recipientAta), before, "no tokens move");
   });
@@ -505,14 +505,14 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     assert.isNotEmpty(await forwarderProgram.account.nonceBitmap.all(), "the wraps above created nonce bitmaps");
     await assertFails(
       closeAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [emergencyCommittee]),
-      { program: forwarderProgram, error: "ProtocolAdapterNotStopped" },
+      { program: forwarderProgram, error: "ProtocolAdapterNotPaused" },
     );
   });
 
   it("rejects close_config while the adapter is running", () =>
     assertFails(
       closeConfig(forwarderProgram, emergencyCommittee.publicKey, paState).signers([emergencyCommittee]).rpc(),
-      { program: forwarderProgram, error: "ProtocolAdapterNotStopped" },
+      { program: forwarderProgram, error: "ProtocolAdapterNotPaused" },
     ));
 
   after(() => funder.drainAll());

@@ -19,7 +19,7 @@ import {
   setExpiryBounds,
   settleBuilder,
   settleFromTxDataBuilder,
-  stopAdapter,
+  pauseAsOwner,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
@@ -106,8 +106,8 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
     });
 
     // Each case is an instruction that loads pa_state; with a foreign version
-    // byte every one must refuse before doing anything else. emergency_stop is
-    // last: it would stop the PA for every case after it.
+    // byte every one must refuse before doing anything else. pause is
+    // last: it would pause the PA for every case after it.
     const cases: { name: string; run: () => Promise<unknown> }[] = [
       {
         name: "update_expiry_config",
@@ -170,8 +170,8 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
         run: () => closeMarkersBatch(program, provider.wallet.publicKey, []).rpc(),
       },
       {
-        name: "emergency_stop",
-        run: stopAdapter,
+        name: "pause",
+        run: pauseAsOwner,
       },
     ];
 

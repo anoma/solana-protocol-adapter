@@ -10,7 +10,7 @@ import { createHash } from "crypto";
 import { execFileSync } from "child_process";
 import { Keypair, SystemProgram, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { assert } from "chai";
-import { migrateState } from "../client/instructions";
+import { migrateState, unpauseAdapter } from "../client/instructions";
 import { EMPTY_KIND_TABLE_COMMITMENT, SCHEMA_VERSION } from "../client/constants";
 import { deriveProgramDataPda, deriveRootMarkerPda } from "../client/pda";
 import { loadFixture, createdCommitmentsOf } from "./utils/fixtures";
@@ -94,6 +94,23 @@ describe("protocol-adapter (upgraded in place across a state-layout change)", ()
     stateBeforeUpgrade = Buffer.from(await stateBytes());
   });
 
+  // The previous build's one-way stop; its lifecycle byte is this build's
+  // paused flag. It takes the state and the authority.
+  it("stops the adapter through the previous build", async () => {
+    await provider.sendAndConfirm(
+      new Transaction().add(
+        previousInstruction(
+          "emergency_stop",
+          [],
+          [
+            { pubkey: paState, isSigner: false, isWritable: true },
+            { pubkey: authority, isSigner: true, isWritable: false },
+          ],
+        ),
+      ),
+    );
+  });
+
   it("upgrades the adapter in place to this build", () => {
     execFileSync(
       "solana",
@@ -143,6 +160,7 @@ describe("protocol-adapter (upgraded in place across a state-layout change)", ()
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.schemaVersion, SCHEMA_VERSION, "the state is in this build's layout");
     assert.deepEqual(state.deniedLogicRefs, [], "no logic ref is denied");
+    assert.isTrue(state.paused, "the previous build's stop is a pause");
     assert.ok(state.verifierRouter.equals(VERIFIER_ROUTER_ID), "the verifier router carries over");
     assert.deepEqual(Buffer.from(state.proofSelector), PROOF_SELECTOR, "the proof selector carries over");
     assert.deepEqual(Buffer.from(state.kindTableCommitment), EMPTY_KIND_TABLE_COMMITMENT);
@@ -161,6 +179,11 @@ describe("protocol-adapter (upgraded in place across a state-layout change)", ()
   it("rejects migrating the state twice", async () => {
     await assertFails(migrateState(program, authority).rpc(), { program, error: "NotPreviousSchema" });
     assert.include(runOperatorScript("scripts/migrate-state.ts"), "already at schema version");
+  });
+
+  it("unpauses the migrated adapter, which the previous build could not undo", async () => {
+    await unpauseAdapter(program, authority).rpc();
+    assert.isFalse((await program.account.paStateAccount.fetch(paState)).paused);
   });
 
   it("settles and denies logic refs after the migration", async () => {
