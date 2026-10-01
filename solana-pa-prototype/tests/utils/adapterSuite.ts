@@ -2,8 +2,9 @@
  * The protocol adapter as the spec files drive it: program handles, the
  * settlement builders, precondition helpers, and
  * `useAdapterSuite`, the hooks a spec file installs inside its own top-level
- * describe. Only spec files import this module: it resolves the workspace
- * programs when loaded.
+ * describe. Spec files, and genesis-settlement-table.ts for the suite's
+ * settlement keys, import this module: it resolves the workspace programs
+ * when loaded.
  */
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
@@ -24,7 +25,7 @@ import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { TestForwarder } from "../../target/types/test_forwarder";
 import { MockVerifier } from "../../target/types/mock_verifier";
 import { emergencyStop, initializeAdapter, initializeForwarder } from "../../client/instructions";
-import { ensureSettlementLookupTable, settlementLookupKeys } from "../../client/lookupTable";
+import { ensureSettlementLookupTable, fetchLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
   derivePaStatePda,
@@ -293,6 +294,19 @@ export function settleBuilder(
     .preInstructions(settleBudget(heapFrame));
 }
 
+/** The suite deployment's settlement keys, with `mints`' escrow token accounts. */
+export function suiteSettlementKeys(mints: PublicKey[]): PublicKey[] {
+  return settlementLookupKeys({
+    paProgram: program.programId,
+    verifierRouter: VERIFIER_ROUTER_ID,
+    proofSelector: PROOF_SELECTOR,
+    verifierProgram: VERIFIER.program,
+    blockTimeForwarder: blockTimeForwarderId,
+    splTokenForwarder: forwarderProgram.programId,
+    mints,
+  });
+}
+
 type TxDataEntry = { uploadId: anchor.BN; txData: PublicKey; authority: Keypair };
 
 /**
@@ -313,13 +327,16 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
   let testStartBalance = 0;
 
   /**
-   * The deployment's settlement lookup table, created on first use from the
-   * deployment's fixed keys: settlements are v0 transactions against it, the
-   * shape every submitter sends.
+   * The deployment's settlement lookup table: settlements are v0
+   * transactions against it, the shape every submitter sends. The local
+   * suite's validator starts with it (PA_SETTLEMENT_TABLE, see
+   * genesis-settlement-table.ts); on a cluster it is created on first use.
    */
   async function settlementTable(): Promise<AddressLookupTableAccount> {
-    if (!table) table = await extendSettlementTable([]);
-    return table;
+    if (table) return table;
+    const genesis = process.env.PA_SETTLEMENT_TABLE;
+    if (!genesis) return extendSettlementTable([]);
+    return (table = await fetchLookupTable(provider.connection, new PublicKey(genesis)));
   }
 
   /** Add `mints`' escrow token accounts to the settlement table: they are fixed for the deployment once the mint is supported. */
@@ -327,15 +344,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
     ({ table } = await ensureSettlementLookupTable(
       provider.connection,
       (provider.wallet as anchor.Wallet).payer,
-      settlementLookupKeys({
-        paProgram: program.programId,
-        verifierRouter: VERIFIER_ROUTER_ID,
-        proofSelector: PROOF_SELECTOR,
-        verifierProgram: VERIFIER.program,
-        blockTimeForwarder: blockTimeForwarderId,
-        splTokenForwarder: forwarderProgram.programId,
-        mints,
-      }),
+      suiteSettlementKeys(mints),
       table?.key,
     ));
     return table;
