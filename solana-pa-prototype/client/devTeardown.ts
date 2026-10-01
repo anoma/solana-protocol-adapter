@@ -33,7 +33,8 @@ export function closeMarkersBatch(program: Program<ProtocolAdapter>, authority: 
 /**
  * Close every marker account (the zero-byte nullifier and root markers) the
  * adapter owns, in batches, as `authority`: the provider wallet, which must
- * be the PA authority of a stopped adapter. Returns how many were closed.
+ * be the program's upgrade authority, on a stopped adapter. Returns how many
+ * were closed.
  */
 export async function closeAllMarkers(program: Program<ProtocolAdapter>, authority: PublicKey): Promise<number> {
   const markers = await program.provider.connection.getProgramAccounts(program.programId, {

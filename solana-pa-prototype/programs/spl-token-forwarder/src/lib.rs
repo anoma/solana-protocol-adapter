@@ -139,6 +139,13 @@ pub mod spl_token_forwarder {
         Ok(())
     }
 
+    /// The release this build is. Mirrors the EVM forwarder's `VERSION`:
+    /// read from the deployed program (by simulation), it names the code an
+    /// address runs, which an in-place upgrade changes.
+    pub fn version(_ctx: Context<Version>) -> Result<String> {
+        Ok(env!("CARGO_PKG_VERSION").to_string())
+    }
+
     /// Bring the config the previous build created to this build's layout:
     /// the bump it stored after the fields gives way to the version, 1, the
     /// previous build having initialized it once and never reinitialized it;
@@ -740,6 +747,9 @@ pub struct Initialize<'info> {
 
     pub system_program: Program<'info, System>,
 }
+
+#[derive(Accounts)]
+pub struct Version {}
 
 #[derive(Accounts)]
 pub struct Reinitialize<'info> {

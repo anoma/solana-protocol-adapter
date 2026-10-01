@@ -131,26 +131,19 @@ pub mod protocol_adapter {
         );
         ctx.accounts.pa_state.set_inner(PAStateAccount::running(
             ctx.bumps.pa_state,
-            ctx.accounts.payer.key(),
             verifier_router,
             proof_selector,
         ));
 
-        // pa-evm's initializer transfers ownership to the initial owner, adds
-        // the empty tree's root, then installs the empty kind table.
-        let events = events::EventCpi {
-            authority: ctx.accounts.event_authority.to_account_info(),
-        };
-        events.emit(&AuthorityTransferredEvent {
-            previous_authority: Pubkey::default(),
-            new_authority: ctx.accounts.payer.key(),
-        })?;
-        events.emit(&CommitmentTreeRootAddedEvent {
+        // pa-evm's initializer adds the empty tree's root, then installs the
+        // empty kind table. Its ownership is the upgrade authority the loader
+        // already records (PROGRAM_DATA), so no ownership event.
+        emit_cpi!(CommitmentTreeRootAddedEvent {
             root: EMPTY_TREE_ROOT_INITIAL.into(),
-        })?;
-        events.emit(&KindTableCommitmentUpdatedEvent {
+        });
+        emit_cpi!(KindTableCommitmentUpdatedEvent {
             kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
-        })?;
+        });
 
         msg!("PAState initialized with empty commitment tree");
         Ok(())
@@ -497,40 +490,11 @@ pub mod protocol_adapter {
         Ok(())
     }
 
-    /// Transfer the authority to `new_authority`, at once. Mirrors
-    /// OpenZeppelin's `OwnableUpgradeable.transferOwnership`, pa-evm's
-    /// ownership: authority only, the zero key rejected, announced with
-    /// AuthorityTransferred.
-    pub fn transfer_authority(
-        ctx: Context<TransferAuthority>,
-        new_authority: Pubkey,
-    ) -> Result<()> {
-        require!(
-            new_authority != Pubkey::default(),
-            PAError::ZeroAuthorityNotAllowed
-        );
-        let state = &mut ctx.accounts.pa_state;
-        let previous_authority = state.authority;
-        state.authority = new_authority;
-        emit_cpi!(AuthorityTransferredEvent {
-            previous_authority,
-            new_authority,
-        });
-        Ok(())
-    }
-
-    /// Give the authority up for good: it becomes the zero key, which no one
-    /// can sign as, so every authority instruction is closed. Mirrors
-    /// `OwnableUpgradeable.renounceOwnership`.
-    pub fn renounce_authority(ctx: Context<TransferAuthority>) -> Result<()> {
-        let state = &mut ctx.accounts.pa_state;
-        let previous_authority = state.authority;
-        state.authority = Pubkey::default();
-        emit_cpi!(AuthorityTransferredEvent {
-            previous_authority,
-            new_authority: Pubkey::default(),
-        });
-        Ok(())
+    /// The release this build is. Mirrors pa-evm's `VERSION`: read from the
+    /// deployed program (by simulation), it names the code an address runs,
+    /// which an in-place upgrade changes.
+    pub fn version(_ctx: Context<Version>) -> Result<String> {
+        Ok(env!("CARGO_PKG_VERSION").to_string())
     }
 
     /// Close marker PDAs and reclaim their rent. Development tooling only.
@@ -886,6 +850,7 @@ fn execute_settlement(
     Ok(())
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(
@@ -902,28 +867,14 @@ pub struct Initialize<'info> {
 
     pub system_program: Program<'info, System>,
 
-    /// The program account is required so `program_data` is proven to be
-    /// *this* program's ProgramData address rather than merely an account
-    /// shaped like one: the constraint reads the programdata address the
-    /// loader recorded inside this very program account and requires it to
-    /// match the supplied `program_data` account.
-    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ PAError::Unauthorized)]
-    pub program: Program<'info, crate::program::ProtocolAdapter>,
-
-    /// The loader records the upgrade authority here at deploy time, which is the
-    /// only trust anchor available before the adapter has any state of its own.
+    /// This program's ProgramData, where the loader records the upgrade
+    /// authority: the adapter's owner, who alone initializes it.
     #[account(
+        address = PROGRAM_DATA @ PAError::Unauthorized,
         constraint = program_data.upgrade_authority_address == Some(payer.key())
             @ PAError::Unauthorized
     )]
     pub program_data: Account<'info, ProgramData>,
-
-    /// The event authority `#[event_cpi]` would add; the macro cannot be
-    /// used here because its own `program` field collides with the typed
-    /// `program` above, which is the same account.
-    /// CHECK: The seeds pin it to this program's event authority PDA.
-    #[account(seeds = [b"__event_authority"], bump)]
-    pub event_authority: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
@@ -932,13 +883,21 @@ pub struct EmergencyStop<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
         constraint = pa_state.schema_version == SCHEMA_VERSION
             @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
     pub authority: Signer<'info>,
+
+    /// This program's ProgramData, where the loader records the upgrade
+    /// authority: the adapter's owner.
+    #[account(
+        address = PROGRAM_DATA @ PAError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(authority.key())
+            @ PAError::Unauthorized
+    )]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 #[event_cpi]
@@ -948,7 +907,6 @@ pub struct DenyLogicRef<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
         constraint = pa_state.schema_version == SCHEMA_VERSION
             @ PAError::UnsupportedStateSchema,
     )]
@@ -959,6 +917,15 @@ pub struct DenyLogicRef<'info> {
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+
+    /// This program's ProgramData, where the loader records the upgrade
+    /// authority: the adapter's owner.
+    #[account(
+        address = PROGRAM_DATA @ PAError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(authority.key())
+            @ PAError::Unauthorized
+    )]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 #[derive(Accounts)]
@@ -975,14 +942,10 @@ pub struct MigrateState<'info> {
 
     pub system_program: Program<'info, System>,
 
-    /// The program account proves `program_data` is this program's own
-    /// ProgramData address rather than any account shaped like one.
-    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ PAError::Unauthorized)]
-    pub program: Program<'info, crate::program::ProtocolAdapter>,
-
-    /// The loader records the upgrade authority here; it upgrades the program
-    /// and so migrates its state.
+    /// This program's ProgramData, where the loader records the upgrade
+    /// authority: the adapter's owner.
     #[account(
+        address = PROGRAM_DATA @ PAError::Unauthorized,
         constraint = program_data.upgrade_authority_address == Some(authority.key())
             @ PAError::Unauthorized
     )]
@@ -996,30 +959,25 @@ pub struct SetKindTableCommitment<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
         constraint = pa_state.schema_version == SCHEMA_VERSION
             @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
     pub authority: Signer<'info>,
-}
 
-#[event_cpi]
-#[derive(Accounts)]
-pub struct TransferAuthority<'info> {
+    /// This program's ProgramData, where the loader records the upgrade
+    /// authority: the adapter's owner.
     #[account(
-        mut,
-        seeds = [PA_STATE_SEED],
-        bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
-        constraint = pa_state.schema_version == SCHEMA_VERSION
-            @ PAError::UnsupportedStateSchema,
+        address = PROGRAM_DATA @ PAError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(authority.key())
+            @ PAError::Unauthorized
     )]
-    pub pa_state: Account<'info, PAStateAccount>,
-
-    pub authority: Signer<'info>,
+    pub program_data: Account<'info, ProgramData>,
 }
+
+#[derive(Accounts)]
+pub struct Version {}
 
 #[event_cpi]
 #[derive(Accounts)]
@@ -1212,13 +1170,21 @@ pub struct UpdateExpiryConfig<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
         constraint = pa_state.schema_version == SCHEMA_VERSION
             @ PAError::UnsupportedStateSchema,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
     pub authority: Signer<'info>,
+
+    /// This program's ProgramData, where the loader records the upgrade
+    /// authority: the adapter's owner.
+    #[account(
+        address = PROGRAM_DATA @ PAError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(authority.key())
+            @ PAError::Unauthorized
+    )]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 #[cfg(feature = "dev-teardown")]
@@ -1227,7 +1193,6 @@ pub struct CloseMarkersBatch<'info> {
     #[account(
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
         constraint = pa_state.schema_version == SCHEMA_VERSION
             @ PAError::UnsupportedStateSchema,
     )]
@@ -1235,6 +1200,15 @@ pub struct CloseMarkersBatch<'info> {
 
     #[account(mut)]
     pub authority: Signer<'info>,
+
+    /// This program's ProgramData, where the loader records the upgrade
+    /// authority: the adapter's owner.
+    #[account(
+        address = PROGRAM_DATA @ PAError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(authority.key())
+            @ PAError::Unauthorized
+    )]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 #[cfg(feature = "dev-teardown")]
@@ -1244,11 +1218,19 @@ pub struct DevSetSchemaVersion<'info> {
         mut,
         seeds = [PA_STATE_SEED],
         bump = pa_state.bump,
-        has_one = authority @ PAError::Unauthorized,
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
     pub authority: Signer<'info>,
+
+    /// This program's ProgramData, where the loader records the upgrade
+    /// authority: the adapter's owner.
+    #[account(
+        address = PROGRAM_DATA @ PAError::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(authority.key())
+            @ PAError::Unauthorized
+    )]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 // Four separate event structs with identical fields: each produces a distinct Anchor
@@ -1286,15 +1268,6 @@ pub struct ApplicationPayloadEvent {
 #[event]
 pub struct KindTableCommitmentUpdatedEvent {
     pub kind_table_commitment: [u8; 32],
-}
-
-/// Mirrors OpenZeppelin's `event OwnershipTransferred(address indexed
-/// previousOwner, address indexed newOwner);`: at initialization (from the
-/// zero key), on every transfer, and on renouncement (to the zero key).
-#[event]
-pub struct AuthorityTransferredEvent {
-    pub previous_authority: Pubkey,
-    pub new_authority: Pubkey,
 }
 
 /// Mirrors pa-evm: `event CommitmentTreeRootAdded(bytes32 root);`: the

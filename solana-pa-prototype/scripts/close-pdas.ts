@@ -43,12 +43,6 @@ async function main() {
     return;
   }
 
-  const paState = await program.account.paStateAccount.fetch(paStatePda);
-  if (!paState.authority.equals(wallet.publicKey)) {
-    console.error(`❌ Wallet ${wallet.publicKey.toBase58()} is not the PA authority (${paState.authority.toBase58()})`);
-    process.exit(1);
-  }
-
   const closed = await closeAllMarkers(program, wallet.publicKey);
   console.log(`✅ Closed ${closed} markers; PAState left open by design (closing it would permit a re-init bypass)`);
 }

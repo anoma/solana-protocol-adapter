@@ -78,19 +78,17 @@ describe("protocol-adapter (initialize)", () => {
       EMPTY_KIND_TABLE_COMMITMENT,
       "initialize must store the empty kind table's commitment",
     );
-    // pa-evm's initializer transfers ownership to the initial owner
-    // (OwnershipTransferred from the zero address), adds the empty tree's root
-    // (CommitmentTreeRootAdded) and installs the empty kind table
-    // (KindTableCommitmentUpdated), in that order.
+    // pa-evm's initializer adds the empty tree's root (CommitmentTreeRootAdded)
+    // and installs the empty kind table (KindTableCommitmentUpdated), in that
+    // order. Its ownership is the upgrade authority the loader records, so
+    // there is no ownership event.
     const { events } = await cpiEventsOf(sig);
     assert.deepEqual(
       events.map((e) => e.name),
-      ["authorityTransferredEvent", "commitmentTreeRootAddedEvent", "kindTableCommitmentUpdatedEvent"],
+      ["commitmentTreeRootAddedEvent", "kindTableCommitmentUpdatedEvent"],
       "initialize emits pa-evm's initializer events in order",
     );
-    assert.ok(events[0].data.previousAuthority.equals(PublicKey.default), "the authority comes from no one");
-    assert.ok(events[0].data.newAuthority.equals(provider.wallet.publicKey), "to the initializing upgrade authority");
-    assert.deepEqual(Buffer.from(events[1].data.root), EMPTY_TREE_ROOT_INITIAL, "the empty tree's root");
-    assert.deepEqual(Buffer.from(events[2].data.kindTableCommitment), EMPTY_KIND_TABLE_COMMITMENT);
+    assert.deepEqual(Buffer.from(events[0].data.root), EMPTY_TREE_ROOT_INITIAL, "the empty tree's root");
+    assert.deepEqual(Buffer.from(events[1].data.kindTableCommitment), EMPTY_KIND_TABLE_COMMITMENT);
   });
 });

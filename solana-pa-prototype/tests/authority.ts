@@ -1,83 +1,92 @@
 /**
- * The adapter authority, pa-evm's owner (OpenZeppelin's OwnableUpgradeable):
- * its record after initialize, the single-step transfer and the renouncement,
- * each announced with AuthorityTransferred. Every test but the last starts
- * and ends with the provider wallet as the authority; the last renounces.
+ * The adapter's owner is the program's upgrade authority, as pa-evm's owner
+ * (OpenZeppelin's OwnableUpgradeable) is the one who authorizes its
+ * upgrades: every owner-only instruction checks its signer against the
+ * upgrade authority the loader records in the program's ProgramData, so
+ * moving or renouncing the upgrade authority moves or renounces the
+ * ownership. Every test but the last leaves the provider wallet as the
+ * upgrade authority; the last renounces it.
  */
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { assert } from "chai";
-import { emergencyStop, renounceAuthority, setKindTableCommitment, transferAuthority } from "../client/instructions";
-import { assertFails, randomRef } from "./utils/helpers";
-import { provider, program, paState, cpiEventsOf, useAdapterSuite } from "./utils/adapterSuite";
+import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
+import { emergencyStop, setKindTableCommitment } from "../client/instructions";
+import { BPF_LOADER_UPGRADEABLE, deriveProgramDataPda } from "../client/pda";
+import { assertFails } from "./utils/helpers";
+import { provider, program, paState, forwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
+
+/**
+ * The loader's SetAuthority (instruction 4) on the adapter's ProgramData,
+ * signed by `current`: `next` becomes the upgrade authority, or none when
+ * `next` is null (the program is final).
+ */
+function setUpgradeAuthority(current: PublicKey, next: PublicKey | null): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: BPF_LOADER_UPGRADEABLE,
+    keys: [
+      { pubkey: deriveProgramDataPda(program.programId), isSigner: false, isWritable: true },
+      { pubkey: current, isSigner: true, isWritable: false },
+      ...(next ? [{ pubkey: next, isSigner: false, isWritable: false }] : []),
+    ],
+    data: Buffer.from([4, 0, 0, 0]),
+  });
+}
 
 describe("protocol-adapter (authority)", () => {
   const { funder } = useAdapterSuite();
   const wallet = provider.wallet.publicKey;
-
-  /** The AuthorityTransferred events of `sig`, as [previous, new] base58 pairs. */
-  const transfersOf = async (sig: string) =>
-    (await cpiEventsOf(sig)).events
-      .filter((e) => e.name === "authorityTransferredEvent")
-      .map((e) => [e.data.previousAuthority.toBase58(), e.data.newAuthority.toBase58()]);
-
-  it("stores the initializing upgrade authority as the authority", async () => {
-    const state = await program.account.paStateAccount.fetch(paState);
-    assert.ok(state.authority.equals(wallet), "the provider wallet initialized the adapter");
-  });
+  const kindTable = Array.from(EMPTY_KIND_TABLE_COMMITMENT);
 
   it("initializes running", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(JSON.stringify(state.lifecycle), JSON.stringify({ running: {} }));
   });
 
-  it("rejects emergency_stop from non-authority", async () => {
+  it("rejects emergency_stop from a signer that is not the upgrade authority", async () => {
     const nonAuthority = await funder.fresh(1);
     await assertFails(emergencyStop(program, nonAuthority.publicKey).signers([nonAuthority]).rpc(), {
       program,
       error: "Unauthorized",
+      account: "program_data",
     });
   });
 
-  // Mirrors OwnableUpgradeable.transferOwnership: onlyOwner.
-  it("rejects a transfer by anyone but the authority", async () => {
-    const nonAuthority = await funder.fresh(1);
-    await assertFails(
-      transferAuthority(program, nonAuthority.publicKey, Keypair.generate().publicKey).signers([nonAuthority]).rpc(),
-      { program, error: "Unauthorized" },
-    );
-  });
+  // The upgrade-authority check reads whatever ProgramData is passed, so the
+  // account is pinned to this program's. Another program with the same
+  // upgrade authority is the cheapest forgery.
+  it("rejects the upgrade authority of another program's ProgramData", () =>
+    assertFails(
+      setKindTableCommitment(program, wallet, kindTable)
+        .accountsPartial({ programData: deriveProgramDataPda(forwarderProgram.programId) })
+        .rpc(),
+      { program, error: "Unauthorized", account: "program_data" },
+    ));
 
-  // Mirrors OwnableUpgradeable.transferOwnership: OwnableInvalidOwner(address(0)).
-  it("rejects a transfer to the zero key", () =>
-    assertFails(transferAuthority(program, wallet, PublicKey.default).rpc(), {
-      program,
-      error: "ZeroAuthorityNotAllowed",
-    }));
-
-  // A transfer takes effect at once, as pa-evm's single-step ownership
-  // transfer does, and moves every authority power with it.
-  it("transfers the authority at once and announces it", async () => {
+  // Mirrors OwnableUpgradeable.transferOwnership: the ownership moves with
+  // the upgrade authority, at once.
+  it("moves with the upgrade authority", async () => {
     const successor = await funder.fresh(1);
+    await provider.sendAndConfirm(new Transaction().add(setUpgradeAuthority(wallet, successor.publicKey)));
 
-    const sig = await transferAuthority(program, wallet, successor.publicKey).rpc();
+    await assertFails(setKindTableCommitment(program, wallet, kindTable).rpc(), {
+      program,
+      error: "Unauthorized",
+      account: "program_data",
+    });
+    await setKindTableCommitment(program, successor.publicKey, kindTable).signers([successor]).rpc();
 
-    const state = await program.account.paStateAccount.fetch(paState);
-    assert.ok(state.authority.equals(successor.publicKey), "the successor is the authority");
-    assert.deepEqual(await transfersOf(sig), [[wallet.toBase58(), successor.publicKey.toBase58()]]);
-    await assertFails(emergencyStop(program, wallet).rpc(), { program, error: "Unauthorized" });
-
-    await transferAuthority(program, successor.publicKey, wallet).signers([successor]).rpc();
-    assert.ok((await program.account.paStateAccount.fetch(paState)).authority.equals(wallet), "restored");
+    await provider.sendAndConfirm(new Transaction().add(setUpgradeAuthority(successor.publicKey, wallet)), [successor]);
+    await setKindTableCommitment(program, wallet, kindTable).rpc();
   });
 
-  // Mirrors OwnableUpgradeable.renounceOwnership: the owner becomes the zero
-  // address, and every owner-only function is closed for good.
-  it("renounces the authority for good", async () => {
-    const sig = await renounceAuthority(program, wallet).rpc();
-
-    const state = await program.account.paStateAccount.fetch(paState);
-    assert.ok(state.authority.equals(PublicKey.default), "no one holds the authority");
-    assert.deepEqual(await transfersOf(sig), [[wallet.toBase58(), PublicKey.default.toBase58()]]);
-    await assertFails(setKindTableCommitment(program, wallet, randomRef()).rpc(), { program, error: "Unauthorized" });
+  // Mirrors OwnableUpgradeable.renounceOwnership: with no upgrade authority
+  // (the program final), every owner-only instruction is closed for good.
+  it("is renounced with the upgrade authority", async () => {
+    await provider.sendAndConfirm(new Transaction().add(setUpgradeAuthority(wallet, null)));
+    await assertFails(setKindTableCommitment(program, wallet, kindTable).rpc(), {
+      program,
+      error: "Unauthorized",
+      account: "program_data",
+    });
   });
 });

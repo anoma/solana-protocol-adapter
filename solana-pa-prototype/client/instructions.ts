@@ -30,26 +30,14 @@ export function initializeAdapter(
     paState: derivePaStatePda(program.programId)[0],
     payer,
     systemProgram: SystemProgram.programId,
-    program: program.programId,
-    programData: deriveProgramDataPda(program.programId),
   });
 }
 
-/** `transfer_authority` by the adapter authority: effective at once. */
-export function transferAuthority(program: Program<ProtocolAdapter>, authority: PublicKey, newAuthority: PublicKey) {
-  return program.methods
-    .transferAuthority(newAuthority)
-    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
-}
+// The adapter's owner is the program's upgrade authority: every builder
+// below takes it as `authority`, and Anchor resolves the program's
+// ProgramData, where the loader records it.
 
-/** `renounce_authority` by the adapter authority: no one holds it afterwards. */
-export function renounceAuthority(program: Program<ProtocolAdapter>, authority: PublicKey) {
-  return program.methods
-    .renounceAuthority()
-    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
-}
-
-/** `deny_logic_ref` by the adapter authority, which pays for the entry. */
+/** `deny_logic_ref` by the upgrade authority, which pays for the entry. */
 export function denyLogicRef(program: Program<ProtocolAdapter>, authority: PublicKey, logicRef: number[]) {
   return program.methods
     .denyLogicRef(logicRef)
@@ -62,17 +50,17 @@ export function denyLogicRef(program: Program<ProtocolAdapter>, authority: Publi
  * upgrade.
  */
 export function migrateState(program: Program<ProtocolAdapter>, authority: PublicKey) {
-  return program.methods.migrateState().accounts({ authority, programData: deriveProgramDataPda(program.programId) });
+  return program.methods.migrateState().accounts({ authority });
 }
 
-/** `emergency_stop` by `authority`. */
+/** `emergency_stop` by the upgrade authority. */
 export function emergencyStop(program: Program<ProtocolAdapter>, authority: PublicKey) {
   return program.methods
     .emergencyStop()
     .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
 }
 
-/** `set_kind_table_commitment` by `authority`. */
+/** `set_kind_table_commitment` by the upgrade authority. */
 export function setKindTableCommitment(program: Program<ProtocolAdapter>, authority: PublicKey, commitment: number[]) {
   return program.methods
     .setKindTableCommitment(commitment)

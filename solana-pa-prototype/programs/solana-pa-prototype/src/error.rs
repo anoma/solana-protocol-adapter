@@ -83,7 +83,7 @@ pub enum PAError {
     // Protocol state errors
     #[msg("Protocol adapter is stopped")]
     Stopped,
-    #[msg("Unauthorized: caller is not the authority")]
+    #[msg("Unauthorized: the signer does not hold the authority this instruction requires")]
     Unauthorized,
     #[msg("Protocol adapter is already stopped")]
     AlreadyStopped,
@@ -126,9 +126,7 @@ pub enum PAError {
     #[msg("A resource carries a denied logic ref")]
     DeniedLogicRef,
 
-    // Initialization and authority, as pa-evm's zero-value rejections
-    #[msg("Zero authority not allowed; renounce_authority gives the authority up")]
-    ZeroAuthorityNotAllowed,
+    // Initialization, as pa-evm's zero-value rejections
     #[msg("Zero verifier router not allowed")]
     ZeroVerifierRouterNotAllowed,
     #[msg("Zero proof selector not allowed")]

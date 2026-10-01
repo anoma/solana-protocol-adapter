@@ -1,26 +1,23 @@
 # Operating a Protocol Adapter Deployment
 
-This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, run it, stop it in an emergency, and retire it permanently. The one fact that shapes everything here: **Solana programs are upgradeable, so "stopped forever" is not enforced by the chain — it is enforced by how you handle two keys.** The EVM Protocol Adapter gets finality for free because its contract is immutable — its `emergencyStop()` has no unpause, no key can resurrect a stopped instance, and its only operational document is a deploy/release checklist. On Solana the equivalent finality is an operator action (burning the upgrade authority), it must come last, and the stop/retire half of the lifecycle below is the part EVM immutability does automatically.
+This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, run it, stop it in an emergency, and retire it permanently. The one fact that shapes everything here: **Solana programs are upgradeable, so "stopped forever" is not enforced by the chain — it is enforced by how you handle the upgrade authority.** The EVM Protocol Adapter gets finality for free because its contract is immutable — its `emergencyStop()` has no unpause, no key can resurrect a stopped instance, and its only operational document is a deploy/release checklist. On Solana the equivalent finality is an operator action (burning the upgrade authority), it must come last, and the stop/retire half of the lifecycle below is the part EVM immutability does automatically.
 
 All commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically. Every command takes `--cluster <localnet|devnet|mainnet>`; see `scripts/ops.sh` for all flags.
 
-## The two keys
+## The owner
 
-A deployment has two independent authorities:
+A deployment has one owner: each program's upgrade authority, which the BPF loader records in the program's ProgramData account. The adapter's owner-only instructions (`initialize`, `emergency_stop`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_ref`, `migrate_state`) and the forwarder's (`initialize`, `reinitialize`, the `migrate_*` instructions) require it as signer. This mirrors pa-evm, whose owner is also the one who authorizes its upgrades.
 
-| Authority | Lives in | Controls | Moved by |
-|---|---|---|---|
-| PA authority | `PAStateAccount.authority` | `emergency_stop`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_ref`, authority transfer | `transfer_authority` (one step, effective at once, as pa-evm's ownership transfer); `renounce_authority` gives it up for good. Each emits `AuthorityTransferredEvent`. |
-| Upgrade authority | BPF loader's ProgramData account | replacing the program binary; signing `initialize`; `migrate_state` after a layout-changing upgrade; final immutability | `solana program set-upgrade-authority` |
+Ownership moves with the upgrade authority, and is given up with it:
 
-They start as the same key: `initialize` requires its payer to be the program's upgrade authority, and records that payer as the initial PA authority (`programs/solana-pa-prototype/src/lib.rs`, the `Initialize` accounts constraint and handler). After initialization no instruction ever compares them, so they can be split freely — the integration suite exercises operation with them split (`tests/authority.ts`, the authority transfer test).
+```sh
+solana program set-upgrade-authority <program id> --new-upgrade-authority <new key>   # moves ownership, at once
+solana program set-upgrade-authority <program id> --final                             # renounces it for good
+```
 
-Two consequences to keep in mind:
+No program instruction or event is involved; the loader's ProgramData account is where the current owner is read. A final program can never be upgraded, initialized again, stopped or reconfigured.
 
-- The PA authority alone decides an emergency stop, regardless of who can upgrade the program.
-- Whoever holds the upgrade authority can replace the program binary — which means they could deploy code that undoes a stop. A stop is only as permanent as upgrade-authority custody.
-
-Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
+The owner can replace the program binary, which means it could deploy code that undoes a stop: a stop is only as permanent as upgrade-authority custody. Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
 
 ## Deploy and initialize
 
@@ -122,20 +119,20 @@ Record the address in the cluster's deployment record and ship it as `SETTLE_LOO
 
 ## The logic-ref denylist
 
-The authority denies a logic ref for good, as pa-evm's owner does with `denyLogicRef`: from that slot on, no settlement consumes or creates a resource carrying it (`DeniedLogicRef`). It is the per-logic kill switch for a compromised resource logic, short of stopping the whole adapter.
+The owner denies a logic ref for good, as pa-evm's owner does with `denyLogicRef`: from that slot on, no settlement consumes or creates a resource carrying it (`DeniedLogicRef`). It is the per-logic kill switch for a compromised resource logic, short of stopping the whole adapter.
 
 ```sh
-PA_DENIED_LOGIC_REF=<hex, 32 bytes> ./scripts/dev.sh deny-logic-ref --cluster <c>   # authority wallet
+PA_DENIED_LOGIC_REF=<hex, 32 bytes> ./scripts/dev.sh deny-logic-ref --cluster <c>   # upgrade-authority wallet
 ```
 
-The zero ref and a ref already denied are rejected; a denial cannot be undone. The denied refs are part of the state account (`denied_logic_refs`), which grows by 32 bytes per denial at the authority's expense, and each denial emits `LogicRefDeniedEvent`.
+The zero ref and a ref already denied are rejected; a denial cannot be undone. The denied refs are part of the state account (`denied_logic_refs`), which grows by 32 bytes per denial at the owner's expense, and each denial emits `LogicRefDeniedEvent`.
 
 ## The kind table
 
-The PA stores the sha256 commitment of the kind table every settled aggregation instance must carry, and rejects a transaction proven against any other table. `initialize` installs the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`) and emits `KindTableCommitmentUpdatedEvent` with it, as pa-evm's initializer does; the authority replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
+The PA stores the sha256 commitment of the kind table every settled aggregation instance must carry, and rejects a transaction proven against any other table. `initialize` installs the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`) and emits `KindTableCommitmentUpdatedEvent` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
 
 ```sh
-PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # authority wallet
+PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # upgrade-authority wallet
 ```
 
 The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the new value, as pa-evm's `KindTableCommitmentUpdated` does. From that slot on, transactions proven against the previous table are rejected (`KindTableCommitmentMismatch`), so provers must load the new table before it is installed. The generated Solana tables and their commitments come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
@@ -149,11 +146,11 @@ The stop exists for one scenario: the deployment can no longer be trusted — ty
 ./scripts/dev.sh estop --cluster devnet --yes  # executes
 ```
 
-The command must be signed by the PA authority. It flips the lifecycle flag from Running to Stopped and there is no instruction that flips it back.
+The command must be signed by the upgrade authority. It flips the lifecycle flag from Running to Stopped and there is no instruction that flips it back.
 
 What stops: `settle` and `settle_from_txdata` reject every transaction with `PAError::Stopped`. Those are the only two instructions gated on the lifecycle flag.
 
-What keeps working: everything else. All accounts (PAState, the commitment tree, nullifier and root markers) remain on chain and readable forever. Transaction-data upload accounts can still be closed and their rent reclaimed by their owners. Authority transfer and expiry configuration still function.
+What keeps working: everything else. All accounts (PAState, the commitment tree, nullifier and root markers) remain on chain and readable forever. Transaction-data upload accounts can still be closed and their rent reclaimed by their owners. Expiry configuration, and moving the upgrade authority (`solana program set-upgrade-authority`), still function.
 
 What a stop does **not** do: it does not prevent the upgrade-authority holder from deploying a modified binary. If the stop is meant to be permanent, finish the job with the Sunsetting steps below.
 

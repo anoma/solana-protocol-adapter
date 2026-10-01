@@ -5,7 +5,7 @@
 import * as anchor from "@anchor-lang/core";
 import { AccountMeta, PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { denyLogicRef, renounceAuthority, setKindTableCommitment, transferAuthority } from "../client/instructions";
+import { denyLogicRef, setKindTableCommitment } from "../client/instructions";
 import { closeMarkersBatch } from "../client/devTeardown";
 import { loadFixture } from "./utils/fixtures";
 import { randomRef, assertFails } from "./utils/helpers";
@@ -112,14 +112,6 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       {
         name: "update_expiry_config",
         run: () => setExpiryBounds(1, 2),
-      },
-      {
-        name: "transfer_authority",
-        run: () => transferAuthority(program, provider.wallet.publicKey, Keypair.generate().publicKey).rpc(),
-      },
-      {
-        name: "renounce_authority",
-        run: () => renounceAuthority(program, provider.wallet.publicKey).rpc(),
       },
       {
         name: "set_kind_table_commitment",

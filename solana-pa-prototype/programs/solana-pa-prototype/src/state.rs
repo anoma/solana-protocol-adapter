@@ -101,8 +101,6 @@ pub struct PAStateAccount {
     /// remove fields ahead of the frontier.
     pub schema_version: u8,
     pub bump: u8,
-    /// Authority that can call emergency_stop.
-    pub authority: Pubkey,
     /// Verifier router program ID, set at initialization.
     /// Mirrors EVM's immutable `_TRUSTED_RISC_ZERO_VERIFIER_ROUTER`.
     pub verifier_router: Pubkey,
@@ -190,16 +188,10 @@ impl PAStateAccount {
 
     /// A running adapter with an empty commitment tree on the empty kind
     /// table: the state `initialize` writes.
-    pub fn running(
-        bump: u8,
-        authority: Pubkey,
-        verifier_router: Pubkey,
-        proof_selector: [u8; 4],
-    ) -> Self {
+    pub fn running(bump: u8, verifier_router: Pubkey, proof_selector: [u8; 4]) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             bump,
-            authority,
             verifier_router,
             proof_selector,
             kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
@@ -238,14 +230,14 @@ pub struct PreviousPAState {
 }
 
 impl From<PreviousPAState> for PAStateAccount {
-    /// This layout with the previous fields, less the pending authority of
-    /// the previous two-step transfer (a proposal never accepted is
-    /// discarded; this layout transfers in one step), and an empty denylist.
+    /// This layout with the previous fields, less its authority and pending
+    /// authority (this layout's owner is the program's upgrade authority, as
+    /// pa-evm's owner is the one who authorizes upgrades), and an empty
+    /// denylist.
     fn from(previous: PreviousPAState) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             bump: previous.bump,
-            authority: previous.authority,
             verifier_router: previous.verifier_router,
             proof_selector: previous.proof_selector,
             kind_table_commitment: previous.kind_table_commitment,
@@ -263,6 +255,20 @@ impl From<PreviousPAState> for PAStateAccount {
 
 #[constant]
 pub const PA_STATE_SEED: &[u8] = b"pa_state";
+
+/// This program's ProgramData account, derived at compile time, where the
+/// loader records the upgrade authority. That authority is the adapter's
+/// owner, as pa-evm's owner is the one who authorizes its upgrades: it signs
+/// every owner-only instruction, and moving or renouncing it
+/// (`solana program set-upgrade-authority`, `--final`) moves or renounces
+/// the ownership.
+pub const PROGRAM_DATA: Pubkey = Pubkey::new_from_array(
+    anchor_lang::derive_program_address(
+        &[&crate::ID_CONST.to_bytes()],
+        &anchor_lang::solana_program::bpf_loader_upgradeable::ID.to_bytes(),
+    )
+    .0,
+);
 
 /// Chunked transaction upload buffer.
 #[account]
