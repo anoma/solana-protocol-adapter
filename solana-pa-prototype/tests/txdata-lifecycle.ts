@@ -5,7 +5,6 @@
 import * as anchor from "@anchor-lang/core";
 import { SystemProgram, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS } from "../client/constants";
 import { deriveTxDataPda } from "../client/pda";
 import { freshUploadId, assertFails } from "./utils/helpers";
 import {
@@ -20,13 +19,17 @@ import {
 describe("TxData lifecycle", () => {
   const { funder, initTxData } = useAdapterSuite();
 
-  // The tests below assume the expiry bounds initialize sets. They are read,
-  // not set: setting them is owner-only, and a cluster run's wallet owns
-  // nothing.
+  // The tests below pick their expiry slots from the bounds the deployment
+  // holds. They are read, not set: setting them is owner-only, and a cluster
+  // run's wallet owns nothing. `midSlots` lies well inside both bounds.
+  let minSlots: number;
+  let maxSlots: number;
+  let midSlots: number;
   before(async () => {
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(state.minExpirySlots.toNumber(), MIN_EXPIRY_SLOTS, "min_expiry_slots is the initial bound");
-    assert.equal(state.maxExpirySlots.toNumber(), MAX_EXPIRY_SLOTS, "max_expiry_slots is the initial bound");
+    minSlots = state.minExpirySlots.toNumber();
+    maxSlots = state.maxExpirySlots.toNumber();
+    midSlots = Math.floor((minSlots + maxSlots) / 2);
   });
 
   describe("protocol-adapter (TxData Expiration)", () => {
@@ -36,8 +39,8 @@ describe("TxData lifecycle", () => {
       const { uploadId, txData } = freshUploadId(program.programId, authority.publicKey);
 
       const slot = await provider.connection.getSlot("confirmed");
-      // Set expiry too soon (only 50 slots from now, MIN is 100)
-      const expiresSlot = new anchor.BN(slot + 50);
+      // One slot short of the minimum from a slot the transaction lands at or after
+      const expiresSlot = new anchor.BN(slot + minSlots - 1);
 
       await assertFails(
         program.methods
@@ -60,8 +63,8 @@ describe("TxData lifecycle", () => {
       const { uploadId, txData } = freshUploadId(program.programId, authority.publicKey);
 
       const slot = await provider.connection.getSlot("confirmed");
-      // Set expiry too late (MAX + 1000 slots from now)
-      const expiresSlot = new anchor.BN(slot + MAX_EXPIRY_SLOTS + 1000);
+      // Past the maximum by more than the slots the transaction can take to land
+      const expiresSlot = new anchor.BN(slot + maxSlots + 1000);
 
       await assertFails(
         program.methods
@@ -82,7 +85,7 @@ describe("TxData lifecycle", () => {
       const authority = await funder.fresh(1);
 
       const slot = await provider.connection.getSlot("confirmed");
-      const expiresSlot = new anchor.BN(slot + Math.floor((MIN_EXPIRY_SLOTS + MAX_EXPIRY_SLOTS) / 2));
+      const expiresSlot = new anchor.BN(slot + midSlots);
       const { txData } = await initTxData(authority, 100, expiresSlot);
 
       const txDataAccount = await program.account.txDataAccount.fetch(txData);
@@ -182,14 +185,14 @@ describe("TxData lifecycle", () => {
       const authority = await funder.fresh(2);
 
       const slot = await provider.connection.getSlot("confirmed");
-      const initialExpiry = new anchor.BN(slot + 1000);
+      const initialExpiry = new anchor.BN(slot + midSlots);
       const { uploadId, txData } = await initTxData(authority, 100, initialExpiry);
 
       let txDataAccount = await program.account.txDataAccount.fetch(txData);
       assert.equal(txDataAccount.expiresSlot.toNumber(), initialExpiry.toNumber());
 
       const currentSlot = await provider.connection.getSlot("confirmed");
-      const newExpiry = new anchor.BN(currentSlot + 5000);
+      const newExpiry = new anchor.BN(currentSlot + maxSlots);
 
       await program.methods
         .txdataExtend(uploadId, newExpiry)
@@ -209,11 +212,11 @@ describe("TxData lifecycle", () => {
       const authority = await funder.fresh(2);
 
       const slot = await provider.connection.getSlot("confirmed");
-      const initialExpiry = new anchor.BN(slot + 10000);
+      const initialExpiry = new anchor.BN(slot + maxSlots);
       const { uploadId, txData } = await initTxData(authority, 100, initialExpiry);
 
       const currentSlot = await provider.connection.getSlot("confirmed");
-      const lowerExpiry = new anchor.BN(currentSlot + 500); // Less than current expires_slot
+      const lowerExpiry = new anchor.BN(currentSlot + midSlots); // Within the bounds, but before the current expires_slot
 
       await assertFails(
         program.methods
@@ -233,7 +236,7 @@ describe("TxData lifecycle", () => {
       const [authority, cleaner] = await Promise.all([funder.fresh(2), funder.fresh(1)]);
 
       const slot = await provider.connection.getSlot("confirmed");
-      const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50000));
+      const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + midSlots));
 
       await assertFails(
         program.methods
@@ -336,7 +339,7 @@ describe("TxData lifecycle", () => {
       const wrongRefund = Keypair.generate().publicKey;
 
       const slot = await provider.connection.getSlot("confirmed");
-      const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + 50_000));
+      const { uploadId, txData } = await initTxData(authority, 100, new anchor.BN(slot + midSlots));
 
       // Hits ConstraintAddress before TxDataNotExpired
       // because Anchor validates account constraints before running the handler body

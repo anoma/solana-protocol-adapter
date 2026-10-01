@@ -1,4 +1,5 @@
 {
+  "name": "batch_forwarder_fail",
   "format": "arm-risc0:Transaction(bincode)",
   "aggregation_strategy": "batch",
   "aggregation_proof_type": "mock",

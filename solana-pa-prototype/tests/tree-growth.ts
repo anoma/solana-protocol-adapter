@@ -7,6 +7,7 @@ import { assert } from "chai";
 import { RESULT_LT } from "../client/constants";
 import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
 import { assertFails, transactionIdOf } from "./utils/helpers";
+import { predictRootAfterAppend } from "./utils/merkle";
 import {
   provider,
   program,
@@ -24,10 +25,13 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
   const { settleFixtureViaTxData, settleUnsettledFixture } = useAdapterSuite();
 
   let v2TxSig: string;
+  // The root the v2 settlement produced: the tree it found with v2's leaf.
+  let v2Root: Buffer;
 
   it("settles v2 fixture (appends one leaf)", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
+    v2Root = await predictRootAfterAppend(program, paState, commitmentsOf(loadFixture("batch_groth16_v2.json")));
 
     v2TxSig = await settleUnsettledFixture("batch_groth16_v2.json");
 
@@ -58,10 +62,9 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
       ["forwarderCallExecutedEvent", "actionExecutedEvent", "commitmentTreeRootAddedEvent", "transactionExecutedEvent"],
       "the settlement's events follow pa-evm's order",
     );
-    const state = await program.account.paStateAccount.fetch(paState);
     assert.deepEqual(
-      Array.from(events[2].data.root),
-      Array.from(state.root),
+      Buffer.from(events[2].data.root),
+      v2Root,
       "CommitmentTreeRootAdded carries the root the settlement produced",
     );
 
@@ -99,12 +102,8 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     // `newRootMarker` is a required named account, so the v2 settlement above
     // could not have succeeded without supplying it. This checks that one
     // instance, for the root the v2 settlement produced.
-    const state = await program.account.paStateAccount.fetch(paState);
-    const currentRoot = Buffer.from(state.root as number[]);
-    const rootMarkerPda = deriveRootPda(currentRoot);
-
-    const info = await provider.connection.getAccountInfo(rootMarkerPda);
-    assert.ok(info, "Root marker should exist for the current root after settlement");
+    const info = await provider.connection.getAccountInfo(deriveRootPda(v2Root));
+    assert.ok(info, "Root marker should exist for the root the v2 settlement produced");
     assert.ok(info!.owner.equals(program.programId), "Root marker should be owned by the PA program");
   });
 

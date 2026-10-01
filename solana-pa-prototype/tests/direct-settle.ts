@@ -1,13 +1,12 @@
 /**
  * `settle` with inline transaction data, and the double-spend rejection.
- * The before hook settles the primary fixture, whose nullifiers the
- * duplicate test re-submits.
+ * The before hook settles the resubmitted fixture unless it is settled
+ * already, and the duplicate test re-submits its nullifiers.
  */
 import { loadFixture } from "./utils/fixtures";
 import { assertFails } from "./utils/helpers";
 import {
   program,
-  fixture,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
   buildSettleRemainingAccounts,
@@ -18,8 +17,9 @@ import {
 
 describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
   const { funder, uploadTxData, settleFixture } = useAdapterSuite();
+  const fixture = loadFixture("batch_groth16_resubmitted.json");
 
-  before(() => settleFixture("batch_groth16.json"));
+  before(() => settleFixture("batch_groth16_resubmitted.json"));
 
   it("rejects garbage transaction_data via settle", async () => {
     const payer = await funder.fresh(2);

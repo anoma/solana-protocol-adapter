@@ -242,7 +242,8 @@ export function freshUploadId(paProgramId: PublicKey, authority: PublicKey): Omi
 
 /**
  * Create an empty TxData account of `payloadSize` bytes under `authority`,
- * expiring 10,000 slots from now unless `expiresSlotOverride` is given.
+ * expiring `expiresSlotOverride`, or else midway between the soonest and the
+ * latest expiry the adapter's bounds allow from now.
  */
 export async function initTxData(
   program: Program<ProtocolAdapter>,
@@ -252,8 +253,7 @@ export async function initTxData(
   expiresSlotOverride?: anchor.BN,
 ): Promise<TxDataUpload> {
   const { uploadId, uploadIdLe, txData } = freshUploadId(program.programId, authority.publicKey);
-  const expiresSlot =
-    expiresSlotOverride ?? new anchor.BN((await program.provider.connection.getSlot("confirmed")) + 10_000);
+  const expiresSlot = expiresSlotOverride ?? (await midExpirySlot(program, paState));
   await program.methods
     .txdataInit(uploadId, payloadSize, expiresSlot)
     .accountsPartial({
@@ -265,6 +265,13 @@ export async function initTxData(
     .signers([authority])
     .rpc();
   return { uploadId, uploadIdLe, txData, expiresSlot };
+}
+
+/** The slot midway between the soonest and the latest expiry the adapter's bounds allow from now. */
+async function midExpirySlot(program: Program<ProtocolAdapter>, paState: PublicKey): Promise<anchor.BN> {
+  const { minExpirySlots, maxExpirySlots } = await program.account.paStateAccount.fetch(paState);
+  const slot = await program.provider.connection.getSlot("confirmed");
+  return new anchor.BN(slot).add(minExpirySlots.add(maxExpirySlots).divn(2));
 }
 
 /** Create a TxData account under `authority` and write `payload` into it in 700-byte chunks. */

@@ -1,8 +1,9 @@
 /**
  * SPL token forwarder emergency flow on a paused adapter: the committee
  * names an emergency caller, who withdraws from escrow through
- * forward_emergency_call. The before hook initializes the adapter and the
- * forwarder config (no emergency caller), then stops the adapter.
+ * forward_emergency_call. The emergency caller can be named only once, so
+ * this runs among the suite's last files, on the deployment's config. The
+ * before hook stops the adapter unless a file before it did.
  */
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { createAccount, getAccount } from "@solana/spl-token";
@@ -10,14 +11,15 @@ import { assert } from "chai";
 import { emergencyWithdraw } from "../client/instructions";
 import { localSetEmergencyCaller } from "./utils/localOnly";
 import { deriveConfigPda } from "../client/pda";
-import { approvedTokenAccount, createFundedEscrow, makeFunder, randomRef, assertFails } from "./utils/helpers";
+import { approvedTokenAccount, createFundedEscrow, makeFunder, assertFails } from "./utils/helpers";
 import {
   ensureAdapterInitialized,
+  ensureForwarderConfig,
+  ensurePaused,
+  forwarderCommittee as emergencyCommittee,
   forwarderProgram,
-  initForwarderConfig,
   paState,
   provider,
-  pauseAsOwner,
 } from "./utils/adapterSuite";
 
 describe("forwarder emergency (adapter paused)", () => {
@@ -25,7 +27,6 @@ describe("forwarder emergency (adapter paused)", () => {
   const funder = makeFunder(provider);
 
   const authority = Keypair.generate();
-  const emergencyCommittee = Keypair.generate();
   const emergencyCaller = Keypair.generate();
   const recipient = Keypair.generate();
 
@@ -41,8 +42,8 @@ describe("forwarder emergency (adapter paused)", () => {
     await funder.fund(emergencyCaller, 1);
 
     await ensureAdapterInitialized();
-    await initForwarderConfig(randomRef(), emergencyCommittee.publicKey);
-    await pauseAsOwner();
+    await ensureForwarderConfig();
+    await ensurePaused();
 
     ({ mint, escrowAuthority, escrowAta } = await createFundedEscrow(
       provider,

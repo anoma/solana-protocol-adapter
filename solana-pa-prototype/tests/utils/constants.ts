@@ -5,6 +5,10 @@ export const EMPTY_TREE_ROOT_INITIAL = Buffer.from(
   "hex",
 );
 
+// fixture-gen's RECIPIENT_SEED_LABEL: the recipient its unwraps release to
+// and its relay fixture names, needed before any unwrap is proven.
+export const UNWRAP_RECIPIENT_SEED_LABEL = "spl_token_forwarder_test_recipient";
+
 // The commitment anoma/risc0-kind-tables publishes for solana-devnet
 // (data/generated/staging/commitments.json): the table fixture-gen's
 // kind_table_solana_devnet.json holds, which spl_token_wrap_devnet_kind_table

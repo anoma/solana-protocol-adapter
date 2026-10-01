@@ -1,13 +1,21 @@
 /**
  * STATE-03 part 2: the consumer spends the committer's leaf through a root
- * that is no longer current. The before hook builds the tree the pair is
- * proven over (the primary fixture, then the committer at leaf 1) and
- * settles one more fixture, so the committer's root is historical.
+ * that is no longer current. The before hook settles the committer on
+ * whatever tree the deployment holds, proves the consumer over that tree,
+ * and settles one more fixture, so the committer's root is historical.
  */
+import { writeFileSync } from "fs";
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
 import { EMPTY_TREE_ROOT_INITIAL } from "./utils/constants";
-import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
+import {
+  type Fixture,
+  createdCommitmentsOf as commitmentsOf,
+  fixturePath,
+  loadFixture,
+  proveFixture,
+  runtimeFixturePath,
+} from "./utils/fixtures";
 import { assertFails } from "./utils/helpers";
 import {
   provider,
@@ -16,8 +24,8 @@ import {
   deriveRootPda,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
-  assertFixtureUnsettled,
   buildSettleRemainingAccounts,
+  treeLeaves,
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
@@ -37,9 +45,9 @@ import {
 // requires a purpose-built "committer" transaction whose created resource is
 // genuinely non-ephemeral.
 //
-// The committer's Merkle path is baked to leaf index 1, so it settles
-// immediately after batch_groth16.json (leaf 0); the before hook settles both
-// in that order. The "consumer" below spends that leaf through the real path.
+// The consumer's Merkle path runs through the tree the deployment holds when
+// the committer settles, so it is proven then, from the deployment's
+// settlement history.
 //
 // ── STATE-03 part 2: spend the committed leaf via its retained root ────────
 // The before hook settles one more fixture after the committer, advancing the
@@ -49,12 +57,23 @@ import {
 // `is_root_valid` that can still admit it is the root-marker lookup, which is
 // exactly the branch no maintained test had ever exercised on a validator.
 describe("protocol-adapter (STATE-03 part 2: settle against a retained historical root)", () => {
-  const { settleFixtureViaTxData, settleFixture } = useAdapterSuite();
+  const { settleFixtureViaTxData, settleUnsettledFixture } = useAdapterSuite();
+
+  let consumer: Fixture;
 
   before(async () => {
-    await settleFixture("batch_groth16.json");
-    await settleFixture("batch_groth16_historical_root_committer.json");
-    await settleFixture("batch_groth16_v2.json");
+    await settleUnsettledFixture("batch_groth16_historical_root_committer.json");
+    const leaves = await treeLeaves();
+    const committer = loadFixture("batch_groth16_historical_root_committer.json");
+    const preceding = leaves.slice(0, leaves.length - commitmentsOf(committer).length);
+    const precedingPath = runtimeFixturePath("historical_root_preceding_leaves.json");
+    writeFileSync(precedingPath, JSON.stringify(preceding.map((leaf) => leaf.toString("hex"))));
+    consumer = proveFixture(
+      "historical-root-consumer",
+      ["--committer", fixturePath("batch_groth16_historical_root_committer.json"), "--preceding-leaves", precedingPath],
+      "batch_groth16_historical_root.json",
+    );
+    await settleUnsettledFixture("batch_groth16_historical_root_successor.json");
   });
 
   // The consumer's root must be genuinely superseded before either of the two
@@ -62,8 +81,7 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
   // *first* branch (root == current root) and the marker branch would again go
   // untested. Asserted explicitly rather than assumed from test ordering.
   function consumerHistoricalRoot(): { rootB64: string; marker: PublicKey } {
-    const consumerFixture = loadFixture("batch_groth16_historical_root.json");
-    const historicalRoots = consumerFixture.historical_roots_b64 ?? [];
+    const historicalRoots = consumer.historical_roots_b64 ?? [];
     assert.lengthOf(historicalRoots, 1, "consumer fixture must carry exactly one historical (non-current) root");
     const rootB64 = historicalRoots[0];
 
@@ -101,9 +119,8 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
     const { rootB64 } = consumerHistoricalRoot();
     await assertRootIsHistoricalNotCurrent(rootB64);
 
-    const consumerFixture = loadFixture("batch_groth16_historical_root.json");
-    const payload = Buffer.from(consumerFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(consumerFixture.consumed_nullifiers_b64);
+    const payload = Buffer.from(consumer.tx_b64, "base64");
+    const nullifierAccounts = deriveNullifierAccounts(consumer.consumed_nullifiers_b64);
     // Deliberately without the historical root marker.
     const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);
 
@@ -121,11 +138,13 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
     assert.ok(markerInfo, "historical root marker should exist from the committer's settlement");
     assert.ok(markerInfo!.owner.equals(program.programId), "root marker should be owned by the PA program");
 
-    await assertFixtureUnsettled("batch_groth16_historical_root.json");
+    const nullifierAccounts = deriveNullifierAccounts(consumer.consumed_nullifiers_b64);
+    assert.isNull(
+      await provider.connection.getAccountInfo(nullifierAccounts[0].pubkey),
+      "the committed resource is unspent",
+    );
 
-    const consumerFixture = loadFixture("batch_groth16_historical_root.json");
-    const payload = Buffer.from(consumerFixture.tx_b64, "base64");
-    const nullifierAccounts = deriveNullifierAccounts(consumerFixture.consumed_nullifiers_b64);
+    const payload = Buffer.from(consumer.tx_b64, "base64");
     const remainingAccounts = [
       ...buildSettleRemainingAccounts(nullifierAccounts),
       { pubkey: marker, isWritable: false, isSigner: false },
@@ -133,7 +152,7 @@ describe("protocol-adapter (STATE-03 part 2: settle against a retained historica
 
     const nextIndexBefore = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
     await settleFixtureViaTxData(payload, remainingAccounts, {
-      createdCommitments: commitmentsOf(consumerFixture),
+      createdCommitments: commitmentsOf(consumer),
     });
     const nextIndexAfter = (await program.account.paStateAccount.fetch(paState)).nextIndex.toNumber();
     assert.equal(nextIndexAfter, nextIndexBefore + 1, "consumer settlement should append its commitment");

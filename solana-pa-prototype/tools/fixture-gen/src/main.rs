@@ -32,7 +32,7 @@ use heliax_ap_orchestrator_sdk::{
 use k256::{AffinePoint, Scalar};
 use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
 use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use solana_pa::verifier_router::types::{Proof, Seal};
 use std::collections::BTreeSet;
 use std::env;
@@ -335,6 +335,8 @@ enum SplForwarderMetadata {
 
 #[derive(Serialize)]
 struct Fixture {
+    /// The name the fixture's resource nonces derive from (see `fixture_name`).
+    name: String,
     format: &'static str,
     aggregation_strategy: &'static str,
     aggregation_proof_type: &'static str,
@@ -369,19 +371,6 @@ struct Cli {
 enum Command {
     #[command(flatten)]
     Generate(ShapeCommand),
-    /// The historical-root pair: a committer settled right after
-    /// batch_groth16, and a consumer spending its resource through a real
-    /// Merkle path over the tree [batch_groth16, committer].
-    HistoricalRoot {
-        /// The settled batch_groth16 fixture (leaf 0 of the tree).
-        batch_groth16: PathBuf,
-        /// Where to write the committer fixture.
-        committer_out: PathBuf,
-        /// Where to write the consumer fixture.
-        consumer_out: PathBuf,
-        #[command(flatten)]
-        prover: ProverArgs,
-    },
     /// Print a fixture's transaction structure.
     Dump { input: PathBuf },
 }
@@ -460,14 +449,42 @@ enum ShapeCommand {
         #[command(flatten)]
         generate: GenerateArgs,
     },
+    /// One action that consumes an ephemeral resource and creates a
+    /// non-ephemeral one, which a later transaction can only spend through
+    /// a real Merkle path to a retained historical root.
+    HistoricalRootCommitter {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// Spend the committer's resource through its Merkle path to the root
+    /// the committer's settlement produced.
+    HistoricalRootConsumer {
+        /// The committer fixture, settled after `--preceding-leaves`: its
+        /// created commitment ends the tree the consumer proves membership in.
+        #[arg(long, value_name = "FIXTURE")]
+        committer: PathBuf,
+        /// The commitments the adapter's tree held before the committer
+        /// settled, in leaf order: a JSON array of hex strings, as an indexer
+        /// serves them. Without it the committer settled on a fresh adapter.
+        #[arg(long, value_name = "FILE")]
+        preceding_leaves: Option<PathBuf>,
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
 }
 
 /// The options every generated fixture takes.
 #[derive(Args)]
 struct GenerateArgs {
     /// Where to write the fixture. Every resource nonce derives from its file
-    /// stem, so fixtures with different names never share a nullifier.
+    /// stem (and `--salt`), so fixtures with different names never share a
+    /// nullifier.
     out_path: PathBuf,
+    /// Set this run's fixtures apart from every other run's on the same
+    /// deployment: resource nonces and a wrap's forwarder nonce derive from
+    /// it too, so nothing the run settles was spent before.
+    #[arg(long, value_name = "SALT")]
+    salt: Option<String>,
     #[command(flatten)]
     prover: ProverArgs,
     /// Also write the final transaction's error variants to DIR:
@@ -1021,17 +1038,54 @@ fn fixture_nonce(fixture_name: &str, index: u32) -> [u8; 32] {
     arm::utils::hash_bytes(&preimage).into()
 }
 
-/// A fixture's name: its file stem (`batch_groth16` for
-/// `tests/fixtures/batch_groth16.json`), which its resource nonces derive from.
-fn fixture_name(path: &Path) -> Result<&str> {
-    path.file_stem()
+/// A fixture's name, which its resource nonces derive from: its file stem
+/// (`batch_groth16` for `tests/fixtures/batch_groth16.json`), followed by
+/// `/<salt>` when the run is salted.
+fn fixture_name(path: &Path, salt: Option<&str>) -> Result<String> {
+    let stem = path
+        .file_stem()
         .and_then(|stem| stem.to_str())
         .ok_or_else(|| {
             anyhow!(
                 "{} has no UTF-8 file stem to name the fixture",
                 path.display()
             )
-        })
+        })?;
+    Ok(match salt {
+        Some(salt) => format!("{stem}/{salt}"),
+        None => stem.to_string(),
+    })
+}
+
+/// The name an existing fixture was generated under, which the resources it
+/// created derive from.
+fn read_fixture_name(path: &Path) -> Result<String> {
+    #[derive(Deserialize)]
+    struct Named {
+        name: String,
+    }
+    let named: Named = serde_json::from_slice(
+        &fs::read(path).with_context(|| format!("read {}", path.display()))?,
+    )
+    .with_context(|| format!("{} carries no fixture name", path.display()))?;
+    Ok(named.name)
+}
+
+/// The forwarder nonce a wrap signs: `wrap_nonce` itself, or, in a salted
+/// run, `wrap_nonce` past a word-aligned base the salt derives, so the run's
+/// wraps land in nonce words no earlier run used.
+fn forwarder_nonce(salt: Option<&str>, wrap_nonce: u64) -> u64 {
+    let Some(salt) = salt else {
+        return wrap_nonce;
+    };
+    let word = u64::from_le_bytes(
+        label_hash(&format!("solana-pa/fixture-gen/forwarder-nonce/{salt}"))[..8]
+            .try_into()
+            .expect("8 bytes"),
+    );
+    // Leave room for wrap_nonce above the base without overflowing.
+    let per_word = spl_token_forwarder::NONCES_PER_WORD;
+    (word % (u64::MAX / per_word - 1)) * per_word + wrap_nonce
 }
 
 /// The nonce of an action's first created resource: the compliance circuit
@@ -1447,6 +1501,7 @@ async fn generate_consume_only_transaction(
 
 fn generate_error_variant_fixtures(
     tx: &Transaction,
+    name: &str,
     selector: &str,
     proof_type: &'static str,
     nullifiers_b64: &[String],
@@ -1459,6 +1514,7 @@ fn generate_error_variant_fixtures(
         let tx_bytes = bincode::serialize(variant_tx)
             .with_context(|| format!("serialize variant tx for {file_name}"))?;
         let fixture = Fixture {
+            name: name.to_owned(),
             format: FIXTURE_FORMAT,
             aggregation_strategy: "batch",
             aggregation_proof_type: proof_type,
@@ -1644,12 +1700,11 @@ fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
 
 /// Seal-encode the aggregation proof, serialize the transaction (and a
 /// tampered clone), extract nullifiers/selector/historical roots, and write
-/// the resulting `Fixture` JSON. Shared by the default `Generate` path and
-/// the `historical-root` path so both fixtures follow the exact same
-/// on-disk convention.
+/// the resulting `Fixture` JSON under `name`.
 fn finalize_and_write_fixture(
     tx: &mut Transaction,
     out_path: &Path,
+    name: String,
     spl_forwarder: Option<SplForwarderMetadata>,
 ) -> Result<Fixture> {
     // The receipt type decides the seal encoding: dev-mode (Fake) receipts
@@ -1673,6 +1728,7 @@ fn finalize_and_write_fixture(
 
     let fields = timed_phase("derive_fixture_fields", || derive_fixture_fields(tx))?;
     let fixture = Fixture {
+        name,
         format: FIXTURE_FORMAT,
         aggregation_strategy: "batch",
         aggregation_proof_type: proof_type,
@@ -1697,22 +1753,6 @@ fn finalize_and_write_fixture(
     eprintln!("wrote fixture: {}", out_path.display());
 
     Ok(fixture)
-}
-
-/// The one commitment an existing fixture settles: leaf 0 of the tree the
-/// historical-root pair is proven over, when that fixture is
-/// `batch_groth16.json`.
-fn read_sole_created_commitment(path: &Path) -> Result<Digest> {
-    let leaves = created_commitments(&load_fixture_tx(path)?)?;
-    if leaves.len() != 1 {
-        bail!(
-            "{} must settle exactly one commitment to serve as the known single-leaf tree \
-             base for historical-root fixture generation (found {})",
-            path.display(),
-            leaves.len()
-        );
-    }
-    Ok(leaves[0])
 }
 
 /// Build the compliance witness for the historical-root *committer*
@@ -1775,120 +1815,38 @@ fn build_historical_root_consumer_witness(
     ))
 }
 
-/// Prove a one-action historical-root transaction (`label` names it in the
-/// log), aggregate it, and verify the aggregation.
-async fn prove_aggregated_single_action(
+/// The historical-root consumer: spends the resource the committer fixture
+/// `committer_name` created, the last of `leaves` (the tree settled before
+/// the consumer), through its Merkle path. The root that path reconstructs is
+/// a real historical root, never the initial one, so settlement must find
+/// its marker.
+async fn generate_historical_root_consumer_transaction(
     prover: &Prover,
-    label: &str,
-    witness: ComplianceWitness,
+    committer_name: &str,
+    leaves: &[Digest],
 ) -> Result<Transaction> {
-    eprintln!("phase: generate historical-root {label} transaction");
-    let start = Instant::now();
-    let tx = prove_single_action_transaction(prover, witness, AppData::default())
-        .await
-        .with_context(|| format!("build {label} transaction"))?;
-    eprintln!(
-        "phase done: {label} transaction ({})",
-        fmt_duration(start.elapsed())
-    );
-
-    eprintln!("phase: aggregate {label} transaction (batch, groth16)");
-    let start = Instant::now();
-    let tx = aggregate_tx(prover, tx)
-        .await
-        .with_context(|| format!("aggregate {label} tx"))?;
-    eprintln!(
-        "phase done: aggregate {label} ({})",
-        fmt_duration(start.elapsed())
-    );
-    arm::transaction::verify_aggregation(&tx, JournalEncoding::Risc0Serde)
-        .map_err(|e| anyhow!("verify {label} aggregated proof: {e:?}"))?;
-    Ok(tx)
-}
-
-/// Generate the historical-root committer and consumer fixtures.
-///
-/// The committer transaction's created resource is genuinely non-ephemeral,
-/// so it is inserted into the on-chain commitment tree the same way as any
-/// other created resource, but it can later be *consumed* through a real
-/// Merkle-inclusion proof (unlike every other existing fixture's created
-/// resource, which is `is_ephemeral: true` and can therefore only ever be
-/// re-admitted through the unconstrained `ephemeral_root` shortcut).
-///
-/// The committer is expected to settle immediately after `batch_groth16.json`
-/// (leaf index 0) and nothing else, landing at leaf index 1: the on-chain
-/// tree grows from depth 1 to depth 2, and the resulting root is
-/// `hash_two(hash_two(batch_groth16_leaf, committer_leaf), ZEROS[1])`. That
-/// exact computation is replicated here using the PA's own on-chain merkle
-/// constants (`solana_pa::merkle`), and independently cross-checked against
-/// `MerklePath::root()` (arm's own hash) before any proof is generated, so
-/// a divergence between the two hash implementations fails loudly instead of
-/// producing a fixture that can never settle.
-async fn generate_historical_root_fixtures(
-    batch_groth16_path: &Path,
-    committer_out: &Path,
-    consumer_out: &Path,
-    prover_choice: Option<ProverChoice>,
-) -> Result<()> {
-    let prover = resolve_prover(prover_choice)?;
-
-    let batch_groth16_leaf = read_sole_created_commitment(batch_groth16_path)
-        .context("read batch_groth16.json's committed leaf")?;
-
-    let (committer_witness, committed_resource, committer_nf_key) =
-        build_historical_root_committer_witness(fixture_name(committer_out)?)?;
-    // The committer settles right after batch_groth16 (leaf 0), as leaf 1.
-    // Its commitment is known before it is proven, so the consumer's Merkle
-    // path is too, and the two transactions prove independently.
+    let (_, committed_resource, committer_nf_key) =
+        build_historical_root_committer_witness(committer_name)?;
     let committed_cm = committed_resource.commitment();
-    let (merkle_path, expected_root) =
-        checked_pa_merkle_path(&[batch_groth16_leaf, committed_cm], 1)?;
-    let consumer_witness =
-        build_historical_root_consumer_witness(committed_resource, committer_nf_key, merkle_path)
-            .context("build consumer witness")?;
-
-    let (mut committer_tx, mut consumer_tx) = run_job_pair(
-        prover.scheduling(),
-        prove_aggregated_single_action(&prover, "committer", committer_witness),
-        prove_aggregated_single_action(&prover, "consumer", consumer_witness),
-    )
-    .await?;
-
-    finalize_and_write_fixture(&mut committer_tx, committer_out, None)
-        .context("write committer fixture")?;
-
-    // The whole point of this fixture: the consumed root must be a genuine,
-    // non-padding historical root. If it were the initial root, is_root_valid
-    // would accept it unconditionally before the marker lookup ever runs,
-    // exactly the coverage gap this fixture exists to close.
-    let consumer_root = consumed_publics(&consumer_tx)?
-        .next()
-        .map(|c| c.commitment_tree_root)
-        .ok_or_else(|| anyhow!("consumer tx has no consumed resources"))?;
-    if consumer_root == INITIAL_ROOT {
+    let index = leaves.len().checked_sub(1).ok_or_else(|| {
+        anyhow!("the consumer needs the leaves settled before it, the committer's last")
+    })?;
+    if leaves[index] != committed_cm {
         bail!(
-            "consumer's consumed commitment tree root is the initial root -- this fixture \
-             would prove nothing about historical root retention"
+            "the last leaf must be the committer's created commitment {}, found {}",
+            hex::encode(committed_cm.as_bytes()),
+            hex::encode(leaves[index].as_bytes())
         );
     }
-    if consumer_root != expected_root {
-        bail!(
-            "consumer's consumed commitment tree root ({}) does not match the expected \
-             historical root ({})",
-            hex::encode(consumer_root.as_bytes()),
-            hex::encode(expected_root.as_bytes())
-        );
-    }
+    let (merkle_path, root) = checked_pa_merkle_path(leaves, index)?;
     eprintln!(
-        "confirmed: consumer's consumed commitment tree root = {} (non-padding, matches the \
-         committer's post-settlement root)",
-        hex::encode(consumer_root.as_bytes())
+        "verified: the committed resource is leaf {index} of {}; root {}",
+        leaves.len(),
+        hex::encode(root.as_bytes())
     );
-
-    finalize_and_write_fixture(&mut consumer_tx, consumer_out, None)
-        .context("write consumer fixture")?;
-
-    Ok(())
+    let witness =
+        build_historical_root_consumer_witness(committed_resource, committer_nf_key, merkle_path)?;
+    prove_single_action_transaction(prover, witness, AppData::default()).await
 }
 
 fn fmt_duration(d: Duration) -> String {
@@ -2057,21 +2015,6 @@ async fn main() -> Result<()> {
             load_kind_table(Path::new(KIND_TABLE_PATH))?;
             dump_fixture(&input)
         }
-        Command::HistoricalRoot {
-            batch_groth16,
-            committer_out,
-            consumer_out,
-            prover,
-        } => {
-            load_kind_table(Path::new(KIND_TABLE_PATH))?;
-            generate_historical_root_fixtures(
-                &batch_groth16,
-                &committer_out,
-                &consumer_out,
-                apply_mock_mode(&prover),
-            )
-            .await
-        }
         Command::Generate(shape) => generate_fixture(shape).await,
     }
 }
@@ -2085,9 +2028,12 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
     | ShapeCommand::ConsumeOnly { generate }
     | ShapeCommand::TransferShape { generate }
     | ShapeCommand::SplTokenWrap { generate, .. }
-    | ShapeCommand::SplTokenUnwrap { generate, .. }) = &shape;
+    | ShapeCommand::SplTokenUnwrap { generate, .. }
+    | ShapeCommand::HistoricalRootCommitter { generate }
+    | ShapeCommand::HistoricalRootConsumer { generate, .. }) = &shape;
     let GenerateArgs {
         out_path,
+        salt,
         prover,
         error_variants,
         kind_table,
@@ -2123,6 +2069,13 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             TOKEN_TRANSFER_ID,
             wrap.display()
         ),
+        ShapeCommand::HistoricalRootCommitter { .. } => {
+            eprintln!("mode: historical-root committer (creates a non-ephemeral resource)")
+        }
+        ShapeCommand::HistoricalRootConsumer { committer, .. } => eprintln!(
+            "mode: historical-root consumer (spends committer {}'s resource)",
+            committer.display()
+        ),
         ShapeCommand::Batch { .. }
         | ShapeCommand::ForwarderFail { .. }
         | ShapeCommand::ForwarderSilent { .. }
@@ -2134,7 +2087,8 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
 
     eprintln!("phase: generate_test_transaction");
     let gen_start = Instant::now();
-    let name = fixture_name(out_path)?;
+    let name = fixture_name(out_path, salt.as_deref())?;
+    let name = name.as_str();
     let single_action = |mode| generate_test_transaction_with_external_payload(&prover, mode, name);
     let (mut tx, spl_forwarder) = match &shape {
         ShapeCommand::Batch {
@@ -2176,8 +2130,8 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             None,
         ),
         ShapeCommand::SplTokenWrap { wrap_nonce, .. } => {
-            let (tx, metadata) =
-                generate_anomapay_wrap_transaction(&prover, name, *wrap_nonce).await?;
+            let nonce = forwarder_nonce(salt.as_deref(), *wrap_nonce);
+            let (tx, metadata) = generate_anomapay_wrap_transaction(&prover, name, nonce).await?;
             (tx, Some(metadata))
         }
         ShapeCommand::SplTokenUnwrap {
@@ -2193,12 +2147,39 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             leaves.extend(created_commitments(&load_fixture_tx(wrap)?)?);
             let (tx, metadata) = generate_anomapay_unwrap_transaction(
                 &prover,
-                fixture_name(wrap)?,
+                &read_fixture_name(wrap)?,
                 &leaves,
                 *to_escrow,
             )
             .await?;
             (tx, Some(metadata))
+        }
+        ShapeCommand::HistoricalRootCommitter { .. } => {
+            let (witness, _, _) = build_historical_root_committer_witness(name)?;
+            (
+                prove_single_action_transaction(&prover, witness, AppData::default()).await?,
+                None,
+            )
+        }
+        ShapeCommand::HistoricalRootConsumer {
+            committer,
+            preceding_leaves,
+            ..
+        } => {
+            let mut leaves = match preceding_leaves {
+                Some(path) => read_leaves(path)?,
+                None => Vec::new(),
+            };
+            leaves.extend(created_commitments(&load_fixture_tx(committer)?)?);
+            (
+                generate_historical_root_consumer_transaction(
+                    &prover,
+                    &read_fixture_name(committer)?,
+                    &leaves,
+                )
+                .await?,
+                None,
+            )
         }
     };
     eprintln!(
@@ -2228,7 +2209,7 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             .map_err(|e| anyhow!("verify aggregated proof: {e:?}"))
     })?;
 
-    let fixture = finalize_and_write_fixture(&mut tx, out_path, spl_forwarder)?;
+    let fixture = finalize_and_write_fixture(&mut tx, out_path, name.to_string(), spl_forwarder)?;
 
     if matches!(shape, ShapeCommand::TransferShape { .. }) {
         check_transfer_shape_wire_size(&fixture.tx_b64)?;
@@ -2238,6 +2219,7 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         timed_phase("write_error_variants", || {
             generate_error_variant_fixtures(
                 &tx,
+                &fixture.name,
                 &fixture.selector,
                 fixture.aggregation_proof_type,
                 &fixture.consumed_nullifiers_b64,
@@ -2341,6 +2323,48 @@ mod tests {
                     .unwrap_or_else(|e| panic!("leaf {i} of {n}: {e}"));
             }
         }
+    }
+
+    /// A salted run names its fixtures apart from the unsalted set and from
+    /// every other salt, so their resources never share a nullifier.
+    #[test]
+    fn salt_sets_the_fixture_name_apart() {
+        let path = Path::new("tests/fixtures/batch_groth16.json");
+        assert_eq!(fixture_name(path, None).unwrap(), "batch_groth16");
+        assert_eq!(
+            fixture_name(path, Some("run1")).unwrap(),
+            "batch_groth16/run1"
+        );
+        assert_ne!(
+            fixture_nullifier(&fixture_name(path, Some("run1")).unwrap(), 0),
+            fixture_nullifier(&fixture_name(path, Some("run2")).unwrap(), 0),
+            "two salted runs must not share a nullifier"
+        );
+    }
+
+    /// Unsalted wraps sign the nonce asked for; a salted run's wraps land
+    /// together in a word the salt picks, so the run's first wrap finds no
+    /// bitmap and its later wraps reuse the first's.
+    #[test]
+    fn salt_moves_the_forwarder_nonce_to_its_own_word() {
+        let per_word = spl_token_forwarder::NONCES_PER_WORD;
+        assert_eq!(forwarder_nonce(None, 2), 2);
+        let (one, two) = (
+            forwarder_nonce(Some("run1"), 1),
+            forwarder_nonce(Some("run1"), 2),
+        );
+        assert_eq!(two, one + 1, "the run's nonces keep their offsets");
+        assert_eq!(
+            one / per_word,
+            two / per_word,
+            "a run's wraps share one word"
+        );
+        assert_eq!(one % per_word, 1, "the base is word-aligned");
+        assert_ne!(
+            forwarder_nonce(Some("run1"), 1) / per_word,
+            forwarder_nonce(Some("run2"), 1) / per_word,
+            "two runs use different words"
+        );
     }
 
     /// `--preceding-leaves` reads an indexer's hex commitments, with or

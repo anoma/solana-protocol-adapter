@@ -15,5 +15,9 @@ proptest-regressions/
 scripts/devnet-wallet.json
 scripts/devnet-test-wallet.json
 
-# Cache for downloaded devnet programs
+# Generated genesis accounts and cluster-run fixture sets
 .cache/
+
+# Fixtures the suite proves while it runs (tests/utils/fixtures.ts proveFixture)
+tests/fixtures/runtime/
+tests/fixtures/mock/runtime/

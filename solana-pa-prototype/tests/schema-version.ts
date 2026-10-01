@@ -98,11 +98,13 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
     });
 
     // txdata_close does not load pa_state, so the uploads close under the
-    // foreign version.
+    // foreign version. dev_set_schema_version accepts a foreign version, so
+    // the adapter returns to the version it had for every later file.
     after(async () => {
       for (const upload of keptUploads) {
         await closeTxData(upload);
       }
+      await setSchemaVersion(current);
     });
 
     // Each case is an instruction that loads pa_state; with a foreign version

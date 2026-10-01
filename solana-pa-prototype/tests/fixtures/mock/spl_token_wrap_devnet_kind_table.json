@@ -1,4 +1,5 @@
 {
+  "name": "spl_token_wrap_devnet_kind_table",
   "format": "arm-risc0:Transaction(bincode)",
   "aggregation_strategy": "batch",
   "aggregation_proof_type": "mock",

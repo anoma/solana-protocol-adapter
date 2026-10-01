@@ -118,7 +118,7 @@ case "${1:-}" in
     # Regenerate the COMPLETE fixture set for one proof mode, sequentially.
     shift
     ensure_lockfile_sync
-    run_in_project "./scripts/regen-fixtures.sh ${1:-}"
+    run_in_project "./scripts/regen-fixtures.sh $(printf '%q ' "$@")"
     ;;
 
   lock-sync)
@@ -251,7 +251,7 @@ PYEOF
     echo "               the programs already deployed there"
     echo "  gen-fixtures <shape> [options] OUT"
     echo "               Generate one fixture (gen-fixtures --help lists the shapes)"
-    echo "  regen-fixtures <real|mock>"
+    echo "  regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH]"
     echo "               Regenerate the complete fixture set for one proof mode"
     echo "               (sequential; real mode is hours of CPU proving)"
     echo "  fixture-test Run fixture-gen tests"

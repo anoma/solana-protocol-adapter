@@ -1,26 +1,28 @@
 /**
  * close_markers_batch: refused while the adapter is not paused, and on a paused
- * adapter it closes the markers and refunds their rent. The before hook
- * settles the primary fixture, leaving markers to close.
+ * adapter it closes the markers and refunds their rent. Closing every marker
+ * forgets every spent nullifier and retained root, so this runs among the
+ * suite's last files. The before hook settles the resubmitted fixture unless
+ * it is settled already, so there are markers to close.
  */
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { assert } from "chai";
 import { localCloseAllMarkers, localCloseMarkersBatch } from "./utils/localOnly";
 import { assertFails } from "./utils/helpers";
-import { provider, program, paState, pauseAsOwner, useAdapterSuite } from "./utils/adapterSuite";
+import { provider, program, paState, ensurePaused, useAdapterSuite } from "./utils/adapterSuite";
 
 // ── Close instruction tests ──────────────────────────────────────────────
 
 describe("protocol-adapter (Close instructions)", () => {
   const { funder, settleFixture } = useAdapterSuite();
 
-  before(() => settleFixture("batch_groth16.json"));
+  before(() => settleFixture("batch_groth16_resubmitted.json"));
 
   it("close_markers_batch fails when the PA is not paused", async () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.isFalse(state.paused, "the PA is not paused at the start of the test");
 
-    // The markers the before hook's settlement created
+    // The markers the deployment's settlements created
     const markers = await provider.connection.getProgramAccounts(program.programId, {
       filters: [{ dataSize: 0 }],
     });
@@ -37,7 +39,7 @@ describe("protocol-adapter (Close instructions)", () => {
   });
 
   describe("on a paused adapter", () => {
-    before(pauseAsOwner);
+    before(ensurePaused);
 
     it("close_markers_batch closes marker PDAs and refunds rent", async () => {
       const markersBefore = (
@@ -45,7 +47,7 @@ describe("protocol-adapter (Close instructions)", () => {
           filters: [{ dataSize: 0 }],
         })
       ).length;
-      assert.isAbove(markersBefore, 0, "the before hook's settlement leaves markers to close");
+      assert.isAbove(markersBefore, 0, "the deployment's settlements leave markers to close");
       const balanceBefore = await provider.connection.getBalance(provider.wallet.publicKey);
 
       assert.equal(

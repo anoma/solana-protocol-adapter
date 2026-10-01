@@ -1,11 +1,12 @@
 /**
  * Expired TxData: writes and settlement are rejected, anyone may close it,
  * and an extension must satisfy the bounds from the current slot. The
- * before hook lowers min_expiry_slots so uploads can expire within a test.
+ * before hook lowers min_expiry_slots so uploads can expire within a test,
+ * and the after hook restores the bounds the deployment held.
  */
 import * as anchor from "@anchor-lang/core";
 import { assert } from "chai";
-import { MAX_EXPIRY_SLOTS, MIN_ALLOWED_EXPIRY } from "../client/constants";
+import { MIN_ALLOWED_EXPIRY } from "../client/constants";
 import { waitForSlotPast, assertFails } from "./utils/helpers";
 import {
   provider,
@@ -23,10 +24,17 @@ import {
 describe("protocol-adapter (TxData expiration enforcement)", () => {
   const { funder, uploadTxData, initTxData } = useAdapterSuite();
 
+  let foundMin: number;
+  let foundMax: number;
   before(async () => {
+    const state = await program.account.paStateAccount.fetch(paState);
+    foundMin = state.minExpirySlots.toNumber();
+    foundMax = state.maxExpirySlots.toNumber();
     // Lower min_expiry_slots so we can create short-lived TxData
-    await setExpiryBounds(MIN_ALLOWED_EXPIRY, MAX_EXPIRY_SLOTS);
+    await setExpiryBounds(MIN_ALLOWED_EXPIRY, foundMax);
   });
+
+  after(() => setExpiryBounds(foundMin, foundMax));
 
   // On devnet, slots advance at ~2.5/s and tx confirmation takes seconds.
   // 30 slots gives enough room to init+write before expiration.
@@ -161,7 +169,7 @@ describe("protocol-adapter (TxData expiration enforcement)", () => {
     );
 
     const currentSlot = await provider.connection.getSlot("confirmed");
-    const tooLateExpiry = new anchor.BN(currentSlot + MAX_EXPIRY_SLOTS + 100_000);
+    const tooLateExpiry = new anchor.BN(currentSlot + foundMax + 100_000);
 
     await assertFails(
       program.methods

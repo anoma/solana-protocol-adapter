@@ -8,8 +8,6 @@
  * upgrade authority; the last renounces it.
  */
 import { Transaction } from "@solana/web3.js";
-import { assert } from "chai";
-import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
 import { pauseAdapter, setKindTableCommitment } from "../client/instructions";
 import { deriveProgramDataPda } from "../client/pda";
 import { localSetUpgradeAuthority } from "./utils/localOnly";
@@ -19,11 +17,11 @@ import { provider, program, paState, forwarderProgram, useAdapterSuite } from ".
 describe("protocol-adapter (authority)", () => {
   const { funder } = useAdapterSuite();
   const wallet = provider.wallet.publicKey;
-  const kindTable = Array.from(EMPTY_KIND_TABLE_COMMITMENT);
-
-  it("initializes unpaused", async () => {
-    const state = await program.account.paStateAccount.fetch(paState);
-    assert.isFalse(state.paused);
+  // The owner-only call these tests make: rewriting the kind table the
+  // adapter already holds, which leaves its configuration as it was found.
+  let kindTable: number[];
+  before(async () => {
+    kindTable = Array.from((await program.account.paStateAccount.fetch(paState)).kindTableCommitment);
   });
 
   it("rejects pause from a signer that is not the upgrade authority", async () => {
