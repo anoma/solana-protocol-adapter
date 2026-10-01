@@ -69,7 +69,7 @@ describe("forwarder emergency (adapter paused)", () => {
       .rpc();
 
   const setEmergencyCallerAsCommittee = (caller: PublicKey) =>
-    localSetEmergencyCaller(provider.connection, forwarderProgram, emergencyCommittee.publicKey, paState, caller)
+    localSetEmergencyCaller(forwarderProgram, emergencyCommittee.publicKey, paState, caller)
       .signers([emergencyCommittee])
       .rpc();
 

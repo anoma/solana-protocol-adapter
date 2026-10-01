@@ -8,7 +8,12 @@ import * as anchor from "@anchor-lang/core";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import { getAccount, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { assert } from "chai";
-import { closeAllNonceBitmaps, closeEscrow, closeConfig, closeNonceBitmapsBatch } from "../client/instructions";
+import {
+  localCloseAllNonceBitmaps,
+  localCloseConfig,
+  localCloseEscrow,
+  localCloseNonceBitmapsBatch,
+} from "./utils/localOnly";
 import { deriveConfigPda, deriveNonceBitmapPda } from "../client/pda";
 import { createFundedEscrow, makeFunder, randomRef, assertFails } from "./utils/helpers";
 import {
@@ -61,16 +66,16 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
   });
 
   const closeEscrowAs = (authority: Keypair, accounts = escrow) =>
-    closeEscrow(forwarderProgram, authority.publicKey, paState, accounts).signers([authority]).rpc();
+    localCloseEscrow(forwarderProgram, authority.publicKey, paState, accounts).signers([authority]).rpc();
 
   const closeConfigAs = (authority: Keypair) =>
-    closeConfig(forwarderProgram, authority.publicKey, paState).signers([authority]).rpc();
+    localCloseConfig(forwarderProgram, authority.publicKey, paState).signers([authority]).rpc();
 
   it("close_escrow rejects a non-committee authority", () =>
     assertFails(closeEscrowAs(impostor), { program: forwarderProgram, error: "UnauthorizedCaller" }));
 
   it("close_nonce_bitmaps_batch rejects a non-committee authority", () =>
-    assertFails(closeAllNonceBitmaps(forwarderProgram, impostor.publicKey, paState, [impostor]), {
+    assertFails(localCloseAllNonceBitmaps(forwarderProgram, impostor.publicKey, paState, [impostor]), {
       program: forwarderProgram,
       error: "UnauthorizedCaller",
     }));
@@ -81,7 +86,7 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
   it("close_nonce_bitmaps_batch rejects a program account that is not a bitmap", () =>
     // The config PDA is program-owned but is not a nonce bitmap.
     assertFails(
-      closeNonceBitmapsBatch(forwarderProgram, emergencyCommittee.publicKey, paState, [configPda])
+      localCloseNonceBitmapsBatch(forwarderProgram, emergencyCommittee.publicKey, paState, [configPda])
         .signers([emergencyCommittee])
         .rpc(),
       { program: forwarderProgram, error: "InvalidNonceBitmapPda" },
@@ -90,7 +95,7 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
   it("closes every nonce bitmap and refunds their rent", async () => {
     const committeeBefore = await provider.connection.getBalance(emergencyCommittee.publicKey);
 
-    const closed = await closeAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [
+    const closed = await localCloseAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [
       emergencyCommittee,
     ]);
 

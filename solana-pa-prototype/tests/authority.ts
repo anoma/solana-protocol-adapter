@@ -50,7 +50,11 @@ describe("protocol-adapter (authority)", () => {
   // the upgrade authority, at once.
   it("moves with the upgrade authority", async () => {
     const successor = await funder.fresh(1);
-    await provider.sendAndConfirm(new Transaction().add(localSetUpgradeAuthority(provider.connection, program.programId, wallet, successor.publicKey)));
+    await provider.sendAndConfirm(
+      new Transaction().add(
+        localSetUpgradeAuthority(provider.connection, program.programId, wallet, successor.publicKey),
+      ),
+    );
 
     await assertFails(setKindTableCommitment(program, wallet, kindTable).rpc(), {
       program,
@@ -59,14 +63,21 @@ describe("protocol-adapter (authority)", () => {
     });
     await setKindTableCommitment(program, successor.publicKey, kindTable).signers([successor]).rpc();
 
-    await provider.sendAndConfirm(new Transaction().add(localSetUpgradeAuthority(provider.connection, program.programId, successor.publicKey, wallet)), [successor]);
+    await provider.sendAndConfirm(
+      new Transaction().add(
+        localSetUpgradeAuthority(provider.connection, program.programId, successor.publicKey, wallet),
+      ),
+      [successor],
+    );
     await setKindTableCommitment(program, wallet, kindTable).rpc();
   });
 
   // Mirrors OwnableUpgradeable.renounceOwnership: with no upgrade authority
   // (the program final), every owner-only instruction is closed for good.
   it("is renounced with the upgrade authority", async () => {
-    await provider.sendAndConfirm(new Transaction().add(localSetUpgradeAuthority(provider.connection, program.programId, wallet, null)));
+    await provider.sendAndConfirm(
+      new Transaction().add(localSetUpgradeAuthority(provider.connection, program.programId, wallet, null)),
+    );
     await assertFails(setKindTableCommitment(program, wallet, kindTable).rpc(), {
       program,
       error: "Unauthorized",

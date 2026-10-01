@@ -7,8 +7,9 @@
  * pause the adapter, replace its kind table, or renounce the authority and
  * leave the program final for good. Run through ops.sh before any spec:
  *
- *   npx ts-node -P tsconfig.json scripts/cluster-test-guard.ts <wallet> <program id>...
+ *   npx ts-node -P tsconfig.json scripts/cluster-test-guard.ts <program id>...
  */
+import { AnchorProvider } from "@anchor-lang/core";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { deriveProgramDataPda } from "../client/pda";
 import { fail, parsePubkey } from "./cli-utils";
@@ -22,7 +23,9 @@ export async function upgradeAuthority(connection: Connection, programId: Public
   const programData = deriveProgramDataPda(programId);
   const account = await connection.getAccountInfo(programData);
   if (!account) {
-    throw new Error(`${programId.toBase58()} has no ProgramData (${programData.toBase58()}): not an upgradeable program`);
+    throw new Error(
+      `${programId.toBase58()} has no ProgramData (${programData.toBase58()}): not an upgradeable program`,
+    );
   }
   const kind = account.data.readUInt32LE(0);
   if (kind !== 3) {
@@ -54,13 +57,12 @@ export async function refuseUpgradeAuthorityWallet(
 }
 
 async function main() {
-  const [walletArg, ...programArgs] = process.argv.slice(2);
-  if (!walletArg || programArgs.length === 0) fail("usage: cluster-test-guard.ts <wallet> <program id>...");
-  const url = process.env.ANCHOR_PROVIDER_URL;
-  if (!url) fail("Missing ANCHOR_PROVIDER_URL: the cluster's RPC endpoint");
+  const programArgs = process.argv.slice(2);
+  if (programArgs.length === 0) fail("usage: cluster-test-guard.ts <program id>...");
+  const provider = AnchorProvider.env();
   await refuseUpgradeAuthorityWallet(
-    new Connection(url, "confirmed"),
-    parsePubkey("wallet", walletArg),
+    provider.connection,
+    provider.wallet.publicKey,
     programArgs.map((p) => parsePubkey("program id", p)),
   );
   console.log("✅ The test wallet owns none of the programs under test.");

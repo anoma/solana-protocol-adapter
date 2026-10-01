@@ -5,7 +5,7 @@
  * and send.
  */
 import { BN, Program } from "@anchor-lang/core";
-import { AccountMeta, Keypair, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { AccountMeta, PublicKey, SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { getVerifierEntryPda } from "./verifier";
@@ -233,75 +233,4 @@ export function emergencyWithdraw(
     .remainingAccounts(
       escrowTransferAccounts(accounts.escrowAta, accounts.recipientAta, deriveEscrowAuthority(forwarder.programId)),
     );
-}
-
-/**
- * `close_escrow` by `authority`, draining the escrow to `recipientAta`;
- * requires the adapter at `paState` to be paused. Callers add signers and send.
- */
-export function closeEscrow(
-  forwarder: Program<SplTokenForwarder>,
-  authority: PublicKey,
-  paState: PublicKey,
-  accounts: { mint: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey },
-) {
-  return forwarder.methods.closeEscrow().accounts({
-    authority,
-    escrowAta: accounts.escrowAta,
-    recipientAta: accounts.recipientAta,
-    tokenMint: accounts.mint,
-    paState,
-  });
-}
-
-/** `close_config` by the committee `authority`; requires the adapter at `paState` to be paused. */
-export function closeConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey, paState: PublicKey) {
-  return forwarder.methods.closeConfig().accounts({ authority, paState });
-}
-
-/** `close_nonce_bitmaps_batch` by the committee `authority` over `bitmaps`; requires the adapter at `paState` to be paused. */
-export function closeNonceBitmapsBatch(
-  forwarder: Program<SplTokenForwarder>,
-  authority: PublicKey,
-  paState: PublicKey,
-  bitmaps: PublicKey[],
-) {
-  return forwarder.methods
-    .closeNonceBitmapsBatch()
-    .accounts({ authority, paState })
-    .remainingAccounts(bitmaps.map((pubkey) => ({ pubkey, isWritable: true, isSigner: false })));
-}
-
-/**
- * Close every nonce bitmap the forwarder owns, in batches, as the committee
- * `authority` (signing with `signers`, or the provider wallet when empty);
- * requires the adapter at `paState` to be paused.
- * Returns how many were closed.
- */
-export async function closeAllNonceBitmaps(
-  forwarder: Program<SplTokenForwarder>,
-  authority: PublicKey,
-  paState: PublicKey,
-  signers: Keypair[],
-): Promise<number> {
-  const bitmaps = await forwarder.account.nonceBitmap.all();
-  const BATCH_SIZE = 20;
-  for (const batch of chunks(bitmaps, BATCH_SIZE)) {
-    await closeNonceBitmapsBatch(
-      forwarder,
-      authority,
-      paState,
-      batch.map(({ publicKey }) => publicKey),
-    )
-      .signers(signers)
-      .rpc();
-  }
-  return bitmaps.length;
-}
-
-/** `items` split, in order, into runs of at most `size`. */
-export function chunks<T>(items: readonly T[], size: number): T[][] {
-  const runs: T[][] = [];
-  for (let i = 0; i < items.length; i += size) runs.push(items.slice(i, i + size));
-  return runs;
 }

@@ -6,7 +6,7 @@ import * as anchor from "@anchor-lang/core";
 import { AccountMeta, PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { denyLogicRef, setKindTableCommitment } from "../client/instructions";
-import { closeMarkersBatch } from "../client/devTeardown";
+import { localCloseMarkersBatch } from "./utils/localOnly";
 import { loadFixture } from "./utils/fixtures";
 import { randomRef, assertFails } from "./utils/helpers";
 import {
@@ -167,7 +167,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       },
       {
         name: "close_markers_batch",
-        run: () => closeMarkersBatch(program, provider.wallet.publicKey, []).rpc(),
+        run: () => localCloseMarkersBatch(program, provider.wallet.publicKey, []).rpc(),
       },
       {
         name: "pause",

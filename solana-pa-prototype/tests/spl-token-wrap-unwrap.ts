@@ -18,9 +18,6 @@ import { assert } from "chai";
 import {
   escrowAccounts,
   escrowTransferAccounts,
-  closeAllNonceBitmaps,
-  closeConfig,
-  closeEscrow,
   setKindTableCommitment,
   forwarderSegmentHead,
   wrapTransferAccounts,
@@ -28,7 +25,12 @@ import {
 import { EMPTY_KIND_TABLE_COMMITMENT, NONCES_PER_WORD } from "../client/constants";
 import { deriveConfigPda, deriveNonceBitmapPda, nonceWordIndex } from "../client/pda";
 import { SOLANA_DEVNET_KIND_TABLE_COMMITMENT } from "./utils/constants";
-import { localSetEmergencyCaller } from "./utils/localOnly";
+import {
+  localCloseAllNonceBitmaps,
+  localCloseConfig,
+  localCloseEscrow,
+  localSetEmergencyCaller,
+} from "./utils/localOnly";
 import { requireFixture, createdCommitmentsOf as commitmentsOf, wrapAuthorizationIx } from "./utils/fixtures";
 import {
   approvedTokenAccount,
@@ -169,7 +171,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.isFalse(state.paused, "the adapter must not be paused here");
     await assertFails(
-      localSetEmergencyCaller(provider.connection, forwarderProgram, emergencyCommittee.publicKey, paState, Keypair.generate().publicKey)
+      localSetEmergencyCaller(forwarderProgram, emergencyCommittee.publicKey, paState, Keypair.generate().publicKey)
         .signers([emergencyCommittee])
         .rpc(),
       { program: forwarderProgram, error: "ProtocolAdapterNotPaused" },
@@ -493,7 +495,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("rejects close_escrow while the adapter is running", async () => {
     const before = await balances(escrowAta, recipientAta);
     await assertFails(
-      closeEscrow(forwarderProgram, emergencyCommittee.publicKey, paState, { mint, escrowAta, recipientAta })
+      localCloseEscrow(forwarderProgram, emergencyCommittee.publicKey, paState, { mint, escrowAta, recipientAta })
         .signers([emergencyCommittee])
         .rpc(),
       { program: forwarderProgram, error: "ProtocolAdapterNotPaused" },
@@ -504,14 +506,14 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("rejects close_nonce_bitmaps_batch while the adapter is running", async () => {
     assert.isNotEmpty(await forwarderProgram.account.nonceBitmap.all(), "the wraps above created nonce bitmaps");
     await assertFails(
-      closeAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [emergencyCommittee]),
+      localCloseAllNonceBitmaps(forwarderProgram, emergencyCommittee.publicKey, paState, [emergencyCommittee]),
       { program: forwarderProgram, error: "ProtocolAdapterNotPaused" },
     );
   });
 
   it("rejects close_config while the adapter is running", () =>
     assertFails(
-      closeConfig(forwarderProgram, emergencyCommittee.publicKey, paState).signers([emergencyCommittee]).rpc(),
+      localCloseConfig(forwarderProgram, emergencyCommittee.publicKey, paState).signers([emergencyCommittee]).rpc(),
       { program: forwarderProgram, error: "ProtocolAdapterNotPaused" },
     ));
 

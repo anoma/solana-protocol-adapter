@@ -14,22 +14,17 @@
  *                                     rotate the config's logic ref to
  *                                     STF_LOGIC_REF, once; escrow, nonce
  *                                     bitmaps and the committee are untouched.
- *   close-config          (committee) Close only the config PDA (retirement).
- *                                     Requires the adapter to be paused.
  *   emergency-withdraw    (caller)    Move STF_AMOUNT of STF_TOKEN_MINT from
  *                                     escrow to STF_RECIPIENT.
- *   drain-escrow          (committee) Drain STF_TOKEN_MINT's escrow to
- *                                     STF_RECIPIENT and close the escrow ATA.
- *                                     Requires the adapter to be paused.
- *   teardown              (committee) Close every nonce bitmap, drain and
- *                                     close STF_TOKEN_MINT's escrow to the
- *                                     committee, close the config. Requires
- *                                     the adapter to be paused.
  *   migrate               (upgrade    After upgrading the program in place
  *                          authority) from its previous build: migrate the
  *                                     config, every nonce bitmap still in the
  *                                     previous layout, and each
  *                                     STF_TOKEN_MINTS escrow. Idempotent.
+ *
+ * Closing escrows, nonce bitmaps or the config, and naming the emergency
+ * caller, are not commands: on a live cluster they are done by hand
+ * (docs/OPERATIONS.md).
  *
  * The program enforces who may do what and when; a refused command fails
  * with the program's error (UnauthorizedCaller, ProtocolAdapterNotPaused,
@@ -39,10 +34,10 @@
  *   STF_LOGIC_REF           32-byte hex: the resource logic the config
  *                           authorizes (init, reinitialize)
  *   STF_EMERGENCY_COMMITTEE base58 pubkey (init)
- *   STF_TOKEN_MINT          base58 mint (init optional; emergency-withdraw,
- *                           drain-escrow, teardown required)
+ *   STF_TOKEN_MINT          base58 mint (init optional; emergency-withdraw
+ *                           required)
  *   STF_RECIPIENT           base58 owner of the receiving token account
- *                           (emergency-withdraw, drain-escrow)
+ *                           (emergency-withdraw)
  *   STF_AMOUNT              raw token units (emergency-withdraw)
  *   STF_TOKEN_MINTS         comma-separated base58 mints whose previous-build
  *                           escrow to move (migrate)
@@ -54,9 +49,6 @@ import { getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
-  closeAllNonceBitmaps,
-  closeConfig,
-  closeEscrow,
   emergencyWithdraw,
   escrowAccounts,
   initializeForwarder,
@@ -89,20 +81,6 @@ async function requireConfig() {
 
 async function recipientAtaFor(mint: PublicKey, owner: PublicKey): Promise<PublicKey> {
   return (await getOrCreateAssociatedTokenAccount(connection, wallet.payer, mint, owner)).address;
-}
-
-/** Drain a mint's escrow to `recipientOwner` and close the escrow ATA, as the committee. */
-async function closeEscrowFor(mint: PublicKey, recipientOwner: PublicKey) {
-  const { escrowAta } = escrowAccounts(forwarder.programId, mint);
-  if ((await connection.getAccountInfo(escrowAta)) === null) {
-    fail(`escrow ATA ${escrowAta.toBase58()} does not exist; nothing to drain`);
-  }
-  const balance = await connection.getTokenAccountBalance(escrowAta);
-  const recipientAta = await recipientAtaFor(mint, recipientOwner);
-  await closeEscrow(forwarder, wallet.publicKey, paState, { mint, escrowAta, recipientAta }).rpc();
-  console.log(
-    `✅ Drained ${balance.value.uiAmountString} of ${mint.toBase58()} to ${recipientAta.toBase58()} and closed the escrow ATA`,
-  );
 }
 
 async function init() {
@@ -151,12 +129,6 @@ async function init() {
   }
 }
 
-async function closeConfigCommand() {
-  await requireConfig();
-  await closeConfig(forwarder, wallet.publicKey, paState).rpc();
-  console.log(`✅ Config ${configPda.toBase58()} closed`);
-}
-
 async function reinitializeCommand() {
   const logicRef = requireHexBytes(
     "STF_LOGIC_REF",
@@ -188,30 +160,6 @@ async function withdraw() {
     { escrowAta, recipientAta },
   ).rpc();
   console.log(`✅ Withdrew ${amount} raw units of ${mint.toBase58()} to ${recipientAta.toBase58()}`);
-}
-
-async function drainEscrow() {
-  const mint = requireMint();
-  const recipient = requireRecipient();
-  await requireConfig();
-  await closeEscrowFor(mint, recipient);
-}
-
-async function teardown() {
-  const mint = requireMint();
-  await requireConfig();
-
-  const closed = await closeAllNonceBitmaps(forwarder, wallet.publicKey, paState, []);
-  console.log(`Closed ${closed} nonce bitmap(s)`);
-
-  const { escrowAta } = escrowAccounts(forwarder.programId, mint);
-  if (await connection.getAccountInfo(escrowAta)) {
-    await closeEscrowFor(mint, wallet.publicKey);
-  } else {
-    console.log(`Escrow ATA ${escrowAta.toBase58()} does not exist; skipping`);
-  }
-
-  await closeConfigCommand();
 }
 
 const instructionCoder = new anchor.BorshInstructionCoder(forwarder.idl);
@@ -304,10 +252,7 @@ async function migrate() {
 const COMMANDS: Record<string, () => Promise<void>> = {
   init,
   reinitialize: reinitializeCommand,
-  "close-config": closeConfigCommand,
   "emergency-withdraw": withdraw,
-  "drain-escrow": drainEscrow,
-  teardown,
   migrate,
 };
 
