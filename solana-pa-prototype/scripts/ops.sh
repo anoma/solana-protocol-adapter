@@ -80,7 +80,9 @@ Commands:
                          programs loaded at genesis, and keep it running
 
 Flags:
-  --cluster <c>    Target cluster (required except test/build-dev/build-release/clippy)
+  --cluster <c>    Target cluster (required except test/build-dev/build-release/
+                   clippy/sync-ids/validator/validator-deploy; optional for
+                   verify-build)
   --wallet <path>  Wallet keypair. Defaults: devnet → scripts/devnet-wallet.json,
                    localnet → ~/.config/solana/id.json, mainnet → none (required).
                    The wallet must exist; nothing is auto-generated.
@@ -89,7 +91,9 @@ Flags:
   --dev-teardown   deploy/upgrade: build with the dev-teardown feature
                    (close_markers_batch enabled). Refused on mainnet.
   --prebuilt       deploy/upgrade: ship the existing target/deploy artifacts
-                   without rebuilding (for verify-build output)
+                   without rebuilding (for verify-build output); test: run the
+                   cluster-safe subset against the programs already deployed
+                   (a running local validator included)
   --mode <m>       test: real (default) runs the suite against Groth16
                    fixtures and the devnet-cloned verifier; mock runs it
                    against mock fixtures and the localnet mock verifier.

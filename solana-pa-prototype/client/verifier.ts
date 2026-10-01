@@ -1,5 +1,5 @@
-// RISC0 verifier infrastructure deployed on devnet,
-// cloned to localnet via Anchor.toml [test.validator.clone].
+// RISC0 verifier infrastructure deployed on devnet, copied into each local
+// validator's genesis (validator-deploy.sh: fetch_devnet_clones, start_validator).
 
 import { PublicKey } from "@solana/web3.js";
 

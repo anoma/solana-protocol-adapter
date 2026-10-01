@@ -43,7 +43,7 @@ pub struct Unwrapped {
     pub amount: u64,
 }
 
-/// Mirrors EVM: `event EmergencyCallerSet(address caller);`
+/// The EVM V1 forwarder's `event EmergencyCallerSet(address caller);` (V1 emergency mechanism, anoma/dos-pm#86).
 #[event]
 pub struct EmergencyCallerSet {
     pub emergency_caller: Pubkey,
@@ -86,7 +86,8 @@ pub mod spl_token_forwarder {
 
     /// Initialize the forwarder config with emergency committee.
     ///
-    /// Mirrors the EVM constructor validation: no zero adapter, logic ref, or committee.
+    /// As the EVM V2 forwarder's initializer: no zero adapter or logic ref.
+    /// The committee, which has no V2 counterpart, must also be nonzero.
     pub fn initialize(
         ctx: Context<Initialize>,
         protocol_adapter: Pubkey,
@@ -118,7 +119,7 @@ pub mod spl_token_forwarder {
     /// Rotate the logic ref, once per build that raises CONFIG_VERSION.
     /// Mirrors the EVM forwarder's rotation: the owner upgrades the proxy to
     /// an implementation whose `reinitializer(n)` writes the new ref
-    /// (`upgradeToAndCall`), and escrow, nonces and the committee stay. Here
+    /// (`upgradeToAndCall`), and escrow and nonces stay. Here
     /// the upgrade authority upgrades the program in place and then calls
     /// this; it runs only while the config's version is below this build's.
     /// Resources under the previous ref leave through the new one once the
@@ -267,7 +268,7 @@ pub mod spl_token_forwarder {
 
     /// Forward a wrap or unwrap call from the Protocol Adapter.
     ///
-    /// Like EVM's ForwarderBase.forwardCall(), this does not check the
+    /// Like the EVM V2 `ForwarderBaseUpgradeable.forwardCall()`, this does not check the
     /// adapter's stopped state: the adapter does not call forwarders once stopped.
     pub fn forward_call<'info>(
         ctx: Context<'info, ForwardCall<'info>>,
@@ -281,7 +282,7 @@ pub mod spl_token_forwarder {
         // descends from. That program is the immediate caller only when this
         // call runs one level below it; deeper, another program invoked us.
         // Together the two checks are the analogue of EVM's
-        // msg.sender == _PROTOCOL_ADAPTER.
+        // msg.sender == $._protocolAdapter.
         require!(
             get_stack_height() == TRANSACTION_LEVEL_STACK_HEIGHT + 1,
             ErrorCode::UnauthorizedCaller
@@ -313,7 +314,8 @@ pub mod spl_token_forwarder {
     }
 
     /// Withdraw from escrow while the adapter is stopped, as the emergency
-    /// caller. The operand is an `UnwrapInput`. Mirrors EVM's forwardEmergencyCall().
+    /// caller. The operand is an `UnwrapInput`. The EVM V1 forwarder's
+    /// forwardEmergencyCall(); V2 has no emergency path (anoma/dos-pm#86).
     pub fn forward_emergency_call(
         ctx: Context<ForwardEmergencyCall>,
         input: Vec<u8>,
@@ -351,7 +353,8 @@ pub mod spl_token_forwarder {
     }
 
     /// Set the emergency caller, once, by the committee while the adapter
-    /// is stopped. Mirrors EVM's setEmergencyCaller().
+    /// is stopped. The EVM V1 forwarder's setEmergencyCaller(); V2 has no
+    /// emergency path (anoma/dos-pm#86).
     pub fn set_emergency_caller(
         ctx: Context<SetEmergencyCaller>,
         new_emergency_caller: Pubkey,
@@ -510,7 +513,7 @@ fn require_token_account(token_account: &AccountInfo, mint: &Pubkey, owner: &Pub
 }
 
 /// Every committee and emergency-caller instruction requires the adapter to
-/// be stopped. Mirrors EVM's _checkEmergencyStopped(): the state account's
+/// be stopped, as the EVM V1 forwarder's _checkEmergencyStopped() did: the state account's
 /// address derives from the configured adapter, and the lifecycle is read
 /// through the adapter's type.
 fn require_stopped_adapter(config: &Config, pa_state: &AccountInfo) -> Result<()> {

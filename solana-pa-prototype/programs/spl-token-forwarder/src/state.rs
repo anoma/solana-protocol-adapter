@@ -8,7 +8,10 @@ use protocol_adapter::state::{PALifecycle, PAStateAccount, PA_STATE_SEED};
 
 /// Configuration account for the forwarder.
 ///
-/// Mirrors EVM's ForwarderBase + EmergencyMigratableForwarderBase state.
+/// The adapter and logic ref mirror the EVM V2 forwarder's
+/// `ForwarderBaseUpgradeable` state, and `version` its `Initializable`
+/// version. The emergency committee and caller are the EVM V1 forwarder's
+/// emergency mechanism, which V2 dropped (anoma/dos-pm#86).
 #[account]
 #[derive(InitSpace)]
 pub struct Config {

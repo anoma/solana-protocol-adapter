@@ -51,7 +51,7 @@ pub enum PAError {
     // External call errors
     #[msg("Invalid external call blob encoding")]
     InvalidExternalCallBlob,
-    #[msg("Forwarder is not registered")]
+    #[msg("Forwarder account does not match the program the external call names")]
     UnregisteredForwarder,
     #[msg("External call output verification failed")]
     ExternalCallOutputMismatch,
@@ -115,7 +115,7 @@ pub enum PAError {
     // State layout
     #[msg("PAState schema version is not the one this program binary reads; migrate the account first")]
     UnsupportedStateSchema,
-    #[msg("PAState is not in the previous schema version - it was migrated already")]
+    #[msg("PAState is not a state account in the previous schema version")]
     NotPreviousSchema,
 
     // Logic-ref denylist

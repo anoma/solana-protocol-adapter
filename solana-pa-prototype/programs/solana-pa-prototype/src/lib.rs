@@ -380,16 +380,16 @@ pub mod protocol_adapter {
     ///
     /// There is no resume instruction: `Running` is set only at initialization
     /// and this is the only transition out of it. Recovery from a stop is
-    /// migration to a new deployment, matching the EVM adapter, which has no
-    /// unpause and whose contract is not upgradeable.
+    /// migration to a new deployment. pa-evm V2 differs: its owner's `pause()`
+    /// is undone by `unpause()` (anoma/dos-pm#86 tracks the difference).
     ///
-    /// Solana programs are upgradeable, so the runtime does not enforce
-    /// terminality the way EVM immutability does — that boundary is
-    /// operational, not on-chain. `close_markers_batch` exists only in
+    /// Terminality is a property of this program's code, not of the runtime:
+    /// the upgrade authority could deploy code that resumes, as a UUPS
+    /// upgrade could on EVM. `close_markers_batch` exists only in
     /// `dev-teardown` builds (never present in production) to reclaim marker
     /// rent so a *development* deployment can be re-initialized in place; it
-    /// has no production counterpart. Reclaiming marker rent has no
-    /// dependency on the upgrade authority.
+    /// has no production counterpart, and it too requires the upgrade
+    /// authority.
     ///
     /// A production shutdown of this deployment is a separate, later step:
     /// setting `program_data.upgrade_authority_address` to `None` makes the
@@ -397,7 +397,7 @@ pub mod protocol_adapter {
     /// because `initialize` requires
     /// `program_data.upgrade_authority_address == Some(payer.key())` — once
     /// the authority is `None`, this program ID can never be initialized
-    /// again, even after `close-pa-state`.
+    /// again.
     pub fn emergency_stop(ctx: Context<EmergencyStop>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         require!(

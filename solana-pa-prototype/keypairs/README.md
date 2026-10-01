@@ -1,32 +1,17 @@
-# Test Keypairs
+# Program Keypairs
 
-These keypairs are for **LOCAL TESTING ONLY** and ensure consistent program IDs across CI runs and fixture generation.
+The program keypairs under `../target/deploy/` are committed so that every checkout builds the same program IDs: local tests, CI, fixture generation (fixtures embed program IDs), and the devnet deployments recorded in `docs/DEVNET_DEPLOYMENT.md`.
+
+- `protocol_adapter-keypair.json`
+- `spl_token_forwarder-keypair.json`
+- `block_time_forwarder-keypair.json`
+- `mock_verifier-keypair.json` (localnet only)
+- `test_forwarder-keypair.json` (localnet only)
 
 ## Security Notice
 
-These private keys are intentionally committed to the repository for test reproducibility. They must **NEVER** be used for mainnet or devnet deployments.
+These private keys are public. Anyone can deploy a program to one of these IDs on a cluster where it is not yet deployed, so never use them for mainnet: a mainnet deployment uses keypairs generated for it and kept out of version control. Program keypairs only claim an ID at first deploy; after that, the program's upgrade authority, not the program keypair, controls it.
 
 ## Verifier Programs
 
-The RISC0 verifier programs (router, groth16 verifier) are **downloaded from devnet** at test time rather than built from source. This ensures:
-1. Tests use the exact same binaries as production
-2. No need to maintain a submodule dependency
-3. Faster CI builds (no verifier compilation)
-
-See `scripts/download-devnet-verifiers.sh` for the download script.
-
-## Protocol Adapter Keypairs
-
-Located in `../target/deploy/`:
-- `solana_pa_prototype-keypair.json`
-- `block_time_forwarder-keypair.json`
-- `spl_token_forwarder-keypair.json`
-
-**Production:** Generate fresh keypairs at deployment time. Do not commit production keypairs to version control.
-
-## Why Commit Test Keypairs?
-
-Program IDs are derived from keypairs. Test fixtures reference specific program IDs, so consistent keypairs ensure:
-1. Fixtures remain valid across CI runs
-2. No 30+ minute fixture regeneration in CI
-3. Deterministic test environments
+The RISC0 verifier programs (router, Groth16 verifier) are copied from devnet rather than built here, so tests run the deployed binaries: `fetch_devnet_clones` in `scripts/validator-deploy.sh` downloads them, and `start_validator` loads them at genesis.

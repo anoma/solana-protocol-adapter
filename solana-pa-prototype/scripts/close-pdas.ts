@@ -1,5 +1,6 @@
 /**
- * Close all PDA accounts owned by the PA program, reclaiming rent to the authority.
+ * Close every marker PDA (nullifier and root markers) the PA program owns,
+ * reclaiming their rent to the signing wallet, the program's upgrade authority.
  *
  * Usage:
  *   ANCHOR_PROVIDER_URL=https://api.devnet.solana.com \
@@ -14,9 +15,7 @@
  * close it. Closing it would allow re-initialization, and because the PA state
  * PDA derives from a fixed seed, a re-initialized adapter reuses the same marker
  * addresses — so previously closed nullifier markers would become spendable
- * again. `close_pa_state` was removed for exactly this reason (commit deefa91,
- * "remove close_pa_state ... preventing the reinit bypass"). Its rent is left
- * unrecovered on purpose.
+ * again. Its rent is left unrecovered on purpose.
  */
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
