@@ -93,4 +93,7 @@ pub enum ErrorCode {
 
     #[msg("Unwrap recipient is the escrow authority - the tokens would never leave escrow")]
     UnwrapToEscrow,
+
+    #[msg("The config is already at this build's CONFIG_VERSION - rotating the logic ref takes a build that raises it")]
+    InvalidInitialization,
 }

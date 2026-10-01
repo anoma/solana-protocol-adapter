@@ -174,17 +174,18 @@ export function initializeForwarder(
 }
 
 /**
- * Rotate the forwarder config's logic ref in place. `authority` must be the
- * program's upgrade authority; `programData` is the forwarder's own
- * ProgramData unless a test substitutes another program's.
+ * Rotate the forwarder config's logic ref, once per build that raises
+ * CONFIG_VERSION, after upgrading the program to that build. `authority`
+ * must be the program's upgrade authority; `programData` is the forwarder's
+ * own ProgramData unless a test substitutes another program's.
  */
-export function setLogicRef(
+export function reinitializeForwarder(
   forwarder: Program<SplTokenForwarder>,
   authority: PublicKey,
   logicRef: number[],
   programData: PublicKey = deriveProgramDataPda(forwarder.programId),
 ) {
-  return forwarder.methods.setLogicRef(logicRef).accounts({ authority, programData });
+  return forwarder.methods.reinitialize(logicRef).accounts({ authority, programData });
 }
 
 /**

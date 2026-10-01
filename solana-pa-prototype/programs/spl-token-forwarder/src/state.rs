@@ -20,12 +20,22 @@ pub struct Config {
     pub emergency_committee: Pubkey,
     /// Emergency caller set by committee (zero = not set)
     pub emergency_caller: Pubkey,
+    /// The version the config was last initialized at, as OpenZeppelin
+    /// Initializable's `_initialized`: `initialize` records CONFIG_VERSION,
+    /// and `reinitialize` raises it to CONFIG_VERSION once.
+    pub version: u64,
 }
 
 impl Config {
     /// The account's size: the discriminator and the fields.
     pub const ACCOUNT_SIZE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
 }
+
+/// The config version this build initializes to and reinitializes to, as
+/// the `n` of an OpenZeppelin `reinitializer(n)`. A build that rotates the
+/// logic ref raises it by one, so its `reinitialize` runs once.
+#[constant]
+pub const CONFIG_VERSION: u64 = 2;
 
 /// Whether the Protocol Adapter is emergency stopped, read from its state
 /// account through the adapter's own account type. Data that is not a PA
@@ -116,10 +126,11 @@ impl NonceBitmap {
     }
 }
 
-/// Size of a config the previous build created: this build's fields, then
-/// the config's bump, which this build derives at compile time (CONFIG_PDA).
+/// Size of a config the previous build created: the discriminator, the
+/// four 32-byte fields, then the config's bump, which this build derives at
+/// compile time (CONFIG_PDA), and no version.
 #[constant]
-pub const PREVIOUS_CONFIG_SIZE: u64 = (Config::ACCOUNT_SIZE + 1) as u64;
+pub const PREVIOUS_CONFIG_SIZE: u64 = (Config::DISCRIMINATOR.len() + 4 * 32 + 1) as u64;
 /// Size of a nonce bitmap the previous build created: the word, without the
 /// bump this build stores.
 #[constant]

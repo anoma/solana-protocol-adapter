@@ -192,13 +192,14 @@ A wrap's replay protection is a per-user, per-256-nonce-word bitmap account. The
 
 ### Rotating the logic ref
 
-The logic ref changes whenever the resource circuit is rebuilt. The upgrade authority rotates it in place, as the EVM forwarder's owner does through its upgrade path:
+The logic ref changes whenever the resource circuit is rebuilt. It is rotated as the EVM forwarder's is: the owner upgrades the proxy to an implementation whose `reinitializer(n)` writes the new ref. The forwarder's config records the version it was last initialized at; `reinitialize` writes the new ref only while that version is below the build's `CONFIG_VERSION`, and then records it, so each build rotates once. To rotate, raise `CONFIG_VERSION` by one in a new build, upgrade the program in place, and reinitialize with the upgrade-authority wallet:
 
 ```sh
-STF_LOGIC_REF=<new 32-byte hex verifying key> ./scripts/dev.sh forwarder set-logic-ref --cluster <c>   # upgrade-authority wallet
+./scripts/dev.sh upgrade stf --cluster <c>                                                             # upgrade-authority wallet
+STF_LOGIC_REF=<new 32-byte hex verifying key> ./scripts/dev.sh forwarder reinitialize --cluster <c>   # upgrade-authority wallet
 ```
 
-Escrow, nonce bitmaps and the committee are untouched. As on EVM, where the rotation emits only the proxy's `Upgraded` and `Initialized`, the instruction emits no event of its own; read the new ref from the config account. Resources wrapped under the previous ref leave through the new one once the adapter's kind table lists the previous version as an alias of the new one (anoma/risc0-kind-tables ADR-0008, rule R2): a transaction converts each into a resource under the new ref, which then unwraps. Until that table's commitment is installed (`set-kind-table`), they stay in escrow and can neither unwrap nor convert. The emergency path below is for a stopped adapter only.
+Escrow, nonce bitmaps and the committee are untouched. The instruction emits `Initialized` with the new version, as OpenZeppelin's reinitializer does; read the new ref from the config account. Resources wrapped under the previous ref leave through the new one once the adapter's kind table lists the previous version as an alias of the new one (anoma/risc0-kind-tables ADR-0008, rule R2): a transaction converts each into a resource under the new ref, which then unwraps. Until that table's commitment is installed (`set-kind-table`), they stay in escrow and can neither unwrap nor convert. The emergency path below is for a stopped adapter only.
 
 ### Upgrading the forwarder
 
@@ -211,7 +212,7 @@ STF_TOKEN_MINTS=<mint>[,<mint>...] ./scripts/dev.sh forwarder migrate --cluster 
 
 This build's migrations bring the previous build's accounts to its layout:
 
-- The config drops the bump the previous build stored after its fields; this build derives the config address at compile time.
+- The config drops the bump the previous build stored after its fields (this build derives the config address at compile time) and records version 1, so this build's `reinitialize` can rotate its logic ref once.
 - Each nonce bitmap keeps its bits and gains its canonical bump. The command finds every bitmap still in the previous layout by itself, reading its user and word from the `init_nonce_bitmap` that created it.
 - Each listed mint's escrow moves from that mint's own authority (`["escrow", mint]`) to the one escrow authority, and the previous escrow account closes. The mints must be listed: escrow token accounts belong to the token program, not the forwarder, so the forwarder cannot enumerate them.
 

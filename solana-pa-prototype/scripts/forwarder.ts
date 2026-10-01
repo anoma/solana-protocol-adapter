@@ -9,8 +9,10 @@
  *                          authority) STF_TOKEN_MINT, the mint's escrow ATA.
  *                                     Idempotent; refuses an existing config
  *                                     that differs from the request.
- *   set-logic-ref         (upgrade    Rotate the config's logic ref to
- *                          authority) STF_LOGIC_REF in place; escrow, nonce
+ *   reinitialize          (upgrade    After upgrading the program to a
+ *                          authority) build that raises CONFIG_VERSION:
+ *                                     rotate the config's logic ref to
+ *                                     STF_LOGIC_REF, once; escrow, nonce
  *                                     bitmaps and the committee are untouched.
  *   close-config          (committee) Close only the config PDA (retirement).
  *                                     Requires the adapter to be stopped.
@@ -37,7 +39,7 @@
  *
  * Environment (read per command):
  *   STF_LOGIC_REF           32-byte hex: the resource logic the config
- *                           authorizes (init, set-logic-ref)
+ *                           authorizes (init, reinitialize)
  *   STF_EMERGENCY_COMMITTEE base58 pubkey (init)
  *   STF_TOKEN_MINT          base58 mint (init optional; emergency-withdraw,
  *                           drain-escrow, teardown required)
@@ -66,7 +68,7 @@ import {
   migrateNonceBitmap,
   previousEscrowAccounts,
   setEmergencyCaller,
-  setLogicRef,
+  reinitializeForwarder,
 } from "../client/instructions";
 import { PREVIOUS_CONFIG_SIZE, PREVIOUS_NONCE_BITMAP_SIZE } from "../client/constants";
 import { deriveConfigPda, deriveNonceBitmapPda, derivePaStatePda } from "../client/pda";
@@ -159,7 +161,7 @@ async function closeConfigCommand() {
   console.log(`✅ Config ${configPda.toBase58()} closed`);
 }
 
-async function setLogicRefCommand() {
+async function reinitializeCommand() {
   const logicRef = requireHexBytes(
     "STF_LOGIC_REF",
     32,
@@ -167,8 +169,11 @@ async function setLogicRefCommand() {
   );
   const existing = await requireConfig();
   const previous = Buffer.from(existing.logicRef).toString("hex");
-  await setLogicRef(forwarder, wallet.publicKey, logicRef).rpc();
-  console.log(`✅ Logic ref rotated: ${previous} -> ${Buffer.from(logicRef).toString("hex")}`);
+  await reinitializeForwarder(forwarder, wallet.publicKey, logicRef).rpc();
+  const config = await requireConfig();
+  console.log(
+    `✅ Logic ref rotated: ${previous} -> ${Buffer.from(config.logicRef).toString("hex")} (config version ${config.version})`,
+  );
 }
 
 async function setEmergencyCallerCommand() {
@@ -309,7 +314,7 @@ async function migrate() {
 
 const COMMANDS: Record<string, () => Promise<void>> = {
   init,
-  "set-logic-ref": setLogicRefCommand,
+  reinitialize: reinitializeCommand,
   "close-config": closeConfigCommand,
   "set-emergency-caller": setEmergencyCallerCommand,
   "emergency-withdraw": withdraw,

@@ -4,7 +4,7 @@
  * (tests/fixtures/previous/spl_token_forwarder.so, the build deployed on
  * devnet), a wrap settles through it, the program is upgraded to this build,
  * and the custody and replay protection the previous build recorded keep
- * working.
+ * working; then this build's reinitialize rotates the logic ref, once.
  */
 import * as anchor from "@anchor-lang/core";
 import { execFileSync } from "child_process";
@@ -19,12 +19,13 @@ import {
   migrateNonceBitmap,
   previousEscrowAccounts,
   forwarderSegmentHead,
+  reinitializeForwarder,
   wrapTransferAccounts,
 } from "../client/instructions";
-import { NONCES_PER_WORD, PREVIOUS_NONCE_BITMAP_SIZE } from "../client/constants";
+import { CONFIG_VERSION, NONCES_PER_WORD, PREVIOUS_NONCE_BITMAP_SIZE } from "../client/constants";
 import { deriveConfigPda, deriveNonceBitmapPda, nonceWordIndex } from "../client/pda";
 import { requireFixture, wrapAuthorizationIx } from "./utils/fixtures";
-import { makeFunder, seededKeypair, assertFails } from "./utils/helpers";
+import { confirmedTransaction, makeFunder, randomRef, seededKeypair, assertFails } from "./utils/helpers";
 import { provider, program, forwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
 
 describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
@@ -193,11 +194,14 @@ describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
     });
   });
 
-  it("keeps the config at the size initialize creates", async () => {
+  // The previous build initialized its config once and had no
+  // reinitializer, so the migrated config is at version 1.
+  it("brings the config to the size initialize creates, at version 1", async () => {
     const config = await provider.connection.getAccountInfo(configPda);
-    assert.equal(config!.data.length, 8 + 4 * 32, "discriminator and four 32-byte fields");
+    assert.equal(config!.data.length, 8 + 4 * 32 + 8, "discriminator, four 32-byte fields and the version");
     const decoded = await forwarderProgram.account.config.fetch(configPda);
     assert.deepEqual(Array.from(decoded.logicRef), Array.from(Buffer.from(wrap.logic_ref_b64, "base64")));
+    assert.equal(decoded.version.toNumber(), 1);
   });
 
   it("keeps the previous build's nonce bitmap: the wrap's nonce stays used", async () => {
@@ -225,5 +229,57 @@ describe("protocol-adapter (SPL token forwarder upgraded in place)", () => {
       [],
     );
     assert.equal(await balance(recipientAta), recipientBefore + unwrapAmount, "the recipient receives the tokens");
+  });
+
+  // The EVM forwarder's rotation: the owner upgrades the proxy to an
+  // implementation whose reinitializer(n) writes the new logic ref. This
+  // build's CONFIG_VERSION is above the migrated config's, so its
+  // reinitialize runs once.
+  describe("rotating the logic ref with this build's reinitialize", () => {
+    const rotated = randomRef();
+    const reinitialize = (ref: number[]) =>
+      reinitializeForwarder(forwarderProgram, provider.wallet.publicKey, ref).rpc();
+
+    it("rejects a zero logic ref", () =>
+      assertFails(reinitialize(Array(32).fill(0)), { program: forwarderProgram, error: "ZeroAddressNotAllowed" }));
+
+    it("rotates the logic ref once, raising the version and leaving the rest of the config untouched", async () => {
+      const before = await forwarderProgram.account.config.fetch(configPda);
+
+      const sig = await reinitialize(rotated);
+
+      const after = await forwarderProgram.account.config.fetch(configPda);
+      assert.deepEqual(after.logicRef, rotated, "the new logic ref is stored");
+      assert.equal(after.version.toNumber(), CONFIG_VERSION, "the config is at this build's version");
+      assert.ok(after.protocolAdapter.equals(before.protocolAdapter), "the adapter is untouched");
+      assert.ok(after.emergencyCommittee.equals(before.emergencyCommittee), "the committee is untouched");
+      assert.ok(after.emergencyCaller.equals(before.emergencyCaller), "the emergency caller is untouched");
+      assert.equal(await balance(escrowAta), wrapAmount - unwrapAmount, "the escrow is untouched");
+
+      const tx = await confirmedTransaction(provider.connection, sig);
+      const parser = new anchor.EventParser(forwarderId, forwarderProgram.coder);
+      const events = [...parser.parseLogs(tx.meta!.logMessages!)];
+      assert.deepEqual(
+        events.map((e) => [e.name, e.data.version.toNumber()]),
+        [["initialized", CONFIG_VERSION]],
+        "OpenZeppelin's reinitializer announces the version",
+      );
+    });
+
+    it("rejects a second rotation in the same build", async () => {
+      await assertFails(reinitialize(randomRef()), { program: forwarderProgram, error: "InvalidInitialization" });
+      assert.deepEqual((await forwarderProgram.account.config.fetch(configPda)).logicRef, rotated);
+    });
+
+    // Mirrors ForwarderBase.t.sol: test_forwardCall_reverts_if_the_logic_ref_is_wrong.
+    // A wrap proven under the ref the config rotated away from is rejected
+    // before any of its input is read.
+    it("rejects a wrap proven under the previous logic ref", () =>
+      assertFails(
+        settleForwarderFixture(wrapReplayFixture, wrapSegment(escrowAuthority, escrowAta), [
+          wrapAuthorizationIx(user.publicKey, wrapReplayFixture),
+        ]),
+        { program: forwarderProgram, error: "UnauthorizedLogicRef" },
+      ));
   });
 });
