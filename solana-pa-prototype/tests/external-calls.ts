@@ -40,7 +40,7 @@ describe("protocol-adapter (External call error paths)", () => {
     });
   });
 
-  it("rejects settlement when test-forwarder returns error", async () => {
+  it("rejects settlement when test-forwarder returns error @localnet", async () => {
     const failFixture = loadFixture("batch_forwarder_fail.json");
     const payload = Buffer.from(failFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(failFixture.consumed_nullifiers_b64);
@@ -54,7 +54,7 @@ describe("protocol-adapter (External call error paths)", () => {
     });
   });
 
-  it("rejects ExternalCallOutputMismatch when forwarder returns no data", async () => {
+  it("rejects ExternalCallOutputMismatch when forwarder returns no data @localnet", async () => {
     const silentFixture = loadFixture("batch_forwarder_silent.json");
     const payload = Buffer.from(silentFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(silentFixture.consumed_nullifiers_b64);

@@ -8,17 +8,17 @@ import { PublicKey } from "@solana/web3.js";
 import { spawnSync } from "child_process";
 import { assert } from "chai";
 import * as anchor from "@anchor-lang/core";
-import { CONFIG_VERSION } from "../client/constants";
-import { initializeForwarder } from "../client/instructions";
-import { deriveConfigPda, deriveProgramDataPda } from "../client/pda";
-import { confirmedTransaction, makeFunder, randomRef, assertFails } from "./utils/helpers";
+import { CONFIG_VERSION } from "../../client/constants";
+import { initializeForwarder } from "../../client/instructions";
+import { deriveConfigPda, deriveProgramDataPda } from "../../client/pda";
+import { confirmedTransaction, makeFunder, randomRef, assertFails } from "../utils/helpers";
 import {
   FORWARDER_LOGIC_REF,
   forwarderCommittee as emergencyCommittee,
   forwarderProgram,
   program as paProgram,
   provider,
-} from "./utils/adapterSuite";
+} from "../utils/adapterSuite";
 
 describe("forwarder initialize", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);

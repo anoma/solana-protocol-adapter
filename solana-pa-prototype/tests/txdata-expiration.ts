@@ -21,7 +21,7 @@ import {
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
-describe("protocol-adapter (TxData expiration enforcement)", () => {
+describe("protocol-adapter (TxData expiration enforcement) @localnet", () => {
   const { funder, uploadTxData, initTxData } = useAdapterSuite();
 
   let foundMin: number;

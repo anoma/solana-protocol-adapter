@@ -8,7 +8,7 @@ import { MIN_ALLOWED_EXPIRY, SEVEN_DAYS_SLOTS } from "../client/constants";
 import { assertFails } from "./utils/helpers";
 import { program, paState, setExpiryBounds, useAdapterSuite } from "./utils/adapterSuite";
 
-describe("protocol-adapter (update_expiry_config)", () => {
+describe("protocol-adapter (update_expiry_config) @localnet", () => {
   const { funder } = useAdapterSuite();
 
   // The bounds the deployment held; the last test restores them.

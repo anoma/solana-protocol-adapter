@@ -1,5 +1,4 @@
-import { execFileSync } from "child_process";
-import { mkdirSync, readFileSync } from "fs";
+import { readFileSync } from "fs";
 import path from "path";
 import { Ed25519Program, PublicKey } from "@solana/web3.js";
 
@@ -20,8 +19,6 @@ const FIXTURE_DIR: string = process.env.PA_FIXTURE_DIR
   : MODE === "mock"
     ? path.resolve(process.cwd(), "tests", "fixtures", "mock")
     : path.resolve(process.cwd(), "tests", "fixtures");
-// Fixtures proven while the suite runs (`proveFixture`).
-const RUNTIME_FIXTURE_DIR = path.join(FIXTURE_DIR, "runtime");
 
 // Replay data of an SPL forwarder wrap fixture (fixture-gen's
 // SplTokenWrapMetadata). The actors are keypairs seeded with sha256 of a
@@ -67,40 +64,6 @@ function readJson<T>(filePath: string): T {
 
 export function loadFixture<T = Fixture>(filename: string): T {
   return readJson<T>(path.join(FIXTURE_DIR, filename));
-}
-
-/**
- * Prove a fixture while the suite runs, for a spend whose Merkle path
- * depends on the tree as the deployment holds it, which no fixture proven in
- * advance can know. Runs fixture-gen's `shape` with `args` in the suite's
- * proof mode, with the run's salt (PA_FIXTURE_SALT) and kind table
- * (PA_KIND_TABLE) when a cluster run sets them, and loads the result.
- * Fixture paths in `args` name fixtures of the suite's set.
- */
-export function proveFixture(shape: string, args: string[], filename: string): Fixture {
-  const out = runtimeFixturePath(filename);
-  const run = [
-    ...(MODE === "mock" ? ["--mock"] : []),
-    ...(process.env.PA_FIXTURE_SALT ? ["--salt", process.env.PA_FIXTURE_SALT] : []),
-    ...(process.env.PA_KIND_TABLE ? ["--kind-table", path.resolve(process.env.PA_KIND_TABLE)] : []),
-  ];
-  execFileSync(
-    "cargo",
-    ["run", "--release", "--manifest-path", "tools/fixture-gen/Cargo.toml", "--", shape, ...run, ...args, out],
-    { stdio: "inherit" },
-  );
-  return readJson<Fixture>(out);
-}
-
-/** Where `proveFixture` and its inputs keep `filename`; the directory exists on return. */
-export function runtimeFixturePath(filename: string): string {
-  mkdirSync(RUNTIME_FIXTURE_DIR, { recursive: true });
-  return path.join(RUNTIME_FIXTURE_DIR, filename);
-}
-
-/** The path of a fixture of the suite's set, for fixture-gen arguments. */
-export function fixturePath(filename: string): string {
-  return path.join(FIXTURE_DIR, filename);
 }
 
 /** Load a fixture, or fail naming the command that regenerates the fixture set. */

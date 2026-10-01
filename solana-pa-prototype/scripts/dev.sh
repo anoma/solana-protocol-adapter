@@ -245,7 +245,7 @@ PYEOF
     echo "               IDL is the development IDL minus the declared dev-only instructions)"
     echo "  anchor-test [--cluster <c>] [--mode <real|mock>] [--prebuilt] [spec file...]"
     echo "               Local: full deterministic integration flow (default),"
-    echo "               each spec file on its own fresh validator; spec files"
+    echo "               every spec file on one validator; spec files"
     echo "               (e.g. tests/settle.ts) restrict the run."
     echo "               devnet/mainnet, or --prebuilt: cluster-safe subset against"
     echo "               the programs already deployed there"

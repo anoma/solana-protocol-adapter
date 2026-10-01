@@ -2,10 +2,10 @@
  * SPL token forwarder through the adapter: wraps and unwraps settled with
  * fixtures whose external calls target the forwarder, and the committee
  * operations it refuses while the adapter runs. The unwraps spend the wrap's
- * resource through the tree the deployment holds after the wrap, so they are
- * proven once the wrap has settled.
+ * resource through the tree the fresh deployment holds after the wrap, so
+ * this file runs in the fresh phase, after the settlements the unwrap
+ * fixtures are proven over.
  */
-import { writeFileSync } from "fs";
 import * as anchor from "@anchor-lang/core";
 import {
   AccountMeta,
@@ -24,25 +24,18 @@ import {
   setKindTableCommitment,
   forwarderSegmentHead,
   wrapTransferAccounts,
-} from "../client/instructions";
-import { NONCES_PER_WORD } from "../client/constants";
-import { deriveNonceBitmapPda, nonceWordIndex } from "../client/pda";
-import { SOLANA_DEVNET_KIND_TABLE_COMMITMENT, UNWRAP_RECIPIENT_SEED_LABEL } from "./utils/constants";
+} from "../../client/instructions";
+import { NONCES_PER_WORD } from "../../client/constants";
+import { deriveNonceBitmapPda, nonceWordIndex } from "../../client/pda";
+import { SOLANA_DEVNET_KIND_TABLE_COMMITMENT, UNWRAP_RECIPIENT_SEED_LABEL } from "../utils/constants";
 import {
   localCloseAllNonceBitmaps,
   localCloseConfig,
   localCloseEscrow,
   localSetEmergencyCaller,
-} from "./utils/localOnly";
-import {
-  type Fixture,
-  createdCommitmentsOf as commitmentsOf,
-  fixturePath,
-  proveFixture,
-  requireFixture,
-  runtimeFixturePath,
-  wrapAuthorizationIx,
-} from "./utils/fixtures";
+} from "../utils/localOnly";
+import { createdCommitmentsOf as commitmentsOf, requireFixture, wrapAuthorizationIx } from "../utils/fixtures";
+import { predictRootAfterAppend } from "../utils/merkle";
 import {
   approvedTokenAccount,
   compileV0,
@@ -52,7 +45,7 @@ import {
   createFundedEscrow,
   assertFails,
   confirmedTransaction,
-} from "./utils/helpers";
+} from "../utils/helpers";
 import {
   provider,
   program,
@@ -65,9 +58,8 @@ import {
   forwarderCommittee as emergencyCommittee,
   cpiEventsOf,
   settleFromTxDataBuilder,
-  treeLeaves,
   useAdapterSuite,
-} from "./utils/adapterSuite";
+} from "../utils/adapterSuite";
 
 // The fixtures' proofs bind the call inputs, so the tests rebuild the
 // fixture's seeded user, mint and recipient and supply the accounts the call
@@ -108,40 +100,31 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
   // The unwrap of the wrap's resource, and the same resource released to the
   // forwarder's own escrow authority: both spend it through its Merkle path
-  // in the tree the deployment holds once the wrap has settled, so they are
-  // proven on first use, after the wrap's settlement.
-  let unwrapFixtures: Promise<{ unwrap: Fixture; toEscrow: Fixture }> | undefined;
-  const provenUnwraps = () =>
-    (unwrapFixtures ??= (async () => {
-      const leaves = await treeLeaves();
-      const preceding = runtimeFixturePath("spl_token_unwrap_preceding_leaves.json");
-      const wrapLeaves = commitmentsOf(wrapFixture).length;
-      const wrapIndex = leaves.findIndex((leaf) => leaf.equals(commitmentsOf(wrapFixture)[0]));
-      assert.notEqual(wrapIndex, -1, "the wrap has settled");
-      writeFileSync(preceding, JSON.stringify(leaves.slice(0, wrapIndex).map((leaf) => leaf.toString("hex"))));
-      assert.deepEqual(leaves.slice(wrapIndex, wrapIndex + wrapLeaves), commitmentsOf(wrapFixture));
-      const prove = (filename: string, extra: string[]) =>
-        proveFixture(
-          "spl-token-unwrap",
-          ["--wrap", fixturePath("spl_token_wrap.json"), "--preceding-leaves", preceding, ...extra],
-          filename,
-        );
-      const proven = {
-        unwrap: prove("spl_token_unwrap.json", []),
-        toEscrow: prove("spl_token_unwrap_to_escrow.json", ["--to-escrow"]),
-      };
-      const unwrap = proven.unwrap.spl_token_unwrap!;
-      assert.equal(unwrap.recipient_seed_label, UNWRAP_RECIPIENT_SEED_LABEL, "the unwrap pays the seeded recipient");
-      assert.equal(unwrap.mint_seed_label, wrap.mint_seed_label, "the unwrap releases the wrapped mint");
-      assert.equal(BigInt(unwrap.amount), wrapAmount, "the unwrap releases the wrapped amount");
-      return proven;
-    })());
+  // in the tree the fresh deployment holds once the wrap settles after the
+  // fresh phase's earlier settlements (regen-fixtures.sh proves them over the
+  // same leaves).
+  const unwraps = {
+    unwrap: requireFixture("spl_token_unwrap.json"),
+    toEscrow: requireFixture("spl_token_unwrap_to_escrow.json"),
+  };
+  const unwrapTerms = unwraps.unwrap.spl_token_unwrap!;
+  assert.equal(unwrapTerms.recipient_seed_label, UNWRAP_RECIPIENT_SEED_LABEL, "the unwrap pays the seeded recipient");
+  assert.equal(unwrapTerms.mint_seed_label, wrap.mint_seed_label, "the unwrap releases the wrapped mint");
+  assert.equal(BigInt(unwrapTerms.amount), wrapAmount, "the unwrap releases the wrapped amount");
 
   let userAta: PublicKey;
   let recipientAta: PublicKey;
   let settlementTable: AddressLookupTableAccount;
 
   before(async () => {
+    const rootAfterWrap = await predictRootAfterAppend(program, paState, commitmentsOf(wrapFixture));
+    assert.equal(
+      rootAfterWrap.toString("base64"),
+      unwraps.unwrap.historical_roots_b64?.[0],
+      "the unwrap fixtures were proven over another tree than the one this deployment holds after the wrap; " +
+        "the fresh phase's order or fixtures changed: regenerate with scripts/regen-fixtures.sh",
+    );
+
     await funder.fund(user, 5);
     await funder.fund(recipient, 1);
 
@@ -394,7 +377,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
   // The recipient account is chosen by the submitter, not by the proof.
   it("rejects an unwrap to a token account the recipient does not own", async () => {
-    const { unwrap } = await provenUnwraps();
+    const { unwrap } = unwraps;
     await assertFails(settleForwarderFixture(unwrap, unwrapSegment(userAta), []), {
       program: forwarderProgram,
       error: "WrongTokenAccountOwner",
@@ -404,7 +387,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // The escrow authority signs the release; as a delegate it could move any account
   // that approved it. An unwrap pays only from an account the escrow owns.
   it("rejects an unwrap whose source the escrow does not own", async () => {
-    const { unwrap } = await provenUnwraps();
+    const { unwrap } = unwraps;
     const otherAta = await approvedTokenAccount(
       provider.connection,
       funder,
@@ -427,7 +410,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // check alone does not keep an unwrap to its mint: the input names the
   // mint, and the escrow account must hold it.
   it("rejects an unwrap that draws another mint's escrow", async () => {
-    const { unwrap } = await provenUnwraps();
+    const { unwrap } = unwraps;
     const other = await createFundedEscrow(provider, forwarderProgram.programId, user, wrapAmount);
     assert.isTrue(other.escrowAuthority.equals(escrowAuthority), "every mint's escrow has the same authority");
     const recipientOtherAta = (
@@ -447,7 +430,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // balance does not grow by the amount). Released to the escrow authority,
   // the tokens would never leave custody while the resource is spent.
   it("rejects an unwrap whose recipient is the escrow authority", async () => {
-    const { toEscrow } = await provenUnwraps();
+    const { toEscrow } = unwraps;
     const [escrowBefore] = await balances(escrowAta);
     await assertFails(settleForwarderFixture(toEscrow, unwrapSegment(escrowAta), []), {
       program: forwarderProgram,
@@ -458,7 +441,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
   // Mirrors ERC20Forwarder.t.sol: test_unwrap_sends_funds_to_the_user
   it("settles an unwrap: the recipient receives the tokens from escrow", async () => {
-    const { unwrap } = await provenUnwraps();
+    const { unwrap } = unwraps;
     const [escrowBefore, recipientBefore] = await balances(escrowAta, recipientAta);
 
     await settleForwarderFixture(unwrap, unwrapSegment(), []);

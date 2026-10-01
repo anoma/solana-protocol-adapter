@@ -23,7 +23,7 @@ import {
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
-describe("protocol-adapter (dev_set_schema_version tooling)", () => {
+describe("protocol-adapter (dev_set_schema_version tooling) @localnet", () => {
   const { funder, uploadTxData, initTxData, keepTxData, closeTxData, settleFixtureViaTxData } = useAdapterSuite();
 
   const setSchemaVersion = (version: number) =>

@@ -8,10 +8,10 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { createAccount, getAccount } from "@solana/spl-token";
 import { assert } from "chai";
-import { emergencyWithdraw } from "../client/instructions";
-import { localSetEmergencyCaller } from "./utils/localOnly";
-import { deriveConfigPda } from "../client/pda";
-import { approvedTokenAccount, createFundedEscrow, makeFunder, assertFails } from "./utils/helpers";
+import { emergencyWithdraw } from "../../client/instructions";
+import { localSetEmergencyCaller } from "../utils/localOnly";
+import { deriveConfigPda } from "../../client/pda";
+import { approvedTokenAccount, createFundedEscrow, makeFunder, assertFails } from "../utils/helpers";
 import {
   ensureAdapterInitialized,
   ensureForwarderConfig,
@@ -20,7 +20,7 @@ import {
   forwarderProgram,
   paState,
   provider,
-} from "./utils/adapterSuite";
+} from "../utils/adapterSuite";
 
 describe("forwarder emergency (adapter paused)", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);

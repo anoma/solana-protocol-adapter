@@ -223,6 +223,24 @@ fixture_matches_program_id() {
   ' "$fixture_path" "$program_id" "$expected_selector"
 }
 
+# The spec files that build on whatever state they find: every tests/**/*.ts
+# outside tests/utils/ (the support modules), tests/fresh/ and
+# tests/terminal/, sorted. A cluster run runs these.
+history_spec_files() {
+  find tests -name '*.ts' -not -path 'tests/utils/*' -not -path 'tests/fresh/*' -not -path 'tests/terminal/*' |
+    LC_ALL=C sort
+}
+
+# Every spec file in the order the local suite runs them against one
+# validator: tests/fresh/ (they only work on a fresh deployment), then
+# history_spec_files, then tests/terminal/ (they change the deployment for
+# good), each group sorted.
+suite_spec_files() {
+  find tests/fresh -name '*.ts' | LC_ALL=C sort
+  history_spec_files
+  find tests/terminal -name '*.ts' | LC_ALL=C sort
+}
+
 # The two suite proof modes; each entry point validates its own input.
 validate_test_mode() {
   if [[ "$1" != "real" && "$1" != "mock" ]]; then

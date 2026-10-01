@@ -6,11 +6,11 @@
  */
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
-import { initializeAdapter } from "../client/instructions";
-import { PAUSED_MOCK_SELECTOR, VERIFIER_ROUTER_ID, getVerifierEntryPda } from "../client/verifier";
-import { EMPTY_TREE_ROOT_INITIAL } from "./utils/constants";
-import { assertFails } from "./utils/helpers";
+import { EMPTY_KIND_TABLE_COMMITMENT } from "../../client/constants";
+import { initializeAdapter } from "../../client/instructions";
+import { PAUSED_MOCK_SELECTOR, VERIFIER_ROUTER_ID, getVerifierEntryPda } from "../../client/verifier";
+import { EMPTY_TREE_ROOT_INITIAL } from "../utils/constants";
+import { assertFails } from "../utils/helpers";
 import {
   PROOF_SELECTOR,
   buildInitialize,
@@ -20,7 +20,7 @@ import {
   program,
   provider,
   useAdapterSuite,
-} from "./utils/adapterSuite";
+} from "../utils/adapterSuite";
 
 describe("protocol-adapter (initialize)", () => {
   const { funder } = useAdapterSuite({ initialize: false });

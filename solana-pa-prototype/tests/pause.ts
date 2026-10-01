@@ -20,7 +20,7 @@ import {
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
-describe("protocol-adapter (pause)", () => {
+describe("protocol-adapter (pause) @localnet", () => {
   const { funder, uploadTxData, settleUnsettledFixture } = useAdapterSuite();
   const owner = provider.wallet.publicKey;
 

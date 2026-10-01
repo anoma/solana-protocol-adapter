@@ -52,7 +52,7 @@ import {
   TxDataUpload,
   uploadTxData as uploadTxDataTo,
 } from "./helpers";
-import { computeRootAfterAppend, EMPTY_TREE, predictRootMarkerPda as predictRootMarkerPdaOf } from "./merkle";
+import { predictRootMarkerPda as predictRootMarkerPdaOf } from "./merkle";
 
 // Every transaction is confirmed, and every read made, at `confirmed`: a
 // cluster's RPC endpoint serves reads from several nodes, and a write only
@@ -268,39 +268,6 @@ function parseCpiEvents(tx: anchor.web3.VersionedTransactionResponse) {
 export async function cpiEventsOf(sig: string) {
   const tx = await confirmedTransaction(provider.connection, sig);
   return { tx, events: parseCpiEvents(tx) };
-}
-
-/**
- * Every leaf of the adapter's commitment tree, in leaf order: the
- * commitments of the ActionExecuted events of its settlements, oldest
- * first, as an indexer serves them. Checked against the adapter's state:
- * the leaves must number next_index and rebuild its root.
- */
-export async function treeLeaves(): Promise<Buffer[]> {
-  const signatures: anchor.web3.ConfirmedSignatureInfo[] = [];
-  for (let before: string | undefined; ;) {
-    const page = await provider.connection.getSignaturesForAddress(paState, { before }, "confirmed");
-    if (page.length === 0) break;
-    signatures.push(...page);
-    before = page[page.length - 1].signature;
-  }
-  const leaves: Buffer[] = [];
-  for (const { signature, err } of signatures.reverse()) {
-    if (err) continue;
-    for (const event of parseCpiEvents(await confirmedTransaction(provider.connection, signature))) {
-      if (event.name === "actionExecutedEvent") {
-        leaves.push(...event.data.commitments.map((c: number[]) => Buffer.from(c)));
-      }
-    }
-  }
-  const state = await program.account.paStateAccount.fetch(paState);
-  assert.equal(leaves.length, state.nextIndex.toNumber(), "the settlement history holds every leaf");
-  assert.deepEqual(
-    computeRootAfterAppend(EMPTY_TREE, leaves),
-    Buffer.from(state.root as number[]),
-    "the leaves rebuild the adapter's root",
-  );
-  return leaves;
 }
 
 /** The full CU budget and, unless `heapFrame` is false, the 256 KiB heap frame settlement needs. */

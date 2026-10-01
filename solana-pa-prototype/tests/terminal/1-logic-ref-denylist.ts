@@ -5,9 +5,9 @@
  * almost every fixture carries, so this runs among the suite's last files.
  */
 import { assert } from "chai";
-import { denyLogicRef } from "../client/instructions";
-import { loadFixture } from "./utils/fixtures";
-import { makeFunder, randomRef, assertFails } from "./utils/helpers";
+import { denyLogicRef } from "../../client/instructions";
+import { loadFixture } from "../utils/fixtures";
+import { makeFunder, randomRef, assertFails } from "../utils/helpers";
 import {
   provider,
   program,
@@ -18,7 +18,7 @@ import {
   buildSettleRemainingAccounts,
   deriveNullifierAccounts,
   useAdapterSuite,
-} from "./utils/adapterSuite";
+} from "../utils/adapterSuite";
 
 describe("protocol-adapter (logic-ref denylist)", () => {
   const { settleUnsettledFixture, settleFixtureViaTxData } = useAdapterSuite();

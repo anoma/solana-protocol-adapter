@@ -49,12 +49,14 @@ Commands:
                          authority)
   test [--cluster <c>] [spec file...]
                          No cluster (or localnet): full deterministic local
-                         integration flow, each spec file on its own fresh
-                         validator. devnet/mainnet: cluster-safe test subset
-                         against the programs deployed there, refused when
-                         the wallet is any of their upgrade authorities
-                         (their owner). Spec files (paths under tests/)
-                         restrict the run to them.
+                         integration flow, every spec file on one validator.
+                         devnet/mainnet: proves a fixture set for the
+                         deployment (new salt, PA_KIND_TABLE), then runs the
+                         spec files that build on any state, without the
+                         tests tagged @localnet, against the programs
+                         deployed there; refused when the wallet is any of
+                         their upgrade authorities (their owner). Spec files
+                         (paths under tests/) restrict the run to them.
   build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
   build-release          Build the production binaries, no deploy (verifies
                          each production IDL is its development IDL minus
@@ -90,8 +92,8 @@ Flags:
                    (close_markers_batch enabled). Localnet only.
   --prebuilt       deploy/upgrade: ship the existing target/deploy artifacts
                    without rebuilding (for verify-build output); test: run the
-                   cluster-safe subset against the programs already deployed
-                   (a running local validator included)
+                   cluster run against the programs already deployed (a
+                   running local validator included)
   --mode <m>       test: real (default) runs the suite against Groth16
                    fixtures and the devnet-cloned verifier; mock runs it
                    against mock fixtures and the localnet mock verifier.
@@ -783,26 +785,43 @@ cmd_test() {
     fi
   fi
 
-  # Cluster-safe spec files (explicit allowlist): none needs the test
-  # forwarder or the owner, stops the adapter, or leaves state another file's
-  # tests cannot run on. Spec files given on the command line replace the list.
-  # One mocha process runs them against the cluster's single deployment, in
-  # list order: settle.ts asserts the primary fixture unsettled before
-  # direct-settle.ts settles it.
-  local specs=(
-    tests/settle.ts
-    tests/direct-settle.ts
-    tests/txdata-lifecycle.ts
-    tests/tree-growth.ts
-  )
+  # The run proves its own fixture set for the deployment: under a salt no
+  # earlier run used, so nothing in it was settled before, and against the
+  # kind table the deployment stores.
+  if [[ -z "${PA_KIND_TABLE:-}" || ! -f "$PA_KIND_TABLE" ]]; then
+    echo "❌ Set PA_KIND_TABLE to the kind table (JSON, as fixture-gen reads it) whose commitment the deployment stores;" >&2
+    echo "   the run proves its fixtures against it." >&2
+    exit 1
+  fi
+  local salt fixture_dir
+  salt="${CLUSTER}-$(date -u +%Y%m%dT%H%M%SZ)"
+  fixture_dir="${PROJECT_DIR}/.cache/cluster-fixtures/${salt}"
+  echo "Proving the run's fixtures (salt ${salt}) into ${fixture_dir}"
+  "${SCRIPT_DIR}/regen-fixtures.sh" real --out "$fixture_dir" --salt "$salt" --kind-table "$PA_KIND_TABLE"
+
+  # The suite's files that build on whatever state they find, or the ones
+  # given, each in its own mocha process against the deployment, without the
+  # tests tagged @localnet: those need the owner or the forwarder's
+  # committee, change a deployment setting, or call a program deployed only
+  # on a local validator.
+  local specs=()
   if [[ ${#SPEC_FILES[@]} -gt 0 ]]; then
     specs=("${SPEC_FILES[@]}")
+  else
+    mapfile -t specs < <(history_spec_files)
   fi
 
   echo "Running cluster integration tests (${CLUSTER}): ${specs[*]}"
-  ANCHOR_PROVIDER_URL="$RPC_URL" \
-  ANCHOR_WALLET="$WALLET" \
-    yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 "${specs[@]}"
+  local spec
+  for spec in "${specs[@]}"; do
+    echo "==> ${spec}"
+    ANCHOR_PROVIDER_URL="$RPC_URL" \
+    ANCHOR_WALLET="$WALLET" \
+    PA_TEST_MODE=real \
+    PA_FIXTURE_DIR="$fixture_dir" \
+    PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE:-}" \
+      yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 --grep @localnet --invert "$spec"
+  done
 
   echo ""
   echo "✅ Cluster tests passed (${CLUSTER})"
@@ -903,9 +922,9 @@ case "$COMMAND" in
     # on localnet) — the validation path for verify-build artifacts, which
     # the full flow would rebuild and clobber.
     if [[ "$PREBUILT" != "true" && ( -z "$CLUSTER" || "$CLUSTER" == "localnet" ) ]]; then
-      # Full deterministic local flow: sync IDs, build, then each spec file
-      # (all, or the ones given) on its own fresh validator with the programs
-      # loaded at genesis. Guard against Cargo.lock skew first.
+      # Full deterministic local flow: sync IDs, build, then the spec files
+      # (all, or the ones given) on one validator with the programs loaded at
+      # genesis. Guard against Cargo.lock skew first.
       ensure_lockfile_sync
       PA_TEST_MODE="$TEST_MODE" exec "${SCRIPT_DIR}/anchor-test.sh" all "${SPEC_FILES[@]}"
     fi

@@ -438,9 +438,15 @@ enum ShapeCommand {
         wrap: PathBuf,
         /// The commitments the adapter's tree held before the wrap settled,
         /// in leaf order: a JSON array of hex strings, as an indexer serves
-        /// them. Without it the wrap settled alone on a fresh adapter.
-        #[arg(long, value_name = "FILE")]
+        /// them. Without it (or --settled-before) the wrap settled alone on
+        /// a fresh adapter.
+        #[arg(long, value_name = "FILE", conflicts_with = "settled_before")]
         preceding_leaves: Option<PathBuf>,
+        /// A fixture settled before the wrap on a fresh adapter, in
+        /// settlement order (repeat it): its created commitments precede the
+        /// wrap's in the tree.
+        #[arg(long, value_name = "FIXTURE")]
+        settled_before: Vec<PathBuf>,
         /// Release the tokens to the forwarder's own escrow authority: the
         /// unwrap the forwarder refuses, as the EVM forwarder reverts an
         /// unwrap to itself.
@@ -465,9 +471,15 @@ enum ShapeCommand {
         committer: PathBuf,
         /// The commitments the adapter's tree held before the committer
         /// settled, in leaf order: a JSON array of hex strings, as an indexer
-        /// serves them. Without it the committer settled on a fresh adapter.
-        #[arg(long, value_name = "FILE")]
+        /// serves them. Without it (or --settled-before) the committer
+        /// settled on a fresh adapter.
+        #[arg(long, value_name = "FILE", conflicts_with = "settled_before")]
         preceding_leaves: Option<PathBuf>,
+        /// A fixture settled before the committer on a fresh adapter, in
+        /// settlement order (repeat it): its created commitments precede the
+        /// committer's in the tree.
+        #[arg(long, value_name = "FIXTURE")]
+        settled_before: Vec<PathBuf>,
         #[command(flatten)]
         generate: GenerateArgs,
     },
@@ -1653,6 +1665,24 @@ fn read_leaves(path: &Path) -> Result<Vec<Digest>> {
     )
 }
 
+/// The leaves a tree held before a fixture settled: those an indexer lists in
+/// `preceding_leaves`, or the commitments the `settled_before` fixtures
+/// created, in their settlement order on a fresh adapter.
+fn preceding_leaves(
+    preceding_leaves: Option<&Path>,
+    settled_before: &[PathBuf],
+) -> Result<Vec<Digest>> {
+    match preceding_leaves {
+        Some(path) => read_leaves(path),
+        None => settled_before
+            .iter()
+            .try_fold(Vec::new(), |mut leaves, path| {
+                leaves.extend(created_commitments(&load_fixture_tx(path)?)?);
+                Ok(leaves)
+            }),
+    }
+}
+
 fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
     let roots: BTreeSet<[u8; 32]> = consumed_publics(tx)?
         .filter(|c| c.commitment_tree_root != INITIAL_ROOT)
@@ -2136,14 +2166,12 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         }
         ShapeCommand::SplTokenUnwrap {
             wrap,
-            preceding_leaves,
+            preceding_leaves: leaves_file,
+            settled_before,
             to_escrow,
             ..
         } => {
-            let mut leaves = match preceding_leaves {
-                Some(path) => read_leaves(path)?,
-                None => Vec::new(),
-            };
+            let mut leaves = preceding_leaves(leaves_file.as_deref(), settled_before)?;
             leaves.extend(created_commitments(&load_fixture_tx(wrap)?)?);
             let (tx, metadata) = generate_anomapay_unwrap_transaction(
                 &prover,
@@ -2163,13 +2191,11 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         }
         ShapeCommand::HistoricalRootConsumer {
             committer,
-            preceding_leaves,
+            preceding_leaves: leaves_file,
+            settled_before,
             ..
         } => {
-            let mut leaves = match preceding_leaves {
-                Some(path) => read_leaves(path)?,
-                None => Vec::new(),
-            };
+            let mut leaves = preceding_leaves(leaves_file.as_deref(), settled_before)?;
             leaves.extend(created_commitments(&load_fixture_tx(committer)?)?);
             (
                 generate_historical_root_consumer_transaction(

@@ -15,7 +15,7 @@ import { deriveConfigPda, deriveProgramDataPda } from "../client/pda";
 import { makeFunder, randomRef, assertFails } from "./utils/helpers";
 import { ensureForwarderConfig, forwarderProgram, paState, program as paProgram, provider } from "./utils/adapterSuite";
 
-describe("forwarder config (logic ref and direct-call guards)", () => {
+describe("forwarder config (logic ref and direct-call guards) @localnet", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
   const funder = makeFunder(provider);
   // The logic ref the deployment's config serves; the rotation test puts it back.

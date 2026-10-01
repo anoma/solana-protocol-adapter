@@ -19,7 +19,7 @@ import {
 } from "./utils/adapterSuite";
 import { loadFixture } from "./utils/fixtures";
 
-describe("protocol-adapter (kind table commitment)", () => {
+describe("protocol-adapter (kind table commitment) @localnet", () => {
   const { funder, uploadTxData, settleFixture } = useAdapterSuite();
   const fixture = loadFixture("batch_groth16_resubmitted.json");
 

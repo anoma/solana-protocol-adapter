@@ -7,9 +7,9 @@
  */
 import { LAMPORTS_PER_SOL } from "@solana/web3.js";
 import { assert } from "chai";
-import { localCloseAllMarkers, localCloseMarkersBatch } from "./utils/localOnly";
-import { assertFails } from "./utils/helpers";
-import { provider, program, paState, ensurePaused, useAdapterSuite } from "./utils/adapterSuite";
+import { localCloseAllMarkers, localCloseMarkersBatch } from "../utils/localOnly";
+import { assertFails } from "../utils/helpers";
+import { provider, program, paState, ensurePaused, useAdapterSuite } from "../utils/adapterSuite";
 
 // ── Close instruction tests ──────────────────────────────────────────────
 
@@ -22,20 +22,19 @@ describe("protocol-adapter (Close instructions)", () => {
     const state = await program.account.paStateAccount.fetch(paState);
     assert.isFalse(state.paused, "the PA is not paused at the start of the test");
 
-    // The markers the deployment's settlements created
+    // A marker the deployment's settlements created: the refusal does not
+    // depend on how many are passed, and the deployment holds more than one
+    // transaction can carry.
     const markers = await provider.connection.getProgramAccounts(program.programId, {
       filters: [{ dataSize: 0 }],
     });
     assert.ok(markers.length > 0, "Should have markers to close");
 
-    await assertFails(
-      localCloseMarkersBatch(
-        program,
-        provider.wallet.publicKey,
-        markers.map(({ pubkey }) => pubkey),
-      ).rpc(),
-      { program, error: "ExpectedPause" },
-    );
+    await assertFails(localCloseMarkersBatch(program, provider.wallet.publicKey, [markers[0].pubkey]).rpc(), {
+      program,
+      error: "ExpectedPause",
+    });
+    assert.isNotNull(await provider.connection.getAccountInfo(markers[0].pubkey), "the marker is not closed");
   });
 
   describe("on a paused adapter", () => {

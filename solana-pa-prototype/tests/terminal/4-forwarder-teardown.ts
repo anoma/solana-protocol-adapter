@@ -14,9 +14,9 @@ import {
   localCloseConfig,
   localCloseEscrow,
   localCloseNonceBitmapsBatch,
-} from "./utils/localOnly";
-import { deriveConfigPda, deriveNonceBitmapPda } from "../client/pda";
-import { createFundedEscrow, makeFunder, assertFails } from "./utils/helpers";
+} from "../utils/localOnly";
+import { deriveConfigPda, deriveNonceBitmapPda } from "../../client/pda";
+import { createFundedEscrow, makeFunder, assertFails } from "../utils/helpers";
 import {
   ensureAdapterInitialized,
   ensureForwarderConfig,
@@ -25,7 +25,7 @@ import {
   forwarderProgram,
   paState,
   provider,
-} from "./utils/adapterSuite";
+} from "../utils/adapterSuite";
 
 describe("forwarder teardown (reclaims forwarder rent)", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);

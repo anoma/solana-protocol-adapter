@@ -1,22 +1,17 @@
 /**
  * STATE-03 part 2: the consumer spends the committer's leaf through a root
- * that is no longer current. The before hook settles the committer on
- * whatever tree the deployment holds, proves the consumer over that tree,
- * and settles one more fixture, so the committer's root is historical.
+ * that is no longer current. The consumer fixture is proven over the tree
+ * the fresh deployment holds once the committer settles as its first leaf,
+ * so this file runs in the fresh phase, before anything else settles. The
+ * before hook settles the committer and one more fixture, so the
+ * committer's root is historical.
  */
-import { writeFileSync } from "fs";
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { EMPTY_TREE_ROOT_INITIAL } from "./utils/constants";
-import {
-  type Fixture,
-  createdCommitmentsOf as commitmentsOf,
-  fixturePath,
-  loadFixture,
-  proveFixture,
-  runtimeFixturePath,
-} from "./utils/fixtures";
-import { assertFails } from "./utils/helpers";
+import { EMPTY_TREE_ROOT_INITIAL } from "../utils/constants";
+import { createdCommitmentsOf as commitmentsOf, loadFixture } from "../utils/fixtures";
+import { assertFails } from "../utils/helpers";
+import { predictRootAfterAppend } from "../utils/merkle";
 import {
   provider,
   program,
@@ -25,9 +20,8 @@ import {
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
   buildSettleRemainingAccounts,
-  treeLeaves,
   useAdapterSuite,
-} from "./utils/adapterSuite";
+} from "../utils/adapterSuite";
 
 // ── Historical-root marker with a real Merkle-inclusion proof ───────────────
 // Every other settling fixture consumes an `is_ephemeral: true` resource: the compliance
@@ -46,8 +40,8 @@ import {
 // genuinely non-ephemeral.
 //
 // The consumer's Merkle path runs through the tree the deployment holds when
-// the committer settles, so it is proven then, from the deployment's
-// settlement history.
+// the committer settles: the fresh phase's settlements before it, none here
+// (regen-fixtures.sh proves it over the same leaves).
 //
 // ── STATE-03 part 2: spend the committed leaf via its retained root ────────
 // The before hook settles one more fixture after the committer, advancing the
@@ -59,20 +53,18 @@ import {
 describe("protocol-adapter (STATE-03 part 2: settle against a retained historical root)", () => {
   const { settleFixtureViaTxData, settleUnsettledFixture } = useAdapterSuite();
 
-  let consumer: Fixture;
+  const consumer = loadFixture("batch_groth16_historical_root.json");
 
   before(async () => {
-    await settleUnsettledFixture("batch_groth16_historical_root_committer.json");
-    const leaves = await treeLeaves();
     const committer = loadFixture("batch_groth16_historical_root_committer.json");
-    const preceding = leaves.slice(0, leaves.length - commitmentsOf(committer).length);
-    const precedingPath = runtimeFixturePath("historical_root_preceding_leaves.json");
-    writeFileSync(precedingPath, JSON.stringify(preceding.map((leaf) => leaf.toString("hex"))));
-    consumer = proveFixture(
-      "historical-root-consumer",
-      ["--committer", fixturePath("batch_groth16_historical_root_committer.json"), "--preceding-leaves", precedingPath],
-      "batch_groth16_historical_root.json",
+    const rootAfterCommitter = await predictRootAfterAppend(program, paState, commitmentsOf(committer));
+    assert.equal(
+      rootAfterCommitter.toString("base64"),
+      consumer.historical_roots_b64?.[0],
+      "the consumer fixture was proven over another tree than the one this deployment holds after the " +
+        "committer; the fresh phase's order or fixtures changed: regenerate with scripts/regen-fixtures.sh",
     );
+    await settleUnsettledFixture("batch_groth16_historical_root_committer.json");
     await settleUnsettledFixture("batch_groth16_historical_root_successor.json");
   });
 

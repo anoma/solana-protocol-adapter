@@ -67,7 +67,7 @@ describe("authority and closing instructions are local-only", () => {
     });
   }
 
-  it("builds every one against the local validator", () => {
+  it("builds every one against the local validator @localnet", () => {
     for (const [name, build] of Object.entries(builders(program, forwarderProgram))) {
       assert.isOk(build(), name);
     }

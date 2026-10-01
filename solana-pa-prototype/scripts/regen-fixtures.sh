@@ -23,9 +23,10 @@
 # settled (rejected, its error variants, and the deliberate-failure
 # forwarder fixtures). fixture-gen derives every resource nonce from the
 # output file's name, so fixtures with different names never share a
-# nullifier. A spend through a Merkle path (the unwraps, the historical-root
-# consumer) depends on the tree the deployment holds when the spent resource
-# settles, so the suite proves it while it runs.
+# nullifier. A spend through a Merkle path (the historical-root consumer, the
+# unwraps) is proven over the tree the fresh phase (tests/fresh/) builds in
+# its fixed order: --settled-before lists the fixtures it settles before the
+# spent resource's, in that order.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -87,11 +88,19 @@ gen batch "$OUT_DIR/batch_groth16_v3.json"
 gen batch --multi-external-call "$OUT_DIR/batch_groth16_multi_call.json"
 gen batch "$OUT_DIR/batch_groth16_unpaused.json"
 gen batch "$OUT_DIR/batch_groth16_denylist.json"
-gen batch "$OUT_DIR/batch_groth16_historical_root_successor.json"
 gen transfer-shape "$OUT_DIR/batch_groth16_transfer_shape.json"
 gen consume-only "$OUT_DIR/batch_groth16_consume_only.json"
-# Creates the non-ephemeral resource the historical-root consumer spends.
-gen historical-root-committer "$OUT_DIR/batch_groth16_historical_root_committer.json"
+
+# The fresh phase's settlements, in their order: the committer (leaf 0) and
+# its successor, then the consumer spending the committer's resource through
+# its retained root (tests/fresh/3-historical-root.ts); then the wrap and the
+# unwraps spending its resource (tests/fresh/4-spl-token-wrap-unwrap.ts).
+COMMITTER="$OUT_DIR/batch_groth16_historical_root_committer.json"
+SUCCESSOR="$OUT_DIR/batch_groth16_historical_root_successor.json"
+CONSUMER="$OUT_DIR/batch_groth16_historical_root.json"
+gen historical-root-committer "$COMMITTER"
+gen batch "$SUCCESSOR"
+gen historical-root-consumer --committer "$COMMITTER" "$CONSUMER"
 
 # Settled by whichever test first needs a settled fixture to resubmit.
 gen batch "$OUT_DIR/batch_groth16_resubmitted.json"
@@ -105,9 +114,15 @@ gen forwarder-silent "$OUT_DIR/batch_forwarder_silent.json"
 gen forwarder-relay "$OUT_DIR/batch_forwarder_relay.json"
 
 # The AnomaPay fixtures are proven with the real transfer logic: the wrap,
-# and the same wrap under a fresh nullifier (a replay of its forwarder nonce).
+# the same wrap under a fresh nullifier (a replay of its forwarder nonce),
+# and the unwraps of the wrap's resource, to the recipient and to the
+# forwarder's own escrow authority, over the fresh phase's tree.
 gen spl-token-wrap "$OUT_DIR/spl_token_wrap.json"
 gen spl-token-wrap "$OUT_DIR/spl_token_wrap_replay.json"
+BEFORE_WRAP=(--settled-before "$COMMITTER" --settled-before "$SUCCESSOR" --settled-before "$CONSUMER")
+gen spl-token-unwrap --wrap "$OUT_DIR/spl_token_wrap.json" "${BEFORE_WRAP[@]}" "$OUT_DIR/spl_token_unwrap.json"
+gen spl-token-unwrap --to-escrow --wrap "$OUT_DIR/spl_token_wrap.json" "${BEFORE_WRAP[@]}" \
+  "$OUT_DIR/spl_token_unwrap_to_escrow.json"
 
 # A second wrap (the next forwarder nonce) proven against the solana-devnet
 # kind table from anoma/risc0-kind-tables (data/generated/staging), whatever

@@ -4,8 +4,8 @@
  * upgrades: every owner-only instruction checks its signer against the
  * upgrade authority the loader records in the program's ProgramData, so
  * moving or renouncing the upgrade authority moves or renounces the
- * ownership. Every test but the last leaves the provider wallet as the
- * upgrade authority; the last renounces it.
+ * ownership. Every test leaves the provider wallet as the upgrade authority;
+ * renouncing it is terminal/5-renounce.ts, among the suite's last files.
  */
 import { Transaction } from "@solana/web3.js";
 import { pauseAdapter, setKindTableCommitment } from "../client/instructions";
@@ -14,7 +14,7 @@ import { localSetUpgradeAuthority } from "./utils/localOnly";
 import { assertFails } from "./utils/helpers";
 import { provider, program, paState, forwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
 
-describe("protocol-adapter (authority)", () => {
+describe("protocol-adapter (authority) @localnet", () => {
   const { funder } = useAdapterSuite();
   const wallet = provider.wallet.publicKey;
   // The owner-only call these tests make: rewriting the kind table the
@@ -68,18 +68,5 @@ describe("protocol-adapter (authority)", () => {
       [successor],
     );
     await setKindTableCommitment(program, wallet, kindTable).rpc();
-  });
-
-  // Mirrors OwnableUpgradeable.renounceOwnership: with no upgrade authority
-  // (the program final), every owner-only instruction is closed for good.
-  it("is renounced with the upgrade authority", async () => {
-    await provider.sendAndConfirm(
-      new Transaction().add(localSetUpgradeAuthority(provider.connection, program.programId, wallet, null)),
-    );
-    await assertFails(setKindTableCommitment(program, wallet, kindTable).rpc(), {
-      program,
-      error: "Unauthorized",
-      account: "program_data",
-    });
   });
 });
