@@ -2,7 +2,9 @@
 
 This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, upgrade it, run it, pause it, and retire it permanently. The one fact that shapes everything here: **the adapter is upgradeable, so "paused forever" is not enforced by the chain — it is enforced by custody of the upgrade authority.** The same holds for pa-evm V2, a UUPS proxy its owner upgrades in place (`upgradeToAndCall`) and pauses and unpauses (`pause()`, `unpause()`); the Solana adapter has the same owner-only `pause` and `unpause`. Burning the upgrade authority, the last Sunsetting step, makes a pause permanent.
 
-Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically; cluster operations take `--cluster <localnet|devnet|mainnet>` (see `scripts/ops.sh` for all flags). Commands shown as `solana`, `npx` or `solana-verify` run directly.
+Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically; cluster operations take `--cluster <localnet|devnet|mainnet>` (see `scripts/ops.sh` for all flags). devnet and mainnet operations go through the operator's RPC provider: pass `--url <rpc>` or set `DEVNET_RPC_URL` / `MAINNET_RPC_URL`; there is no public-endpoint default. Commands shown as `solana`, `npx` or `solana-verify` run directly.
+
+`dev.sh anchor-test --cluster <devnet|mainnet>` runs a test subset against the live deployment. Its wallet must own nothing under test: the run refuses a wallet that is the upgrade authority of any deployed program, because a spec signing as the owner could pause the deployment, replace its kind table or renounce the authority, which makes the program final for good. Use a separate funded test wallet (`--wallet`).
 
 ## The owner
 
