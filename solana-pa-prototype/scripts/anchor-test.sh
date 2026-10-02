@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Local integration flow. Every spec file runs against its own validator
-# started on a fresh ledger, so no file depends on another's on-chain state
-# or on the order files run in.
+# Local integration flow. Every spec file runs against one validator, so
+# the deployment builds up as much history as the suite makes: first the
+# files that only work on a fresh deployment (tests/fresh/), then every
+# other file, which builds on whatever state it finds, then the files that
+# change the deployment for good (tests/terminal/, in their numbered order).
 #
 #   anchor-test.sh [all|build|test] [spec file...]
 #
@@ -10,7 +12,8 @@
 #   build           sync IDs and build the programs, nothing else
 #   test            the spec files against existing artifacts
 # Spec files default to every tests/**/*.ts outside tests/utils/ (the
-# support modules the specs import), in sorted order.
+# support modules the specs import) in that order; given ones run in the
+# order given.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -35,7 +38,7 @@ if [[ "$PHASE" == "build" && ${#SPEC_FILES[@]} -gt 0 ]]; then
   exit 1
 fi
 if [[ ${#SPEC_FILES[@]} -eq 0 ]]; then
-  mapfile -t SPEC_FILES < <(find tests -name '*.ts' -not -path 'tests/utils/*' | LC_ALL=C sort)
+  mapfile -t SPEC_FILES < <(suite_spec_files)
 fi
 for spec in "${SPEC_FILES[@]}"; do
   if [[ ! -f "$spec" ]]; then
@@ -78,12 +81,11 @@ echo "==> Type-checking scripts and tests"
 yarn run tsc --noEmit -p ./tsconfig.json
 
 echo "==> (2/3) Preparing validator genesis"
-fetch_devnet_clones
 
-# The settlement lookup table every spec file's validator starts with (see
+# The settlement lookup table the validator starts with (see
 # tests/utils/genesis-settlement-table.ts); its keys depend on the test mode.
 # A validator serves a table's keys only once its root is past the slot that
-# last extended the table, slot 0 for this one; each validator is warped to
+# last extended the table, slot 0 for this one; the validator is warped to
 # slot 1 so its root starts there, instead of about 32 slots after startup.
 GENESIS_ACCOUNT_DIR="${PROJECT_DIR}/.cache/genesis-accounts"
 mkdir -p "$GENESIS_ACCOUNT_DIR"
@@ -93,21 +95,14 @@ settlement_table_file=("$GENESIS_ACCOUNT_DIR"/settlement-table-*.json)
 PA_SETTLEMENT_TABLE="$(basename "${settlement_table_file[0]}" .json)"
 PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE#settlement-table-}"
 
-# Spec files that start on a cluster running a program's previous build,
-# which they upgrade in place: spec file -> program name.
-declare -A PREVIOUS_BUILD_SPECS=(
-  [tests/adapter-upgrade.ts]=protocol_adapter
-  [tests/forwarder-upgrade.ts]=spl_token_forwarder
-)
-
 trap 'stop_validator' EXIT
 
-echo "==> (3/3) Running ${#SPEC_FILES[@]} spec file(s), each on a fresh validator"
+echo "==> (3/3) Running ${#SPEC_FILES[@]} spec file(s) on one validator"
+workspace_program_args
+start_validator "${WORKSPACE_PROGRAM_ARGS[@]}" --warp-slot 1 --account "$PA_SETTLEMENT_TABLE" "${settlement_table_file[0]}"
 for i in "${!SPEC_FILES[@]}"; do
   spec="${SPEC_FILES[$i]}"
   echo "==> [$((i + 1))/${#SPEC_FILES[@]}] ${spec}"
-  workspace_program_args "${PREVIOUS_BUILD_SPECS[$spec]:-}"
-  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}" --warp-slot 1 --account "$PA_SETTLEMENT_TABLE" "${settlement_table_file[0]}"
   if ! ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
     ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
     PA_SETTLEMENT_TABLE="$PA_SETTLEMENT_TABLE" \
@@ -115,8 +110,8 @@ for i in "${!SPEC_FILES[@]}"; do
     echo "❌ ${spec} failed (validator log: ${VALIDATOR_LOG})" >&2
     exit 1
   fi
-  stop_validator
 done
+stop_validator
 
 if [[ "$PHASE" != "test" ]]; then
   # Anchor's SBF toolchain can leave incompatible host debug artifacts in

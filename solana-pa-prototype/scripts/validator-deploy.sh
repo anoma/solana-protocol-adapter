@@ -26,15 +26,15 @@ VALIDATOR_LOG="${VALIDATOR_LOG:-${PROJECT_DIR}/.validator.log}"
 ANCHOR_WALLET_PATH="${ANCHOR_WALLET:-$HOME/.config/solana/id.json}"
 
 # RISC0 verifier programs and PDAs copied from devnet into every local
-# validator's genesis. fetch_devnet_clones downloads them once into
-# DEVNET_CLONE_DIR (gitignored), so each validator start is offline.
+# validator's genesis. The copies are committed in DEVNET_CLONE_DIR, so tests
+# never touch the network; refresh_devnet_verifier replaces them.
 VERIFIER_ROUTER="BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"
 GROTH16_VERIFIER="2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"
 ROUTER_PDA="9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"
 VERIFIER_ENTRY_PDA="4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
 DEVNET_CLONE_PROGRAMS=("$VERIFIER_ROUTER" "$GROTH16_VERIFIER")
 DEVNET_CLONE_ACCOUNTS=("$ROUTER_PDA" "$VERIFIER_ENTRY_PDA")
-DEVNET_CLONE_DIR="${PROJECT_DIR}/.cache/devnet-clones"
+DEVNET_CLONE_DIR="${PROJECT_DIR}/devnet-verifier"
 # Selector registered for the groth16 verifier entry above
 GROTH16_SELECTOR="0x73c457ba"
 # Selector the synthetic genesis VerifierEntry registers the localnet
@@ -61,7 +61,7 @@ VALIDATOR_PID=""
 PROGRAM_TABLE="
 protocol_adapter      pa   5  dev-teardown  close_markers_batch,dev_set_schema_version
 block_time_forwarder  btf  2  -             -
-spl_token_forwarder   stf  3  -             -
+spl_token_forwarder   stf  3  dev-config-version  dev_set_config_version
 test_forwarder        -    -  -             -
 mock_verifier         -    -  -             -
 "
@@ -221,6 +221,24 @@ fixture_matches_program_id() {
     const programIdBytes = Buffer.from(bs58.decode(programId));
     process.exit(txBytes.includes(programIdBytes) ? 0 : 1);
   ' "$fixture_path" "$program_id" "$expected_selector"
+}
+
+# The spec files that build on whatever state they find: every tests/**/*.ts
+# outside tests/utils/ (the support modules), tests/fresh/ and
+# tests/terminal/, sorted. A cluster run runs these.
+history_spec_files() {
+  find tests -name '*.ts' -not -path 'tests/utils/*' -not -path 'tests/fresh/*' -not -path 'tests/terminal/*' |
+    LC_ALL=C sort
+}
+
+# Every spec file in the order the local suite runs them against one
+# validator: tests/fresh/ (they only work on a fresh deployment), then
+# history_spec_files, then tests/terminal/ (they change the deployment for
+# good), each group sorted.
+suite_spec_files() {
+  find tests/fresh -name '*.ts' | LC_ALL=C sort
+  history_spec_files
+  find tests/terminal -name '*.ts' | LC_ALL=C sort
 }
 
 # The two suite proof modes; each entry point validates its own input.
@@ -565,39 +583,34 @@ check_required_fixture() {
   fi
 }
 
-# Download the devnet RISC0 verifier stack into DEVNET_CLONE_DIR: each
-# program's binary and its devnet upgrade authority (the groth16 verifier's
-# authority is the router PDA, which the router relies on), and each PDA's
-# account data. Overwrites the previous download, so every run starts from
-# devnet's current state.
-fetch_devnet_clones() {
-  local id addr
+# Replace the committed copy of the devnet RISC0 verifier stack in
+# DEVNET_CLONE_DIR with devnet's current state, read through the RPC endpoint
+# $1: each program's binary and its devnet upgrade authority (the groth16
+# verifier's authority is the router PDA, which the router relies on), and
+# each PDA's account data.
+refresh_devnet_verifier() {
+  local rpc="$1" id addr
   mkdir -p "$DEVNET_CLONE_DIR"
-  echo "    Fetching the devnet verifier stack into ${DEVNET_CLONE_DIR}"
+  echo "Copying the devnet verifier stack into ${DEVNET_CLONE_DIR}"
   for id in "${DEVNET_CLONE_PROGRAMS[@]}"; do
-    solana program dump --url devnet "$id" "${DEVNET_CLONE_DIR}/${id}.so"
-    solana program show --url devnet "$id" --output json |
+    solana program dump --url "$rpc" "$id" "${DEVNET_CLONE_DIR}/${id}.so"
+    solana program show --url "$rpc" "$id" --output json |
       jq -j --arg id "$id" '.authority // error("devnet program \($id) reports no upgrade authority")' \
         >"${DEVNET_CLONE_DIR}/${id}.authority"
   done
   for addr in "${DEVNET_CLONE_ACCOUNTS[@]}"; do
-    solana account --url devnet "$addr" --output json --output-file "${DEVNET_CLONE_DIR}/${addr}.json" >/dev/null
+    solana account --url "$rpc" "$addr" --output json --output-file "${DEVNET_CLONE_DIR}/${addr}.json" >/dev/null
   done
 }
 
 # Set WORKSPACE_PROGRAM_ARGS to the solana-test-validator arguments that load
 # every workspace program at genesis from target/deploy, upgradeable, with
 # the provider wallet as upgrade authority (what `anchor deploy` would set).
-# $1, if given, names a program to load at its previous build instead, from
-# tests/fixtures/previous/<name>.so: a cluster that has not been upgraded yet.
 workspace_program_args() {
-  local previous="${1:-}" name so
+  local name so
   WORKSPACE_PROGRAM_ARGS=()
   for name in "${PROGRAM_NAMES[@]}"; do
     so="target/deploy/${name}.so"
-    if [[ "$name" == "$previous" ]]; then
-      so="tests/fixtures/previous/${name}.so"
-    fi
     if [[ ! -f "$so" ]]; then
       echo "❌ ${so} is missing; build the programs first ('./scripts/anchor-test.sh build', or the default phase)." >&2
       exit 1
@@ -606,15 +619,15 @@ workspace_program_args() {
   done
 }
 
-# Start a validator on a fresh ledger with the devnet verifier stack (from
-# fetch_devnet_clones) and the genesis account fixtures preloaded. Extra
+# Start a validator on a fresh ledger with the devnet verifier stack (the
+# committed copy in DEVNET_CLONE_DIR) and the genesis account fixtures preloaded. Extra
 # arguments are passed to solana-test-validator (e.g. WORKSPACE_PROGRAM_ARGS).
 start_validator() {
   local clone_args=() id addr file
   for id in "${DEVNET_CLONE_PROGRAMS[@]}"; do
     for file in "${DEVNET_CLONE_DIR}/${id}.so" "${DEVNET_CLONE_DIR}/${id}.authority"; do
       if [[ ! -s "$file" ]]; then
-        echo "❌ ${file} is missing; run fetch_devnet_clones first." >&2
+        echo "❌ ${file} is missing; restore it from git, or run ./scripts/dev.sh refresh-devnet-verifier --url <devnet rpc>." >&2
         return 1
       fi
     done
@@ -623,7 +636,7 @@ start_validator() {
   for addr in "${DEVNET_CLONE_ACCOUNTS[@]}"; do
     file="${DEVNET_CLONE_DIR}/${addr}.json"
     if [[ ! -s "$file" ]]; then
-      echo "❌ ${file} is missing; run fetch_devnet_clones first." >&2
+      echo "❌ ${file} is missing; restore it from git, or run ./scripts/dev.sh refresh-devnet-verifier --url <devnet rpc>." >&2
       return 1
     fi
     clone_args+=(--account "$addr" "$file")

@@ -32,11 +32,8 @@ Commands:
   deny-logic-ref         Deny PA_DENIED_LOGIC_REF: no settlement consumes or
                          creates a resource carrying it again. Cannot be
                          undone (authority wallet).
-  migrate-state          After an in-place upgrade to a build with a new state
-                         layout, migrate PAState from the previous schema
-                         version. Idempotent (upgrade-authority wallet).
   forwarder <cmd>        SPL token forwarder operations: init, reinitialize,
-                         emergency-withdraw, migrate. Parameters are STF_*
+                         emergency-withdraw. Parameters are STF_*
                          environment variables; see scripts/forwarder.ts.
   lookup-table           Create the deployment's settlement lookup table, or
                          extend the one in PA_LOOKUP_TABLE with any missing
@@ -52,12 +49,14 @@ Commands:
                          authority)
   test [--cluster <c>] [spec file...]
                          No cluster (or localnet): full deterministic local
-                         integration flow, each spec file on its own fresh
-                         validator. devnet/mainnet: cluster-safe test subset
-                         against the programs deployed there, refused when
-                         the wallet is any of their upgrade authorities
-                         (their owner). Spec files (paths under tests/)
-                         restrict the run to them.
+                         integration flow, every spec file on one validator.
+                         devnet/mainnet: proves a fixture set for the
+                         deployment (new salt, PA_KIND_TABLE), then runs the
+                         spec files that build on any state, without the
+                         tests tagged @localnet, against the programs
+                         deployed there; refused when the wallet is any of
+                         their upgrade authorities (their owner). Spec files
+                         (paths under tests/) restrict the run to them.
   build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
   build-release          Build the production binaries, no deploy (verifies
                          each production IDL is its development IDL minus
@@ -71,6 +70,10 @@ Commands:
                          with a cluster, compares against the deployed hash
   validator              Start the local test validator (RISC0 verifier stack
                          copied from devnet, marker fixtures preloaded)
+  refresh-devnet-verifier --url <rpc>
+                         Replace the committed copy of the devnet RISC0
+                         verifier stack (devnet-verifier/) with devnet's
+                         current state
   validator-deploy       Sync IDs, build, start the validator with all
                          programs loaded at genesis, and keep it running
 
@@ -89,8 +92,8 @@ Flags:
                    (close_markers_batch enabled). Localnet only.
   --prebuilt       deploy/upgrade: ship the existing target/deploy artifacts
                    without rebuilding (for verify-build output); test: run the
-                   cluster-safe subset against the programs already deployed
-                   (a running local validator included)
+                   cluster run against the programs already deployed (a
+                   running local validator included)
   --mode <m>       test: real (default) runs the suite against Groth16
                    fixtures and the devnet-cloned verifier; mock runs it
                    against mock fixtures and the localnet mock verifier.
@@ -576,11 +579,6 @@ cmd_deny_logic_ref() {
   run_ts scripts/deny-logic-ref.ts
 }
 
-cmd_migrate_state() {
-  require_pa_deployed
-  run_ts scripts/migrate-state.ts
-}
-
 cmd_forwarder() {
   require_cmd npx
 
@@ -591,11 +589,7 @@ cmd_forwarder() {
 }
 
 cmd_lookup_table() {
-  require_cmd npx
-
-  local pid
-  pid="$(get_program_id "protocol_adapter")"
-  require_deployed "$pid" "PA" "deploy pa"
+  require_pa_deployed
   run_ts scripts/lookup-table.ts
 }
 
@@ -779,29 +773,68 @@ cmd_test() {
   # A local validator's deployment is disposable and owned by the local wallet.
   if [[ "$CLUSTER" != "localnet" ]]; then
     run_ts scripts/cluster-test-guard.ts "${pids[@]}"
+    # Settlements go through the deployment's own lookup table; without it the
+    # suite would create a table of its own on the cluster, and leave it.
+    if [[ -z "${PA_SETTLEMENT_TABLE:-}" ]]; then
+      echo "❌ Set PA_SETTLEMENT_TABLE to the deployment's settlement lookup table (its deployment record names it)." >&2
+      exit 1
+    fi
   fi
 
-  # Cluster-safe spec files (explicit allowlist): none needs the test
-  # forwarder or the owner, stops the adapter, or leaves state another file's
-  # tests cannot run on. Spec files given on the command line replace the list.
-  # One mocha process runs them against the cluster's single deployment, in
-  # list order: settle.ts asserts the primary fixture unsettled before
-  # direct-settle.ts settles it.
-  local specs=(
-    tests/settle.ts
-    tests/direct-settle.ts
-    tests/txdata-lifecycle.ts
-    tests/txdata-expiration.ts
-    tests/tree-growth.ts
-  )
+  # The run proves its own fixture set for the deployment: under a salt no
+  # earlier run used, so nothing in it was settled before, and against the
+  # kind table the deployment stores. Each fixture is proven when a test
+  # first loads it (tests/utils/fixtures.ts), so the run stops at the first
+  # failure and proves only what its tests use.
+  if [[ -z "${PA_KIND_TABLE:-}" || ! -f "$PA_KIND_TABLE" ]]; then
+    echo "❌ Set PA_KIND_TABLE to the kind table (JSON, as fixture-gen reads it) whose commitment the deployment stores;" >&2
+    echo "   the run proves its fixtures against it." >&2
+    exit 1
+  fi
+  # PA_FIXTURE_SALT continues an interrupted run's set, whose fixtures were
+  # proven but not settled; a fixture it already settled fails loudly as
+  # settled.
+  local salt fixture_dir
+  salt="${PA_FIXTURE_SALT:-${CLUSTER}-$(date -u +%Y%m%dT%H%M%SZ)}"
+  fixture_dir="${PROJECT_DIR}/.cache/cluster-fixtures/${salt}"
+  mkdir -p "$fixture_dir"
+  echo "The run's fixtures (salt ${salt}) are proven into ${fixture_dir} as tests need them"
+  # Every spec file loads the suite harness, which reads the primary fixture
+  # for the deployment's proof selector before any test runs.
+  if [[ ! -f "${fixture_dir}/batch_groth16.json" ]]; then
+    "${SCRIPT_DIR}/regen-fixtures.sh" real --out "$fixture_dir" --salt "$salt" --kind-table "$PA_KIND_TABLE" \
+      --only batch_groth16.json
+  fi
+
+  # The suite's files that build on whatever state they find, or the ones
+  # given, each in its own mocha process against the deployment, without the
+  # tests tagged @localnet: those need the owner or the forwarder's
+  # committee, change a deployment setting, or call a program deployed only
+  # on a local validator.
+  local specs=()
   if [[ ${#SPEC_FILES[@]} -gt 0 ]]; then
     specs=("${SPEC_FILES[@]}")
+  else
+    mapfile -t specs < <(history_spec_files)
   fi
 
+  # No per-test timeout (-t 0): a test that first loads a fixture proves it,
+  # for as long as proving takes, and a timeout would abandon a test that
+  # goes on settling in the background. The RPC calls and confirmations the
+  # tests wait on carry their own timeouts.
   echo "Running cluster integration tests (${CLUSTER}): ${specs[*]}"
-  ANCHOR_PROVIDER_URL="$RPC_URL" \
-  ANCHOR_WALLET="$WALLET" \
-    yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 "${specs[@]}"
+  local spec
+  for spec in "${specs[@]}"; do
+    echo "==> ${spec}"
+    ANCHOR_PROVIDER_URL="$RPC_URL" \
+    ANCHOR_WALLET="$WALLET" \
+    PA_TEST_MODE=real \
+    PA_FIXTURE_DIR="$fixture_dir" \
+    PA_FIXTURE_SALT="$salt" \
+    PA_KIND_TABLE="$PA_KIND_TABLE" \
+    PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE:-}" \
+      yarn run ts-mocha --type-check -p ./tsconfig.json -t 0 --grep @localnet --invert "$spec"
+  done
 
   echo ""
   echo "✅ Cluster tests passed (${CLUSTER})"
@@ -861,14 +894,21 @@ case "$COMMAND" in
     fi
     cmd_verify_build
     ;;
+  refresh-devnet-verifier)
+    if [[ -z "$RPC_OVERRIDE" ]]; then
+      echo "❌ refresh-devnet-verifier reads devnet through --url <rpc>; there is no default endpoint." >&2
+      exit 1
+    fi
+    require_cmd solana
+    require_cmd jq
+    refresh_devnet_verifier "$RPC_OVERRIDE"
+    ;;
   validator)
     require_cmd solana-test-validator
     # start_validator (validator-deploy.sh) preloads the RISC0 verifier stack
     # copied from devnet and the synthetic verifier-entry account fixtures
     # — a bare validator cannot settle anything.
     require_cmd solana
-    require_cmd jq
-    fetch_devnet_clones
     start_validator
     trap 'stop_validator' EXIT INT TERM
     echo "Validator running (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
@@ -883,7 +923,6 @@ case "$COMMAND" in
     ensure_lockfile_sync
     sync_program_ids
     build_programs_dev
-    fetch_devnet_clones
     workspace_program_args
     start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
     trap 'stop_validator' EXIT INT TERM
@@ -896,9 +935,9 @@ case "$COMMAND" in
     # on localnet) — the validation path for verify-build artifacts, which
     # the full flow would rebuild and clobber.
     if [[ "$PREBUILT" != "true" && ( -z "$CLUSTER" || "$CLUSTER" == "localnet" ) ]]; then
-      # Full deterministic local flow: sync IDs, build, then each spec file
-      # (all, or the ones given) on its own fresh validator with the programs
-      # loaded at genesis. Guard against Cargo.lock skew first.
+      # Full deterministic local flow: sync IDs, build, then the spec files
+      # (all, or the ones given) on one validator with the programs loaded at
+      # genesis. Guard against Cargo.lock skew first.
       ensure_lockfile_sync
       PA_TEST_MODE="$TEST_MODE" exec "${SCRIPT_DIR}/anchor-test.sh" all "${SPEC_FILES[@]}"
     fi
@@ -913,7 +952,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

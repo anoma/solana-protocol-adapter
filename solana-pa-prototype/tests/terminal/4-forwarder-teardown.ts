@@ -1,8 +1,9 @@
 /**
  * SPL token forwarder teardown on a paused adapter: the committee reclaims
- * rent from nonce bitmaps, escrows and finally the config. The before hook
- * initializes the adapter and the forwarder config, creates a nonce bitmap
- * (init_nonce_bitmap is permissionless) and an escrow, then stops the adapter.
+ * rent from nonce bitmaps, escrows and finally the config, so this runs
+ * among the suite's last files, on the deployment's config. The before hook
+ * creates a nonce bitmap (init_nonce_bitmap is permissionless) and an escrow,
+ * then stops the adapter unless a file before it did.
  */
 import * as anchor from "@anchor-lang/core";
 import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
@@ -13,23 +14,23 @@ import {
   localCloseConfig,
   localCloseEscrow,
   localCloseNonceBitmapsBatch,
-} from "./utils/localOnly";
-import { deriveConfigPda, deriveNonceBitmapPda } from "../client/pda";
-import { createFundedEscrow, makeFunder, randomRef, assertFails } from "./utils/helpers";
+} from "../utils/localOnly";
+import { deriveConfigPda, deriveNonceBitmapPda } from "../../client/pda";
+import { createFundedEscrow, makeFunder, assertFails } from "../utils/helpers";
 import {
   ensureAdapterInitialized,
+  ensureForwarderConfig,
+  ensurePaused,
+  forwarderCommittee as emergencyCommittee,
   forwarderProgram,
-  initForwarderConfig,
   paState,
   provider,
-  pauseAsOwner,
-} from "./utils/adapterSuite";
+} from "../utils/adapterSuite";
 
 describe("forwarder teardown (reclaims forwarder rent)", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
   const funder = makeFunder(provider);
 
-  const emergencyCommittee = Keypair.generate();
   const impostor = Keypair.generate();
 
   let escrow: { mint: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey };
@@ -40,7 +41,7 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
     await funder.fund(impostor, 1);
 
     await ensureAdapterInitialized();
-    await initForwarderConfig(randomRef(), emergencyCommittee.publicKey);
+    await ensureForwarderConfig();
     const bitmapUser = Keypair.generate().publicKey;
     await forwarderProgram.methods
       .initNonceBitmap(bitmapUser, new anchor.BN(0))
@@ -62,7 +63,7 @@ describe("forwarder teardown (reclaims forwarder rent)", () => {
     ).address;
     escrow = { ...funded, recipientAta };
 
-    await pauseAsOwner();
+    await ensurePaused();
   });
 
   const closeEscrowAs = (authority: Keypair, accounts = escrow) =>

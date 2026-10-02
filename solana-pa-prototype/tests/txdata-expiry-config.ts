@@ -4,12 +4,21 @@
  */
 import * as anchor from "@anchor-lang/core";
 import { assert } from "chai";
-import { MAX_EXPIRY_SLOTS, MIN_ALLOWED_EXPIRY, MIN_EXPIRY_SLOTS, SEVEN_DAYS_SLOTS } from "../client/constants";
+import { MIN_ALLOWED_EXPIRY, SEVEN_DAYS_SLOTS } from "../client/constants";
 import { assertFails } from "./utils/helpers";
 import { program, paState, setExpiryBounds, useAdapterSuite } from "./utils/adapterSuite";
 
-describe("protocol-adapter (update_expiry_config)", () => {
+describe("protocol-adapter (update_expiry_config) @localnet", () => {
   const { funder } = useAdapterSuite();
+
+  // The bounds the deployment held; the last test restores them.
+  let foundMin: number;
+  let foundMax: number;
+  before(async () => {
+    const state = await program.account.paStateAccount.fetch(paState);
+    foundMin = state.minExpirySlots.toNumber();
+    foundMax = state.maxExpirySlots.toNumber();
+  });
 
   it("updates expiry config successfully", async () => {
     await setExpiryBounds(50, 5000);
@@ -47,19 +56,11 @@ describe("protocol-adapter (update_expiry_config)", () => {
     );
   });
 
-  it("restores default config", async () => {
-    await setExpiryBounds(MIN_EXPIRY_SLOTS, MAX_EXPIRY_SLOTS);
+  it("restores the bounds the deployment held", async () => {
+    await setExpiryBounds(foundMin, foundMax);
 
     const state = await program.account.paStateAccount.fetch(paState);
-    assert.equal(
-      state.minExpirySlots.toNumber(),
-      MIN_EXPIRY_SLOTS,
-      "min_expiry_slots should be restored to the default",
-    );
-    assert.equal(
-      state.maxExpirySlots.toNumber(),
-      MAX_EXPIRY_SLOTS,
-      "max_expiry_slots should be restored to the default",
-    );
+    assert.equal(state.minExpirySlots.toNumber(), foundMin, "min_expiry_slots is restored");
+    assert.equal(state.maxExpirySlots.toNumber(), foundMax, "max_expiry_slots is restored");
   });
 });

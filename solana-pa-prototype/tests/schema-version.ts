@@ -23,7 +23,7 @@ import {
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
-describe("protocol-adapter (dev_set_schema_version tooling)", () => {
+describe("protocol-adapter (dev_set_schema_version tooling) @localnet", () => {
   const { funder, uploadTxData, initTxData, keepTxData, closeTxData, settleFixtureViaTxData } = useAdapterSuite();
 
   const setSchemaVersion = (version: number) =>
@@ -85,7 +85,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       ({ uploadId: extendUploadId, txData: extendTxData } = await initTxData(extendAuthority, 100));
 
       settleAuthority = await funder.fresh(2);
-      const settleFixture = loadFixture("wrong_root.json");
+      const settleFixture = await loadFixture("wrong_root.json");
       const settlePayload = Buffer.from(settleFixture.tx_b64, "base64");
       ({ uploadId: settleUploadId, txData: settleTxData } = await uploadTxData(settleAuthority, settlePayload));
       settleRemainingAccounts = buildSettleRemainingAccounts(
@@ -98,11 +98,13 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
     });
 
     // txdata_close does not load pa_state, so the uploads close under the
-    // foreign version.
+    // foreign version. dev_set_schema_version accepts a foreign version, so
+    // the adapter returns to the version it had for every later file.
     after(async () => {
       for (const upload of keptUploads) {
         await closeTxData(upload);
       }
+      await setSchemaVersion(current);
     });
 
     // Each case is an instruction that loads pa_state; with a foreign version
@@ -148,7 +150,7 @@ describe("protocol-adapter (dev_set_schema_version tooling)", () => {
       {
         name: "txdata_init",
         run: async () => {
-          const fx = loadFixture("wrong_root.json");
+          const fx = await loadFixture("wrong_root.json");
           const payload = Buffer.from(fx.tx_b64, "base64");
           const remaining = buildSettleRemainingAccounts(deriveNullifierAccounts(fx.consumed_nullifiers_b64));
           return settleFixtureViaTxData(payload, remaining, { newRootMarker: DUMMY_ROOT_MARKER });

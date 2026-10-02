@@ -1,24 +1,30 @@
 /**
  * SPL token forwarder config initialization: who may initialize, the
  * zero-value rejections and what a successful initialize stores. Needs no
- * config yet and touches nothing of the adapter.
+ * config yet and touches nothing of the adapter: it runs first, on the fresh
+ * deployment, and the config it stores is the one every later file uses.
  */
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { PublicKey } from "@solana/web3.js";
 import { spawnSync } from "child_process";
 import { assert } from "chai";
 import * as anchor from "@anchor-lang/core";
-import { CONFIG_VERSION } from "../client/constants";
-import { initializeForwarder } from "../client/instructions";
-import { deriveConfigPda, deriveProgramDataPda } from "../client/pda";
-import { confirmedTransaction, makeFunder, randomRef, assertFails } from "./utils/helpers";
-import { forwarderProgram, program as paProgram, provider } from "./utils/adapterSuite";
+import { CONFIG_VERSION } from "../../client/constants";
+import { initializeForwarder } from "../../client/instructions";
+import { deriveConfigPda, deriveProgramDataPda } from "../../client/pda";
+import { confirmedTransaction, makeFunder, randomRef, assertFails } from "../utils/helpers";
+import {
+  forwarderLogicRef,
+  forwarderCommittee as emergencyCommittee,
+  forwarderProgram,
+  program as paProgram,
+  provider,
+} from "../utils/adapterSuite";
 
 describe("forwarder initialize", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
   const funder = makeFunder(provider);
 
-  const emergencyCommittee = Keypair.generate();
-  const logicRef = randomRef();
+  const logicRef = forwarderLogicRef();
 
   // The upgrade authority, the forwarder's owner, initializes it: the EVM
   // proxy runs its initializer atomically at deployment, so no one else ever

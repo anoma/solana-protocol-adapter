@@ -16,29 +16,15 @@ use anchor_lang::solana_program::program::invoke_signed;
 /// discriminator and Borsh body, serialized once into a buffer sized exactly
 /// (the BPF bump allocator never frees a grown-out buffer).
 pub fn event_instruction_data<E: anchor_lang::Event>(event: &E) -> Result<Vec<u8>> {
-    let mut body_len = ByteCount(0);
-    event.serialize(&mut body_len)?;
     let mut data = Vec::with_capacity(
-        anchor_lang::event::EVENT_IX_TAG_LE.len() + E::DISCRIMINATOR.len() + body_len.0,
+        anchor_lang::event::EVENT_IX_TAG_LE.len()
+            + E::DISCRIMINATOR.len()
+            + borsh::object_length(event)?,
     );
     data.extend_from_slice(anchor_lang::event::EVENT_IX_TAG_LE);
     data.extend_from_slice(E::DISCRIMINATOR);
     event.serialize(&mut data)?;
     Ok(data)
-}
-
-/// A writer that only counts, to size a Borsh buffer before filling it.
-struct ByteCount(usize);
-
-impl std::io::Write for ByteCount {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0 += buf.len();
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
 }
 
 /// The event authority PDA, as `#[event_cpi]` validates it.

@@ -20,13 +20,19 @@ import {
   useAdapterSuite,
 } from "./utils/adapterSuite";
 
-describe("protocol-adapter (pause)", () => {
+describe("protocol-adapter (pause) @localnet", () => {
   const { funder, uploadTxData, settleUnsettledFixture } = useAdapterSuite();
   const owner = provider.wallet.publicKey;
 
   const paused = async () => (await program.account.paStateAccount.fetch(paState)).paused;
   const eventsOf = async (sig: string) =>
     (await cpiEventsOf(sig)).events.map((e) => [e.name, e.data.account.toBase58()]);
+
+  // The deployment is shared with every later file: a failure between the
+  // pause and the unpause must not leave it paused.
+  after(async () => {
+    if (await paused()) await unpauseAdapter(program, owner).rpc();
+  });
 
   it("reports the deployment's verifier as not paused", async () => {
     assert.isFalse(
@@ -84,6 +90,6 @@ describe("protocol-adapter (pause)", () => {
     const sig = await unpauseAdapter(program, owner).rpc();
     assert.isFalse(await paused());
     assert.deepEqual(await eventsOf(sig), [["unpausedEvent", owner.toBase58()]]);
-    await settleUnsettledFixture("batch_groth16.json");
+    await settleUnsettledFixture("batch_groth16_unpaused.json");
   });
 });

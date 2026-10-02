@@ -86,11 +86,6 @@ pub enum ErrorCode {
     #[msg("Token transfer failed - check the SPL Token error in the logs")]
     TokenTransferFailed,
 
-    #[msg(
-        "Account is not in the previous build's layout - it was migrated already, or never existed"
-    )]
-    NotPreviousLayout,
-
     #[msg("Unwrap recipient is the escrow authority - the tokens would never leave escrow")]
     UnwrapToEscrow,
 

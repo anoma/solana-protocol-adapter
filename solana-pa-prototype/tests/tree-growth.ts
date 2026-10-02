@@ -7,6 +7,7 @@ import { assert } from "chai";
 import { RESULT_LT } from "../client/constants";
 import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
 import { assertFails, transactionIdOf } from "./utils/helpers";
+import { predictRootAfterAppend } from "./utils/merkle";
 import {
   provider,
   program,
@@ -24,10 +25,13 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
   const { settleFixtureViaTxData, settleUnsettledFixture } = useAdapterSuite();
 
   let v2TxSig: string;
+  // The root the v2 settlement produced: the tree it found with v2's leaf.
+  let v2Root: Buffer;
 
   it("settles v2 fixture (appends one leaf)", async () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
+    v2Root = await predictRootAfterAppend(program, paState, commitmentsOf(await loadFixture("batch_groth16_v2.json")));
 
     v2TxSig = await settleUnsettledFixture("batch_groth16_v2.json");
 
@@ -58,16 +62,15 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
       ["forwarderCallExecutedEvent", "actionExecutedEvent", "commitmentTreeRootAddedEvent", "transactionExecutedEvent"],
       "the settlement's events follow pa-evm's order",
     );
-    const state = await program.account.paStateAccount.fetch(paState);
     assert.deepEqual(
-      Array.from(events[2].data.root),
-      Array.from(state.root),
+      Buffer.from(events[2].data.root),
+      v2Root,
       "CommitmentTreeRootAdded carries the root the settlement produced",
     );
 
     // pa-evm's ActionExecuted carries the action's nullifiers and commitments
     // with their logic refs; TransactionExecuted carries the transaction id.
-    const fixture = loadFixture("batch_groth16_v2.json");
+    const fixture = await loadFixture("batch_groth16_v2.json");
     const [, action, , executed] = events;
     const hex = (values: number[][]) => values.map((v) => Buffer.from(v).toString("hex"));
     assert.deepEqual(
@@ -99,18 +102,14 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     // `newRootMarker` is a required named account, so the v2 settlement above
     // could not have succeeded without supplying it. This checks that one
     // instance, for the root the v2 settlement produced.
-    const state = await program.account.paStateAccount.fetch(paState);
-    const currentRoot = Buffer.from(state.root as number[]);
-    const rootMarkerPda = deriveRootPda(currentRoot);
-
-    const info = await provider.connection.getAccountInfo(rootMarkerPda);
-    assert.ok(info, "Root marker should exist for the current root after settlement");
+    const info = await provider.connection.getAccountInfo(deriveRootPda(v2Root));
+    assert.ok(info, "Root marker should exist for the root the v2 settlement produced");
     assert.ok(info!.owner.equals(program.programId), "Root marker should be owned by the PA program");
   });
 
   // A settlement that appends commitments must retain its resulting root.
   it("rejects a settlement that creates resources but passes no root marker", async () => {
-    const fixture = loadFixture("batch_groth16_v3.json");
+    const fixture = await loadFixture("batch_groth16_v3.json");
     await assertFails(
       settleFixtureViaTxData(
         Buffer.from(fixture.tx_b64, "base64"),
@@ -137,7 +136,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     const stateBefore = await program.account.paStateAccount.fetch(paState);
     const nextIndexBefore = stateBefore.nextIndex.toNumber();
 
-    const multiFixture = loadFixture("batch_groth16_multi_call.json");
+    const multiFixture = await loadFixture("batch_groth16_multi_call.json");
     const payload = Buffer.from(multiFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(multiFixture.consumed_nullifiers_b64);
 
@@ -161,7 +160,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
   // A settlement that creates nothing produces no root, so no marker account
   // belongs to it.
   it("rejects a root marker passed with a settlement that creates nothing", async () => {
-    const fixture = loadFixture("batch_groth16_consume_only.json");
+    const fixture = await loadFixture("batch_groth16_consume_only.json");
     const { root } = await program.account.paStateAccount.fetch(paState);
     await assertFails(
       settleFixtureViaTxData(
@@ -187,7 +186,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     assert.equal(after.nextIndex.toNumber(), before.nextIndex.toNumber(), "no leaf is appended");
     assert.deepEqual(after.root, before.root, "the latest root is unchanged");
 
-    const fixture = loadFixture("batch_groth16_consume_only.json");
+    const fixture = await loadFixture("batch_groth16_consume_only.json");
     const [nullifierMarker] = deriveNullifierAccounts(fixture.consumed_nullifiers_b64);
     assert.isNotNull(
       await provider.connection.getAccountInfo(nullifierMarker.pubkey),

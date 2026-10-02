@@ -1,4 +1,5 @@
 {
+  "name": "batch_groth16_multi_call",
   "format": "arm-risc0:Transaction(bincode)",
   "aggregation_strategy": "batch",
   "aggregation_proof_type": "mock",

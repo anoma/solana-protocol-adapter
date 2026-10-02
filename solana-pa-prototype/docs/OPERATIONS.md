@@ -4,11 +4,11 @@ This document is the operator's procedure set for a Protocol Adapter (PA) deploy
 
 Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically; cluster operations take `--cluster <localnet|devnet|mainnet>` (see `scripts/ops.sh` for all flags). devnet and mainnet operations go through the operator's RPC provider: pass `--url <rpc>` or set `DEVNET_RPC_URL` / `MAINNET_RPC_URL`; there is no public-endpoint default. Commands shown as `solana`, `npx` or `solana-verify` run directly.
 
-`dev.sh anchor-test --cluster <devnet|mainnet>` runs a test subset against the live deployment. Its wallet must own nothing under test: the run refuses a wallet that is the upgrade authority of any deployed program, because a spec signing as the owner could pause the deployment, replace its kind table or renounce the authority, which makes the program final for good. Use a separate funded test wallet (`--wallet`).
+`dev.sh anchor-test --cluster <devnet|mainnet>` runs the local suite's tests against the live deployment, building on whatever history it holds: every spec file outside `tests/fresh/` and `tests/terminal/`, without the tests tagged `@localnet` (those need the owner or the forwarder's committee, change a deployment setting, or call a program deployed only on a local validator). The run first proves its own fixture set for the deployment, under a salt no earlier run used and against the kind table it stores, so name that table's JSON (as fixture-gen reads it) in `PA_KIND_TABLE`; proving runs locally unless `QUEUE_BASE_URL` sends it to the workers queue. Its wallet must own nothing under test: the run refuses a wallet that is the upgrade authority of any deployed program. Use a separate funded test wallet (`--wallet`), and name the deployment's settlement lookup table in `PA_SETTLEMENT_TABLE` (without it the suite would create and leave a table of its own).
 
 ## The owner
 
-A deployment has one owner: each program's upgrade authority, which the BPF loader records in the program's ProgramData account. The adapter's owner-only instructions (`initialize`, `pause`, `unpause`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_ref`, `migrate_state`) and the forwarder's (`initialize`, `reinitialize`, the `migrate_*` instructions) require it as signer. This mirrors pa-evm, whose owner is also the one who authorizes its upgrades.
+A deployment has one owner: each program's upgrade authority, which the BPF loader records in the program's ProgramData account. The adapter's owner-only instructions (`initialize`, `pause`, `unpause`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_ref`) and the forwarder's (`initialize`, `reinitialize`) require it as signer. This mirrors pa-evm, whose owner is also the one who authorizes its upgrades.
 
 Ownership moves with the upgrade authority, and is given up with it:
 
@@ -71,16 +71,7 @@ To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster 
 - Every instruction that reads the state account refuses it when byte 8 is not the binary's own version, `txdata_init` included. `txdata_write`, `txdata_close`, and `txdata_close_expired` never load `PAStateAccount`, so they keep working against a foreign version regardless of migration status, letting uploaders reclaim rent mid-migration. An upgrade to a layout-changing binary therefore stops the rest of the adapter cold until the account is migrated; nothing misreads old bytes.
 - The refusal surfaces as one of two errors depending on the account's bytes. When the old account still deserializes under the new binary's layout — a version-byte mismatch only — the error is `UnsupportedStateSchema`. When it does not (a re-serialization shorter than an earlier one leaves stale bytes past its end, where a newer layout reads its appended fields), Anchor's `AccountDidNotDeserialize` surfaces first, because account deserialization runs before constraints. Either way the instruction is refused before it runs.
 
-A release that changes the layout ships the migration with it, the counterpart of the call pa-evm's owner passes to `upgradeToAndCall`. The procedure is: upgrade the binary, then run its `migrate_state` once, signed by the upgrade authority, before any other instruction:
-
-```sh
-./scripts/dev.sh upgrade pa --cluster <c>          # upgrade-authority wallet
-./scripts/dev.sh migrate-state --cluster <c>       # upgrade-authority wallet; idempotent
-```
-
-`migrate_state` declares the account unchecked (the typed layout cannot read it), requires this program as owner and the previous version at byte 8, parses the previous layout (never reinterpreting its bytes: a shorter re-serialization leaves stale bytes past its end), reallocates the account to the new size, zeroes it and writes the new layout with the new version. The upgrade authority pays the rent difference. Only the version byte has a fixed offset (byte 8); a new layout may add, remove or reorder the other fields, which is why `migrate_state` parses the previous layout instead of reading it in place.
-
-Schema version 2 drops the stored authority and pending authority (the owner is the upgrade authority) and appends the logic-ref denylist (below); its `migrate_state` migrates from version 1, the layout of the build deployed on devnet. `tests/adapter-upgrade.ts` runs the whole path from that build (`tests/fixtures/previous/protocol_adapter.so`): settle through it, upgrade in place, migrate through `migrate-state`, settle again.
+A release that changes the layout ships its migration with it, the counterpart of the call pa-evm's owner passes to `upgradeToAndCall`: an owner-only instruction that the upgrade authority runs once, right after upgrading the program in place and before any other instruction. It declares the state account unchecked (the typed layout cannot read it), requires this program as owner and the previous version at byte 8, parses the previous layout (never reinterpreting its bytes: a shorter re-serialization leaves stale bytes past its end), reallocates the account, and writes the new layout with the new version; the upgrade authority pays the rent difference. Only the version byte has a fixed offset (byte 8); a new layout may add, remove or reorder the other fields, which is why the migration parses the previous layout. The release that brings the migration also brings a test that starts from the previous build and runs the upgrade path. This build is the first layout of its deployments, so it carries no migration.
 
 This covers the state account only. A change to the commitment tree itself (hash, arity, leaf encoding) or to the marker PDA seeds invalidates the existing tree and marker addresses, and no in-place migration recovers that: it is a fresh deployment plus a bulk copy of roots and nullifiers.
 
@@ -204,20 +195,7 @@ Escrow, nonce bitmaps and the committee are untouched. The instruction emits `In
 
 ### Upgrading the forwarder
 
-The forwarder is upgraded in place, as the EVM forwarder's proxy is upgraded through `upgradeToAndCall`: the program id, the config, the escrow and the nonce bitmaps stay. A release that changes an account layout ships `migrate_*` instructions, the counterpart of the call the EVM owner passes to `upgradeToAndCall`, which the upgrade authority runs once, right after the upgrade:
-
-```sh
-./scripts/dev.sh upgrade stf --cluster <c>                                          # upgrade-authority wallet
-STF_TOKEN_MINTS=<mint>[,<mint>...] ./scripts/dev.sh forwarder migrate --cluster <c>  # upgrade-authority wallet
-```
-
-This build's migrations bring the previous build's accounts to its layout:
-
-- The config drops the bump the previous build stored after its fields (this build derives the config address at compile time) and records version 1, so this build's `reinitialize` can rotate its logic ref once.
-- Each nonce bitmap keeps its bits and gains its canonical bump. The command finds every bitmap still in the previous layout by itself, reading its user and word from the `init_nonce_bitmap` that created it.
-- Each listed mint's escrow moves from that mint's own authority (`["escrow", mint]`) to the one escrow authority, and the previous escrow account closes. The mints must be listed: escrow token accounts belong to the token program, not the forwarder, so the forwarder cannot enumerate them.
-
-The command is idempotent. Until a bitmap is migrated, wraps on its word fail with `NonceBitmapMissing`; until a mint's escrow is migrated, its unwraps fail for lack of funds in the new escrow. Nothing misreads the old bytes. `tests/forwarder-upgrade.ts` runs this path from the previous build (`tests/fixtures/previous/spl_token_forwarder.so`).
+The forwarder is upgraded in place, as the EVM forwarder's proxy is upgraded through `upgradeToAndCall`: the program id, the config, the escrow and the nonce bitmaps stay. A release that changes an account layout ships owner-only migration instructions, the counterpart of the call the EVM owner passes to `upgradeToAndCall`, which the upgrade authority runs once, right after the upgrade, and a test that runs the upgrade path from the previous build. This build is the first layout of its deployments, so it carries none.
 
 ### Emergency committee
 

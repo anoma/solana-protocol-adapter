@@ -129,16 +129,6 @@ impl NonceBitmap {
     }
 }
 
-/// Size of a config the previous build created: the discriminator, the
-/// four 32-byte fields, then the config's bump, which this build derives at
-/// compile time (CONFIG_PDA), and no version.
-#[constant]
-pub const PREVIOUS_CONFIG_SIZE: u64 = (Config::DISCRIMINATOR.len() + 4 * 32 + 1) as u64;
-/// Size of a nonce bitmap the previous build created: the word, without the
-/// bump this build stores.
-#[constant]
-pub const PREVIOUS_NONCE_BITMAP_SIZE: u64 = (NonceBitmap::ACCOUNT_SIZE - 1) as u64;
-
 /// The bitmap word a nonce lives in and its bit within that word.
 #[inline]
 pub fn nonce_to_word_and_bit(nonce: u64) -> (u64, u8) {

@@ -90,7 +90,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|migrate-state|forwarder|lookup-table|pause|unpause|status|balance|sync-ids|idl-publish|verify-build)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|sync-ids|idl-publish|verify-build|refresh-devnet-verifier)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -118,7 +118,7 @@ case "${1:-}" in
     # Regenerate the COMPLETE fixture set for one proof mode, sequentially.
     shift
     ensure_lockfile_sync
-    run_in_project "./scripts/regen-fixtures.sh ${1:-}"
+    run_in_project "./scripts/regen-fixtures.sh $(printf '%q ' "$@")"
     ;;
 
   lock-sync)
@@ -245,19 +245,22 @@ PYEOF
     echo "               IDL is the development IDL minus the declared dev-only instructions)"
     echo "  anchor-test [--cluster <c>] [--mode <real|mock>] [--prebuilt] [spec file...]"
     echo "               Local: full deterministic integration flow (default),"
-    echo "               each spec file on its own fresh validator; spec files"
+    echo "               every spec file on one validator; spec files"
     echo "               (e.g. tests/settle.ts) restrict the run."
     echo "               devnet/mainnet, or --prebuilt: cluster-safe subset against"
     echo "               the programs already deployed there"
     echo "  gen-fixtures <shape> [options] OUT"
     echo "               Generate one fixture (gen-fixtures --help lists the shapes)"
-    echo "  regen-fixtures <real|mock>"
+    echo "  regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH]"
     echo "               Regenerate the complete fixture set for one proof mode"
     echo "               (sequential; real mode is hours of CPU proving)"
     echo "  fixture-test Run fixture-gen tests"
     echo "  validator    Start a local Solana validator (verifier stack only)"
     echo "  validator-deploy Build, start a validator with every program loaded"
     echo "               at genesis, and keep it running"
+    echo "  refresh-devnet-verifier --url <rpc>"
+    echo "               Replace the committed copy of the devnet verifier stack"
+    echo "               (devnet-verifier/) with devnet's current state"
     echo "  update-deps  Regenerate yarn.lock"
     echo "  coverage     Run unit tests with kcov and report line coverage"
     echo "  clean        Remove local validator/test artifacts"
@@ -274,10 +277,9 @@ PYEOF
     echo "                         and PA_PROOF_SELECTOR)"
     echo "  set-kind-table         Replace the PA's kind-table commitment (PA_KIND_TABLE_COMMITMENT)"
     echo "  deny-logic-ref         Deny a logic ref for good (PA_DENIED_LOGIC_REF)"
-    echo "  migrate-state          Migrate PAState from the previous schema after an in-place upgrade"
     echo "  lookup-table           Create/extend the deployment's settlement lookup table"
     echo "  forwarder <cmd>        SPL token forwarder operations (init, reinitialize,"
-    echo "                         migrate, emergency-withdraw; STF_* env)"
+    echo "                         emergency-withdraw; STF_* env)"
     echo "  idl-publish            Publish the production IDL on chain"
     echo "  verify-build           Deterministic solana-verify build of the PA; with"
     echo "                         --cluster, compares against the deployed program"

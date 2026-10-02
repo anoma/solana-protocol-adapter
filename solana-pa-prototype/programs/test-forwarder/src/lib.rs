@@ -53,10 +53,9 @@ fn relay<'info>(accounts: &[AccountInfo<'info>], payload: &[u8]) -> Result<()> {
     let (target, forwarded) = accounts
         .split_first()
         .ok_or(ErrorCode::RelayMissingTarget)?;
-    if payload.len() < 32 {
-        return Err(ErrorCode::RelayPayloadTooShort.into());
-    }
-    let (logic_ref, input) = payload.split_at(32);
+    let (logic_ref, input) = payload
+        .split_first_chunk::<32>()
+        .ok_or(ErrorCode::RelayPayloadTooShort)?;
     let ix = Instruction {
         program_id: *target.key,
         accounts: forwarded
@@ -68,7 +67,7 @@ fn relay<'info>(accounts: &[AccountInfo<'info>], payload: &[u8]) -> Result<()> {
             })
             .collect(),
         data: crate::instruction::ForwardCall {
-            _logic_ref: logic_ref.try_into().expect("split at 32"),
+            _logic_ref: *logic_ref,
             input: input.to_vec(),
         }
         .data(),

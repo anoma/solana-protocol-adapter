@@ -1,29 +1,57 @@
 /**
  * SPL token forwarder config: who may reinitialize it, and the guards a
- * direct caller hits. The before hook initializes the config. Everything
+ * direct caller hits, on the config the deployment runs. Everything
  * forward_call does past its caller check needs the adapter as the CPI
  * caller, so those behaviours are tested through settlement
  * (spl-token-wrap-unwrap.ts); the emergency flow is forwarder-emergency.ts.
  */
+import { BN } from "@anchor-lang/core";
 import { Keypair, PublicKey, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
 import { encodeUnwrapInput, reinitializeForwarder } from "../client/instructions";
 import { localSetEmergencyCaller } from "./utils/localOnly";
-import { OP_UNWRAP } from "../client/constants";
+import { CONFIG_VERSION, OP_UNWRAP } from "../client/constants";
 import { deriveConfigPda, deriveProgramDataPda } from "../client/pda";
 import { makeFunder, randomRef, assertFails } from "./utils/helpers";
-import { forwarderProgram, initForwarderConfig, paState, program as paProgram, provider } from "./utils/adapterSuite";
+import { ensureForwarderConfig, forwarderProgram, paState, program as paProgram, provider } from "./utils/adapterSuite";
 
-describe("forwarder config (logic ref and direct-call guards)", () => {
+describe("forwarder config (logic ref and direct-call guards) @localnet", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
   const funder = makeFunder(provider);
-  const logicRef = randomRef();
+  // The logic ref the deployment's config serves; the rotation test puts it back.
+  let logicRef: number[];
 
-  before(() => initForwarderConfig(logicRef, Keypair.generate().publicKey));
+  before(async () => {
+    logicRef = (await ensureForwarderConfig()).logicRef;
+  });
 
   describe("reinitialize", () => {
     const reinitialize = (ref: number[], programData?: PublicKey) =>
       reinitializeForwarder(forwarderProgram, provider.wallet.publicKey, ref, programData).rpc();
+    // The development build's dev_set_config_version, looked up untyped, as
+    // production types lack it: it puts the config below this build's
+    // version, as an earlier build would have left it.
+    const lowerConfigVersion = () =>
+      (
+        (forwarderProgram.methods as Record<string, unknown>).devSetConfigVersion as (
+          version: BN,
+        ) => ReturnType<typeof forwarderProgram.methods.reinitialize>
+      )(new BN(CONFIG_VERSION - 1))
+        .accounts({
+          authority: provider.wallet.publicKey,
+          programData: deriveProgramDataPda(forwarderProgram.programId),
+        })
+        .rpc();
+
+    // Every later file wraps under the logic ref the deployment served.
+    after(async () => {
+      if (
+        !Buffer.from((await forwarderProgram.account.config.fetch(configPda)).logicRef).equals(Buffer.from(logicRef))
+      ) {
+        await lowerConfigVersion();
+        await reinitialize(logicRef);
+      }
+    });
 
     it("rejects a signer that is not the program's upgrade authority", async () => {
       const impostor = await funder.fresh(1);
@@ -50,8 +78,7 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
 
     // Mirrors OpenZeppelin's reinitializer(n): InvalidInitialization once the
     // version is n. A config this build initialized is at its version, so
-    // rotating it takes a build that raises CONFIG_VERSION
-    // (forwarder-upgrade.ts rotates one).
+    // rotating it takes a build that raises CONFIG_VERSION.
     it("rejects a config already at this build's version", async () => {
       await assertFails(reinitialize(randomRef()), { program: forwarderProgram, error: "InvalidInitialization" });
       assert.deepEqual(
@@ -59,6 +86,19 @@ describe("forwarder config (logic ref and direct-call guards)", () => {
         logicRef,
         "the config is untouched",
       );
+    });
+
+    // A config an earlier build initialized sits below this build's
+    // CONFIG_VERSION; reinitialize then rotates the ref and records the
+    // version, once.
+    it("rotates the logic ref once for a config below this build's version", async () => {
+      await lowerConfigVersion();
+      const rotated = randomRef();
+      await reinitialize(rotated);
+      const config = await forwarderProgram.account.config.fetch(configPda);
+      assert.deepEqual(config.logicRef, rotated, "the logic ref is rotated");
+      assert.equal(config.version.toNumber(), CONFIG_VERSION, "the config records this build's version");
+      await assertFails(reinitialize(randomRef()), { program: forwarderProgram, error: "InvalidInitialization" });
     });
   });
 

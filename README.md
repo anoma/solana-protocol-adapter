@@ -37,8 +37,7 @@ cd solana-protocol-adapter/solana-pa-prototype
 
 The script:
 1. Syncs the program IDs to the committed keypairs and builds the programs.
-2. Downloads the RISC0 verifier stack from devnet once (`.cache/devnet-clones/`).
-3. Runs each spec file under `tests/` on its own fresh validator, which starts with the programs, the verifier stack and the suite's settlement lookup table loaded at genesis, warped to slot 1.
+2. Starts one validator with the programs, the devnet verifier stack (the committed copy in `devnet-verifier/`) and the suite's settlement lookup table loaded at genesis, warped to slot 1, and runs every spec file under `tests/` against it, so the deployment builds up as much history as the suite makes: first `tests/fresh/` (initialization, which only works on a fresh deployment), then every other file, each building on whatever state it finds, then `tests/terminal/` in numbered order (denials, marker and forwarder teardown, renounced authorities: changes no later test could run after).
 
 ### Proof Modes
 
@@ -67,7 +66,7 @@ entry point for one fixture.
 
 | Command | Description |
 |---------|-------------|
-| `./scripts/dev.sh anchor-test [--mode mock] [spec file...]` | Build the programs and run the integration suite, each spec file on a fresh validator; spec files restrict the run |
+| `./scripts/dev.sh anchor-test [--mode mock] [spec file...]` | Build the programs and run the integration suite on one validator; spec files restrict the run |
 | `./scripts/dev.sh test` | Run the Rust unit tests |
 | `./scripts/dev.sh fmt` / `clippy` | Format check / lints with CI's flags |
 | `./scripts/dev.sh anchor-build` | Development build of the programs (dev-teardown enabled) |
@@ -80,7 +79,7 @@ entry point for one fixture.
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
 | `./scripts/dev.sh shell` / `run <cmd>` | Interactive Nix shell / one command in it |
-| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-ref`, `migrate-state`, `forwarder`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `sync-ids`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
+| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-ref`, `forwarder`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `sync-ids`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
 
 ### Rebuilding From Scratch
 
@@ -108,7 +107,7 @@ Inside the shell, from `solana-pa-prototype/`:
 # Build programs (SBPF v3 with the flake's platform-tools; see scripts/validator-deploy.sh)
 ./scripts/ops.sh build-dev
 
-# Run one spec file on its own fresh validator
+# Run one spec file on a fresh validator (it initializes what it needs)
 ./scripts/ops.sh test tests/settle.ts
 ```
 
@@ -414,12 +413,13 @@ omit it. Anything else fails with `RootPdaMismatch`.
 
 ## Fixtures
 
-Fixtures contain pre-generated RM transactions with valid proofs, committed because real proving takes hours of CPU for the full set.
+Fixtures contain pre-generated RM transactions with valid proofs, committed because real proving takes hours of CPU for the full set. The suite runs on one deployment, so each fixture has one role: settled by exactly one test, settled by whichever test first needs a settled fixture to resubmit (`batch_groth16_resubmitted.json`), or never settled (`batch_groth16_rejected.json` and its error variants, the deliberate-failure forwarder fixtures). A spend through a Merkle path (the historical-root consumer, the unwraps) depends on the tree the deployment holds when the spent resource settles, so it is a fresh-phase test: `regen-fixtures.sh` proves it over the tree `tests/fresh/` builds in its fixed order (`fixture-gen ... --settled-before FIXTURE`, once per earlier settlement), and the test checks that its fixture's root is the one the deployment will hold before settling anything.
 
 ### Fixture Format
 
 ```json
 {
+  "name": "batch_groth16",
   "format": "arm-risc0:Transaction(bincode)",
   "aggregation_strategy": "batch",
   "aggregation_proof_type": "groth16",
@@ -432,11 +432,11 @@ Fixtures contain pre-generated RM transactions with valid proofs, committed beca
 }
 ```
 
-`historical_roots_b64` is present only for fixtures anchored to a historical root; SPL token fixtures add their forwarder metadata.
+`name` is what the fixture's resource nonces derive from: its file stem, followed by `/<salt>` when generated with `--salt`. `historical_roots_b64` is present only for fixtures anchored to a historical root; SPL token fixtures add their forwarder metadata.
 
 ### Generating Fixtures
 
-`./scripts/dev.sh regen-fixtures <real|mock>` regenerates the whole set; `./scripts/dev.sh gen-fixtures <shape> [options] OUT` generates one (`gen-fixtures --help` lists the shapes). Proving runs locally by default; its Groth16 step needs a container runtime (the Nix shell provides podman behind a `docker` wrapper). Setting `QUEUE_BASE_URL` and `QUEUE_AUTH_TOKEN`, or passing `--prover queue`, sends the proving jobs to the AnomaPay workers queue instead.
+`./scripts/dev.sh regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH]` regenerates the whole set (a salt sets every nonce and forwarder nonce apart from earlier runs, so the set settles on a deployment that already holds another run's); `./scripts/dev.sh gen-fixtures <shape> [options] OUT` generates one (`gen-fixtures --help` lists the shapes). Proving runs locally by default; its Groth16 step needs a container runtime (the Nix shell provides podman behind a `docker` wrapper). Setting `QUEUE_BASE_URL` and `QUEUE_AUTH_TOKEN`, or passing `--prover queue`, sends the proving jobs to the AnomaPay workers queue instead.
 
 `fixture-gen` builds `passthrough-logic-guest` in a container during its build, with the RISC0 guest toolchain the `risczero/risc0-guest-builder` image provides.
 
@@ -450,7 +450,7 @@ Fixtures embed program IDs (the block-time forwarder's, the SPL token forwarder'
 
 ### Local Testing
 
-The local validator does not fetch anything at startup. `fetch_devnet_clones` (`scripts/validator-deploy.sh`) downloads the RISC0 verifier router, the Groth16 verifier and their state accounts from devnet once into `.cache/devnet-clones/` (`DEVNET_CLONE_PROGRAMS`, `DEVNET_CLONE_ACCOUNTS`), and `start_validator` loads them at genesis:
+The local validator and the tests never touch the network. `devnet-verifier/` holds a committed copy of the RISC0 verifier router, the Groth16 verifier and their state accounts as they are on devnet (`DEVNET_CLONE_PROGRAMS`, `DEVNET_CLONE_ACCOUNTS` in `scripts/validator-deploy.sh`), and `start_validator` loads them at genesis. `./scripts/dev.sh refresh-devnet-verifier --url <devnet rpc>` replaces the copy with devnet's current state:
 
 | Address | Account |
 |---|---|

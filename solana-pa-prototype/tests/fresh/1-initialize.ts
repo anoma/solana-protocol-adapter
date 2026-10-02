@@ -1,16 +1,16 @@
 /**
  * `initialize`: only the program's upgrade authority may call it (AUTH-01),
  * and it starts every deployment on the empty kind table, announcing it as
- * pa-evm's initializer does. Needs an adapter that was never initialized,
- * which the file's fresh validator provides.
+ * pa-evm's initializer does. Needs an adapter that was never initialized:
+ * it runs first, on the fresh deployment the rest of the suite builds on.
  */
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
-import { initializeAdapter } from "../client/instructions";
-import { PAUSED_MOCK_SELECTOR, VERIFIER_ROUTER_ID, getVerifierEntryPda } from "../client/verifier";
-import { EMPTY_TREE_ROOT_INITIAL } from "./utils/constants";
-import { assertFails } from "./utils/helpers";
+import { EMPTY_KIND_TABLE_COMMITMENT } from "../../client/constants";
+import { initializeAdapter } from "../../client/instructions";
+import { PAUSED_MOCK_SELECTOR, VERIFIER_ROUTER_ID, getVerifierEntryPda } from "../../client/verifier";
+import { EMPTY_TREE_ROOT_INITIAL } from "../utils/constants";
+import { assertFails } from "../utils/helpers";
 import {
   PROOF_SELECTOR,
   buildInitialize,
@@ -20,7 +20,7 @@ import {
   program,
   provider,
   useAdapterSuite,
-} from "./utils/adapterSuite";
+} from "../utils/adapterSuite";
 
 describe("protocol-adapter (initialize)", () => {
   const { funder } = useAdapterSuite({ initialize: false });
@@ -94,6 +94,10 @@ describe("protocol-adapter (initialize)", () => {
       EMPTY_KIND_TABLE_COMMITMENT,
       "initialize must store the empty kind table's commitment",
     );
+    assert.isFalse(state.paused, "the adapter starts unpaused");
+    assert.equal(state.nextIndex.toNumber(), 0, "the tree starts empty");
+    assert.equal(state.currentDepth, 1, "the tree starts at depth 1");
+    assert.deepEqual(Buffer.from(state.root as number[]), EMPTY_TREE_ROOT_INITIAL, "the root is the empty tree's");
     // pa-evm's initializer adds the empty tree's root (CommitmentTreeRootAdded)
     // and installs the empty kind table (KindTableCommitmentUpdated), in that
     // order. Its ownership is the upgrade authority the loader records, so

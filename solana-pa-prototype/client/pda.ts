@@ -63,15 +63,6 @@ export function deriveEscrowAuthority(forwarderProgramId: PublicKey): PublicKey 
   return PublicKey.findProgramAddressSync([ESCROW_SEED], forwarderProgramId)[0];
 }
 
-/**
- * The escrow authority of `mint` under the forwarder's previous build, which
- * held each mint's escrow under its own `["escrow", mint]` authority;
- * `migrate_escrow` moves that escrow to the one authority above.
- */
-export function derivePreviousEscrowAuthority(forwarderProgramId: PublicKey, mint: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([ESCROW_SEED, mint.toBuffer()], forwarderProgramId)[0];
-}
-
 /** The 256-nonce word a nonce belongs to. */
 export function nonceWordIndex(nonce: bigint): bigint {
   return nonce / NONCES_PER_WORD;

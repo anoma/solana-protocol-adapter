@@ -32,7 +32,7 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   // no longer stresses the heap and must grow. Runs before the successful
   // settlement so a surprise success cannot consume the nullifiers first.
   it("cannot settle the transfer-shape fixture without the extended heap budget", async () => {
-    const fx = loadFixture("batch_groth16_transfer_shape.json");
+    const fx = await loadFixture("batch_groth16_transfer_shape.json");
     const payload = Buffer.from(fx.tx_b64, "base64");
     const authority = await funder.fresh(2);
     const { uploadId, txData } = await uploadTxData(authority, payload);
@@ -55,7 +55,7 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
   });
 
   it("settles the three-action transfer-shape fixture and emits payload events", async () => {
-    const fx = loadFixture("batch_groth16_transfer_shape.json");
+    const fx = await loadFixture("batch_groth16_transfer_shape.json");
     const payload = Buffer.from(fx.tx_b64, "base64");
     assert.equal(fx.consumed_nullifiers_b64.length, 3, "fixture should have 3 actions");
 

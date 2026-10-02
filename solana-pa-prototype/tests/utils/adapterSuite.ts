@@ -12,6 +12,7 @@ import {
   AccountMeta,
   AddressLookupTableAccount,
   ComputeBudgetProgram,
+  Connection,
   Keypair,
   LAMPORTS_PER_SOL,
   PublicKey,
@@ -27,6 +28,7 @@ import { MockVerifier } from "../../target/types/mock_verifier";
 import { initializeAdapter, initializeForwarder, pauseAdapter } from "../../client/instructions";
 import { ensureSettlementLookupTable, fetchLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
+  deriveConfigPda,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
   derivePaStatePda,
   deriveRootMarkerPda,
@@ -39,27 +41,41 @@ import {
   VERIFIER_ROUTER_ID,
 } from "../../client/verifier";
 import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
-import { createdCommitmentsOf, type Fixture, loadFixture, parseSelectorFromFixture } from "./fixtures";
+import { createdCommitmentsOf, type Fixture, loadFixture, parseSelectorFromFixture, requireFixture } from "./fixtures";
 import {
   confirmedTransaction,
   ExpectedFailure,
   initTxData as initTxDataOf,
   makeFunder,
+  seededKeypair,
   sendV0,
   TxDataUpload,
   uploadTxData as uploadTxDataTo,
 } from "./helpers";
 import { predictRootMarkerPda as predictRootMarkerPdaOf } from "./merkle";
 
-export const provider = anchor.AnchorProvider.env();
+// Every transaction is confirmed, and every read made, at `confirmed`: a
+// cluster's RPC endpoint serves reads from several nodes, and a write only
+// processed by one of them may not be visible yet on the one that answers the
+// next read. (Anchor's default, `processed`, is one node's unvoted view.)
+const envProvider = anchor.AnchorProvider.env();
+export const provider = new anchor.AnchorProvider(
+  new Connection(envProvider.connection.rpcEndpoint, "confirmed"),
+  envProvider.wallet,
+  { commitment: "confirmed", preflightCommitment: "confirmed" },
+);
 anchor.setProvider(provider);
 
 export const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 export const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
 export const [paState] = derivePaStatePda(program.programId);
 
-/** The primary fixture: one ephemeral consumed resource, one created, a block-time-forwarder call. */
-export const fixture = loadFixture("batch_groth16.json");
+/**
+ * The primary fixture: one ephemeral consumed resource, one created, a
+ * block-time-forwarder call. Read when this module loads, for the proof
+ * selector below; a cluster run proves it before the first spec file.
+ */
+export const fixture = requireFixture("batch_groth16.json");
 
 // Verifiers by router selector. Fixtures carry their selector, so tests
 // derive the verifier program and its failures from the fixture instead of
@@ -133,8 +149,9 @@ export async function paStateExists(): Promise<boolean> {
 }
 
 /**
- * Initialize the adapter unless it already is. A fresh validator never has
- * it; a cluster run finds the deployment's own adapter and uses it as is.
+ * Initialize the adapter unless it already is: the suite's first file
+ * initializes it, and every later file, or a cluster run, finds it
+ * initialized and uses it as is.
  */
 export async function ensureAdapterInitialized(): Promise<void> {
   if (!(await paStateExists())) {
@@ -147,6 +164,14 @@ export async function pauseAsOwner(): Promise<void> {
   await pauseAdapter(program, provider.wallet.publicKey).rpc();
 }
 
+/**
+ * Pause the adapter unless it already is: the files that run last act on a
+ * paused adapter, and the first of them pauses it for the rest.
+ */
+export async function ensurePaused(): Promise<void> {
+  if (!(await program.account.paStateAccount.fetch(paState)).paused) await pauseAsOwner();
+}
+
 /** Set the TxData expiry bounds as the adapter authority. */
 export async function setExpiryBounds(minSlots: number, maxSlots: number): Promise<void> {
   await program.methods
@@ -155,36 +180,55 @@ export async function setExpiryBounds(minSlots: number, maxSlots: number): Promi
     .rpc();
 }
 
-/** Initialize the SPL token forwarder's config for this adapter, the provider wallet paying. */
-export async function initForwarderConfig(logicRef: number[], committee: PublicKey): Promise<void> {
-  await initializeForwarder(forwarderProgram, program.programId, logicRef, committee, provider.wallet.publicKey).rpc();
+/**
+ * The SPL token forwarder's config the suite's deployment runs: it serves the
+ * AnomaPay transfer logic the wrap fixtures carry, and its emergency
+ * committee is a keypair seeded from a label, apart from the owner.
+ */
+export const forwarderLogicRef = () =>
+  Array.from(Buffer.from(requireFixture("spl_token_wrap.json").spl_token_wrap!.logic_ref_b64, "base64"));
+export const forwarderCommittee = seededKeypair("spl_token_forwarder_test_committee");
+
+/**
+ * Initialize the forwarder config with the suite's values unless it exists:
+ * the suite's first files initialize it, and every later file, or a cluster
+ * run, finds it and uses it as is. Returns the stored config.
+ */
+export async function ensureForwarderConfig() {
+  const [configPda] = deriveConfigPda(forwarderProgram.programId);
+  if (!(await provider.connection.getAccountInfo(configPda))) {
+    await initializeForwarder(
+      forwarderProgram,
+      program.programId,
+      forwarderLogicRef(),
+      forwarderCommittee.publicKey,
+      provider.wallet.publicKey,
+    ).rpc();
+  }
+  return forwarderProgram.account.config.fetch(configPda);
 }
 
 /**
- * Assert that `fixtureName` has not already been settled on this validator.
+ * Assert that `fixtureName` has not been settled on this deployment.
  *
- * Every test that settles a fixture asserts an exact state transition
- * (next_index before -> after, a specific resulting root, specific markers).
- * Those assertions are only meaningful when the fixture's nullifiers are
- * unconsumed. If they already exist, the rest of the test is measuring
- * something else.
- *
- * This fails loudly rather than skipping or degrading to a weaker check: a
- * silently retired test reports as pending, which reads as green, and a
- * weakened one reports as passing while verifying materially less.
+ * A test that settles a fixture asserts the transition its settlement makes
+ * on the state it finds, which needs the fixture's nullifiers unspent. Each
+ * fixture is settled by exactly one test, and a cluster run proves a new set
+ * under its own salt, so a settled fixture means the fixture set is reused
+ * or two tests claim one fixture.
  */
 export async function assertFixtureUnsettled(fixtureName: string): Promise<void> {
   assert.isFalse(
     await fixtureSettled(fixtureName),
-    `${fixtureName} is already settled on this validator (its first nullifier ` +
-      `marker exists). These tests require a fresh ledger: run them through ` +
-      `'./scripts/dev.sh anchor-test', which gives every spec file its own, or deploy to a fresh devnet.`,
+    `${fixtureName} is already settled on this deployment (its first nullifier marker exists): ` +
+      `either another test settles it too, or this fixture set was settled by an earlier run ` +
+      `(a cluster run proves a new set under its own salt).`,
   );
 }
 
-/** Whether `fixtureName` is settled on this validator: its first nullifier marker exists. */
+/** Whether `fixtureName` is settled on this deployment: its first nullifier marker exists. */
 export async function fixtureSettled(fixtureName: string): Promise<boolean> {
-  const [first] = deriveNullifierAccounts(loadFixture(fixtureName).consumed_nullifiers_b64);
+  const [first] = deriveNullifierAccounts((await loadFixture(fixtureName)).consumed_nullifiers_b64);
   return (await provider.connection.getAccountInfo(first.pubkey)) !== null;
 }
 
@@ -330,7 +374,8 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
    * The deployment's settlement lookup table: settlements are v0
    * transactions against it, the shape every submitter sends. The local
    * suite's validator starts with it (PA_SETTLEMENT_TABLE, see
-   * genesis-settlement-table.ts); on a cluster it is created on first use.
+   * genesis-settlement-table.ts); a cluster run names the deployment's own
+   * (ops.sh requires PA_SETTLEMENT_TABLE there).
    */
   async function settlementTable(): Promise<AddressLookupTableAccount> {
     if (table) return table;
@@ -465,7 +510,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
    */
   async function settleUnsettledFixture(fixtureName: string): Promise<string> {
     await assertFixtureUnsettled(fixtureName);
-    const f = loadFixture(fixtureName);
+    const f = await loadFixture(fixtureName);
     return settleFixtureViaTxData(
       Buffer.from(f.tx_b64, "base64"),
       buildSettleRemainingAccounts(deriveNullifierAccounts(f.consumed_nullifiers_b64)),
@@ -474,9 +519,9 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
   }
 
   /**
-   * Settle the fixture `fixtureName` unless it is already settled. A fresh
-   * validator never has it; a cluster run shares one deployment across spec
-   * files, so another file may have settled it already.
+   * Settle the fixture `fixtureName` unless it is already settled, for a
+   * test that needs it settled and asserts nothing about its settlement:
+   * other tests on the deployment may have settled it already.
    */
   async function settleFixture(fixtureName: string): Promise<void> {
     if (!(await fixtureSettled(fixtureName))) await settleUnsettledFixture(fixtureName);

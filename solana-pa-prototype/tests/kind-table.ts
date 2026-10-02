@@ -1,17 +1,15 @@
 /**
- * The kind-table commitment setter. The before hook settles the primary
- * fixture, so a re-submission of it reaches nullifier creation exactly when
- * the stored commitment matches its instance.
+ * The kind-table commitment setter. The before hook settles the resubmitted
+ * fixture unless it is settled already, so a re-submission of it reaches
+ * nullifier creation exactly when the stored commitment matches its instance.
  */
 import { assert } from "chai";
 import { setKindTableCommitment } from "../client/instructions";
-import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
 import { randomRef, assertFails } from "./utils/helpers";
 import {
   provider,
   program,
   paState,
-  fixture,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
   buildSettleRemainingAccounts,
@@ -19,23 +17,37 @@ import {
   settleFromTxDataBuilder,
   useAdapterSuite,
 } from "./utils/adapterSuite";
+import { type Fixture, loadFixture } from "./utils/fixtures";
 
-describe("protocol-adapter (kind table commitment)", () => {
+describe("protocol-adapter (kind table commitment) @localnet", () => {
   const { funder, uploadTxData, settleFixture } = useAdapterSuite();
-
-  before(() => settleFixture("batch_groth16.json"));
+  let fixture: Fixture;
 
   // Mirrors pa-evm ProtocolAdapter.setKindTableCommitment: owner-only, zero
   // rejected, KindTableCommitmentUpdated emitted. The stored commitment is
   // what every settled aggregation instance must carry, so a change rejects
   // transactions proven against the previous table until it is changed back.
-  const empty = Array.from(EMPTY_KIND_TABLE_COMMITMENT);
+  // The tests change it and restore the one the deployment held.
+  let found: number[];
+  const stored = async () => (await program.account.paStateAccount.fetch(paState)).kindTableCommitment;
 
-  // A fresh upload of the already-settled primary fixture. Under another
+  before(async () => {
+    found = await stored();
+    fixture = await loadFixture("batch_groth16_resubmitted.json");
+    await settleFixture("batch_groth16_resubmitted.json");
+  });
+
+  after(async () => {
+    if (!Buffer.from(await stored()).equals(Buffer.from(found))) {
+      await setKindTableCommitment(program, provider.wallet.publicKey, found).rpc();
+    }
+  });
+
+  // A fresh upload of the already-settled resubmitted fixture. Under another
   // commitment it fails at the commitment check, which precedes every other
   // check on the instance; under the right one it reaches nullifier creation
   // and fails there, which is what tells the two rejections apart.
-  const resettlePrimaryFixture = async () => {
+  const resettleFixture = async () => {
     const authority = await funder.fresh(2);
     const { uploadId, txData } = await uploadTxData(authority, Buffer.from(fixture.tx_b64, "base64"));
     return settleFromTxDataBuilder(
@@ -55,11 +67,7 @@ describe("protocol-adapter (kind table commitment)", () => {
       program,
       error: "Unauthorized",
     });
-    assert.deepEqual(
-      (await program.account.paStateAccount.fetch(paState)).kindTableCommitment,
-      empty,
-      "the commitment is untouched",
-    );
+    assert.deepEqual(await stored(), found, "the commitment is untouched");
   });
 
   it("rejects a zero commitment", () =>
@@ -71,11 +79,7 @@ describe("protocol-adapter (kind table commitment)", () => {
   it("stores a new commitment, emits KindTableCommitmentUpdated, and rejects transactions proven against the previous table until it is restored", async () => {
     const rotated = randomRef();
     const sig = await setKindTableCommitment(program, provider.wallet.publicKey, rotated).rpc();
-    assert.deepEqual(
-      (await program.account.paStateAccount.fetch(paState)).kindTableCommitment,
-      rotated,
-      "the new commitment is stored",
-    );
+    assert.deepEqual(await stored(), rotated, "the new commitment is stored");
     const { events } = await cpiEventsOf(sig);
     const updated = events.find((e) => e.name === "kindTableCommitmentUpdatedEvent");
     assert.ok(
@@ -88,14 +92,10 @@ describe("protocol-adapter (kind table commitment)", () => {
       { kindTableCommitment: rotated },
       "the event carries exactly pa-evm's field, the new commitment",
     );
-    await assertFails(resettlePrimaryFixture(), { program: program, error: "KindTableCommitmentMismatch" });
+    await assertFails(resettleFixture(), { program, error: "KindTableCommitmentMismatch" });
 
-    await setKindTableCommitment(program, provider.wallet.publicKey, empty).rpc();
-    assert.deepEqual(
-      (await program.account.paStateAccount.fetch(paState)).kindTableCommitment,
-      empty,
-      "the empty table's commitment is restored",
-    );
-    await assertFails(resettlePrimaryFixture(), { program: program, error: "DuplicateNullifier" });
+    await setKindTableCommitment(program, provider.wallet.publicKey, found).rpc();
+    assert.deepEqual(await stored(), found, "the commitment the deployment held is restored");
+    await assertFails(resettleFixture(), { program, error: "DuplicateNullifier" });
   });
 });

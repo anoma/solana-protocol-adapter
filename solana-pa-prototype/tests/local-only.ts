@@ -1,4 +1,7 @@
-// Every builder in tests/utils/localOnly.ts refuses a non-local RPC endpoint and works against the local validator.
+// Every builder in tests/utils/localOnly.ts refuses a non-local RPC endpoint and works against the local validator,
+// and no other code in the repository builds those instructions.
+import { readdirSync, readFileSync } from "fs";
+import { join } from "path";
 import { AnchorProvider, Program } from "@anchor-lang/core";
 import { Connection, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
@@ -64,9 +67,42 @@ describe("authority and closing instructions are local-only", () => {
     });
   }
 
-  it("builds every one against the local validator", () => {
+  it("builds every one against the local validator @localnet", () => {
     for (const [name, build] of Object.entries(builders(program, forwarderProgram))) {
       assert.isOk(build(), name);
     }
+  });
+});
+
+describe("no code outside tests/utils/localOnly.ts changes an authority or closes protocol accounts", () => {
+  const ROOT = join(__dirname, "..");
+  const LOCAL_ONLY = "tests/utils/localOnly.ts";
+  /** The forwarder and adapter instructions localOnly.ts alone may build, and the loader's SetAuthority. */
+  const TS_AUTHORITY_CALL =
+    /\.(setEmergencyCaller|closeEscrow|closeConfig|closeNonceBitmapsBatch|closeMarkersBatch)\s*\(|programId:\s*BPF_LOADER_UPGRADEABLE/;
+  /** The Solana CLI commands that move or renounce an authority. */
+  const SHELL_AUTHORITY_CALL = /\bset-upgrade-authority\b|\bset-buffer-authority\b|\bset-authority\b|--final\b/;
+
+  const files = (dir: string, ext: string): string[] =>
+    readdirSync(join(ROOT, dir), { recursive: true, encoding: "utf8" })
+      .filter((p) => p.endsWith(ext))
+      .map((p) => join(dir, p));
+  const offending = (paths: string[], pattern: RegExp) =>
+    paths.flatMap((path) =>
+      readFileSync(join(ROOT, path), "utf8")
+        .split("\n")
+        .flatMap((line, i) => (pattern.test(line) ? [`${path}:${i + 1}: ${line.trim()}`] : [])),
+    );
+
+  it("TypeScript in tests/, scripts/ and client/ builds them only through localOnly.ts", () => {
+    const sources = ["tests", "scripts", "client"].flatMap((d) => files(d, ".ts")).filter((p) => p !== LOCAL_ONLY);
+    assert.isAbove(sources.length, 0, "found no TypeScript sources to check");
+    assert.deepEqual(offending(sources, TS_AUTHORITY_CALL), [], "use the builders in tests/utils/localOnly.ts instead");
+  });
+
+  it("no shell script calls the CLI's authority commands", () => {
+    const scripts = files("scripts", ".sh");
+    assert.isAbove(scripts.length, 0, "found no shell scripts to check");
+    assert.deepEqual(offending(scripts, SHELL_AUTHORITY_CALL), [], "authority changes on a cluster are made by hand");
   });
 });

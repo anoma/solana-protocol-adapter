@@ -4,26 +4,24 @@
  * upgrades: every owner-only instruction checks its signer against the
  * upgrade authority the loader records in the program's ProgramData, so
  * moving or renouncing the upgrade authority moves or renounces the
- * ownership. Every test but the last leaves the provider wallet as the
- * upgrade authority; the last renounces it.
+ * ownership. Every test leaves the provider wallet as the upgrade authority;
+ * renouncing it is terminal/5-renounce.ts, among the suite's last files.
  */
 import { Transaction } from "@solana/web3.js";
-import { assert } from "chai";
-import { EMPTY_KIND_TABLE_COMMITMENT } from "../client/constants";
 import { pauseAdapter, setKindTableCommitment } from "../client/instructions";
 import { deriveProgramDataPda } from "../client/pda";
 import { localSetUpgradeAuthority } from "./utils/localOnly";
 import { assertFails } from "./utils/helpers";
 import { provider, program, paState, forwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
 
-describe("protocol-adapter (authority)", () => {
+describe("protocol-adapter (authority) @localnet", () => {
   const { funder } = useAdapterSuite();
   const wallet = provider.wallet.publicKey;
-  const kindTable = Array.from(EMPTY_KIND_TABLE_COMMITMENT);
-
-  it("initializes unpaused", async () => {
-    const state = await program.account.paStateAccount.fetch(paState);
-    assert.isFalse(state.paused);
+  // The owner-only call these tests make: rewriting the kind table the
+  // adapter already holds, which leaves its configuration as it was found.
+  let kindTable: number[];
+  before(async () => {
+    kindTable = Array.from((await program.account.paStateAccount.fetch(paState)).kindTableCommitment);
   });
 
   it("rejects pause from a signer that is not the upgrade authority", async () => {
@@ -70,18 +68,5 @@ describe("protocol-adapter (authority)", () => {
       [successor],
     );
     await setKindTableCommitment(program, wallet, kindTable).rpc();
-  });
-
-  // Mirrors OwnableUpgradeable.renounceOwnership: with no upgrade authority
-  // (the program final), every owner-only instruction is closed for good.
-  it("is renounced with the upgrade authority", async () => {
-    await provider.sendAndConfirm(
-      new Transaction().add(localSetUpgradeAuthority(provider.connection, program.programId, wallet, null)),
-    );
-    await assertFails(setKindTableCommitment(program, wallet, kindTable).rpc(), {
-      program,
-      error: "Unauthorized",
-      account: "program_data",
-    });
   });
 });

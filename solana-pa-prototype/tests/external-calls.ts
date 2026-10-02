@@ -24,7 +24,7 @@ describe("protocol-adapter (External call error paths)", () => {
     // Use the mismatch fixture (valid proof, nonce=2 nullifiers not consumed).
     // Replace SYSVAR_CLOCK_PUBKEY with a random pubkey so the CPI to btf fails.
     // The inner CPI error propagates through (btf's AccountSysvarMismatch).
-    const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
+    const mismatchFixture = await loadFixture("batch_groth16_mismatch.json");
     const payload = Buffer.from(mismatchFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
     const randomAccount = Keypair.generate().publicKey;
@@ -40,8 +40,8 @@ describe("protocol-adapter (External call error paths)", () => {
     });
   });
 
-  it("rejects settlement when test-forwarder returns error", async () => {
-    const failFixture = loadFixture("batch_forwarder_fail.json");
+  it("rejects settlement when test-forwarder returns error @localnet", async () => {
+    const failFixture = await loadFixture("batch_forwarder_fail.json");
     const payload = Buffer.from(failFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(failFixture.consumed_nullifiers_b64);
 
@@ -54,8 +54,8 @@ describe("protocol-adapter (External call error paths)", () => {
     });
   });
 
-  it("rejects ExternalCallOutputMismatch when forwarder returns no data", async () => {
-    const silentFixture = loadFixture("batch_forwarder_silent.json");
+  it("rejects ExternalCallOutputMismatch when forwarder returns no data @localnet", async () => {
+    const silentFixture = await loadFixture("batch_forwarder_silent.json");
     const payload = Buffer.from(silentFixture.tx_b64, "base64");
     const nullifierAccounts = deriveNullifierAccounts(silentFixture.consumed_nullifiers_b64);
 
