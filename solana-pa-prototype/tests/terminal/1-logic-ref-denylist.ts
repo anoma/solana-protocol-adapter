@@ -7,7 +7,7 @@
 import { assert } from "chai";
 import { denyLogicRef } from "../../client/instructions";
 import { requireFixture } from "../utils/fixtures";
-import { makeFunder, randomRef, assertFails } from "../utils/helpers";
+import { randomRef, assertFails } from "../utils/helpers";
 import {
   provider,
   program,
@@ -21,8 +21,7 @@ import {
 } from "../utils/adapterSuite";
 
 describe("protocol-adapter (logic-ref denylist)", () => {
-  const { settleUnsettledFixture, settleFixtureViaTxData } = useAdapterSuite();
-  const funder = makeFunder(provider);
+  const { funder, settleUnsettledFixture, settleFixtureViaTxData } = useAdapterSuite();
   const authority = provider.wallet.publicKey;
   const denied = async () =>
     (await program.account.paStateAccount.fetch(paState)).deniedLogicRefs.map((r: number[]) => Array.from(r));
@@ -89,6 +88,4 @@ describe("protocol-adapter (logic-ref denylist)", () => {
   // consumed resources on their own.
   it("rejects a settlement that only consumes a resource carrying a denied logic ref", () =>
     assertFails(submit("batch_groth16_consume_only.json"), { program, error: "DeniedLogicRef" }));
-
-  after(() => funder.drainAll());
 });

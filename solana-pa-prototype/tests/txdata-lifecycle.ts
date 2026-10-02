@@ -1,12 +1,12 @@
 /**
- * TxData uploads under the default expiry bounds: expiry validation at init
- * and extend, closing, and the authority and bounds constraints.
+ * TxData uploads under the deployment's expiry bounds: expiry validation at
+ * init and extend, closing, and the authority and bounds constraints.
  */
 import * as anchor from "@anchor-lang/core";
-import { SystemProgram, Keypair } from "@solana/web3.js";
+import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { deriveTxDataPda } from "../client/pda";
-import { freshUploadId, assertFails } from "./utils/helpers";
+import { assertFails } from "./utils/helpers";
 import {
   provider,
   program,
@@ -35,50 +35,20 @@ describe("TxData lifecycle", () => {
   describe("protocol-adapter (TxData Expiration)", () => {
     it("rejects txdata_init with expires_slot too soon", async () => {
       const authority = await funder.fresh(1);
-
-      const { uploadId, txData } = freshUploadId(program.programId, authority.publicKey);
-
       const slot = await provider.connection.getSlot("confirmed");
       // One slot short of the minimum from a slot the transaction lands at or after
       const expiresSlot = new anchor.BN(slot + minSlots - 1);
 
-      await assertFails(
-        program.methods
-          .txdataInit(uploadId, 100, expiresSlot)
-          .accountsPartial({
-            paState,
-            txData,
-            authority: authority.publicKey,
-            systemProgram: SystemProgram.programId,
-          })
-          .signers([authority])
-          .rpc(),
-        { program, error: "TxDataExpiryTooSoon" },
-      );
+      await assertFails(initTxData(authority, 100, expiresSlot), { program, error: "TxDataExpiryTooSoon" });
     });
 
     it("rejects txdata_init with expires_slot too late", async () => {
       const authority = await funder.fresh(1);
-
-      const { uploadId, txData } = freshUploadId(program.programId, authority.publicKey);
-
       const slot = await provider.connection.getSlot("confirmed");
       // Past the maximum by more than the slots the transaction can take to land
       const expiresSlot = new anchor.BN(slot + maxSlots + 1000);
 
-      await assertFails(
-        program.methods
-          .txdataInit(uploadId, 100, expiresSlot)
-          .accountsPartial({
-            paState,
-            txData,
-            authority: authority.publicKey,
-            systemProgram: SystemProgram.programId,
-          })
-          .signers([authority])
-          .rpc(),
-        { program, error: "TxDataExpiryTooLate" },
-      );
+      await assertFails(initTxData(authority, 100, expiresSlot), { program, error: "TxDataExpiryTooLate" });
     });
 
     it("accepts txdata_init with valid expires_slot", async () => {

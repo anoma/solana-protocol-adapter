@@ -55,15 +55,10 @@ const [configPda] = deriveConfigPda(forwarder.programId);
 const [paState] = derivePaStatePda(adapter.programId);
 
 const requireMint = () => requirePubkey("STF_TOKEN_MINT", "the mint whose escrow to operate on");
-const requireRecipient = () => requirePubkey("STF_RECIPIENT", "the owner of the receiving token account");
 
 async function requireConfig() {
   const config = await forwarder.account.config.fetchNullable(configPda);
   return config ?? fail(`forwarder config ${configPda.toBase58()} does not exist — run 'forwarder init' first`);
-}
-
-async function recipientAtaFor(mint: PublicKey, owner: PublicKey): Promise<PublicKey> {
-  return (await getOrCreateAssociatedTokenAccount(connection, wallet.payer, mint, owner)).address;
 }
 
 async function init() {
@@ -129,11 +124,11 @@ async function reinitializeCommand() {
 
 async function withdraw() {
   const mint = requireMint();
-  const recipient = requireRecipient();
+  const recipient = requirePubkey("STF_RECIPIENT", "the owner of the receiving token account");
   const amount = requireRawAmount("STF_AMOUNT", "the amount to withdraw, in the token's raw units");
   await requireConfig();
   const { escrowAta } = escrowAccounts(forwarder.programId, mint);
-  const recipientAta = await recipientAtaFor(mint, recipient);
+  const recipientAta = (await getOrCreateAssociatedTokenAccount(connection, wallet.payer, mint, recipient)).address;
 
   await emergencyWithdraw(
     forwarder,

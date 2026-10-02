@@ -589,11 +589,7 @@ cmd_forwarder() {
 }
 
 cmd_lookup_table() {
-  require_cmd npx
-
-  local pid
-  pid="$(get_program_id "protocol_adapter")"
-  require_deployed "$pid" "PA" "deploy pa"
+  require_pa_deployed
   run_ts scripts/lookup-table.ts
 }
 

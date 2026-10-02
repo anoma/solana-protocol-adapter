@@ -29,15 +29,7 @@ type TreeState = {
   root: number[];
 };
 
-/** The tree `initialize` starts every deployment on: no leaf, depth 1. */
-export const EMPTY_TREE: TreeState = {
-  nextIndex: new anchor.BN(0),
-  currentDepth: 1,
-  frontier: [Array.from(EMPTY_TREE_ROOT_INITIAL)],
-  root: Array.from(EMPTY_TREE_ROOT_INITIAL),
-};
-
-export function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
+function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
   let nextIndex = BigInt(state.nextIndex.toString());
   let depth = state.currentDepth;
   const frontier: Buffer[] = state.frontier.map((f) => Buffer.from(f));

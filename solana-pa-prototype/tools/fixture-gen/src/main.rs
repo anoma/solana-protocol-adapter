@@ -638,7 +638,7 @@ fn mutate_tag_keep_structure(tx: &mut Transaction) -> Result<()> {
     Ok(())
 }
 
-fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
+fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> ExpirableBlob {
     let program_id = block_time_forwarder::ID.to_bytes();
 
     // Use -1 so expected_time < current_time for any reasonable cluster clock.
@@ -653,45 +653,45 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<E
         vec![RESULT_LT]
     };
 
-    Ok(encode_external_call(&SolanaExternalCall {
+    encode_external_call(&SolanaExternalCall {
         program_id,
         instruction_data: input,
         expected_output,
         output_mode: OutputMode::ReturnData,
         num_accounts: 2,
-    }))
+    })
 }
 
-fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
+fn test_forwarder_fail_payload_blob() -> ExpirableBlob {
     // expected_output must be non-empty: Solana's runtime reports no return-data
     // record both for an explicit empty return and for no return at all, so
     // decode_external_call rejects an empty expected_output before the call is
     // ever attempted. This test needs the call to actually reach the CPI so the
     // test-forwarder's IntentionalFailure can propagate, so we pin a non-empty
     // expected value; it is never compared because the CPI itself fails first.
-    Ok(encode_external_call(&SolanaExternalCall {
+    encode_external_call(&SolanaExternalCall {
         program_id: test_forwarder::ID.to_bytes(),
         instruction_data: vec![MODE_FAIL],
         expected_output: vec![0x2a],
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
-    }))
+    })
 }
 
-fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
+fn test_forwarder_silent_payload_blob() -> ExpirableBlob {
     // expected_output must be non-empty: Solana's runtime reports no return-data
     // record both for an explicit empty return and for no return at all, so
     // decode_external_call rejects an empty expected_output before the call is
     // ever attempted. Pinning a non-empty expected value here makes the silent
     // forwarder path a genuine output mismatch (expected [0x2a], got nothing)
     // rather than conflating "expected empty" with "returned nothing".
-    Ok(encode_external_call(&SolanaExternalCall {
+    encode_external_call(&SolanaExternalCall {
         program_id: test_forwarder::ID.to_bytes(),
         instruction_data: vec![MODE_SILENT],
         expected_output: vec![0x2a],
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
-    }))
+    })
 }
 
 /// Amount the relay fixture's unwrap names; it is settled once the escrow holds tokens.
@@ -702,7 +702,7 @@ const RELAY_UNWRAP_AMOUNT: u64 = 1;
 /// seeded recipient. Segment: the test-forwarder, then the SPL forwarder's
 /// unwrap segment (program, config, instructions sysvar, escrow ATA,
 /// recipient ATA, escrow authority, token program).
-fn test_forwarder_relay_payload_blob() -> Result<ExpirableBlob> {
+fn test_forwarder_relay_payload_blob() -> ExpirableBlob {
     let seeded_pubkey =
         |label| Pubkey::new_from_array(seeded_keypair(label).verifying_key().to_bytes());
     let unwrap = spl_token_forwarder::UnwrapInput {
@@ -714,13 +714,13 @@ fn test_forwarder_relay_payload_blob() -> Result<ExpirableBlob> {
     instruction_data.extend_from_slice(TOKEN_TRANSFER_ID.as_bytes());
     instruction_data.push(spl_token_forwarder::OP_UNWRAP);
     instruction_data.extend_from_slice(&unwrap.to_bytes());
-    Ok(encode_external_call(&SolanaExternalCall {
+    encode_external_call(&SolanaExternalCall {
         program_id: test_forwarder::ID.to_bytes(),
         instruction_data,
         expected_output: vec![RELAY_OK],
         output_mode: OutputMode::ReturnData,
         num_accounts: anoma_pa_solana_client::FORWARDER_UNWRAP_NUM_ACCOUNTS + 1,
-    }))
+    })
 }
 
 const USER_SEED_LABEL: &str = "spl_token_forwarder_test_user";
@@ -1416,10 +1416,10 @@ async fn generate_test_transaction_with_external_payload(
     let external_blob = match &forwarder_mode {
         ForwarderMode::BlockTimeForwarder {
             output_mismatch, ..
-        } => block_time_forwarder_external_payload_blob(*output_mismatch)?,
-        ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob()?,
-        ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
-        ForwarderMode::TestForwarderRelay => test_forwarder_relay_payload_blob()?,
+        } => block_time_forwarder_external_payload_blob(*output_mismatch),
+        ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob(),
+        ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob(),
+        ForwarderMode::TestForwarderRelay => test_forwarder_relay_payload_blob(),
     };
     consumed_app_data.external_payload.push(external_blob);
     if let ForwarderMode::BlockTimeForwarder {
@@ -1429,7 +1429,7 @@ async fn generate_test_transaction_with_external_payload(
     {
         consumed_app_data
             .external_payload
-            .push(block_time_forwarder_external_payload_blob(false)?);
+            .push(block_time_forwarder_external_payload_blob(false));
     }
 
     prove_single_action_transaction(prover, compliance_witness, consumed_app_data).await
