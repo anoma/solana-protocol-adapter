@@ -193,6 +193,15 @@ STF_LOGIC_REF=<new 32-byte hex verifying key> ./scripts/dev.sh forwarder reiniti
 
 Escrow, nonce bitmaps and the committee are untouched. The instruction emits `Initialized` with the new version, as OpenZeppelin's reinitializer does; read the new ref from the config account. Resources wrapped under the previous ref leave through the new one once the adapter's kind table lists the previous version as an alias of the new one (anoma/risc0-kind-tables ADR-0008, rule R2): a transaction converts each into a resource under the new ref, which then unwraps. Until that table's commitment is installed (`set-kind-table`), they stay in escrow and can neither unwrap nor convert. The emergency path below is for a stopped adapter only.
 
+### Checking a devnet deployment with a wrap and an unwrap
+
+The integration suite's wraps run only on a fresh local deployment, so a devnet deployment, upgrade or logic-ref rotation is exercised end to end by hand, with fixture-gen's seeded test user and mint (their keys derive from public labels, so this is for devnet only) and anoma-pa-solana-client's `settle-fixture` tool:
+
+1. Prove a wrap against the kind table the adapter stores, under a forwarder nonce the seeded user has not used on this deployment: `./scripts/dev.sh gen-fixtures spl-token-wrap --kind-table <table.json> --wrap-nonce <n> <wrap.json>`.
+2. As the seeded user, mint the amount and approve the forwarder's escrow authority, then settle the wrap with `settle-fixture`.
+3. Read the deployment's commitments in tree order from an indexer (the Envio project's created tags ordered by block, transaction index, action log index and tag index) into a JSON array of hex strings, and check that their root equals the adapter's on-chain root.
+4. Prove the unwrap of the wrap's resource over that tree, `./scripts/dev.sh gen-fixtures spl-token-unwrap --wrap <wrap.json> --preceding-leaves <leaves.json> <unwrap.json>`, where the leaves are the commitments before the wrap's, and settle it with `settle-fixture`.
+
 ### Upgrading the forwarder
 
 The forwarder is upgraded in place, as the EVM forwarder's proxy is upgraded through `upgradeToAndCall`: the program id, the config, the escrow and the nonce bitmaps stay. A release that changes an account layout ships owner-only migration instructions, the counterpart of the call the EVM owner passes to `upgradeToAndCall`, which the upgrade authority runs once, right after the upgrade, and a test that runs the upgrade path from the previous build. This build is the first layout of its deployments, so it carries none.
