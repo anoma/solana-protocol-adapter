@@ -167,10 +167,7 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     ...escrowTransferAccounts(escrowAta, recipientAta, escrowAuthority),
   ];
 
-  /**
-   * The permissionless instruction that creates `owner`'s bitmap for `word`:
-   * by default the user's, for the wrap nonce's word.
-   */
+  /** The permissionless instruction that creates `owner`'s bitmap for `word`. */
   const initNonceBitmapIx = (owner = user.publicKey, word = nonceWordIndex(wrapNonce)) =>
     forwarderProgram.methods
       .initNonceBitmap(owner, new anchor.BN(word.toString()))
@@ -324,18 +321,27 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     assert.deepEqual(await balances(userOtherAta, escrowOwnedOtherAta, escrowAta), before, "no tokens move");
   });
 
+  /** Settling `fixture` through `segment` fails with `expected`, and no tokens move between the user and the escrow. */
+  const refusesSettlement = async (
+    fixture: typeof wrapFixture,
+    segment: AccountMeta[],
+    preInstructions: anchor.web3.TransactionInstruction[],
+    expected: { error: string; account?: string },
+  ) => {
+    const before = await balances(userAta, escrowAta);
+    await assertFails(settleForwarderFixture(fixture, segment, preInstructions), {
+      program: forwarderProgram,
+      ...expected,
+    });
+    assert.deepEqual(await balances(userAta, escrowAta), before, "no tokens move");
+  };
+
   // The wrap input names the user and the index of the ed25519 instruction
   // that authorizes it; the submitter supplies that instruction. Each of these
   // reaches the authorization check (the bitmap exists, the accounts are the
   // user's and the escrow's) and must stop there with no tokens moved.
-  const refusesWrapAuthorization = async (preInstructions: anchor.web3.TransactionInstruction[], error: string) => {
-    const before = await balances(userAta, escrowAta);
-    await assertFails(settleForwarderFixture(wrapFixture, wrapSegment(), preInstructions), {
-      program: forwarderProgram,
-      error,
-    });
-    assert.deepEqual(await balances(userAta, escrowAta), before, "no tokens move");
-  };
+  const refusesWrapAuthorization = (preInstructions: anchor.web3.TransactionInstruction[], error: string) =>
+    refusesSettlement(wrapFixture, wrapSegment(), preInstructions, { error });
   const signedWrapMessage = Buffer.from(wrap.signed_message_b64, "base64");
 
   it("rejects a wrap authorized by another key's signature over the wrap message", async () =>
@@ -423,9 +429,8 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     assert.deepEqual(await balances(escrowAta), [escrowBefore], "escrow is unchanged");
   });
 
-  // The submitter chooses the bitmap account too. The user holds and has
-  // approved the replay's amount, so if any of these accounts made the used
-  // nonce look unused, the replay would move tokens.
+  // Settles the replay fixture with the user holding and approving its
+  // amount, so any account substitution that let it through would move tokens.
   const refusesReplay = async (
     segment: AccountMeta[],
     preInstructions: anchor.web3.TransactionInstruction[],
@@ -433,15 +438,12 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   ) => {
     await mintTo(provider.connection, user, mint, userAta, user, Number(wrapAmount));
     await approve(provider.connection, user, userAta, escrowAuthority, user, Number(wrapAmount));
-    const before = await balances(userAta, escrowAta);
-    await assertFails(
-      settleForwarderFixture(wrapReplayFixture, segment, [
-        wrapAuthorizationIx(user.publicKey, wrapReplayFixture),
-        ...preInstructions,
-      ]),
-      { program: forwarderProgram, ...expected },
+    await refusesSettlement(
+      wrapReplayFixture,
+      segment,
+      [wrapAuthorizationIx(user.publicKey, wrapReplayFixture), ...preInstructions],
+      expected,
     );
-    assert.deepEqual(await balances(userAta, escrowAta), before, "no tokens move");
   };
 
   it("rejects a replay that supplies the user's bitmap of another word", async () => {
@@ -455,28 +457,26 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
   it("rejects a replay that supplies another user's bitmap of the nonce's word", async () => {
     const other = Keypair.generate().publicKey;
-    const word = nonceWordIndex(wrapNonce);
     await refusesReplay(
-      wrapSegment(escrowAta, userAta, deriveNonceBitmapPda(forwarderProgram.programId, other, word)[0]),
-      [await initNonceBitmapIx(other, word)],
+      wrapSegment(
+        escrowAta,
+        userAta,
+        deriveNonceBitmapPda(forwarderProgram.programId, other, nonceWordIndex(wrapNonce))[0],
+      ),
+      [await initNonceBitmapIx(other)],
       { error: "InvalidNonceBitmapPda" },
     );
   });
 
   // Not read as an all-zero bitmap in which the nonce is unused.
-  it("rejects a wrap whose nonce bitmap is an account of another program", async () =>
+  it("rejects a replay whose nonce bitmap is an account of another program", async () =>
     refusesReplay(wrapSegment(escrowAta, userAta, userAta), [], { error: "NonceBitmapMissing" }));
 
   // The config the forwarder checks the caller and logic ref against is at a
   // fixed address; another account there is refused in account validation.
   it("rejects a forward_call whose config is an account of another program", async () => {
-    const [head, , sysvar] = segmentHead;
-    const segment = [
-      head,
-      { pubkey: mint, isSigner: false, isWritable: false },
-      sysvar,
-      ...wrapTransferAccounts(userAta, escrowAta, escrowAuthority, nonceBitmapPda),
-    ];
+    const segment = wrapSegment();
+    segment[1] = { ...segment[1], pubkey: mint };
     await refusesReplay(segment, [], { error: "AccountOwnedByWrongProgram", account: "config" });
   });
 
