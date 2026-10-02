@@ -2,7 +2,7 @@
 
 Live state is always what `./scripts/dev.sh status --cluster devnet` reports; this file records what was deployed, by whom, and when. Update it after every deploy, upgrade, pause, unpause, or teardown.
 
-**Record last verified:** 2026-10-01
+**Record last verified:** 2026-10-02
 
 ## V2 deployment (current, since 2026-10-01)
 
@@ -10,14 +10,14 @@ Deployed 2026-10-01 from `anthony/devnet-v2-redeploy` (production builds under n
 
 | Program | ID | State |
 |---|---|---|
-| Protocol Adapter | `5zeqkB3kc9fd1RvaXB2GeMB53Jgf98QJtaFK38e6tTsc` | deployed in slot 506148066; executable hash `a70c074dbb6e94c0a2469f7723ec6a3a4f3c7355cd3975dcbf06797f93c6cbbc` (`solana-verify get-program-hash`); initialized on the empty kind table with selector `0x73c457ba`, then given anoma/risc0-kind-tables' solana-devnet commitment `e6b8e1832b61d0d6ed3685ee46e62a8f4723a49df520096c5d96ff509263b483`; production IDL in the canonical Program Metadata account `93JLbkJtf8zabNVkkvHrRGvFMgvFFikPL1bmWS3MrvG` |
+| Protocol Adapter | `5zeqkB3kc9fd1RvaXB2GeMB53Jgf98QJtaFK38e6tTsc` | upgraded in place 2026-10-02 from `anthony/arm-v2-port` `2da4151` (the merge of #111; the deterministic `solana-verify` build, executable hash `100d6e51412f6fa072e291eab6070ab7dfcf039367d543e1c1bc450af04078f2`, which `dev.sh verify-build --cluster devnet` matched against the deployed program; `dev.sh upgrade pa --prebuilt`, `5g4ggr6ryrt2ncgNuj2hCNAcK2tSdsqPgjiJ3UfAWRGZVRAvPBcc6f9bTbpcXMewwTXf1Xyi5cW8h9c344ePtgpf`; production IDL unchanged). Deployed in slot 506148066 from `83ad6a7` (executable hash `a70c074dbb6e94c0a2469f7723ec6a3a4f3c7355cd3975dcbf06797f93c6cbbc`); initialized on the empty kind table with selector `0x73c457ba`, then given anoma/risc0-kind-tables' solana-devnet commitment `e6b8e1832b61d0d6ed3685ee46e62a8f4723a49df520096c5d96ff509263b483`; production IDL in the canonical Program Metadata account `93JLbkJtf8zabNVkkvHrRGvFMgvFFikPL1bmWS3MrvG` |
 | SPL Token Forwarder | `BsfuXpxw8oCmZXnYijyQkUYNcCnuskFZbYizmWLnpSU7` | config `6wu5mRw8RN1euy4AUsQoHTU5HraEGGXYhmrucG41bMdq` pins the adapter above, logic ref `179ebea4903d61c69dbdaba15db26e9726f7d7fb39098a6a2c0f94be854295c6` (anoma/anomapay-solana-resource `f550cac`) and the operator wallet as emergency committee; escrow authority `G78SQtzYuo4YKDEECzh25rckXeJFjLMXy44iWKKG5rDG`, its test-mint escrow `Buty3Mj9ZRZ76ZZ4Y3ZmtGdJpgoZcxitRdHRuCJrBG9e` |
 | Block Time Forwarder | `3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf` | deployed (stateless); the batch fixtures call it |
 
 - **PAState PDA:** `FDc54YoiWpSJqxTB3f4PWuoZGUXXfyDUSzT1oKqmVdZ7`; event authority `5ZycgCWUwuJzmVnvxtsTcb4C7Zjh8y66XcpPpwreZDRM`.
 - **Settlement lookup table:** `4UFsq2ks2DcC29ErmEeHxqXWKLRWo26vs4W65S89bpWn`, authority the operator wallet, with the test mint `9EHEFzyuY7sZEzTVm7C3uMkNZFMgm5ZeWjGjirZ3MVfr`'s escrow accounts. Shipped as `SETTLE_LOOKUP_TABLE` in anoma-pa-solana-client.
 - **Exercised 2026-10-01 by anoma-pa-solana-client's settle-fixture:** a wrap of 100 test tokens proven against the devnet kind table (`5qTDwqjiju33MefTAhEnVUyacLKvtC6524B6wvNHxEzGLZJc8Xfb9rnurEEDWrqzJQEWgkvuw1BrZcNtaeJexjkZ`, 211,531 CU), then its unwrap to the seeded recipient, proven over the tree the deployment held after the wrap (`4F6jf9XGzu4NubjP5ExwBm2LyZ3KJVxGjQqM68SA8pyHXe8zY9YtZcSUqd1wyQWonQUheTjGtPtQncwn78EJ6G6K`, 212,730 CU). Each time the on-chain root equalled the client's replay, and a local Envio sync of the adapter rebuilt the same root from its indexed commitments. The tree's first four leaves come from a test run before the kind table was set.
-- **Cluster test runs, 2026-10-02:** `dev.sh anchor-test --cluster devnet` (every history-phase spec file, without the `@localnet` tests; fixtures proven under the run's salt against the devnet kind table as tests loaded them) passed every test across two runs: salt `devnet-20261002T013739Z`, 38 passing through `settle.ts` before `transfer-shape.ts` hit a proving defect since fixed; salt `devnet-20261002T025314Z`, the remaining `transfer-shape.ts`, `tree-growth.ts`, `txdata-lifecycle.ts` and `version.ts`, 26 passing.
+- **Cluster test runs, 2026-10-02:** `dev.sh anchor-test --cluster devnet` (every history-phase spec file, without the `@localnet` tests; fixtures proven under the run's salt against the devnet kind table as tests loaded them) passed every test across two runs: salt `devnet-20261002T013739Z`, 38 passing through `settle.ts` before `transfer-shape.ts` hit a proving defect since fixed; salt `devnet-20261002T025314Z`, the remaining `transfer-shape.ts`, `tree-growth.ts`, `txdata-lifecycle.ts` and `version.ts`, 26 passing. After the upgrade to `2da4151`, one run (salt `devnet-20261002T050243Z`) passed all 64 tests of the 18 spec files.
 - **Test wallet:** `1maXLWdbrqB6FEHc57sv63p8sBfiTA9sDap6FuPJmDD` (`scripts/devnet-test-wallet.json`), owns nothing under test; it funds `dev.sh anchor-test --cluster devnet`.
 - **Indexing:** the Solana Envio project in anoma-envio (`solana/config.yaml`, PR #170) indexes this program from slot 506148066.
 
