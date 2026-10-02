@@ -127,9 +127,7 @@ RPC_OVERRIDE=""
 NO_IDL=false
 DEV_TEARDOWN=false
 PREBUILT=false
-# PA_TEST_MODE is the suite's own mode variable (anchor-test.sh); --mode overrides it.
 TEST_MODE="${PA_TEST_MODE:-real}"
-validate_test_mode "$TEST_MODE"
 SPEC_FILES=()
 
 while [[ $# -gt 0 ]]; do
@@ -164,7 +162,6 @@ while [[ $# -gt 0 ]]; do
     --mode)
       [[ $# -ge 2 ]] || { echo "❌ --mode requires a value" >&2; exit 1; }
       TEST_MODE="$2"
-      validate_test_mode "$TEST_MODE"
       shift 2
       ;;
     --*)
@@ -187,6 +184,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+validate_test_mode "$TEST_MODE"
 [[ -n "$COMMAND" ]] || usage
 
 # ---------- cluster resolution ----------
