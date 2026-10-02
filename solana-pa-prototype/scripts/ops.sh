@@ -822,6 +822,10 @@ cmd_test() {
     mapfile -t specs < <(history_spec_files)
   fi
 
+  # No per-test timeout (-t 0): a test that first loads a fixture proves it,
+  # for as long as proving takes, and a timeout would abandon a test that
+  # goes on settling in the background. The RPC calls and confirmations the
+  # tests wait on carry their own timeouts.
   echo "Running cluster integration tests (${CLUSTER}): ${specs[*]}"
   local spec
   for spec in "${specs[@]}"; do
@@ -833,7 +837,7 @@ cmd_test() {
     PA_FIXTURE_SALT="$salt" \
     PA_KIND_TABLE="$PA_KIND_TABLE" \
     PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE:-}" \
-      yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 --grep @localnet --invert "$spec"
+      yarn run ts-mocha --type-check -p ./tsconfig.json -t 0 --grep @localnet --invert "$spec"
   done
 
   echo ""

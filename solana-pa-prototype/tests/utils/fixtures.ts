@@ -72,9 +72,16 @@ function readJson<T>(filePath: string): T {
  */
 export async function loadFixture<T = Fixture>(filename: string): Promise<T> {
   const file = path.join(FIXTURE_DIR, filename);
-  if (!existsSync(file) && process.env.PA_FIXTURE_SALT) await proveForClusterRun(filename);
+  if (!existsSync(file) && process.env.PA_FIXTURE_SALT) {
+    if (!proving.has(filename)) proving.set(filename, proveForClusterRun(filename));
+    await proving.get(filename);
+  }
   return readJson<T>(file);
 }
+
+// The proof of each fixture a cluster run has started: a second test that
+// loads the fixture waits for it rather than proving it again alongside.
+const proving = new Map<string, Promise<void>>();
 
 /**
  * Prove `filename` into a cluster run's fixture set with the recipe
