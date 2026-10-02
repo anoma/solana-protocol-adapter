@@ -71,6 +71,13 @@ A settlement's instruction trace includes its outer instructions, the verifier a
 - `tag` is the resource tag the payload belongs to; `index` is the entry's position within its own category's payload list for that resource (not a global index).
 - `blob` is the payload's `u32` word array reinterpreted as bytes in memory order (`words_to_bytes`, a plain cast — little-endian on Solana), the inverse of the zero-padded `bytes_to_words` packing.
 
+**Outside settlement**, the instructions that change the deployment's configuration emit pa-evm's events in the same way, read from their own transaction's inner instructions:
+
+- `initialize`: `CommitmentTreeRootAddedEvent { root }` with the empty tree's root, then `KindTableCommitmentUpdatedEvent { kind_table_commitment: [u8;32] }` with the empty kind table's commitment. There is no ownership event: the owner is the program's upgrade authority, which the loader records.
+- `set_kind_table_commitment` (owner only): `KindTableCommitmentUpdatedEvent` with the new commitment, pa-evm's `KindTableCommitmentUpdated`. Transactions proven against the previous table are refused from then on.
+- `deny_logic_ref` (owner only): `LogicRefDeniedEvent { logic_ref: [u8;32] }`, pa-evm's `LogicRefDenied`. No settlement consumes or creates a resource carrying that logic ref again, and a denial cannot be undone.
+- `pause` / `unpause` (owner only): `PausedEvent { account: Pubkey }` / `UnpausedEvent { account: Pubkey }`, OpenZeppelin Pausable's `Paused` / `Unpaused`, where `account` is the signer. While paused, both settle instructions refuse every transaction.
+
 ## Roots and markers
 
 A root is valid for settlement exactly when a marker account exists: a PDA of `["root", pa_state, root_bytes]` owned by the PA (`root.rs`). The PA stores no list of historical roots in its state account. Two roots are valid without any marker: the current tree root, and the empty-tree root (the tree pads unfilled positions with a fixed leaf value — `PADDING_LEAF` in `merkle.rs` — and an empty tree's root is built entirely from it, which lets transactions built against a freshly initialized PA settle without a genesis marker).
