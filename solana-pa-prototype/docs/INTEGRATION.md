@@ -73,7 +73,7 @@ A settlement's instruction trace includes its outer instructions, the verifier a
 
 **Outside settlement**, the instructions that change the deployment's configuration emit pa-evm's events in the same way, read from their own transaction's inner instructions:
 
-- `initialize`: `CommitmentTreeRootAddedEvent { root }` with the empty tree's root, then `KindTableCommitmentUpdatedEvent { kind_table_commitment: [u8;32] }` with the empty kind table's commitment. There is no ownership event: the owner is the program's upgrade authority, which the loader records.
+- `initialize`: `CommitmentTreeRootAddedEvent { root }` with the empty tree's root, then `KindTableCommitmentUpdatedEvent { kind_table_commitment: [u8;32] }` with the empty kind table's commitment.
 - `set_kind_table_commitment` (owner only): `KindTableCommitmentUpdatedEvent` with the new commitment, pa-evm's `KindTableCommitmentUpdated`. Transactions proven against the previous table are refused from then on.
 - `deny_logic_ref` (owner only): `LogicRefDeniedEvent { logic_ref: [u8;32] }`, pa-evm's `LogicRefDenied`. No settlement consumes or creates a resource carrying that logic ref again, and a denial cannot be undone.
 - `pause` / `unpause` (owner only): `PausedEvent { account: Pubkey }` / `UnpausedEvent { account: Pubkey }`, OpenZeppelin Pausable's `Paused` / `Unpaused`, where `account` is the signer. While paused, both settle instructions refuse every transaction.
