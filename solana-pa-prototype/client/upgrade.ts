@@ -11,12 +11,19 @@ import { deriveProgramDataPda } from "./pda";
 
 /** Bytes before the code in a ProgramData account: the loader's state enum, slot and optional authority. */
 const PROGRAM_DATA_METADATA_LEN = 45;
+/** Bytes before the code in a loader buffer: the loader's state enum and optional authority. */
+const BUFFER_METADATA_LEN = 37;
 
 /** sha256 of `code` without its trailing zero bytes. */
 export function executableHash(code: Buffer): Buffer {
   let end = code.length;
   while (end > 0 && code[end - 1] === 0) end--;
   return createHash("sha256").update(code.subarray(0, end)).digest();
+}
+
+/** The executable hash of the code a loader buffer's data holds. */
+export function bufferExecutableHash(bufferData: Buffer): Buffer {
+  return executableHash(bufferData.subarray(BUFFER_METADATA_LEN));
 }
 
 /** The executable hash of the code `programId` runs, read from its ProgramData. */

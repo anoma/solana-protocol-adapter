@@ -219,7 +219,8 @@ pub mod spl_token_forwarder {
 
     /// Give up the ownership for good. Mirrors OwnableUpgradeable's
     /// `renounceOwnership`: owner only; the owner becomes the zero key, so
-    /// neither `upgrade` nor `reinitialize` can run again.
+    /// no owner-only instruction, `upgrade` and `reinitialize` included, can
+    /// run again.
     pub fn renounce_ownership(ctx: Context<OwnerOnly>) -> Result<()> {
         let previous_owner = std::mem::take(&mut ctx.accounts.config.owner);
         emit_cpi!(OwnershipTransferred {
@@ -757,7 +758,8 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
 
 /// The upgrade authority initializes the config, as the EVM proxy runs its
 /// initializer atomically at deployment: whoever initializes names the
-/// adapter the forwarder obeys and the committee. `Initialized` is a CPI
+/// adapter the forwarder obeys, the committee and the owner, and hands the
+/// upgrade authority to the program. `Initialized` is a CPI
 /// event: `event_authority` is the account `#[event_cpi]` adds, declared by
 /// its seeds so the IDL lets clients resolve it next to the `program` this
 /// struct already has, which the self-invocation needs.
@@ -775,15 +777,17 @@ pub struct Initialize<'info> {
     )]
     pub config: Account<'info, Config>,
 
-    /// The program account proves `program_data` is this program's own
-    /// ProgramData address rather than any account shaped like one.
-    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ ErrorCode::UnauthorizedCaller)]
+    /// This program, which the `Initialized` event's self-invocation needs.
     pub program: Program<'info, crate::program::SplTokenForwarder>,
 
-    /// The loader records the upgrade authority here: the deployer, who
-    /// alone initializes the forwarder and hands the authority to
-    /// `upgrade_authority`.
-    #[account(mut, constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::UnauthorizedCaller)]
+    /// This program's ProgramData, where the loader records the upgrade
+    /// authority: the deployer, who alone initializes the forwarder and
+    /// hands the authority to `upgrade_authority`.
+    #[account(
+        mut,
+        address = crate::PROGRAM_DATA @ ErrorCode::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::Unauthorized
+    )]
     pub program_data: Account<'info, ProgramData>,
 
     pub system_program: Program<'info, System>,
@@ -872,14 +876,17 @@ pub struct MigrateConfig<'info> {
     #[account(mut, address = CONFIG_PDA)]
     pub config: UncheckedAccount<'info>,
 
-    /// The program account proves `program_data` is this program's own
-    /// ProgramData address rather than any account shaped like one.
-    #[account(constraint = program.programdata_address()? == Some(program_data.key()) @ ErrorCode::UnauthorizedCaller)]
+    /// This program, which the `OwnershipTransferred` event's
+    /// self-invocation needs.
     pub program: Program<'info, crate::program::SplTokenForwarder>,
 
-    /// The loader records the upgrade authority here, which the handler
-    /// hands to `upgrade_authority`.
-    #[account(mut, constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::UnauthorizedCaller)]
+    /// This program's ProgramData, where the loader records the upgrade
+    /// authority, which the handler hands to `upgrade_authority`.
+    #[account(
+        mut,
+        address = crate::PROGRAM_DATA @ ErrorCode::Unauthorized,
+        constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::Unauthorized
+    )]
     pub program_data: Account<'info, ProgramData>,
 
     pub system_program: Program<'info, System>,

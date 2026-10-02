@@ -21,7 +21,7 @@ import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import { upgradeAdapter, upgradeForwarder } from "../client/instructions";
 import { deriveUpgradeAuthorityPda } from "../client/pda";
-import { deployedExecutableHash, executableHash, upgradeAuthority } from "../client/upgrade";
+import { bufferExecutableHash, deployedExecutableHash, upgradeAuthority } from "../client/upgrade";
 import { cpiEventsOfSignature } from "../client/events";
 import { fail, parsePubkey } from "./cli-utils";
 
@@ -70,8 +70,7 @@ async function main() {
   const buffer = parsePubkey("buffer", bufferArg);
   const bufferAccount = await provider.connection.getAccountInfo(buffer, "confirmed");
   if (!bufferAccount) fail(`buffer ${buffer.toBase58()} does not exist`);
-  // The loader's buffer metadata: u32 kind (1), then the authority as an Option<Pubkey>.
-  const expected = executableHash(bufferAccount.data.subarray(37));
+  const expected = bufferExecutableHash(bufferAccount.data);
 
   console.log(`Upgrading ${name} (${program.programId.toBase58()}) from buffer ${buffer.toBase58()}`);
   const signature = await upgrade(wallet, buffer, wallet).rpc({ commitment: "confirmed" });

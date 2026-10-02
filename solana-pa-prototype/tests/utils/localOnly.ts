@@ -15,7 +15,7 @@ import { Program } from "@anchor-lang/core";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
-import { derivePaStatePda, deriveProgramDataPda } from "../../client/pda";
+import { derivePaStatePda } from "../../client/pda";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const BATCH_SIZE = 20;
@@ -91,9 +91,7 @@ export function localRenounceForwarderOwnership(forwarder: Program<SplTokenForwa
  */
 export function localMigrateConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey) {
   assertLocalValidator(forwarder.provider.connection);
-  return forwarder.methods
-    .migrateConfig()
-    .accountsPartial({ authority, programData: deriveProgramDataPda(forwarder.programId) });
+  return forwarder.methods.migrateConfig().accountsPartial({ authority });
 }
 
 /** `set_emergency_caller` by the committee; only while the adapter at `paState` is paused. */

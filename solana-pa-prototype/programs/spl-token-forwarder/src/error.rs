@@ -105,4 +105,7 @@ pub enum ErrorCode {
 
     #[msg("Buffer is not a loader buffer holding a program")]
     InvalidUpgradeBuffer,
+
+    #[msg("Unauthorized: the signer does not hold the authority this instruction requires")]
+    Unauthorized,
 }

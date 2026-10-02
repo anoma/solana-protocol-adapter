@@ -10,6 +10,19 @@ use anchor_lang::solana_program::bpf_loader_upgradeable::{
 };
 use anchor_lang::solana_program::program::invoke_signed;
 
+/// The loader's ProgramData account of `program_id`, where it records the
+/// upgrade authority; a `const fn`, so each program derives its own at
+/// compile time.
+pub const fn program_data_address(program_id: &Pubkey) -> Pubkey {
+    Pubkey::new_from_array(
+        anchor_lang::derive_program_address(
+            &[&program_id.to_bytes()],
+            &anchor_lang::solana_program::bpf_loader_upgradeable::ID.to_bytes(),
+        )
+        .0,
+    )
+}
+
 /// Hand `program_id`'s upgrade authority from `current_authority` (a signer)
 /// to its PDA at `[seed]`, which signs for itself here: the loader's checked
 /// authority change requires both signatures.

@@ -84,7 +84,7 @@ describe("spl-token-forwarder (upgraded in place across its config layout)", () 
     const stranger = await funder.fresh(1);
     await assertFails(localMigrateConfig(forwarderProgram, stranger.publicKey).signers([stranger]).rpc(), {
       program: forwarderProgram,
-      error: "UnauthorizedCaller",
+      error: "Unauthorized",
       account: "program_data",
     });
   });
@@ -120,7 +120,7 @@ describe("spl-token-forwarder (upgraded in place across its config layout)", () 
   it("rejects migrating twice", () =>
     assertFails(localMigrateConfig(forwarderProgram, wallet).rpc(), {
       program: forwarderProgram,
-      error: "UnauthorizedCaller",
+      error: "Unauthorized",
       account: "program_data",
     }));
 

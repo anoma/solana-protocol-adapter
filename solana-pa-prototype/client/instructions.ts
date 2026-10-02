@@ -16,13 +16,7 @@ import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-tok
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { getVerifierEntryPda } from "./verifier";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
-import {
-  deriveConfigPda,
-  deriveEscrowAuthority,
-  deriveEventAuthorityPda,
-  derivePaStatePda,
-  deriveProgramDataPda,
-} from "./pda";
+import { deriveConfigPda, deriveEscrowAuthority, deriveEventAuthorityPda, derivePaStatePda } from "./pda";
 
 // Protocol adapter governance
 
@@ -177,8 +171,7 @@ export function escrowTransferAccounts(
 /**
  * The forwarder's `initialize`, signed by `authority`, the program's upgrade
  * authority, which it hands to the program's upgrade authority PDA: it makes
- * `initialOwner` the owner. `programData` is the forwarder's own ProgramData
- * unless a test substitutes another program's. Callers add signers and send.
+ * `initialOwner` the owner. Callers add signers and send.
  */
 export function initializeForwarder(
   forwarder: Program<SplTokenForwarder>,
@@ -187,11 +180,10 @@ export function initializeForwarder(
   committee: PublicKey,
   initialOwner: PublicKey,
   authority: PublicKey,
-  programData: PublicKey = deriveProgramDataPda(forwarder.programId),
 ) {
   return forwarder.methods
     .initialize(adapterProgramId, logicRef, committee, initialOwner)
-    .accountsPartial({ authority, programData });
+    .accountsPartial({ authority });
 }
 
 /**

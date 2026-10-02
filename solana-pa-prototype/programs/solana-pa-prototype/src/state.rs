@@ -216,13 +216,7 @@ pub const UPGRADE_AUTHORITY_SEED: &[u8] = b"upgrade_authority";
 /// This program's ProgramData account, derived at compile time, where the
 /// loader records the upgrade authority: the deployer until `initialize` (or
 /// `migrate_state`) hands it to the `UPGRADE_AUTHORITY_SEED` PDA.
-pub const PROGRAM_DATA: Pubkey = Pubkey::new_from_array(
-    anchor_lang::derive_program_address(
-        &[&crate::ID_CONST.to_bytes()],
-        &anchor_lang::solana_program::bpf_loader_upgradeable::ID.to_bytes(),
-    )
-    .0,
-);
+pub const PROGRAM_DATA: Pubkey = crate::upgrade::program_data_address(&crate::ID_CONST);
 
 /// Chunked transaction upload buffer.
 #[account]

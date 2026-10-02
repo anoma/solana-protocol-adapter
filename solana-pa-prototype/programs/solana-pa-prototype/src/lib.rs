@@ -411,8 +411,8 @@ pub mod protocol_adapter {
     /// A permanent shutdown is a pause followed by `renounce_ownership`, as
     /// on pa-evm: with no owner, no one can unpause or upgrade.
     /// `close_markers_batch`, which requires a paused adapter, exists only in
-    /// `dev-teardown` builds (never present in production) to reclaim marker
-    /// rent so a *development* deployment can be re-initialized in place.
+    /// `dev-teardown` builds (never present in production) to reclaim a
+    /// development deployment's marker rent.
     pub fn pause(ctx: Context<OwnerOnly>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         require!(!state.paused, PAError::EnforcedPause);

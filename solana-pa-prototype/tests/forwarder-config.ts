@@ -3,7 +3,8 @@
  * direct caller hits, on the config the deployment runs. Everything
  * forward_call does past its caller check needs the adapter as the CPI
  * caller, so those behaviours are tested through settlement
- * (spl-token-wrap-unwrap.ts); the emergency flow is forwarder-emergency.ts.
+ * (fresh/4-spl-token-wrap-unwrap.ts); the emergency flow is
+ * terminal/4-forwarder-emergency.ts.
  */
 import { BN } from "@anchor-lang/core";
 import { Keypair, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";

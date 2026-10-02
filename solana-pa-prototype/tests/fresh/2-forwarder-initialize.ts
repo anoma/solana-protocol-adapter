@@ -47,7 +47,7 @@ describe("forwarder initialize", () => {
       )
         .signers([intruder])
         .rpc(),
-      { program: forwarderProgram, error: "UnauthorizedCaller", account: "program_data" },
+      { program: forwarderProgram, error: "Unauthorized", account: "program_data" },
     );
     assert.isNull(await provider.connection.getAccountInfo(configPda), "no config is created");
   });
@@ -56,16 +56,10 @@ describe("forwarder initialize", () => {
   // of the upgrade-authority check.
   it("rejects the upgrade authority of another program's ProgramData", () =>
     assertFails(
-      initializeForwarder(
-        forwarderProgram,
-        paProgram.programId,
-        logicRef,
-        emergencyCommittee.publicKey,
-        wallet,
-        wallet,
-        deriveProgramDataPda(paProgram.programId),
-      ).rpc(),
-      { program: forwarderProgram, error: "UnauthorizedCaller", account: "program" },
+      initializeForwarder(forwarderProgram, paProgram.programId, logicRef, emergencyCommittee.publicKey, wallet, wallet)
+        .accountsPartial({ programData: deriveProgramDataPda(paProgram.programId) })
+        .rpc(),
+      { program: forwarderProgram, error: "Unauthorized", account: "program_data" },
     ));
 
   // Mirrors OwnableUpgradeable's initializer: OwnableInvalidOwner(address(0)).

@@ -10,8 +10,9 @@ use protocol_adapter::state::{PAStateAccount, PA_STATE_SEED};
 ///
 /// The adapter and logic ref mirror the EVM V2 forwarder's
 /// `ForwarderBaseUpgradeable` state, `version` its `Initializable` version,
-/// and `owner` its `OwnableUpgradeable` owner. The emergency committee and caller are the EVM V1 forwarder's
-/// emergency mechanism, which V2 dropped (anoma/dos-pm#86).
+/// and `owner` its `OwnableUpgradeable` owner. The emergency committee and
+/// caller are the EVM V1 forwarder's emergency mechanism, which V2 dropped
+/// (anoma/dos-pm#86).
 #[account]
 #[derive(InitSpace)]
 pub struct Config {
@@ -100,13 +101,7 @@ pub const CONFIG_PDA: Pubkey = Pubkey::new_from_array(
 /// This program's ProgramData account, derived at compile time, where the
 /// loader records the upgrade authority: the deployer until `initialize` (or
 /// `migrate_config`) hands it to the program's upgrade authority PDA.
-pub const PROGRAM_DATA: Pubkey = Pubkey::new_from_array(
-    anchor_lang::derive_program_address(
-        &[&crate::ID_CONST.to_bytes()],
-        &anchor_lang::solana_program::bpf_loader_upgradeable::ID.to_bytes(),
-    )
-    .0,
-);
+pub const PROGRAM_DATA: Pubkey = protocol_adapter::upgrade::program_data_address(&crate::ID_CONST);
 /// Seed of the escrow authority.
 #[constant]
 pub const ESCROW_SEED: &[u8] = b"escrow";
