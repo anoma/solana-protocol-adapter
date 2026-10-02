@@ -50,20 +50,20 @@ fn executable_hash_refuses_an_account_that_is_not_a_buffer() {
         &[1, 2, 3],
     );
     assert!(
-        executable_hash(&program_data).is_err(),
+        executable_hash(&program_data).is_none(),
         "a Program account is not a buffer"
     );
     assert!(
-        executable_hash(&[1, 0, 0]).is_err(),
+        executable_hash(&[1, 0, 0]).is_none(),
         "shorter than the buffer metadata"
     );
 }
 
 #[test]
 fn executable_hash_refuses_a_buffer_without_code() {
-    assert!(executable_hash(&holding(&[])).is_err(), "an empty buffer");
+    assert!(executable_hash(&holding(&[])).is_none(), "an empty buffer");
     assert!(
-        executable_hash(&holding(&[0; 64])).is_err(),
+        executable_hash(&holding(&[0; 64])).is_none(),
         "a buffer of zeros"
     );
 }

@@ -5,12 +5,14 @@
  *   ./scripts/dev.sh forwarder <command> --cluster <c> [--wallet <path>]
  *
  * Commands (the wallet that must sign is in parentheses):
- *   init                  (upgrade    Initialize the config and, with
- *                          authority) STF_TOKEN_MINT, the mint's escrow ATA.
+ *   init                  (upgrade    Initialize the config, owned by
+ *                          authority) STF_OWNER, which hands the upgrade
+ *                                     authority to the program, and, with
+ *                                     STF_TOKEN_MINT, the mint's escrow ATA.
  *                                     Idempotent; refuses an existing config
  *                                     that differs from the request.
- *   reinitialize          (upgrade    After upgrading the program to a
- *                          authority) build that raises CONFIG_VERSION:
+ *   reinitialize          (owner)     After upgrading the program to a
+ *                                     build that raises CONFIG_VERSION:
  *                                     rotate the config's logic ref to
  *                                     STF_LOGIC_REF, once; escrow, nonce
  *                                     bitmaps and the committee are untouched.
@@ -29,6 +31,7 @@
  *   STF_LOGIC_REF           32-byte hex: the resource logic the config
  *                           authorizes (init, reinitialize)
  *   STF_EMERGENCY_COMMITTEE base58 pubkey (init)
+ *   STF_OWNER               base58 pubkey of the initial owner (init)
  *   STF_TOKEN_MINT          base58 mint (init optional; emergency-withdraw
  *                           required)
  *   STF_RECIPIENT           base58 owner of the receiving token account
@@ -71,6 +74,10 @@ async function init() {
     "STF_EMERGENCY_COMMITTEE",
     "the committee that can name an emergency caller and close accounts",
   );
+  const owner = requirePubkey(
+    "STF_OWNER",
+    "the forwarder's initial owner, who alone upgrades it and rotates its logic ref",
+  );
 
   const existing = await forwarder.account.config.fetchNullable(configPda);
   if (existing) {
@@ -79,6 +86,7 @@ async function init() {
       ["adapter", existing.protocolAdapter.toBase58(), adapter.programId.toBase58()],
       ["logic ref", Buffer.from(existing.logicRef).toString("hex"), Buffer.from(logicRef).toString("hex")],
       ["committee", existing.emergencyCommittee.toBase58(), committee.toBase58()],
+      ["owner", existing.owner.toBase58(), owner.toBase58()],
     ];
     const mismatches = fields.filter(([, stored, requested]) => stored !== requested);
     if (mismatches.length > 0) {
@@ -93,7 +101,8 @@ async function init() {
     console.log(`  adapter:   ${adapter.programId.toBase58()}`);
     console.log(`  logic ref: ${Buffer.from(logicRef).toString("hex")}`);
     console.log(`  committee: ${committee.toBase58()}`);
-    await initializeForwarder(forwarder, adapter.programId, logicRef, committee, wallet.publicKey).rpc();
+    console.log(`  owner:     ${owner.toBase58()}`);
+    await initializeForwarder(forwarder, adapter.programId, logicRef, committee, owner, wallet.publicKey).rpc();
     console.log("✅ Config initialized");
   }
 

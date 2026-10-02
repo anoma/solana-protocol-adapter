@@ -22,16 +22,21 @@ Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]
 Commands:
   deploy [${DEPLOY_TARGETS}|all]
                          First-time deploy (default target: all). Deploys the
-                         production build; initializes the PA and the SPL
-                         token forwarder config if deployed.
+                         production build and initializes the SPL token
+                         forwarder config if deployed; the PA is initialized
+                         at once on localnet, while on devnet/mainnet its IDL
+                         is published and init is left for after the
+                         metadata accounts are given to the owner.
   upgrade [${DEPLOY_TARGETS}|all]
-                         Rebuild + deploy over existing programs
+                         Rebuild + upgrade existing programs in place: through
+                         their own upgrade (owner wallet) once their upgrade
+                         authority is their PDA, else through the loader
   init                   Initialize PA state (idempotent)
   set-kind-table         Replace the PA's kind-table commitment with
-                         PA_KIND_TABLE_COMMITMENT (authority wallet).
+                         PA_KIND_TABLE_COMMITMENT (owner wallet).
   deny-logic-ref         Deny PA_DENIED_LOGIC_REF: no settlement consumes or
                          creates a resource carrying it again. Cannot be
-                         undone (authority wallet).
+                         undone (owner wallet).
   forwarder <cmd>        SPL token forwarder operations: init, reinitialize,
                          emergency-withdraw. Parameters are STF_*
                          environment variables; see scripts/forwarder.ts.
@@ -46,7 +51,7 @@ Commands:
   idl-publish            Publish the PA's production IDL on chain (the
                          program's canonical Program Metadata IDL account;
                          devnet/mainnet only; signer must be the upgrade
-                         authority)
+                         authority to create it, its authority to update it)
   test [--cluster <c>] [spec file...]
                          No cluster (or localnet): full deterministic local
                          integration flow, every spec file on one validator.
@@ -54,8 +59,9 @@ Commands:
                          deployment (new salt, PA_KIND_TABLE), then runs the
                          spec files that build on any state, without the
                          tests tagged @localnet, against the programs
-                         deployed there; refused when the wallet is any of
-                         their upgrade authorities (their owner). Spec files
+                         deployed there; refused when the wallet holds an
+                         owner's role (a stored owner, or an upgrade
+                         authority that is not the program's PDA). Spec files
                          (paths under tests/) restrict the run to them.
   build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
   build-release          Build the production binaries, no deploy (verifies
@@ -114,6 +120,8 @@ the SPL token forwarder is a target):
   STF_LOGIC_REF        32-byte hex logic ref the forwarder serves
   STF_EMERGENCY_COMMITTEE
                        base58 pubkey of the emergency committee
+  STF_OWNER            base58 pubkey of the forwarder's initial owner, who
+                       alone upgrades it and rotates its logic ref
   STF_TOKEN_MINT       optional: base58 mint whose escrow ATA to create
 USAGE
   exit 1
@@ -359,7 +367,7 @@ deploy_one() {
 # authority becomes their own PDA, and only their owner-only `upgrade`
 # replaces their code, as pa-evm's UUPS contracts authorize their own
 # upgrades.
-SELF_UPGRADING_PROGRAMS=(protocol_adapter)
+SELF_UPGRADING_PROGRAMS=(protocol_adapter spl_token_forwarder)
 
 # Upgrade <name> in place along the path its upgrade authority leaves: through
 # the program when the authority is the program's own PDA, through the
@@ -524,10 +532,10 @@ init_pa() {
 }
 
 require_forwarder_init_params() {
-  if [[ -z "${STF_LOGIC_REF:-}" || -z "${STF_EMERGENCY_COMMITTEE:-}" ]]; then
-    echo "❌ Missing STF_LOGIC_REF and/or STF_EMERGENCY_COMMITTEE." >&2
-    echo "   The forwarder config pins the logic ref it serves and the committee" >&2
-    echo "   that can act in an emergency; there is no safe default." >&2
+  if [[ -z "${STF_LOGIC_REF:-}" || -z "${STF_EMERGENCY_COMMITTEE:-}" || -z "${STF_OWNER:-}" ]]; then
+    echo "❌ Missing STF_LOGIC_REF, STF_EMERGENCY_COMMITTEE and/or STF_OWNER." >&2
+    echo "   The forwarder config pins the logic ref it serves, the committee" >&2
+    echo "   that can act in an emergency and the owner; there is no safe default." >&2
     exit 1
   fi
 }

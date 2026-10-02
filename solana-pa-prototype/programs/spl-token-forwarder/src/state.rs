@@ -9,8 +9,8 @@ use protocol_adapter::state::{PAStateAccount, PA_STATE_SEED};
 /// Configuration account for the forwarder.
 ///
 /// The adapter and logic ref mirror the EVM V2 forwarder's
-/// `ForwarderBaseUpgradeable` state, and `version` its `Initializable`
-/// version. The emergency committee and caller are the EVM V1 forwarder's
+/// `ForwarderBaseUpgradeable` state, `version` its `Initializable` version,
+/// and `owner` its `OwnableUpgradeable` owner. The emergency committee and caller are the EVM V1 forwarder's
 /// emergency mechanism, which V2 dropped (anoma/dos-pm#86).
 #[account]
 #[derive(InitSpace)]
@@ -27,11 +27,45 @@ pub struct Config {
     /// Initializable's `_initialized`: `initialize` records CONFIG_VERSION,
     /// and `reinitialize` raises it to CONFIG_VERSION once.
     pub version: u64,
+    /// The forwarder's owner, as the EVM V2 forwarder's OwnableUpgradeable
+    /// owner: it upgrades the program (`upgrade`), rotates the logic ref
+    /// (`reinitialize`), and moves or renounces the ownership. The all-zero
+    /// key once renounced, which no one can sign for.
+    pub owner: Pubkey,
 }
 
 impl Config {
     /// The account's size: the discriminator and the fields.
     pub const ACCOUNT_SIZE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
+}
+
+/// The config in the previous build's layout, which `migrate_config` reads:
+/// this layout without the owner, whose role the program's upgrade authority
+/// played. Its size tells it apart, the config being fixed-size.
+#[derive(AnchorDeserialize)]
+pub struct PreviousConfig {
+    pub protocol_adapter: Pubkey,
+    pub logic_ref: [u8; 32],
+    pub emergency_committee: Pubkey,
+    pub emergency_caller: Pubkey,
+    pub version: u64,
+}
+
+impl PreviousConfig {
+    /// The previous build's config account size: the discriminator and the fields.
+    pub const ACCOUNT_SIZE: usize = Config::ACCOUNT_SIZE - size_of::<Pubkey>();
+
+    /// This layout with the previous fields, owned by `owner`.
+    pub fn migrate(self, owner: Pubkey) -> Config {
+        Config {
+            protocol_adapter: self.protocol_adapter,
+            logic_ref: self.logic_ref,
+            emergency_committee: self.emergency_committee,
+            emergency_caller: self.emergency_caller,
+            version: self.version,
+            owner,
+        }
+    }
 }
 
 /// The config version this build initializes to and reinitializes to, as
@@ -62,6 +96,16 @@ pub const CONFIG_SEED: &[u8] = b"config";
 /// costs no PDA derivation.
 pub const CONFIG_PDA: Pubkey = Pubkey::new_from_array(
     anchor_lang::derive_program_address(&[CONFIG_SEED], &crate::ID_CONST.to_bytes()).0,
+);
+/// This program's ProgramData account, derived at compile time, where the
+/// loader records the upgrade authority: the deployer until `initialize` (or
+/// `migrate_config`) hands it to the program's upgrade authority PDA.
+pub const PROGRAM_DATA: Pubkey = Pubkey::new_from_array(
+    anchor_lang::derive_program_address(
+        &[&crate::ID_CONST.to_bytes()],
+        &anchor_lang::solana_program::bpf_loader_upgradeable::ID.to_bytes(),
+    )
+    .0,
 );
 /// Seed of the escrow authority.
 #[constant]

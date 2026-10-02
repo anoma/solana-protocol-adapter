@@ -8,7 +8,6 @@
  * 3, owned by the upgrade authority, and hands the upgrade authority to the
  * program's PDA, after which the owner alone runs it and upgrades it.
  */
-import { execFileSync } from "child_process";
 import { BN, Idl, Program } from "@anchor-lang/core";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { assert } from "chai";
@@ -19,7 +18,15 @@ import { deriveUpgradeAuthorityPda } from "../../client/pda";
 import { deployedExecutableHash, executableHash, upgradeAuthority } from "../../client/upgrade";
 import { VERIFIER_ROUTER_ID, getVerifierEntryPda } from "../../client/verifier";
 import { createdCommitmentsOf, loadFixture } from "../utils/fixtures";
-import { assertFails, randomRef, sendV0, uploadTxData, waitForSlotPast } from "../utils/helpers";
+import {
+  assertFails,
+  randomRef,
+  sendV0,
+  solanaCli,
+  uploadTxData,
+  waitForSlotPast,
+  writeBuffer,
+} from "../utils/helpers";
 import { localMigrateState } from "../utils/localOnly";
 import { predictRootMarkerPda } from "../utils/merkle";
 import {
@@ -41,13 +48,6 @@ const previous: Program<any> = new Program(
   JSON.parse(readFileSync("tests/fixtures/previous/protocol_adapter.json", "utf8")) as Idl,
   provider,
 );
-
-const solana = (...args: string[]) =>
-  execFileSync(
-    "solana",
-    [...args, "--keypair", process.env.ANCHOR_WALLET!, "--url", provider.connection.rpcEndpoint, "--output", "json"],
-    { encoding: "utf8" },
-  );
 
 describe("protocol-adapter (upgraded in place from schema 2)", () => {
   const { funder, settlementTable, settleUnsettledFixture } = useAdapterSuite({ initialize: false });
@@ -111,7 +111,7 @@ describe("protocol-adapter (upgraded in place from schema 2)", () => {
 
   // The loader's new code runs from the slot after the upgrade.
   it("upgrades the program in place to this build through the loader", async () => {
-    solana("program", "deploy", ADAPTER_SO, "--program-id", "target/deploy/protocol_adapter-keypair.json");
+    solanaCli(provider, "program", "deploy", ADAPTER_SO, "--program-id", "target/deploy/protocol_adapter-keypair.json");
     await waitForSlotPast(provider.connection, await provider.connection.getSlot("confirmed"));
   });
 
@@ -192,9 +192,7 @@ describe("protocol-adapter (upgraded in place from schema 2)", () => {
   });
 
   it("upgrades through the program from then on", async () => {
-    const buffer = new PublicKey(
-      (JSON.parse(solana("program", "write-buffer", ADAPTER_SO)) as { buffer: string }).buffer,
-    );
+    const buffer = writeBuffer(provider, ADAPTER_SO);
     const sig = await upgradeAdapter(program, wallet, buffer, wallet).rpc();
     const { tx, events } = await cpiEventsOf(sig);
     const expected = executableHash(readFileSync(ADAPTER_SO));

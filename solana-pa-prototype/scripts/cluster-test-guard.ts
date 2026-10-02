@@ -6,7 +6,7 @@
  * a spec pause the adapter, replace its kind table, upgrade a program, or
  * renounce the ownership for good. The roles: each program's upgrade
  * authority while it is not the program's own upgrade authority PDA, and
- * the adapter's stored owner. Run through ops.sh before any spec:
+ * the adapter's and the forwarder's stored owners. Run through ops.sh before any spec:
  *
  *   npx ts-node -P tsconfig.json scripts/cluster-test-guard.ts <program id>...
  */
@@ -14,7 +14,8 @@ import * as anchor from "@anchor-lang/core";
 import { AnchorProvider, Program } from "@anchor-lang/core";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { derivePaStatePda, deriveUpgradeAuthorityPda } from "../client/pda";
+import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
+import { deriveConfigPda, derivePaStatePda, deriveUpgradeAuthorityPda } from "../client/pda";
 import { upgradeAuthority } from "../client/upgrade";
 import { fail, parsePubkey } from "./cli-utils";
 
@@ -24,12 +25,14 @@ export type OwnerRole = { role: string; key: PublicKey };
 /**
  * Every owner's role in the deployment: each of `programIds`' upgrade
  * authority unless it is the program's own PDA (or the program is final),
- * and the adapter's stored owner once it is initialized.
+ * and the adapter's and the forwarder's stored owners once they are
+ * initialized.
  */
 export async function ownerRoles(
   connection: Connection,
   programIds: PublicKey[],
   adapter: Program<ProtocolAdapter>,
+  forwarder: Program<SplTokenForwarder>,
 ): Promise<OwnerRole[]> {
   const roles: OwnerRole[] = [];
   for (const id of programIds) {
@@ -40,6 +43,8 @@ export async function ownerRoles(
   }
   const state = await adapter.account.paStateAccount.fetchNullable(derivePaStatePda(adapter.programId)[0]);
   if (state) roles.push({ role: `the owner of the adapter ${adapter.programId.toBase58()}`, key: state.owner });
+  const config = await forwarder.account.config.fetchNullable(deriveConfigPda(forwarder.programId)[0]);
+  if (config) roles.push({ role: `the owner of the forwarder ${forwarder.programId.toBase58()}`, key: config.owner });
   return roles;
 }
 
@@ -60,12 +65,14 @@ async function main() {
   const provider = AnchorProvider.env();
   anchor.setProvider(provider);
   const adapter = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
+  const forwarder = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
   refuseOwnerWallet(
     provider.wallet.publicKey,
     await ownerRoles(
       provider.connection,
       programArgs.map((p) => parsePubkey("program id", p)),
       adapter,
+      forwarder,
     ),
   );
   console.log("✅ The test wallet owns none of the programs under test.");

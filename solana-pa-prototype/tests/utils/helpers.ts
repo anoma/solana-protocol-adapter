@@ -21,6 +21,7 @@ import {
 } from "@solana/web3.js";
 import { approve, createMint, getOrCreateAssociatedTokenAccount, mintTo } from "@solana/spl-token";
 import { assert } from "chai";
+import { execFileSync } from "child_process";
 import { createHash } from "crypto";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { escrowAccounts } from "../../client/instructions";
@@ -377,4 +378,18 @@ export async function sendV0(
  */
 export function transactionIdOf(actionTreeRoots: number[][]): Buffer {
   return Buffer.from(keccak_256(Buffer.concat(actionTreeRoots.map((root) => Buffer.from(root)))));
+}
+
+/** The Solana CLI against `provider`'s validator, signing with the suite's wallet, with JSON output. */
+export function solanaCli(provider: anchor.AnchorProvider, ...args: string[]): string {
+  return execFileSync(
+    "solana",
+    [...args, "--keypair", process.env.ANCHOR_WALLET!, "--url", provider.connection.rpcEndpoint, "--output", "json"],
+    { encoding: "utf8" },
+  );
+}
+
+/** A loader buffer holding the program binary `so`, written by the suite's wallet, which is its authority. */
+export function writeBuffer(provider: anchor.AnchorProvider, so: string): PublicKey {
+  return new PublicKey((JSON.parse(solanaCli(provider, "program", "write-buffer", so)) as { buffer: string }).buffer);
 }

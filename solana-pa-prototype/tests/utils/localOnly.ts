@@ -1,9 +1,9 @@
 /**
  * The only builders in this repository for instructions that change an
- * authority or close protocol accounts for good: the adapter's
- * `transfer_ownership`, `renounce_ownership` and `migrate_state` (which
- * hands the program's upgrade authority to its PDA), the loader's
- * SetAuthority on a program's ProgramData, the forwarder's
+ * authority or close protocol accounts for good: both programs'
+ * `transfer_ownership` and `renounce_ownership`, the adapter's
+ * `migrate_state` and the forwarder's `migrate_config` (which hand the
+ * program's upgrade authority to its PDA), the forwarder's
  * `set_emergency_caller`, `close_escrow`, `close_config` and
  * `close_nonce_bitmaps_batch` (wrap replay protection), and the adapter's
  * dev-build `close_markers_batch` (settlement replay protection). They exist
@@ -12,10 +12,10 @@
  * by hand (docs/OPERATIONS.md).
  */
 import { Program } from "@anchor-lang/core";
-import { Connection, Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
-import { BPF_LOADER_UPGRADEABLE, derivePaStatePda, deriveProgramDataPda } from "../../client/pda";
+import { derivePaStatePda, deriveProgramDataPda } from "../../client/pda";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const BATCH_SIZE = 20;
@@ -36,29 +36,6 @@ export function assertLocalValidator(connection: Connection): void {
         "on devnet and mainnet they are made by hand",
     );
   }
-}
-
-/**
- * The loader's SetAuthority (instruction 4) on `programId`'s ProgramData,
- * signed by `current`, for sending through `connection`: `next` becomes the
- * upgrade authority, or none when `next` is null (the program is final).
- */
-export function localSetUpgradeAuthority(
-  connection: Connection,
-  programId: PublicKey,
-  current: PublicKey,
-  next: PublicKey | null,
-): TransactionInstruction {
-  assertLocalValidator(connection);
-  return new TransactionInstruction({
-    programId: BPF_LOADER_UPGRADEABLE,
-    keys: [
-      { pubkey: deriveProgramDataPda(programId), isSigner: false, isWritable: true },
-      { pubkey: current, isSigner: true, isWritable: false },
-      ...(next ? [{ pubkey: next, isSigner: false, isWritable: false }] : []),
-    ],
-    data: Buffer.from([4, 0, 0, 0]),
-  });
 }
 
 /** The adapter's `transfer_ownership` by its owner `authority`, to `newOwner`. */
@@ -89,6 +66,34 @@ export function localRenounceAdapterOwnership(program: Program<ProtocolAdapter>,
 export function localMigrateState(program: Program<ProtocolAdapter>, authority: PublicKey) {
   assertLocalValidator(program.provider.connection);
   return program.methods.migrateState().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/** The forwarder's `transfer_ownership` by its owner `authority`, to `newOwner`. */
+export function localTransferForwarderOwnership(
+  forwarder: Program<SplTokenForwarder>,
+  authority: PublicKey,
+  newOwner: PublicKey,
+) {
+  assertLocalValidator(forwarder.provider.connection);
+  return forwarder.methods.transferOwnership(newOwner).accountsPartial({ authority });
+}
+
+/** The forwarder's `renounce_ownership` by its owner `authority`: neither `upgrade` nor `reinitialize` can run again. */
+export function localRenounceForwarderOwnership(forwarder: Program<SplTokenForwarder>, authority: PublicKey) {
+  assertLocalValidator(forwarder.provider.connection);
+  return forwarder.methods.renounceOwnership().accountsPartial({ authority });
+}
+
+/**
+ * The forwarder's `migrate_config` by the program's upgrade authority, after
+ * an in-place upgrade from the previous build: it becomes the stored owner
+ * and hands the upgrade authority to the program's PDA.
+ */
+export function localMigrateConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey) {
+  assertLocalValidator(forwarder.provider.connection);
+  return forwarder.methods
+    .migrateConfig()
+    .accountsPartial({ authority, programData: deriveProgramDataPda(forwarder.programId) });
 }
 
 /** `set_emergency_caller` by the committee; only while the adapter at `paState` is paused. */

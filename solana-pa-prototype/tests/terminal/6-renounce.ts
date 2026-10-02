@@ -1,35 +1,19 @@
 /**
- * Renouncing an ownership is for good, so these run last on the suite's
- * deployment: the forwarder's upgrade authority, then the adapter's
- * ownership, after which no owner-only instruction can run.
+ * Renouncing the adapter's ownership is for good, so it runs last on the
+ * suite's deployment, after which no owner-only instruction can run.
  */
-import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import { Keypair, PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
 import { EMPTY_KIND_TABLE_COMMITMENT } from "../../client/constants";
 import { setKindTableCommitment, upgradeAdapter } from "../../client/instructions";
-import { upgradeAuthority } from "../../client/upgrade";
-import { localRenounceAdapterOwnership, localSetUpgradeAuthority } from "../utils/localOnly";
+import { localRenounceAdapterOwnership } from "../utils/localOnly";
 import { assertFails } from "../utils/helpers";
 import { ownerRoles, refuseOwnerWallet } from "../../scripts/cluster-test-guard";
 import { cpiEventsOf, provider, program, paState, forwarderProgram, useAdapterSuite } from "../utils/adapterSuite";
 
-describe("renounced ownerships", () => {
+describe("renounced adapter ownership", () => {
   useAdapterSuite();
   const wallet = provider.wallet.publicKey;
-
-  // The cluster test guard reads no upgrade authority from a final program,
-  // so it finds no owner's role there.
-  it("cluster test guard: reads no upgrade authority from a final program", async () => {
-    await provider.sendAndConfirm(
-      new Transaction().add(localSetUpgradeAuthority(provider.connection, forwarderProgram.programId, wallet, null)),
-    );
-    assert.isNull(await upgradeAuthority(provider.connection, forwarderProgram.programId));
-    const roles = await ownerRoles(provider.connection, [forwarderProgram.programId], program);
-    assert.notInclude(
-      roles.map((r) => r.role),
-      `the upgrade authority of ${forwarderProgram.programId.toBase58()}`,
-    );
-  });
 
   // Mirrors OwnableUpgradeable.renounceOwnership: the owner becomes the zero
   // address, announced, and every owner-only instruction, upgrades included,
@@ -53,6 +37,9 @@ describe("renounced ownerships", () => {
       error: "OwnableUnauthorizedAccount",
       account: "authority",
     });
-    refuseOwnerWallet(wallet, await ownerRoles(provider.connection, [program.programId], program));
+    refuseOwnerWallet(
+      wallet,
+      await ownerRoles(provider.connection, [program.programId, forwarderProgram.programId], program, forwarderProgram),
+    );
   });
 });

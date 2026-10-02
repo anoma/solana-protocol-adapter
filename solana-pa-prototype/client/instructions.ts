@@ -174,33 +174,50 @@ export function escrowTransferAccounts(
   ];
 }
 
-/** The forwarder's `initialize`; callers add signers and send. */
+/**
+ * The forwarder's `initialize`, signed by `authority`, the program's upgrade
+ * authority, which it hands to the program's upgrade authority PDA: it makes
+ * `initialOwner` the owner. `programData` is the forwarder's own ProgramData
+ * unless a test substitutes another program's. Callers add signers and send.
+ */
 export function initializeForwarder(
   forwarder: Program<SplTokenForwarder>,
   adapterProgramId: PublicKey,
   logicRef: number[],
   committee: PublicKey,
+  initialOwner: PublicKey,
   authority: PublicKey,
   programData: PublicKey = deriveProgramDataPda(forwarder.programId),
 ) {
   return forwarder.methods
-    .initialize(adapterProgramId, logicRef, committee)
+    .initialize(adapterProgramId, logicRef, committee, initialOwner)
     .accountsPartial({ authority, programData });
 }
 
 /**
  * Rotate the forwarder config's logic ref, once per build that raises
  * CONFIG_VERSION, after upgrading the program to that build. `authority`
- * must be the program's upgrade authority; `programData` is the forwarder's
- * own ProgramData unless a test substitutes another program's.
+ * must be the forwarder's owner.
  */
-export function reinitializeForwarder(
+export function reinitializeForwarder(forwarder: Program<SplTokenForwarder>, authority: PublicKey, logicRef: number[]) {
+  return forwarder.methods.reinitialize(logicRef).accountsPartial({ authority });
+}
+
+/**
+ * The forwarder's `upgrade` by its owner, as `upgradeAdapter`: the program's
+ * code becomes `buffer`'s, a loader buffer the owner wrote; the buffer's
+ * rent goes to `spill`.
+ */
+export function upgradeForwarder(
   forwarder: Program<SplTokenForwarder>,
   authority: PublicKey,
-  logicRef: number[],
-  programData: PublicKey = deriveProgramDataPda(forwarder.programId),
+  buffer: PublicKey,
+  spill: PublicKey,
 ) {
-  return forwarder.methods.reinitialize(logicRef).accountsPartial({ authority, programData });
+  return forwarder.methods
+    .upgrade()
+    .accountsPartial({ authority, buffer, spill })
+    .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: UPGRADE_COMPUTE_UNIT_LIMIT })]);
 }
 
 /** `forward_emergency_call` by `caller`; callers add signers and send. */

@@ -1,6 +1,6 @@
 [package]
 name = "spl-token-forwarder"
-version = "2.0.0-rc.2"
+version = "2.0.0-rc.3"
 description = "SPL Token forwarder for wrap/unwrap operations with Ed25519 signature verification"
 edition = "2021"
 

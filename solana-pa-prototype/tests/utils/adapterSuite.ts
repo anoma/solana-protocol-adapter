@@ -205,6 +205,7 @@ export async function ensureForwarderConfig() {
       forwarderLogicRef(),
       forwarderCommittee.publicKey,
       provider.wallet.publicKey,
+      provider.wallet.publicKey,
     ).rpc();
   }
   return forwarderProgram.account.config.fetch(configPda);

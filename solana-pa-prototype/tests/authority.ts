@@ -5,9 +5,8 @@
  * authority is the program's own PDA, as pa-evm's UUPS implementation
  * authorizes its own upgrades. Every test leaves the provider wallet as the
  * owner and the deployed code as it found it; renouncing the ownership is
- * terminal/5-renounce.ts, among the suite's last files.
+ * terminal/6-renounce.ts, the suite's last file.
  */
-import { execFileSync } from "child_process";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
 import { readFileSync } from "fs";
@@ -15,22 +14,10 @@ import { pauseAdapter, setKindTableCommitment, upgradeAdapter } from "../client/
 import { BPF_LOADER_UPGRADEABLE } from "../client/pda";
 import { deployedExecutableHash, executableHash } from "../client/upgrade";
 import { localTransferAdapterOwnership } from "./utils/localOnly";
-import { assertFails, waitForSlotPast } from "./utils/helpers";
+import { assertFails, solanaCli, waitForSlotPast, writeBuffer } from "./utils/helpers";
 import { cpiEventsOf, provider, program, paState, useAdapterSuite } from "./utils/adapterSuite";
 
 const ADAPTER_SO = "target/deploy/protocol_adapter.so";
-
-/** The Solana CLI with the provider's wallet and validator. */
-const solanaCli = (...args: string[]) =>
-  execFileSync(
-    "solana",
-    [...args, "--keypair", process.env.ANCHOR_WALLET!, "--url", provider.connection.rpcEndpoint, "--output", "json"],
-    { encoding: "utf8" },
-  );
-
-/** A loader buffer holding `so`, written by the provider wallet, which is its authority. */
-const writeBuffer = (so: string) =>
-  new PublicKey((JSON.parse(solanaCli("program", "write-buffer", so)) as { buffer: string }).buffer);
 
 describe("protocol-adapter (ownership and upgrades) @localnet", () => {
   const { funder } = useAdapterSuite();
@@ -112,14 +99,14 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
     // than the owner wrote is refused there.
     it("rejects a buffer someone other than the owner wrote", async () => {
       const successor = await funder.fresh(1);
-      const buffer = writeBuffer(ADAPTER_SO);
+      const buffer = writeBuffer(provider, ADAPTER_SO);
       await localTransferAdapterOwnership(program, wallet, successor.publicKey).rpc();
       await assertFails(
         upgradeAdapter(program, successor.publicKey, buffer, successor.publicKey).signers([successor]).rpc(),
         { program: BPF_LOADER_UPGRADEABLE, reason: /^Incorrect authority provided$/ },
       );
       await localTransferAdapterOwnership(program, successor.publicKey, wallet).signers([successor]).rpc();
-      solanaCli("program", "close", buffer.toBase58(), "--bypass-warning");
+      solanaCli(provider, "program", "close", buffer.toBase58(), "--bypass-warning");
     });
 
     // UUPS upgradeToAndCall: the owner replaces the code, announced with
@@ -128,7 +115,7 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
     // deployment as it was.
     it("replaces the code with the owner's buffer, announces its executable hash, and runs it from the next slot", async () => {
       const expected = executableHash(readFileSync(ADAPTER_SO));
-      const buffer = writeBuffer(ADAPTER_SO);
+      const buffer = writeBuffer(provider, ADAPTER_SO);
       const spill = Keypair.generate().publicKey;
       const bufferRent = (await provider.connection.getAccountInfo(buffer))!.lamports;
 

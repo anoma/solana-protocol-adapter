@@ -477,7 +477,7 @@ pub mod protocol_adapter {
             !state.is_logic_ref_denied(&logic_ref),
             PAError::LogicRefAlreadyDenied
         );
-        resize_state(
+        resize_account(
             &state.to_account_info(),
             PAStateAccount::space(state.depth(), state.denied_logic_refs.len() + 1),
             &ctx.accounts.authority.to_account_info(),
@@ -518,14 +518,16 @@ pub mod protocol_adapter {
     /// UUPS `upgradeToAndCall` pa-evm's owner calls: owner only
     /// (`_authorizeUpgrade`), announced with `UpgradedEvent`, which names the
     /// new code by its executable hash as ERC1967's `Upgraded` names the new
-    /// implementation. The buffer's authority must be the upgrade authority
-    /// PDA, as the loader requires; its rent goes to `spill`. The new code
+    /// implementation. The buffer's authority must be the owner, who wrote
+    /// it; the program hands it to its upgrade authority PDA, which signs the
+    /// upgrade, and its rent goes to `spill`. The new code
     /// runs from the next slot, so a release that changes a layout ships a
     /// migration the owner runs after it.
     pub fn upgrade(ctx: Context<UpgradeProgram>) -> Result<()> {
         // The event first: the self-invocation that carries it must run this
         // code, which the loader replaces below.
-        let executable_hash = upgrade::executable_hash(&ctx.accounts.buffer.try_borrow_data()?)?;
+        let executable_hash = upgrade::executable_hash(&ctx.accounts.buffer.try_borrow_data()?)
+            .ok_or(PAError::InvalidUpgradeBuffer)?;
         emit_cpi!(UpgradedEvent { executable_hash });
         upgrade::upgrade_program(
             &crate::ID,
@@ -535,6 +537,7 @@ pub mod protocol_adapter {
                 program_data: &ctx.accounts.program_data.to_account_info(),
                 program: &ctx.accounts.upgraded_program.to_account_info(),
                 buffer: &ctx.accounts.buffer.to_account_info(),
+                buffer_authority: &ctx.accounts.authority.to_account_info(),
                 spill: &ctx.accounts.spill.to_account_info(),
                 rent: &ctx.accounts.rent.to_account_info(),
                 clock: &ctx.accounts.clock.to_account_info(),
@@ -571,7 +574,7 @@ pub mod protocol_adapter {
                 .map_err(|_| PAError::NotPreviousSchema)?
                 .migrate(owner)
         };
-        resize_state(
+        resize_account(
             &info,
             PAStateAccount::space(state.depth(), state.denied_logic_refs.len()),
             &ctx.accounts.authority.to_account_info(),
@@ -687,7 +690,7 @@ fn maybe_grow_account<'info>(
         return Ok(());
     }
 
-    resize_state(
+    resize_account(
         pa_state_info,
         PAStateAccount::space(target_depth, state.denied_logic_refs.len()),
         payer,
@@ -701,28 +704,29 @@ fn maybe_grow_account<'info>(
     Ok(())
 }
 
-/// Resize the state account to `size`, `payer` topping up its rent first.
-fn resize_state<'info>(
-    pa_state_info: &AccountInfo<'info>,
+/// Resize a program-owned account to `size`, `payer` topping up its rent
+/// first. Shared with the SPL token forwarder's config migration.
+pub fn resize_account<'info>(
+    account: &AccountInfo<'info>,
     size: usize,
     payer: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
 ) -> Result<()> {
     let minimum_balance = Rent::get()?.minimum_balance(size);
-    let current_balance = pa_state_info.lamports();
+    let current_balance = account.lamports();
     if minimum_balance > current_balance {
         anchor_lang::system_program::transfer(
             CpiContext::new(
                 system_program.key(),
                 anchor_lang::system_program::Transfer {
                     from: payer.clone(),
-                    to: pa_state_info.clone(),
+                    to: account.clone(),
                 },
             ),
             minimum_balance - current_balance,
         )?;
     }
-    pa_state_info.resize(size)?;
+    account.resize(size)?;
     Ok(())
 }
 
@@ -1040,8 +1044,8 @@ pub struct UpgradeProgram<'info> {
     pub upgraded_program: UncheckedAccount<'info>,
 
     /// CHECK: The loader buffer holding the new code, whose authority the
-    /// loader requires to be `upgrade_authority`; `executable_hash` refuses
-    /// anything else.
+    /// loader requires to be the owner, who signs; `executable_hash` refuses
+    /// any other account.
     #[account(mut)]
     pub buffer: UncheckedAccount<'info>,
 

@@ -16,20 +16,35 @@
  */
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
+import { PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { upgradeAdapter } from "../client/instructions";
+import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
+import { upgradeAdapter, upgradeForwarder } from "../client/instructions";
 import { deriveUpgradeAuthorityPda } from "../client/pda";
 import { deployedExecutableHash, executableHash, upgradeAuthority } from "../client/upgrade";
 import { cpiEventsOfSignature } from "../client/events";
 import { fail, parsePubkey } from "./cli-utils";
 
-/** The workspace program `name` names; the programs that upgrade themselves. */
-function selfUpgradingProgram(name: string): Program<ProtocolAdapter> {
+/** A program that upgrades itself: its client, its `upgrade` by an owner, and the name of the event that announces it. */
+type SelfUpgrading = {
+  program: Program<any>;
+  upgrade: (owner: PublicKey, buffer: PublicKey, spill: PublicKey) => { rpc(opts?: object): Promise<string> };
+  event: string;
+};
+
+/** The workspace program `name` names, among the programs that upgrade themselves. */
+function selfUpgradingProgram(name: string): SelfUpgrading {
   switch (name) {
-    case "protocol_adapter":
-      return anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
+    case "protocol_adapter": {
+      const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
+      return { program, upgrade: (o, b, s) => upgradeAdapter(program, o, b, s), event: "upgradedEvent" };
+    }
+    case "spl_token_forwarder": {
+      const program = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
+      return { program, upgrade: (o, b, s) => upgradeForwarder(program, o, b, s), event: "upgraded" };
+    }
     default:
-      fail(`${name} does not upgrade itself; known: protocol_adapter`);
+      fail(`${name} does not upgrade itself; known: protocol_adapter, spl_token_forwarder`);
   }
 }
 
@@ -37,7 +52,7 @@ async function main() {
   const [command, name, bufferArg] = process.argv.slice(2);
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
-  const program = selfUpgradingProgram(name);
+  const { program, upgrade, event } = selfUpgradingProgram(name);
   const wallet = provider.wallet.publicKey;
 
   if (command === "path") {
@@ -59,11 +74,11 @@ async function main() {
   const expected = executableHash(bufferAccount.data.subarray(37));
 
   console.log(`Upgrading ${name} (${program.programId.toBase58()}) from buffer ${buffer.toBase58()}`);
-  const signature = await upgradeAdapter(program, wallet, buffer, wallet).rpc({ commitment: "confirmed" });
+  const signature = await upgrade(wallet, buffer, wallet).rpc({ commitment: "confirmed" });
 
   const events = await cpiEventsOfSignature(provider.connection, program, signature);
-  const upgraded = events.find((e) => e.name === "upgradedEvent");
-  if (!upgraded) throw new Error(`transaction ${signature} landed without an UpgradedEvent`);
+  const upgraded = events.find((e) => e.name === event);
+  if (!upgraded) throw new Error(`transaction ${signature} landed without ${event}`);
   const announced = Buffer.from(upgraded.data.executableHash as number[]);
   const deployed = await deployedExecutableHash(provider.connection, program.programId);
   if (!announced.equals(expected) || !deployed.equals(expected)) {
