@@ -17,11 +17,11 @@ import {
   settleFromTxDataBuilder,
   useAdapterSuite,
 } from "./utils/adapterSuite";
-import { loadFixture } from "./utils/fixtures";
+import { type Fixture, loadFixture } from "./utils/fixtures";
 
 describe("protocol-adapter (kind table commitment) @localnet", () => {
   const { funder, uploadTxData, settleFixture } = useAdapterSuite();
-  const fixture = loadFixture("batch_groth16_resubmitted.json");
+  let fixture: Fixture;
 
   // Mirrors pa-evm ProtocolAdapter.setKindTableCommitment: owner-only, zero
   // rejected, KindTableCommitmentUpdated emitted. The stored commitment is
@@ -33,6 +33,7 @@ describe("protocol-adapter (kind table commitment) @localnet", () => {
 
   before(async () => {
     found = await stored();
+    fixture = loadFixture("batch_groth16_resubmitted.json");
     await settleFixture("batch_groth16_resubmitted.json");
   });
 

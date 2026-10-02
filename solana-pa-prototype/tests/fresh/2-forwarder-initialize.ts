@@ -13,7 +13,7 @@ import { initializeForwarder } from "../../client/instructions";
 import { deriveConfigPda, deriveProgramDataPda } from "../../client/pda";
 import { confirmedTransaction, makeFunder, randomRef, assertFails } from "../utils/helpers";
 import {
-  FORWARDER_LOGIC_REF,
+  forwarderLogicRef,
   forwarderCommittee as emergencyCommittee,
   forwarderProgram,
   program as paProgram,
@@ -24,7 +24,7 @@ describe("forwarder initialize", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
   const funder = makeFunder(provider);
 
-  const logicRef = FORWARDER_LOGIC_REF;
+  const logicRef = forwarderLogicRef();
 
   // The upgrade authority, the forwarder's owner, initializes it: the EVM
   // proxy runs its initializer atomically at deployment, so no one else ever

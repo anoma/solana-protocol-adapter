@@ -181,9 +181,8 @@ export async function setExpiryBounds(minSlots: number, maxSlots: number): Promi
  * AnomaPay transfer logic the wrap fixtures carry, and its emergency
  * committee is a keypair seeded from a label, apart from the owner.
  */
-export const FORWARDER_LOGIC_REF = Array.from(
-  Buffer.from(loadFixture("spl_token_wrap.json").spl_token_wrap!.logic_ref_b64, "base64"),
-);
+export const forwarderLogicRef = () =>
+  Array.from(Buffer.from(loadFixture("spl_token_wrap.json").spl_token_wrap!.logic_ref_b64, "base64"));
 export const forwarderCommittee = seededKeypair("spl_token_forwarder_test_committee");
 
 /**
@@ -197,7 +196,7 @@ export async function ensureForwarderConfig() {
     await initializeForwarder(
       forwarderProgram,
       program.programId,
-      FORWARDER_LOGIC_REF,
+      forwarderLogicRef(),
       forwarderCommittee.publicKey,
       provider.wallet.publicKey,
     ).rpc();

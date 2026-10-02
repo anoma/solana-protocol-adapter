@@ -787,17 +787,22 @@ cmd_test() {
 
   # The run proves its own fixture set for the deployment: under a salt no
   # earlier run used, so nothing in it was settled before, and against the
-  # kind table the deployment stores.
+  # kind table the deployment stores. Each fixture is proven when a test
+  # first loads it (tests/utils/fixtures.ts), so the run stops at the first
+  # failure and proves only what its tests use.
   if [[ -z "${PA_KIND_TABLE:-}" || ! -f "$PA_KIND_TABLE" ]]; then
     echo "❌ Set PA_KIND_TABLE to the kind table (JSON, as fixture-gen reads it) whose commitment the deployment stores;" >&2
     echo "   the run proves its fixtures against it." >&2
     exit 1
   fi
+  # PA_FIXTURE_SALT continues an interrupted run's set, whose fixtures were
+  # proven but not settled; a fixture it already settled fails loudly as
+  # settled.
   local salt fixture_dir
-  salt="${CLUSTER}-$(date -u +%Y%m%dT%H%M%SZ)"
+  salt="${PA_FIXTURE_SALT:-${CLUSTER}-$(date -u +%Y%m%dT%H%M%SZ)}"
   fixture_dir="${PROJECT_DIR}/.cache/cluster-fixtures/${salt}"
-  echo "Proving the run's fixtures (salt ${salt}) into ${fixture_dir}"
-  "${SCRIPT_DIR}/regen-fixtures.sh" real --out "$fixture_dir" --salt "$salt" --kind-table "$PA_KIND_TABLE"
+  mkdir -p "$fixture_dir"
+  echo "The run's fixtures (salt ${salt}) are proven into ${fixture_dir} as tests need them"
 
   # The suite's files that build on whatever state they find, or the ones
   # given, each in its own mocha process against the deployment, without the
@@ -819,6 +824,8 @@ cmd_test() {
     ANCHOR_WALLET="$WALLET" \
     PA_TEST_MODE=real \
     PA_FIXTURE_DIR="$fixture_dir" \
+    PA_FIXTURE_SALT="$salt" \
+    PA_KIND_TABLE="$PA_KIND_TABLE" \
     PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE:-}" \
       yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 --grep @localnet --invert "$spec"
   done

@@ -1,4 +1,5 @@
-import { readFileSync } from "fs";
+import { execFileSync } from "child_process";
+import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { Ed25519Program, PublicKey } from "@solana/web3.js";
 
@@ -8,8 +9,9 @@ import { Ed25519Program, PublicKey } from "@solana/web3.js";
 // the localnet mock verifier). The mode's only job is picking the
 // directory — the fixture's selector drives everything downstream: the PA
 // initialize argument, the verifier-entry PDA, and the verifier program.
-// A cluster run proves its own set for the deployment (ops.sh test) and
-// names it in PA_FIXTURE_DIR.
+// A cluster run (ops.sh test) proves its own set for the deployment into
+// PA_FIXTURE_DIR, each fixture when a test first loads it, under the run's
+// salt (PA_FIXTURE_SALT) and the deployment's kind table (PA_KIND_TABLE).
 const MODE = process.env.PA_TEST_MODE ?? "real";
 if (MODE !== "real" && MODE !== "mock") {
   throw new Error(`PA_TEST_MODE must be "real" or "mock", got "${MODE}"`);
@@ -63,7 +65,35 @@ function readJson<T>(filePath: string): T {
 }
 
 export function loadFixture<T = Fixture>(filename: string): T {
-  return readJson<T>(path.join(FIXTURE_DIR, filename));
+  const file = path.join(FIXTURE_DIR, filename);
+  if (!existsSync(file) && process.env.PA_FIXTURE_SALT) proveForClusterRun(filename);
+  return readJson<T>(file);
+}
+
+/**
+ * Prove `filename` into a cluster run's fixture set, with the recipe
+ * scripts/regen-fixtures.sh holds for it: proving each fixture when a test
+ * first needs it stops at the first failing test and proves nothing the run
+ * does not use.
+ */
+function proveForClusterRun(filename: string): void {
+  const kindTable = process.env.PA_KIND_TABLE;
+  if (!kindTable) throw new Error("a cluster run (PA_FIXTURE_SALT set) needs PA_KIND_TABLE to prove its fixtures");
+  execFileSync(
+    "./scripts/regen-fixtures.sh",
+    [
+      "real",
+      "--out",
+      FIXTURE_DIR,
+      "--salt",
+      process.env.PA_FIXTURE_SALT!,
+      "--kind-table",
+      kindTable,
+      "--only",
+      filename,
+    ],
+    { stdio: "inherit" },
+  );
 }
 
 /** Load a fixture, or fail naming the command that regenerates the fixture set. */
