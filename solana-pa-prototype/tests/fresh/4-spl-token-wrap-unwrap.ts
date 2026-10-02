@@ -10,6 +10,7 @@ import * as anchor from "@anchor-lang/core";
 import {
   AccountMeta,
   AddressLookupTableAccount,
+  Ed25519Program,
   PublicKey,
   SystemProgram,
   Keypair,
@@ -150,9 +151,9 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
 
   const segmentHead = forwarderSegmentHead(forwarderProgram.programId);
 
-  const wrapSegment = (destination = escrowAta, source = userAta): AccountMeta[] => [
+  const wrapSegment = (destination = escrowAta, source = userAta, nonceBitmap = nonceBitmapPda): AccountMeta[] => [
     ...segmentHead,
-    ...wrapTransferAccounts(source, destination, escrowAuthority, nonceBitmapPda),
+    ...wrapTransferAccounts(source, destination, escrowAuthority, nonceBitmap),
   ];
 
   const unwrapSegment = (destination = recipientAta, source = escrowAta): AccountMeta[] => [
@@ -166,13 +167,16 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     ...escrowTransferAccounts(escrowAta, recipientAta, escrowAuthority),
   ];
 
-  /** The permissionless instruction that creates the user's bitmap for the wrap nonce's word. */
-  const initNonceBitmapIx = () =>
+  /**
+   * The permissionless instruction that creates `owner`'s bitmap for `word`:
+   * by default the user's, for the wrap nonce's word.
+   */
+  const initNonceBitmapIx = (owner = user.publicKey, word = nonceWordIndex(wrapNonce)) =>
     forwarderProgram.methods
-      .initNonceBitmap(user.publicKey, new anchor.BN(nonceWordIndex(wrapNonce).toString()))
+      .initNonceBitmap(owner, new anchor.BN(word.toString()))
       .accountsPartial({
         payer: provider.wallet.publicKey,
-        nonceBitmap: nonceBitmapPda,
+        nonceBitmap: deriveNonceBitmapPda(forwarderProgram.programId, owner, word)[0],
         systemProgram: SystemProgram.programId,
       })
       .instruction();
@@ -320,6 +324,50 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     assert.deepEqual(await balances(userOtherAta, escrowOwnedOtherAta, escrowAta), before, "no tokens move");
   });
 
+  // The wrap input names the user and the index of the ed25519 instruction
+  // that authorizes it; the submitter supplies that instruction. Each of these
+  // reaches the authorization check (the bitmap exists, the accounts are the
+  // user's and the escrow's) and must stop there with no tokens moved.
+  const refusesWrapAuthorization = async (preInstructions: anchor.web3.TransactionInstruction[], error: string) => {
+    const before = await balances(userAta, escrowAta);
+    await assertFails(settleForwarderFixture(wrapFixture, wrapSegment(), preInstructions), {
+      program: forwarderProgram,
+      error,
+    });
+    assert.deepEqual(await balances(userAta, escrowAta), before, "no tokens move");
+  };
+  const signedWrapMessage = Buffer.from(wrap.signed_message_b64, "base64");
+
+  it("rejects a wrap authorized by another key's signature over the wrap message", async () =>
+    refusesWrapAuthorization(
+      [
+        Ed25519Program.createInstructionWithPrivateKey({
+          privateKey: Keypair.generate().secretKey,
+          message: signedWrapMessage,
+        }),
+        await initNonceBitmapIx(),
+      ],
+      "Ed25519PubkeyMismatch",
+    ));
+
+  it("rejects a wrap whose authorization is the user's signature over another message", async () => {
+    const otherMessage = Buffer.from(signedWrapMessage);
+    otherMessage[0] ^= 1;
+    await refusesWrapAuthorization(
+      [
+        Ed25519Program.createInstructionWithPrivateKey({ privateKey: user.secretKey, message: otherMessage }),
+        await initNonceBitmapIx(),
+      ],
+      "Ed25519MessageMismatch",
+    );
+  });
+
+  it("rejects a wrap whose authorization is not at the instruction index its input names", async () =>
+    refusesWrapAuthorization(
+      [await initNonceBitmapIx(), wrapAuthorizationIx(user.publicKey, wrapFixture)],
+      "InvalidEd25519Instruction",
+    ));
+
   // Mirrors ERC20Forwarder.t.sol: test_wrap_pulls_funds_from_user. The
   // first wrap on a word carries init_nonce_bitmap in the same transaction,
   // after the ed25519 instruction the wrap input points at (index 0).
@@ -373,6 +421,63 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
       { program: forwarderProgram, error: "NonceAlreadyUsed" },
     );
     assert.deepEqual(await balances(escrowAta), [escrowBefore], "escrow is unchanged");
+  });
+
+  // The submitter chooses the bitmap account too. The user holds and has
+  // approved the replay's amount, so if any of these accounts made the used
+  // nonce look unused, the replay would move tokens.
+  const refusesReplay = async (
+    segment: AccountMeta[],
+    preInstructions: anchor.web3.TransactionInstruction[],
+    expected: { error: string; account?: string },
+  ) => {
+    await mintTo(provider.connection, user, mint, userAta, user, Number(wrapAmount));
+    await approve(provider.connection, user, userAta, escrowAuthority, user, Number(wrapAmount));
+    const before = await balances(userAta, escrowAta);
+    await assertFails(
+      settleForwarderFixture(wrapReplayFixture, segment, [
+        wrapAuthorizationIx(user.publicKey, wrapReplayFixture),
+        ...preInstructions,
+      ]),
+      { program: forwarderProgram, ...expected },
+    );
+    assert.deepEqual(await balances(userAta, escrowAta), before, "no tokens move");
+  };
+
+  it("rejects a replay that supplies the user's bitmap of another word", async () => {
+    const otherWord = nonceWordIndex(wrapNonce) + 1n;
+    await refusesReplay(
+      wrapSegment(escrowAta, userAta, deriveNonceBitmapPda(forwarderProgram.programId, user.publicKey, otherWord)[0]),
+      [await initNonceBitmapIx(user.publicKey, otherWord)],
+      { error: "InvalidNonceBitmapPda" },
+    );
+  });
+
+  it("rejects a replay that supplies another user's bitmap of the nonce's word", async () => {
+    const other = Keypair.generate().publicKey;
+    const word = nonceWordIndex(wrapNonce);
+    await refusesReplay(
+      wrapSegment(escrowAta, userAta, deriveNonceBitmapPda(forwarderProgram.programId, other, word)[0]),
+      [await initNonceBitmapIx(other, word)],
+      { error: "InvalidNonceBitmapPda" },
+    );
+  });
+
+  // Not read as an all-zero bitmap in which the nonce is unused.
+  it("rejects a wrap whose nonce bitmap is an account of another program", async () =>
+    refusesReplay(wrapSegment(escrowAta, userAta, userAta), [], { error: "NonceBitmapMissing" }));
+
+  // The config the forwarder checks the caller and logic ref against is at a
+  // fixed address; another account there is refused in account validation.
+  it("rejects a forward_call whose config is an account of another program", async () => {
+    const [head, , sysvar] = segmentHead;
+    const segment = [
+      head,
+      { pubkey: mint, isSigner: false, isWritable: false },
+      sysvar,
+      ...wrapTransferAccounts(userAta, escrowAta, escrowAuthority, nonceBitmapPda),
+    ];
+    await refusesReplay(segment, [], { error: "AccountOwnedByWrongProgram", account: "config" });
   });
 
   // The recipient account is chosen by the submitter, not by the proof.
