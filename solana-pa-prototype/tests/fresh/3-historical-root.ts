@@ -9,7 +9,7 @@
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
 import { EMPTY_TREE_ROOT_INITIAL } from "../utils/constants";
-import { createdCommitmentsOf as commitmentsOf, loadFixture } from "../utils/fixtures";
+import { createdCommitmentsOf as commitmentsOf, requireFixture } from "../utils/fixtures";
 import { assertFails } from "../utils/helpers";
 import { predictRootAfterAppend } from "../utils/merkle";
 import {
@@ -53,10 +53,10 @@ import {
 describe("protocol-adapter (STATE-03 part 2: settle against a retained historical root)", () => {
   const { settleFixtureViaTxData, settleUnsettledFixture } = useAdapterSuite();
 
-  const consumer = loadFixture("batch_groth16_historical_root.json");
+  const consumer = requireFixture("batch_groth16_historical_root.json");
 
   before(async () => {
-    const committer = loadFixture("batch_groth16_historical_root_committer.json");
+    const committer = requireFixture("batch_groth16_historical_root_committer.json");
     const rootAfterCommitter = await predictRootAfterAppend(program, paState, commitmentsOf(committer));
     assert.equal(
       rootAfterCommitter.toString("base64"),

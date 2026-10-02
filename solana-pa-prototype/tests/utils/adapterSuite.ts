@@ -41,7 +41,7 @@ import {
   VERIFIER_ROUTER_ID,
 } from "../../client/verifier";
 import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
-import { createdCommitmentsOf, type Fixture, loadFixture, parseSelectorFromFixture } from "./fixtures";
+import { createdCommitmentsOf, type Fixture, loadFixture, parseSelectorFromFixture, requireFixture } from "./fixtures";
 import {
   confirmedTransaction,
   ExpectedFailure,
@@ -70,8 +70,12 @@ export const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapt
 export const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
 export const [paState] = derivePaStatePda(program.programId);
 
-/** The primary fixture: one ephemeral consumed resource, one created, a block-time-forwarder call. */
-export const fixture = loadFixture("batch_groth16.json");
+/**
+ * The primary fixture: one ephemeral consumed resource, one created, a
+ * block-time-forwarder call. Read when this module loads, for the proof
+ * selector below; a cluster run proves it before the first spec file.
+ */
+export const fixture = requireFixture("batch_groth16.json");
 
 // Verifiers by router selector. Fixtures carry their selector, so tests
 // derive the verifier program and its failures from the fixture instead of
@@ -182,7 +186,7 @@ export async function setExpiryBounds(minSlots: number, maxSlots: number): Promi
  * committee is a keypair seeded from a label, apart from the owner.
  */
 export const forwarderLogicRef = () =>
-  Array.from(Buffer.from(loadFixture("spl_token_wrap.json").spl_token_wrap!.logic_ref_b64, "base64"));
+  Array.from(Buffer.from(requireFixture("spl_token_wrap.json").spl_token_wrap!.logic_ref_b64, "base64"));
 export const forwarderCommittee = seededKeypair("spl_token_forwarder_test_committee");
 
 /**
@@ -224,7 +228,7 @@ export async function assertFixtureUnsettled(fixtureName: string): Promise<void>
 
 /** Whether `fixtureName` is settled on this deployment: its first nullifier marker exists. */
 export async function fixtureSettled(fixtureName: string): Promise<boolean> {
-  const [first] = deriveNullifierAccounts(loadFixture(fixtureName).consumed_nullifiers_b64);
+  const [first] = deriveNullifierAccounts((await loadFixture(fixtureName)).consumed_nullifiers_b64);
   return (await provider.connection.getAccountInfo(first.pubkey)) !== null;
 }
 
@@ -506,7 +510,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
    */
   async function settleUnsettledFixture(fixtureName: string): Promise<string> {
     await assertFixtureUnsettled(fixtureName);
-    const f = loadFixture(fixtureName);
+    const f = await loadFixture(fixtureName);
     return settleFixtureViaTxData(
       Buffer.from(f.tx_b64, "base64"),
       buildSettleRemainingAccounts(deriveNullifierAccounts(f.consumed_nullifiers_b64)),

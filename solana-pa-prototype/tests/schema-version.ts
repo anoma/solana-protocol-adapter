@@ -85,7 +85,7 @@ describe("protocol-adapter (dev_set_schema_version tooling) @localnet", () => {
       ({ uploadId: extendUploadId, txData: extendTxData } = await initTxData(extendAuthority, 100));
 
       settleAuthority = await funder.fresh(2);
-      const settleFixture = loadFixture("wrong_root.json");
+      const settleFixture = await loadFixture("wrong_root.json");
       const settlePayload = Buffer.from(settleFixture.tx_b64, "base64");
       ({ uploadId: settleUploadId, txData: settleTxData } = await uploadTxData(settleAuthority, settlePayload));
       settleRemainingAccounts = buildSettleRemainingAccounts(
@@ -150,7 +150,7 @@ describe("protocol-adapter (dev_set_schema_version tooling) @localnet", () => {
       {
         name: "txdata_init",
         run: async () => {
-          const fx = loadFixture("wrong_root.json");
+          const fx = await loadFixture("wrong_root.json");
           const payload = Buffer.from(fx.tx_b64, "base64");
           const remaining = buildSettleRemainingAccounts(deriveNullifierAccounts(fx.consumed_nullifiers_b64));
           return settleFixtureViaTxData(payload, remaining, { newRootMarker: DUMMY_ROOT_MARKER });

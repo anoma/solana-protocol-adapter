@@ -6,7 +6,7 @@
  */
 import { assert } from "chai";
 import { denyLogicRef } from "../../client/instructions";
-import { loadFixture } from "../utils/fixtures";
+import { requireFixture } from "../utils/fixtures";
 import { makeFunder, randomRef, assertFails } from "../utils/helpers";
 import {
   provider,
@@ -29,7 +29,7 @@ describe("protocol-adapter (logic-ref denylist)", () => {
 
   /** Submit `fixtureName` for settlement, whatever its nullifiers' state. */
   const submit = (fixtureName: string) => {
-    const f = loadFixture(fixtureName);
+    const f = requireFixture(fixtureName);
     return settleFixtureViaTxData(
       Buffer.from(f.tx_b64, "base64"),
       buildSettleRemainingAccounts(deriveNullifierAccounts(f.consumed_nullifiers_b64)),

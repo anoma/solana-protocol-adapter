@@ -1,4 +1,4 @@
-import { execFileSync } from "child_process";
+import { spawn } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { Ed25519Program, PublicKey } from "@solana/web3.js";
@@ -64,46 +64,49 @@ function readJson<T>(filePath: string): T {
   return JSON.parse(readFileSync(filePath, "utf8")) as T;
 }
 
-export function loadFixture<T = Fixture>(filename: string): T {
+/**
+ * Load a fixture of the suite's set. In a cluster run, a fixture the run's
+ * set does not hold yet is proven first: proving each fixture when a test
+ * first needs it stops at the first failing test and proves nothing the run
+ * does not use.
+ */
+export async function loadFixture<T = Fixture>(filename: string): Promise<T> {
   const file = path.join(FIXTURE_DIR, filename);
-  if (!existsSync(file) && process.env.PA_FIXTURE_SALT) proveForClusterRun(filename);
+  if (!existsSync(file) && process.env.PA_FIXTURE_SALT) await proveForClusterRun(filename);
   return readJson<T>(file);
 }
 
 /**
- * Prove `filename` into a cluster run's fixture set, with the recipe
- * scripts/regen-fixtures.sh holds for it: proving each fixture when a test
- * first needs it stops at the first failing test and proves nothing the run
- * does not use.
+ * Prove `filename` into a cluster run's fixture set with the recipe
+ * scripts/regen-fixtures.sh holds for it. The proof takes minutes, so it runs
+ * without blocking the event loop: a process that blocks that long leaves
+ * its pooled RPC connections stale, and its next request fails.
  */
-function proveForClusterRun(filename: string): void {
+function proveForClusterRun(filename: string): Promise<void> {
   const kindTable = process.env.PA_KIND_TABLE;
   if (!kindTable) throw new Error("a cluster run (PA_FIXTURE_SALT set) needs PA_KIND_TABLE to prove its fixtures");
-  execFileSync(
-    "./scripts/regen-fixtures.sh",
-    [
-      "real",
-      "--out",
-      FIXTURE_DIR,
-      "--salt",
-      process.env.PA_FIXTURE_SALT!,
-      "--kind-table",
-      kindTable,
-      "--only",
-      filename,
-    ],
-    { stdio: "inherit" },
-  );
+  const args = ["real", "--out", FIXTURE_DIR, "--salt", process.env.PA_FIXTURE_SALT!, "--kind-table", kindTable];
+  return new Promise((resolve, reject) => {
+    const prover = spawn("./scripts/regen-fixtures.sh", [...args, "--only", filename], { stdio: "inherit" });
+    prover.on("error", reject);
+    prover.on("exit", (code, signal) =>
+      code === 0 ? resolve() : reject(new Error(`proving ${filename} failed (exit ${code}, signal ${signal})`)),
+    );
+  });
 }
 
-/** Load a fixture, or fail naming the command that regenerates the fixture set. */
+/**
+ * Read a fixture that must already exist, for a file whose fixtures are all
+ * committed, or before any test runs; fail naming the command that
+ * regenerates the fixture set.
+ */
 export function requireFixture(filename: string): Fixture {
-  try {
-    return loadFixture(filename);
-  } catch (e: any) {
+  const file = path.join(FIXTURE_DIR, filename);
+  if (!existsSync(file)) {
     const mode = process.env.PA_TEST_MODE ?? "real";
-    throw new Error(`${filename} missing (${e.message}); generate with: ./scripts/dev.sh regen-fixtures ${mode}`);
+    throw new Error(`${file} missing; generate with: ./scripts/dev.sh regen-fixtures ${mode}`);
   }
+  return readJson<Fixture>(file);
 }
 
 export function parseSelectorFromFixture(selectorHex: string): Buffer {

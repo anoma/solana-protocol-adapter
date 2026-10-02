@@ -6,7 +6,7 @@
 import { AccountMeta, PublicKey, SystemProgram, Keypair, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
 import { SCHEMA_VERSION } from "../client/constants";
-import { loadFixture, createdCommitmentsOf as commitmentsOf, tamperedTxOf } from "./utils/fixtures";
+import { type Fixture, loadFixture, createdCommitmentsOf as commitmentsOf, tamperedTxOf } from "./utils/fixtures";
 import { assertFails } from "./utils/helpers";
 import { predictRootAfterAppend } from "./utils/merkle";
 import {
@@ -38,8 +38,12 @@ describe("settlement", () => {
     // The rejections below fail at proof verification, which runs after the
     // nullifiers are recorded (as in pa-evm), so they need an unspent
     // nullifier: they use a fixture no test settles, and its error variants.
-    const rejected = loadFixture("batch_groth16_rejected.json");
-    const rejectedNullifierAccounts = deriveNullifierAccounts(rejected.consumed_nullifiers_b64);
+    let rejected: Fixture;
+    let rejectedNullifierAccounts: AccountMeta[];
+    before(async () => {
+      rejected = await loadFixture("batch_groth16_rejected.json");
+      rejectedNullifierAccounts = deriveNullifierAccounts(rejected.consumed_nullifiers_b64);
+    });
 
     async function settleViaTxData(
       payload: Buffer,
@@ -88,7 +92,7 @@ describe("settlement", () => {
       // witness check — a clean ExpectedDeltaProof, never a crash. A witness
       // scalar is prover-side private data; deserializing it on-chain must
       // never execute curve arithmetic (the k256 stack-overflow class).
-      const fx = loadFixture("witness_delta.json");
+      const fx = await loadFixture("witness_delta.json");
       const txWitness = Buffer.from(fx.tx_b64, "base64");
 
       await assertFails(settleViaTxData(txWitness, { newRootMarker: DUMMY_ROOT_MARKER }), {
@@ -110,7 +114,7 @@ describe("settlement", () => {
     });
 
     it("rejects InvalidProof (garbage aggregation proof bytes)", async () => {
-      const fx = loadFixture("garbage_proof.json");
+      const fx = await loadFixture("garbage_proof.json");
       await assertFails(
         settleViaTxData(Buffer.from(fx.tx_b64, "base64"), {
           nullifierAccounts: deriveNullifierAccounts(fx.consumed_nullifiers_b64),
@@ -156,7 +160,7 @@ describe("settlement", () => {
       // - timestamp = -1 (past time, forwarder will return RESULT_LT = 0x00)
       // - expected_output = 0x02 (RESULT_GT - intentionally WRONG)
       // The PA should revert with ExternalCallOutputMismatch when actual != expected.
-      const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
+      const mismatchFixture = await loadFixture("batch_groth16_mismatch.json");
       const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
       const mismatchNullifierAccounts = deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64);
@@ -202,7 +206,7 @@ describe("settlement", () => {
       // The program expects 1 nullifier PDA in remaining_accounts.
       const authority = await funder.fresh(2);
 
-      const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
+      const mismatchFixture = await loadFixture("batch_groth16_mismatch.json");
       const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
       const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
@@ -226,7 +230,7 @@ describe("settlement", () => {
       // UnregisteredForwarder when it can't find it.
       const authority = await funder.fresh(2);
 
-      const mismatchFixture = loadFixture("batch_groth16_mismatch.json");
+      const mismatchFixture = await loadFixture("batch_groth16_mismatch.json");
       const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
       const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
@@ -253,7 +257,7 @@ describe("settlement", () => {
 
   describe("protocol-adapter (Settlement error paths — fixture variants)", () => {
     async function expectSettleError(fixtureName: string, expectedError: string) {
-      const fx = loadFixture(fixtureName);
+      const fx = await loadFixture(fixtureName);
       const payload = Buffer.from(fx.tx_b64, "base64");
       const nullifierAccounts = deriveNullifierAccounts(fx.consumed_nullifiers_b64);
       const remainingAccounts = buildSettleRemainingAccounts(nullifierAccounts);

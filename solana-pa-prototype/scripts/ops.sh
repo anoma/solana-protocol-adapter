@@ -803,6 +803,12 @@ cmd_test() {
   fixture_dir="${PROJECT_DIR}/.cache/cluster-fixtures/${salt}"
   mkdir -p "$fixture_dir"
   echo "The run's fixtures (salt ${salt}) are proven into ${fixture_dir} as tests need them"
+  # Every spec file loads the suite harness, which reads the primary fixture
+  # for the deployment's proof selector before any test runs.
+  if [[ ! -f "${fixture_dir}/batch_groth16.json" ]]; then
+    "${SCRIPT_DIR}/regen-fixtures.sh" real --out "$fixture_dir" --salt "$salt" --kind-table "$PA_KIND_TABLE" \
+      --only batch_groth16.json
+  fi
 
   # The suite's files that build on whatever state they find, or the ones
   # given, each in its own mocha process against the deployment, without the

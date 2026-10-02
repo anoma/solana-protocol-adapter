@@ -52,8 +52,8 @@ describe("Security: mutation-based settle tests", () => {
 
   // --- Zero-action transaction (SEC-006 regression) ---
 
-  it("rejects zero-action transaction", () =>
-    assertFails(settleInline(Buffer.from(loadFixture("zero_action.json").tx_b64, "base64")), {
+  it("rejects zero-action transaction", async () =>
+    assertFails(settleInline(Buffer.from((await loadFixture("zero_action.json")).tx_b64, "base64")), {
       program,
       error: "InvalidTransactionData",
     }));
@@ -66,8 +66,8 @@ describe("Security: mutation-based settle tests", () => {
   // Every account the settlement needs is supplied, so the corrupted proof
   // is the only defect: the forwarder call runs before verification, as in
   // pa-evm, and the verifier rejects the seal.
-  it("rejects transaction with corrupted proof bytes", () => {
-    const corrupt = loadFixture("corrupt_seal.json");
+  it("rejects transaction with corrupted proof bytes", async () => {
+    const corrupt = await loadFixture("corrupt_seal.json");
     return assertFails(
       settleUploaded(
         Buffer.from(corrupt.tx_b64, "base64"),

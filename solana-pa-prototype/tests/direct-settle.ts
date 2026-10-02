@@ -3,7 +3,7 @@
  * The before hook settles the resubmitted fixture unless it is settled
  * already, and the duplicate test re-submits its nullifiers.
  */
-import { loadFixture } from "./utils/fixtures";
+import { type Fixture, loadFixture } from "./utils/fixtures";
 import { assertFails } from "./utils/helpers";
 import {
   program,
@@ -17,9 +17,12 @@ import {
 
 describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
   const { funder, uploadTxData, settleFixture } = useAdapterSuite();
-  const fixture = loadFixture("batch_groth16_resubmitted.json");
+  let fixture: Fixture;
 
-  before(() => settleFixture("batch_groth16_resubmitted.json"));
+  before(async () => {
+    fixture = await loadFixture("batch_groth16_resubmitted.json");
+    await settleFixture("batch_groth16_resubmitted.json");
+  });
 
   it("rejects garbage transaction_data via settle", async () => {
     const payer = await funder.fresh(2);
@@ -39,7 +42,7 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
     // emptied (fixture-gen's zero_action.json error variant, SEC-006
     // regression): deserializes cleanly, rejected by the PA's empty-instance
     // check.
-    const emptyTx = Buffer.from(loadFixture("zero_action.json").tx_b64, "base64");
+    const emptyTx = Buffer.from((await loadFixture("zero_action.json")).tx_b64, "base64");
 
     await assertFails(settleBuilder(payer.publicKey, emptyTx).signers([payer]).rpc(), {
       program,

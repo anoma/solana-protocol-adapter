@@ -33,7 +33,7 @@ describe("protocol-adapter (kind table commitment) @localnet", () => {
 
   before(async () => {
     found = await stored();
-    fixture = loadFixture("batch_groth16_resubmitted.json");
+    fixture = await loadFixture("batch_groth16_resubmitted.json");
     await settleFixture("batch_groth16_resubmitted.json");
   });
 
