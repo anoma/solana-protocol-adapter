@@ -766,6 +766,7 @@ cmd_test() {
   done
 
   ensure_node_modules
+  build_dev_idls
 
   # The wallet must own none of the programs under test: their owner is their
   # upgrade authority, and a spec signing as the owner could pause the
