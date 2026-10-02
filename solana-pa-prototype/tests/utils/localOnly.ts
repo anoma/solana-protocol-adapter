@@ -1,8 +1,9 @@
 /**
  * The only builders in this repository for instructions that change an
- * authority or close protocol accounts for good: the loader's SetAuthority on
- * a program's ProgramData (move or renounce the upgrade authority, which is
- * the adapter's and the forwarder's owner), the forwarder's
+ * authority or close protocol accounts for good: the adapter's
+ * `transfer_ownership`, `renounce_ownership` and `migrate_state` (which
+ * hands the program's upgrade authority to its PDA), the loader's
+ * SetAuthority on a program's ProgramData, the forwarder's
  * `set_emergency_caller`, `close_escrow`, `close_config` and
  * `close_nonce_bitmaps_batch` (wrap replay protection), and the adapter's
  * dev-build `close_markers_batch` (settlement replay protection). They exist
@@ -58,6 +59,36 @@ export function localSetUpgradeAuthority(
     ],
     data: Buffer.from([4, 0, 0, 0]),
   });
+}
+
+/** The adapter's `transfer_ownership` by its owner `authority`, to `newOwner`. */
+export function localTransferAdapterOwnership(
+  program: Program<ProtocolAdapter>,
+  authority: PublicKey,
+  newOwner: PublicKey,
+) {
+  assertLocalValidator(program.provider.connection);
+  return program.methods
+    .transferOwnership(newOwner)
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/** The adapter's `renounce_ownership` by its owner `authority`: no owner-only instruction can run again. */
+export function localRenounceAdapterOwnership(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  assertLocalValidator(program.provider.connection);
+  return program.methods
+    .renounceOwnership()
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/**
+ * The adapter's `migrate_state` by the program's upgrade authority, after an
+ * in-place upgrade from the previous schema version: it becomes the stored
+ * owner and hands the upgrade authority to the program's PDA.
+ */
+export function localMigrateState(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  assertLocalValidator(program.provider.connection);
+  return program.methods.migrateState().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
 }
 
 /** `set_emergency_caller` by the committee; only while the adapter at `paState` is paused. */
@@ -161,7 +192,7 @@ export function localCloseMarkersBatch(program: Program<ProtocolAdapter>, author
 /**
  * Close every marker account (the zero-byte nullifier and root markers) the
  * adapter owns, in batches, as `authority`: the provider wallet, which must
- * be the program's upgrade authority, on a paused adapter. Returns how many
+ * be the adapter's owner, on a paused adapter. Returns how many
  * were closed.
  */
 export async function localCloseAllMarkers(program: Program<ProtocolAdapter>, authority: PublicKey): Promise<number> {

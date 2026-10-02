@@ -14,7 +14,10 @@ import {
   localCloseEscrow,
   localCloseMarkersBatch,
   localCloseNonceBitmapsBatch,
+  localMigrateState,
+  localRenounceAdapterOwnership,
   localSetEmergencyCaller,
+  localTransferAdapterOwnership,
   localSetUpgradeAuthority,
 } from "./utils/localOnly";
 import { forwarderProgram, paState, program, provider, useAdapterSuite } from "./utils/adapterSuite";
@@ -34,6 +37,9 @@ describe("authority and closing instructions are local-only", () => {
 
   /** Every builder, bound to the programs it would send through. */
   const builders = (adapter: Program<ProtocolAdapter>, forwarder: Program<SplTokenForwarder>) => ({
+    "transfer the adapter's ownership": () => localTransferAdapterOwnership(adapter, someone(), someone()),
+    "renounce the adapter's ownership": () => localRenounceAdapterOwnership(adapter, someone()),
+    "migrate the adapter's state": () => localMigrateState(adapter, someone()),
     "set the upgrade authority": () =>
       localSetUpgradeAuthority(adapter.provider.connection, adapter.programId, someone(), null),
     "set the emergency caller": () => localSetEmergencyCaller(forwarder, someone(), paState, someone()),
@@ -79,7 +85,7 @@ describe("no code outside tests/utils/localOnly.ts changes an authority or close
   const LOCAL_ONLY = "tests/utils/localOnly.ts";
   /** The forwarder and adapter instructions localOnly.ts alone may build, and the loader's SetAuthority. */
   const TS_AUTHORITY_CALL =
-    /\.(setEmergencyCaller|closeEscrow|closeConfig|closeNonceBitmapsBatch|closeMarkersBatch)\s*\(|programId:\s*BPF_LOADER_UPGRADEABLE/;
+    /\.(transferOwnership|renounceOwnership|migrateState|setEmergencyCaller|closeEscrow|closeConfig|closeNonceBitmapsBatch|closeMarkersBatch)\s*\(|programId:\s*BPF_LOADER_UPGRADEABLE/;
   /** The Solana CLI commands that move or renounce an authority. */
   const SHELL_AUTHORITY_CALL = /\bset-upgrade-authority\b|\bset-buffer-authority\b|\bset-authority\b|--final\b/;
 

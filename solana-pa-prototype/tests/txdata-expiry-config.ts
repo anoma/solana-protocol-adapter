@@ -52,7 +52,7 @@ describe("protocol-adapter (update_expiry_config) @localnet", () => {
         })
         .signers([nonAuthority])
         .rpc(),
-      { program, error: "Unauthorized" },
+      { program, error: "OwnableUnauthorizedAccount" },
     );
   });
 

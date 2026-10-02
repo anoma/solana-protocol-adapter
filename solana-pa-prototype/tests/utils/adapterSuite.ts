@@ -26,6 +26,7 @@ import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { TestForwarder } from "../../target/types/test_forwarder";
 import { MockVerifier } from "../../target/types/mock_verifier";
 import { initializeAdapter, initializeForwarder, pauseAdapter } from "../../client/instructions";
+import { parseCpiEvents } from "../../client/events";
 import { ensureSettlementLookupTable, fetchLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
   deriveConfigPda,
@@ -141,8 +142,9 @@ export function deriveNullifierAccounts(nullifierB64s: string[]): AccountMeta[] 
 // The one set of initialize arguments every spec file deploys with: the
 // verifier router and the fixture's selector. Callers add `.signers()` when
 // the payer is not the provider wallet.
+/** `initialize` signed by `payer`, making the provider wallet the owner. */
 export const buildInitialize = (payer: PublicKey) =>
-  initializeAdapter(program, payer, VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR));
+  initializeAdapter(program, payer, provider.wallet.publicKey, VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR));
 
 export async function paStateExists(): Promise<boolean> {
   return (await provider.connection.getAccountInfo(paState)) !== null;
@@ -241,32 +243,6 @@ export function buildSettleRemainingAccounts(nullifierAccounts: AccountMeta[]): 
   ];
 }
 
-/** Anchor's CPI event tag: the fixed 8-byte `EVENT_IX_TAG_LE`, the little-endian encoding of the u64 0x1d9acb512ea545e4. */
-const EVENT_IX_TAG_LE = Buffer.from([0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]);
-
-/**
- * Settlement events are CPI events: inner instructions of the adapter whose
- * data is Anchor's event tag followed by the event's discriminator and Borsh
- * body. Read them in emission order from the confirmed transaction.
- */
-function parseCpiEvents(tx: anchor.web3.VersionedTransactionResponse, emitter: anchor.Program<any>) {
-  const keys = tx.transaction.message.getAccountKeys({
-    accountKeysFromLookups: tx.meta?.loadedAddresses,
-  });
-  const coder = new anchor.BorshCoder(emitter.idl);
-  const events: { name: string; data: any }[] = [];
-  for (const group of tx.meta?.innerInstructions ?? []) {
-    for (const ix of group.instructions) {
-      if (!keys.get(ix.programIdIndex)?.equals(emitter.programId)) continue;
-      const data = Buffer.from(anchor.utils.bytes.bs58.decode(ix.data));
-      if (data.length < 16 || !data.subarray(0, 8).equals(EVENT_IX_TAG_LE)) continue;
-      const decoded = coder.events.decode(data.subarray(8).toString("base64"));
-      if (decoded) events.push(decoded);
-    }
-  }
-  return events;
-}
-
 /** The CPI events `emitter` (by default the adapter) emitted in transaction `sig`, once it is confirmed. */
 export async function cpiEventsOf(sig: string, emitter: anchor.Program<any> = program) {
   const tx = await confirmedTransaction(provider.connection, sig);
@@ -283,7 +259,8 @@ function settleBudget(heapFrame: boolean) {
 
 /**
  * `settle_from_txdata` with the full CU budget and, unless `heapFrame` is
- * false, the 256 KiB heap frame settlement needs.
+ * false, the 256 KiB heap frame settlement needs, through `adapter`: this
+ * build's program, or a previous build's (tests/upgrade/).
  */
 export function settleFromTxDataBuilder(
   authority: PublicKey,
@@ -292,8 +269,9 @@ export function settleFromTxDataBuilder(
   newRootMarker: PublicKey | null,
   remainingAccounts: AccountMeta[],
   heapFrame = true,
+  adapter: anchor.Program<any> = program,
 ) {
-  return program.methods
+  return adapter.methods
     .settleFromTxdata(uploadId)
     .accountsPartial({
       paState,
@@ -597,6 +575,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
 
   return {
     funder,
+    settlementTable,
     extendSettlementTable,
     uploadTxData,
     initTxData,

@@ -75,7 +75,9 @@ A settlement's instruction trace includes its outer instructions, the verifier a
 
 **Outside settlement**, the instructions that change the deployment's configuration emit pa-evm's events in the same way, read from their own transaction's inner instructions:
 
-- `initialize`: `CommitmentTreeRootAddedEvent { root }` with the empty tree's root, then `KindTableCommitmentUpdatedEvent { kind_table_commitment: [u8;32] }` with the empty kind table's commitment.
+- `initialize`: `OwnershipTransferredEvent { previous_owner: Pubkey, new_owner: Pubkey }` from the zero key to the initial owner, OpenZeppelin Ownable's `OwnershipTransferred`; then `CommitmentTreeRootAddedEvent { root }` with the empty tree's root, then `KindTableCommitmentUpdatedEvent { kind_table_commitment: [u8;32] }` with the empty kind table's commitment.
+- `transfer_ownership` / `renounce_ownership` (owner only): `OwnershipTransferredEvent` from the owner to the new owner, or to the zero key when renounced. `migrate_state`, which brings a schema-2 state account to this layout, emits it from the zero key to the owner it stores, as `initialize` does.
+- `upgrade` (owner only): `UpgradedEvent { executable_hash: [u8;32] }`, ERC1967's `Upgraded`. A Solana program keeps its address across upgrades, so the new code is named by its executable hash: sha256 of the code without trailing zero bytes, which `solana-verify get-program-hash` reports. The new code runs from the next slot.
 - `set_kind_table_commitment` (owner only): `KindTableCommitmentUpdatedEvent` with the new commitment, pa-evm's `KindTableCommitmentUpdated`. Transactions proven against the previous table are refused from then on.
 - `deny_logic_ref` (owner only): `LogicRefDeniedEvent { logic_ref: [u8;32] }`, pa-evm's `LogicRefDenied`. No settlement consumes or creates a resource carrying that logic ref again, and a denial cannot be undone.
 - `pause` / `unpause` (owner only): `PausedEvent { account: Pubkey }` / `UnpausedEvent { account: Pubkey }`, OpenZeppelin Pausable's `Paused` / `Unpaused`, where `account` is the signer. While paused, both settle instructions refuse every transaction.

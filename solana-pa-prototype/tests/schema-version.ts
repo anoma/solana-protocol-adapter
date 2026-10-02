@@ -5,8 +5,12 @@
 import * as anchor from "@anchor-lang/core";
 import { AccountMeta, PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { denyLogicRef, setKindTableCommitment } from "../client/instructions";
-import { localCloseMarkersBatch } from "./utils/localOnly";
+import { denyLogicRef, setKindTableCommitment, upgradeAdapter } from "../client/instructions";
+import {
+  localCloseMarkersBatch,
+  localRenounceAdapterOwnership,
+  localTransferAdapterOwnership,
+} from "./utils/localOnly";
 import { loadFixture } from "./utils/fixtures";
 import { randomRef, assertFails } from "./utils/helpers";
 import {
@@ -41,7 +45,7 @@ describe("protocol-adapter (dev_set_schema_version tooling) @localnet", () => {
         .accountsPartial({ paState, authority: intruder.publicKey })
         .signers([intruder])
         .rpc(),
-      { program, error: "Unauthorized" },
+      { program, error: "OwnableUnauthorizedAccount" },
     );
     const after = await program.account.paStateAccount.fetch(paState);
     assert.equal(after.schemaVersion, before.schemaVersion, "a rejected call must not change the version");
@@ -109,7 +113,9 @@ describe("protocol-adapter (dev_set_schema_version tooling) @localnet", () => {
 
     // Each case is an instruction that loads pa_state; with a foreign version
     // byte every one must refuse before doing anything else. pause is
-    // last: it would pause the PA for every case after it.
+    // last: it would pause the PA for every case after it, and the
+    // ownership cases come just before it, since one that went through would
+    // take the ownership from every case after it.
     const cases: { name: string; run: () => Promise<unknown> }[] = [
       {
         name: "update_expiry_config",
@@ -170,6 +176,25 @@ describe("protocol-adapter (dev_set_schema_version tooling) @localnet", () => {
       {
         name: "close_markers_batch",
         run: () => localCloseMarkersBatch(program, provider.wallet.publicKey, []).rpc(),
+      },
+      {
+        name: "upgrade",
+        run: () =>
+          upgradeAdapter(
+            program,
+            provider.wallet.publicKey,
+            Keypair.generate().publicKey,
+            provider.wallet.publicKey,
+          ).rpc(),
+      },
+      {
+        name: "transfer_ownership",
+        run: () =>
+          localTransferAdapterOwnership(program, provider.wallet.publicKey, Keypair.generate().publicKey).rpc(),
+      },
+      {
+        name: "renounce_ownership",
+        run: () => localRenounceAdapterOwnership(program, provider.wallet.publicKey).rpc(),
       },
       {
         name: "pause",
