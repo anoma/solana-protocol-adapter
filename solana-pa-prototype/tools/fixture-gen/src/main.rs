@@ -432,7 +432,8 @@ enum ShapeCommand {
     /// An AnomaPay unwrap: the owner spends the wrapped resource, releasing
     /// the escrow to the recipient.
     SplTokenUnwrap {
-        /// The wrap fixture, settled after `--preceding-leaves`: its created
+        /// The wrap fixture, settled after `--preceding-leaves` or
+        /// `--settled-before`: its created
         /// commitments end the tree the unwrap proves membership in.
         #[arg(long, value_name = "FIXTURE")]
         wrap: PathBuf,
@@ -465,7 +466,8 @@ enum ShapeCommand {
     /// Spend the committer's resource through its Merkle path to the root
     /// the committer's settlement produced.
     HistoricalRootConsumer {
-        /// The committer fixture, settled after `--preceding-leaves`: its
+        /// The committer fixture, settled after `--preceding-leaves` or
+        /// `--settled-before`: its
         /// created commitment ends the tree the consumer proves membership in.
         #[arg(long, value_name = "FIXTURE")]
         committer: PathBuf,
@@ -1659,26 +1661,28 @@ fn parse_leaves(json: &str) -> Result<Vec<Digest>> {
         .collect()
 }
 
-fn read_leaves(path: &Path) -> Result<Vec<Digest>> {
-    parse_leaves(&fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?)
-}
-
-/// The leaves a tree held before a fixture settled: those an indexer lists in
-/// `preceding_leaves`, or the commitments the `settled_before` fixtures
-/// created, in their settlement order on a fresh adapter.
-fn preceding_leaves(
+/// The tree once `last` settled: the leaves it held before (those an indexer
+/// lists in `preceding_leaves`, or the commitments the `settled_before`
+/// fixtures created in their settlement order on a fresh adapter), then the
+/// commitments `last` created.
+fn tree_leaves(
     preceding_leaves: Option<&Path>,
     settled_before: &[PathBuf],
+    last: &Path,
 ) -> Result<Vec<Digest>> {
-    match preceding_leaves {
-        Some(path) => read_leaves(path),
+    let mut leaves = match preceding_leaves {
+        Some(path) => parse_leaves(
+            &fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
+        )?,
         None => settled_before
             .iter()
             .try_fold(Vec::new(), |mut leaves, path| {
                 leaves.extend(created_commitments(&load_fixture_tx(path)?)?);
-                Ok(leaves)
-            }),
-    }
+                Ok::<_, anyhow::Error>(leaves)
+            })?,
+    };
+    leaves.extend(created_commitments(&load_fixture_tx(last)?)?);
+    Ok(leaves)
 }
 
 fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
@@ -2164,17 +2168,15 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         }
         ShapeCommand::SplTokenUnwrap {
             wrap,
-            preceding_leaves: leaves_file,
+            preceding_leaves,
             settled_before,
             to_escrow,
             ..
         } => {
-            let mut leaves = preceding_leaves(leaves_file.as_deref(), settled_before)?;
-            leaves.extend(created_commitments(&load_fixture_tx(wrap)?)?);
             let (tx, metadata) = generate_anomapay_unwrap_transaction(
                 &prover,
                 &read_fixture_name(wrap)?,
-                &leaves,
+                &tree_leaves(preceding_leaves.as_deref(), settled_before, wrap)?,
                 *to_escrow,
             )
             .await?;
@@ -2189,22 +2191,18 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         }
         ShapeCommand::HistoricalRootConsumer {
             committer,
-            preceding_leaves: leaves_file,
+            preceding_leaves,
             settled_before,
             ..
-        } => {
-            let mut leaves = preceding_leaves(leaves_file.as_deref(), settled_before)?;
-            leaves.extend(created_commitments(&load_fixture_tx(committer)?)?);
-            (
-                generate_historical_root_consumer_transaction(
-                    &prover,
-                    &read_fixture_name(committer)?,
-                    &leaves,
-                )
-                .await?,
-                None,
+        } => (
+            generate_historical_root_consumer_transaction(
+                &prover,
+                &read_fixture_name(committer)?,
+                &tree_leaves(preceding_leaves.as_deref(), settled_before, committer)?,
             )
-        }
+            .await?,
+            None,
+        ),
     };
     eprintln!(
         "phase done: generate_test_transaction ({})",

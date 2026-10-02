@@ -49,7 +49,6 @@ import {
   freshUploadId,
   createFundedEscrow,
   assertFails,
-  confirmedTransaction,
 } from "../utils/helpers";
 import {
   provider,
@@ -385,11 +384,13 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("settles a wrap: escrow receives the tokens and the nonce is marked used", async () => {
     const [userBefore, escrowBefore] = await balances(userAta, escrowAta);
 
-    // An earlier instruction of the same transaction fills most of its
-    // 10,000-byte program-log budget, so the runtime truncates the
-    // settlement's log.
+    // An earlier instruction of the same transaction uses up its program-log
+    // budget (Agave's LOG_MESSAGES_BYTES_LIMIT, 10,000 bytes, counting each
+    // line with its "Program log: " prefix; the test forwarder logs 100-byte
+    // lines), so the runtime truncates the settlement's log.
+    const logLines = Math.ceil(10_000 / ("Program log: ".length + 100));
     const logFlood = await testForwarderProgram.methods
-      .forwardCall(Array(32).fill(0), Buffer.from([TEST_FORWARDER_MODE_LOG, 95]))
+      .forwardCall(Array(32).fill(0), Buffer.from([TEST_FORWARDER_MODE_LOG, logLines]))
       .instruction();
     const sig = await settleForwarderFixture(wrapFixture, wrapSegment(), [
       wrapAuthorizationIx(user.publicKey, wrapFixture),
