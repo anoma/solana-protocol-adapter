@@ -200,7 +200,7 @@ The integration suite's wraps run only on a fresh local deployment, so a devnet 
 1. Prove a wrap against the kind table the adapter stores, under a forwarder nonce the seeded user has not used on this deployment: `./scripts/dev.sh gen-fixtures spl-token-wrap --kind-table <table.json> --wrap-nonce <n> <wrap.json>`.
 2. As the seeded user, mint the amount and approve the forwarder's escrow authority, then settle the wrap with `settle-fixture`.
 3. Read the deployment's commitments in tree order from an indexer (the Envio project's created tags ordered by block, transaction index, action log index and tag index) into a JSON array of hex strings, and check that their root equals the adapter's on-chain root.
-4. Prove the unwrap of the wrap's resource over that tree, `./scripts/dev.sh gen-fixtures spl-token-unwrap --wrap <wrap.json> --preceding-leaves <leaves.json> <unwrap.json>`, where the leaves are the commitments before the wrap's, and settle it with `settle-fixture`.
+4. Prove the unwrap of the wrap's resource over that tree, `./scripts/dev.sh gen-fixtures spl-token-unwrap --kind-table <table.json> --wrap <wrap.json> --preceding-leaves <leaves.json> <unwrap.json>`, against the same kind table, where the leaves are the commitments before the wrap's, and settle it with `settle-fixture`.
 
 ### Upgrading the forwarder
 
