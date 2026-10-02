@@ -47,7 +47,7 @@ The integration suite runs in one of two proof modes:
   `0x73c457ba`), verified on-chain by the devnet-copied RISC0 Groth16
   verifier. Regenerating them requires full proving (hours of CPU for the
   set, and a container runtime): `./scripts/dev.sh regen-fixtures real`.
-- **mock** (`./scripts/dev.sh anchor-test --mode mock`): fixtures carry mock
+- **mock** (`./scripts/dev.sh anchor-test --mode mock`, or `PA_TEST_MODE=mock`): fixtures carry mock
   seals (selector `0xffffffff`) accepted only by the localnet-only
   `mock-verifier` program, which the validator's synthetic `VerifierEntry`
   account registers in the RISC0 router at genesis. The transactions are
