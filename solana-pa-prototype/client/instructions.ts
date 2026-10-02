@@ -10,7 +10,13 @@ import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-tok
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { getVerifierEntryPda } from "./verifier";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
-import { deriveConfigPda, deriveEscrowAuthority, derivePaStatePda, deriveProgramDataPda } from "./pda";
+import {
+  deriveConfigPda,
+  deriveEscrowAuthority,
+  deriveEventAuthorityPda,
+  derivePaStatePda,
+  deriveProgramDataPda,
+} from "./pda";
 
 // Protocol adapter governance
 
@@ -85,12 +91,18 @@ export function escrowAccounts(
   return { escrowAuthority, escrowAta: getAssociatedTokenAddressSync(mint, escrowAuthority, true) };
 }
 
-/** The head of every forwarder call segment: the forwarder, its config and the instructions sysvar. */
+/**
+ * The head of every forwarder call segment: the forwarder, its config, the
+ * instructions sysvar, then the forwarder's event authority and the forwarder
+ * again, which its CPI events need.
+ */
 export function forwarderSegmentHead(forwarderProgramId: PublicKey): AccountMeta[] {
   return [
     { pubkey: forwarderProgramId, isSigner: false, isWritable: false },
     { pubkey: deriveConfigPda(forwarderProgramId)[0], isSigner: false, isWritable: false },
     { pubkey: SYSVAR_INSTRUCTIONS_PUBKEY, isSigner: false, isWritable: false },
+    { pubkey: deriveEventAuthorityPda(forwarderProgramId)[0], isSigner: false, isWritable: false },
+    { pubkey: forwarderProgramId, isSigner: false, isWritable: false },
   ];
 }
 
@@ -140,7 +152,9 @@ export function initializeForwarder(
   authority: PublicKey,
   programData: PublicKey = deriveProgramDataPda(forwarder.programId),
 ) {
-  return forwarder.methods.initialize(adapterProgramId, logicRef, committee).accounts({ authority, programData });
+  return forwarder.methods
+    .initialize(adapterProgramId, logicRef, committee)
+    .accountsPartial({ authority, programData });
 }
 
 /**
@@ -155,7 +169,7 @@ export function reinitializeForwarder(
   logicRef: number[],
   programData: PublicKey = deriveProgramDataPda(forwarder.programId),
 ) {
-  return forwarder.methods.reinitialize(logicRef).accounts({ authority, programData });
+  return forwarder.methods.reinitialize(logicRef).accountsPartial({ authority, programData });
 }
 
 /** `forward_emergency_call` by `caller`; callers add signers and send. */
@@ -168,7 +182,7 @@ export function emergencyWithdraw(
 ) {
   return forwarder.methods
     .forwardEmergencyCall(encodeUnwrapInput(withdrawal.mint, withdrawal.amount, withdrawal.recipient))
-    .accounts({ caller, paState })
+    .accountsPartial({ caller, paState })
     .remainingAccounts(
       escrowTransferAccounts(accounts.escrowAta, accounts.recipientAta, deriveEscrowAuthority(forwarder.programId)),
     );

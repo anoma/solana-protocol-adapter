@@ -28,7 +28,11 @@ import {
 } from "../../client/instructions";
 import { NONCES_PER_WORD } from "../../client/constants";
 import { deriveNonceBitmapPda, nonceWordIndex } from "../../client/pda";
-import { SOLANA_DEVNET_KIND_TABLE_COMMITMENT, UNWRAP_RECIPIENT_SEED_LABEL } from "../utils/constants";
+import {
+  SOLANA_DEVNET_KIND_TABLE_COMMITMENT,
+  TEST_FORWARDER_MODE_LOG,
+  UNWRAP_RECIPIENT_SEED_LABEL,
+} from "../utils/constants";
 import {
   localCloseAllNonceBitmaps,
   localCloseConfig,
@@ -53,6 +57,7 @@ import {
   forwarderProgram,
   paState,
   testForwarderId,
+  testForwarderProgram,
   DUMMY_ROOT_MARKER,
   deriveNullifierAccounts,
   ensureForwarderConfig,
@@ -374,23 +379,32 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   it("settles a wrap: escrow receives the tokens and the nonce is marked used", async () => {
     const [userBefore, escrowBefore] = await balances(userAta, escrowAta);
 
+    // An earlier instruction of the same transaction fills most of its
+    // 10,000-byte program-log budget, so the runtime truncates the
+    // settlement's log.
+    const logFlood = await testForwarderProgram.methods
+      .forwardCall(Array(32).fill(0), Buffer.from([TEST_FORWARDER_MODE_LOG, 95]))
+      .instruction();
     const sig = await settleForwarderFixture(wrapFixture, wrapSegment(), [
       wrapAuthorizationIx(user.publicKey, wrapFixture),
       await initNonceBitmapIx(),
+      logFlood,
     ]);
 
     const [userAfter, escrowAfter] = await balances(userAta, escrowAta);
     assert.equal(userAfter, userBefore - wrapAmount, "user balance decreases by the wrap amount");
     assert.equal(escrowAfter, escrowBefore + wrapAmount, "escrow holds the wrapped tokens");
 
-    // Mirrors ERC20Forwarder's `Wrapped` event. It travels in the program
-    // log, which the runtime truncates past 10,000 bytes per transaction.
-    const logs = (await confirmedTransaction(provider.connection, sig)).meta!.logMessages!;
-    const wrapped = [
-      ...new anchor.EventParser(forwarderProgram.programId, forwarderProgram.coder).parseLogs(logs),
-    ].filter((e) => e.name === "wrapped");
+    // Mirrors ERC20Forwarder's `Wrapped` event. It is a CPI event, part of the
+    // transaction, so the truncated log cannot drop it.
+    const { tx, events } = await cpiEventsOf(sig, forwarderProgram);
+    assert.include(tx.meta!.logMessages!, "Log truncated", "the settlement's log is truncated");
+    const wrapped = events.filter((e) => e.name === "wrapped");
     assert.lengthOf(wrapped, 1, "the settlement emits one Wrapped event");
+    assert.ok(wrapped[0].data.tokenMint.equals(mint));
+    assert.ok(wrapped[0].data.from.equals(user.publicKey));
     assert.equal(BigInt(wrapped[0].data.amount.toString()), wrapAmount);
+    assert.equal(BigInt(wrapped[0].data.nonce.toString()), wrapNonce);
 
     // Both resources carry the AnomaPay transfer logic the forwarder config
     // pins: the wrap settled under the real verifying key.
@@ -470,13 +484,8 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
   // The config the forwarder checks the caller and logic ref against is at a
   // fixed address; another account there is refused in account validation.
   it("rejects a forward_call whose config is an account of another program", async () => {
-    const [head, , sysvar] = segmentHead;
-    const segment = [
-      head,
-      { pubkey: mint, isSigner: false, isWritable: false },
-      sysvar,
-      ...wrapTransferAccounts(userAta, escrowAta, escrowAuthority, nonceBitmapPda),
-    ];
+    const segment = wrapSegment();
+    segment[1] = { pubkey: mint, isSigner: false, isWritable: false };
     await refusesReplay(segment, [], { error: "AccountOwnedByWrongProgram", account: "config" });
   });
 
@@ -549,11 +558,18 @@ describe("protocol-adapter (SPL token forwarder wrap and unwrap)", () => {
     const { unwrap } = unwraps;
     const [escrowBefore, recipientBefore] = await balances(escrowAta, recipientAta);
 
-    await settleForwarderFixture(unwrap, unwrapSegment(), []);
+    const sig = await settleForwarderFixture(unwrap, unwrapSegment(), []);
 
     const [escrowAfter, recipientAfter] = await balances(escrowAta, recipientAta);
     assert.equal(escrowAfter, escrowBefore - wrapAmount, "escrow balance decreases by the unwrap amount");
     assert.equal(recipientAfter, recipientBefore + wrapAmount, "recipient receives the unwrapped tokens");
+
+    // Mirrors ERC20Forwarder's `Unwrapped` event, a CPI event like `Wrapped`.
+    const unwrapped = (await cpiEventsOf(sig, forwarderProgram)).events.filter((e) => e.name === "unwrapped");
+    assert.lengthOf(unwrapped, 1, "the settlement emits one Unwrapped event");
+    assert.ok(unwrapped[0].data.tokenMint.equals(mint));
+    assert.ok(unwrapped[0].data.to.equals(recipient.publicKey));
+    assert.equal(BigInt(unwrapped[0].data.amount.toString()), wrapAmount);
   });
 
   // The kind table anoma/risc0-kind-tables generates for solana-devnet is

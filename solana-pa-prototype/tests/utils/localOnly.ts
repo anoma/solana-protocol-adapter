@@ -68,7 +68,7 @@ export function localSetEmergencyCaller(
   caller: PublicKey,
 ) {
   assertLocalValidator(forwarder.provider.connection);
-  return forwarder.methods.setEmergencyCaller(caller).accounts({ committee, paState });
+  return forwarder.methods.setEmergencyCaller(caller).accountsPartial({ committee, paState });
 }
 
 /**

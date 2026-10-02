@@ -8,8 +8,11 @@
 //! | 0x00      | Returns `Err(IntentionalFailure)`                 | ExternalCallCpiFailed       |
 //! | 0x01      | Returns `Ok` without calling `set_return_data`    | ExternalCallOutputMismatch  |
 //! | 0x02      | Relays `forward_call` to `remaining_accounts[0]`  | forwarder caller check      |
+//! | 0x03      | Logs `input[1]` lines of 100 bytes, returns `Ok`  | events survive log truncation |
 //!
-//! Empty input is treated as mode 0x00.
+//! Empty input is treated as mode 0x00. Mode 0x03 is called directly, as an
+//! instruction of its own: it fills a transaction's 10,000-byte program-log
+//! budget before a settlement in the same transaction.
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
@@ -22,6 +25,9 @@ declare_id!("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD");
 pub const MODE_FAIL: u8 = 0x00;
 pub const MODE_SILENT: u8 = 0x01;
 pub const MODE_RELAY: u8 = 0x02;
+/// Called directly by the integration suite, which reads it from the IDL.
+#[constant]
+pub const MODE_LOG: u8 = 0x03;
 /// Return data of a relay whose inner call succeeded.
 pub const RELAY_OK: u8 = 0x2a;
 
@@ -40,6 +46,14 @@ pub mod test_forwarder {
         match mode {
             MODE_SILENT => Ok(()),
             MODE_RELAY => relay(ctx.remaining_accounts, &input[1..]),
+            MODE_LOG => {
+                let lines = input.get(1).ok_or(ErrorCode::LogLineCountMissing)?;
+                let line = "x".repeat(100);
+                for _ in 0..*lines {
+                    msg!("{}", line);
+                }
+                Ok(())
+            }
             _ => Err(ErrorCode::IntentionalFailure.into()),
         }
     }
@@ -88,4 +102,6 @@ pub enum ErrorCode {
     RelayMissingTarget,
     #[msg("Relay payload must start with a 32-byte logic ref")]
     RelayPayloadTooShort,
+    #[msg("Log mode needs the number of lines to log")]
+    LogLineCountMissing,
 }

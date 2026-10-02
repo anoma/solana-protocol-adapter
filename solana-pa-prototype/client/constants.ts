@@ -18,7 +18,7 @@ function idlBytes(idl: IdlWithConstants, name: string): Buffer {
   return Buffer.from(JSON.parse(idlConstant(idl, name)) as number[]);
 }
 
-function idlNumber(idl: IdlWithConstants, name: string): number {
+export function idlNumber(idl: IdlWithConstants, name: string): number {
   const value = Number(idlConstant(idl, name));
   if (!Number.isSafeInteger(value)) {
     throw new Error(`The ${idl.metadata.name} IDL constant ${name} is not a safe integer.`);

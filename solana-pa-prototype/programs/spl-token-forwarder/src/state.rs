@@ -38,7 +38,7 @@ impl Config {
 /// the `n` of an OpenZeppelin `reinitializer(n)`. A build that rotates the
 /// logic ref raises it by one, so its `reinitialize` runs once.
 #[constant]
-pub const CONFIG_VERSION: u64 = 2;
+pub const CONFIG_VERSION: u64 = 3;
 
 /// Whether the Protocol Adapter is paused, read from its state account
 /// through the adapter's own account type. Data that is not a PA state

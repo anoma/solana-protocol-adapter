@@ -52,6 +52,7 @@ export function settlementLookupKeys(s: SettlementKeySources): PublicKey[] {
     s.blockTimeForwarder,
     s.splTokenForwarder,
     forwarderConfig,
+    deriveEventAuthorityPda(s.splTokenForwarder)[0],
     deriveEscrowAuthority(s.splTokenForwarder),
     TOKEN_PROGRAM_ID,
     ...s.mints.map((mint) => escrowAccounts(s.splTokenForwarder, mint).escrowAta),
