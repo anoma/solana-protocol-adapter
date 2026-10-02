@@ -92,10 +92,10 @@ describe("protocol-adapter (kind table commitment) @localnet", () => {
       { kindTableCommitment: rotated },
       "the event carries exactly pa-evm's field, the new commitment",
     );
-    await assertFails(resettleFixture(), { program: program, error: "KindTableCommitmentMismatch" });
+    await assertFails(resettleFixture(), { program, error: "KindTableCommitmentMismatch" });
 
     await setKindTableCommitment(program, provider.wallet.publicKey, found).rpc();
     assert.deepEqual(await stored(), found, "the commitment the deployment held is restored");
-    await assertFails(resettleFixture(), { program: program, error: "DuplicateNullifier" });
+    await assertFails(resettleFixture(), { program, error: "DuplicateNullifier" });
   });
 });

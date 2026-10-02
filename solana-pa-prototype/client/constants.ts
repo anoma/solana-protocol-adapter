@@ -34,8 +34,6 @@ export const ROOT_SEED = idlBytes(paIdl, "ROOT_SEED");
 export const SCHEMA_VERSION = idlNumber(paIdl, "SCHEMA_VERSION");
 export const EMPTY_KIND_TABLE_COMMITMENT = idlBytes(paIdl, "EMPTY_KIND_TABLE_COMMITMENT");
 export const MIN_ALLOWED_EXPIRY = idlNumber(paIdl, "MIN_ALLOWED_EXPIRY");
-export const MIN_EXPIRY_SLOTS = idlNumber(paIdl, "MIN_EXPIRY_SLOTS");
-export const MAX_EXPIRY_SLOTS = idlNumber(paIdl, "MAX_EXPIRY_SLOTS");
 export const SEVEN_DAYS_SLOTS = idlNumber(paIdl, "SEVEN_DAYS_SLOTS");
 
 // SPL token forwarder

@@ -1660,9 +1660,7 @@ fn parse_leaves(json: &str) -> Result<Vec<Digest>> {
 }
 
 fn read_leaves(path: &Path) -> Result<Vec<Digest>> {
-    parse_leaves(
-        &std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
-    )
+    parse_leaves(&fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?)
 }
 
 /// The leaves a tree held before a fixture settled: those an indexer lists in

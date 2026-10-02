@@ -16,11 +16,9 @@ const MODE = process.env.PA_TEST_MODE ?? "real";
 if (MODE !== "real" && MODE !== "mock") {
   throw new Error(`PA_TEST_MODE must be "real" or "mock", got "${MODE}"`);
 }
-const FIXTURE_DIR: string = process.env.PA_FIXTURE_DIR
-  ? path.resolve(process.env.PA_FIXTURE_DIR)
-  : MODE === "mock"
-    ? path.resolve(process.cwd(), "tests", "fixtures", "mock")
-    : path.resolve(process.cwd(), "tests", "fixtures");
+const FIXTURE_DIR = path.resolve(
+  process.env.PA_FIXTURE_DIR || path.join("tests", "fixtures", MODE === "mock" ? "mock" : ""),
+);
 
 // Replay data of an SPL forwarder wrap fixture (fixture-gen's
 // SplTokenWrapMetadata). The actors are keypairs seeded with sha256 of a
@@ -110,8 +108,7 @@ function proveForClusterRun(filename: string): Promise<void> {
 export function requireFixture(filename: string): Fixture {
   const file = path.join(FIXTURE_DIR, filename);
   if (!existsSync(file)) {
-    const mode = process.env.PA_TEST_MODE ?? "real";
-    throw new Error(`${file} missing; generate with: ./scripts/dev.sh regen-fixtures ${mode}`);
+    throw new Error(`${file} missing; generate with: ./scripts/dev.sh regen-fixtures ${MODE}`);
   }
   return readJson<Fixture>(file);
 }

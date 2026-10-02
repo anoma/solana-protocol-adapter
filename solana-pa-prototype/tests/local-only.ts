@@ -1,7 +1,7 @@
 // Every builder in tests/utils/localOnly.ts refuses a non-local RPC endpoint and works against the local validator,
 // and no other code in the repository builds those instructions.
 import { readdirSync, readFileSync } from "fs";
-import { join, relative } from "path";
+import { join } from "path";
 import { AnchorProvider, Program } from "@anchor-lang/core";
 import { Connection, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
@@ -84,16 +84,14 @@ describe("no code outside tests/utils/localOnly.ts changes an authority or close
   const SHELL_AUTHORITY_CALL = /\bset-upgrade-authority\b|\bset-buffer-authority\b|\bset-authority\b|--final\b/;
 
   const files = (dir: string, ext: string): string[] =>
-    readdirSync(join(ROOT, dir), { withFileTypes: true }).flatMap((e) =>
-      e.isDirectory() ? files(join(dir, e.name), ext) : e.name.endsWith(ext) ? [join(dir, e.name)] : [],
-    );
+    readdirSync(join(ROOT, dir), { recursive: true, encoding: "utf8" })
+      .filter((p) => p.endsWith(ext))
+      .map((p) => join(dir, p));
   const offending = (paths: string[], pattern: RegExp) =>
     paths.flatMap((path) =>
       readFileSync(join(ROOT, path), "utf8")
         .split("\n")
-        .flatMap((line, i) =>
-          pattern.test(line) ? [`${relative(ROOT, join(ROOT, path))}:${i + 1}: ${line.trim()}`] : [],
-        ),
+        .flatMap((line, i) => (pattern.test(line) ? [`${path}:${i + 1}: ${line.trim()}`] : [])),
     );
 
   it("TypeScript in tests/, scripts/ and client/ builds them only through localOnly.ts", () => {
