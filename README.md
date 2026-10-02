@@ -10,7 +10,7 @@ solana-protocol-adapter/
     ├── programs/            # the adapter, the SPL token forwarder, and test programs
     ├── client/              # instruction builders shared by the operator scripts and the tests
     ├── scripts/             # dev.sh, ops.sh and the operator scripts
-    ├── tests/               # the integration suite (one validator per spec file)
+    ├── tests/               # the integration suite (one validator for every spec file)
     ├── tools/fixture-gen/   # proves the test fixtures
     └── docs/                # OPERATIONS.md (runbook), INTEGRATION.md (clients and indexers)
 ```

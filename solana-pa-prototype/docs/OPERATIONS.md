@@ -100,7 +100,7 @@ solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
 
 ## The settlement lookup table
 
-Every settlement carries accounts that never change for a deployment: fourteen fixed ones (PAState, the system program, the verifier router, its router PDA and verifier entry, the verifier program, the event authority, the instructions and clock sysvars, the two forwarders, the SPL forwarder's config and escrow authority, and the SPL token program) plus each supported mint's escrow ATA. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps the first-wrap settlement (ed25519 authorization, inline bitmap init, settle) well inside the 1,232-byte packet.
+Every settlement carries accounts that never change for a deployment: fifteen fixed ones (PAState, the system program, the verifier router, its router PDA and verifier entry, the verifier program, the event authority, the instructions and clock sysvars, the two forwarders, the SPL forwarder's config, event authority and escrow authority, and the SPL token program) plus each supported mint's escrow ATA. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps the first-wrap settlement (ed25519 authorization, inline bitmap init, settle) well inside the 1,232-byte packet.
 
 ```sh
 ./scripts/dev.sh lookup-table --cluster devnet                      # create

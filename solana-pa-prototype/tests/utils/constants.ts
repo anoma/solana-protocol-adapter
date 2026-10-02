@@ -20,6 +20,6 @@ export const UNWRAP_RECIPIENT_SEED_LABEL = "spl_token_forwarder_test_recipient";
 // kind_table_solana_devnet.json holds, which spl_token_wrap_devnet_kind_table
 // is proven against.
 export const SOLANA_DEVNET_KIND_TABLE_COMMITMENT = Buffer.from(
-  "e6b8e1832b61d0d6ed3685ee46e62a8f4723a49df520096c5d96ff509263b483",
+  "0a362a8f9b49d3ec7bf75f7f30c89f7231ab164e50835bf1b14f0e35328c7c69",
   "hex",
 );

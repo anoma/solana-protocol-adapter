@@ -605,8 +605,9 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
 /// The upgrade authority initializes the config, as the EVM proxy runs its
 /// initializer atomically at deployment: whoever initializes names the
 /// adapter the forwarder obeys and the committee. `Initialized` is a CPI
-/// event: the event authority is the account `#[event_cpi]` would add, and
-/// `program` is the program account the self-invocation needs.
+/// event: `event_authority` is the account `#[event_cpi]` adds, declared by
+/// its seeds so the IDL lets clients resolve it next to the `program` this
+/// struct already has, which the self-invocation needs.
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
@@ -633,7 +634,7 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 
     /// CHECK: Only the event authority can invoke self-CPI
-    #[account(address = crate::EVENT_AUTHORITY_AND_BUMP.0)]
+    #[account(seeds = [b"__event_authority"], bump = crate::EVENT_AUTHORITY_AND_BUMP.1)]
     pub event_authority: UncheckedAccount<'info>,
 }
 
@@ -658,7 +659,7 @@ pub struct Reinitialize<'info> {
     pub program_data: Account<'info, ProgramData>,
 
     /// CHECK: Only the event authority can invoke self-CPI
-    #[account(address = crate::EVENT_AUTHORITY_AND_BUMP.0)]
+    #[account(seeds = [b"__event_authority"], bump = crate::EVENT_AUTHORITY_AND_BUMP.1)]
     pub event_authority: UncheckedAccount<'info>,
 }
 
