@@ -15,18 +15,10 @@ import { readFileSync } from "fs";
 import { PREVIOUS_SCHEMA_VERSION, SCHEMA_VERSION } from "../../client/constants";
 import { denyLogicRef, setKindTableCommitment, unpauseAdapter, upgradeAdapter } from "../../client/instructions";
 import { deriveUpgradeAuthorityPda } from "../../client/pda";
-import { deployedExecutableHash, executableHash, upgradeAuthority } from "../../client/upgrade";
+import { upgradeAuthority } from "../../client/upgrade";
 import { VERIFIER_ROUTER_ID, getVerifierEntryPda } from "../../client/verifier";
 import { createdCommitmentsOf, loadFixture } from "../utils/fixtures";
-import {
-  assertFails,
-  randomRef,
-  sendV0,
-  solanaCli,
-  uploadTxData,
-  waitForSlotPast,
-  writeBuffer,
-} from "../utils/helpers";
+import { assertFails, randomRef, sendV0, solanaCli, uploadTxData, waitForSlotPast } from "../utils/helpers";
 import { localMigrateState } from "../utils/localOnly";
 import { predictRootMarkerPda } from "../utils/merkle";
 import {
@@ -38,10 +30,10 @@ import {
   program,
   provider,
   settleFromTxDataBuilder,
+  upgradeThroughProgram,
   useAdapterSuite,
 } from "../utils/adapterSuite";
-
-const ADAPTER_SO = "target/deploy/protocol_adapter.so";
+import { ADAPTER_SO } from "../utils/constants";
 
 /** The previous build, through its own production IDL (fetched from devnet with it). */
 const previous: Program<any> = new Program(
@@ -91,13 +83,11 @@ describe("protocol-adapter (upgraded in place from schema 2)", () => {
       previous,
     ).transaction();
     await sendV0(provider, settle.instructions, [authority], await settlementTable());
-    if (await provider.connection.getAccountInfo(txData)) {
-      await previous.methods
-        .txdataClose(uploadId)
-        .accountsPartial({ txData, authority: authority.publicKey, refund: authority.publicKey })
-        .signers([authority])
-        .rpc();
-    }
+    await previous.methods
+      .txdataClose(uploadId)
+      .accountsPartial({ txData, authority: authority.publicKey, refund: authority.publicKey })
+      .signers([authority])
+      .rpc();
 
     await previous.methods.denyLogicRef(deniedBefore).accountsPartial({ paState, authority: wallet }).rpc();
     await previous.methods
@@ -192,16 +182,9 @@ describe("protocol-adapter (upgraded in place from schema 2)", () => {
   });
 
   it("upgrades through the program from then on", async () => {
-    const buffer = writeBuffer(provider, ADAPTER_SO);
-    const sig = await upgradeAdapter(program, wallet, buffer, wallet).rpc();
-    const { tx, events } = await cpiEventsOf(sig);
-    const expected = executableHash(readFileSync(ADAPTER_SO));
-    assert.deepEqual(
-      events.map((e) => [e.name, Buffer.from(e.data.executableHash).toString("hex")]),
-      [["upgradedEvent", expected.toString("hex")]],
+    await upgradeThroughProgram(program, ADAPTER_SO, "upgradedEvent", (buffer, spill) =>
+      upgradeAdapter(program, wallet, buffer, spill),
     );
-    assert.deepEqual(await deployedExecutableHash(provider.connection, program.programId), expected);
-    await waitForSlotPast(provider.connection, tx.slot);
     await setKindTableCommitment(program, wallet, Array.from(stateBefore.kindTableCommitment)).rpc();
   });
 });

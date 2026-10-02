@@ -7,7 +7,7 @@ import { Keypair, PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
 import { reinitializeForwarder, upgradeForwarder } from "../../client/instructions";
 import { localRenounceForwarderOwnership } from "../utils/localOnly";
-import { assertFails } from "../utils/helpers";
+import { assertFails, randomRef } from "../utils/helpers";
 import { cpiEventsOf, ensureForwarderConfig, forwarderProgram, provider, useAdapterSuite } from "../utils/adapterSuite";
 
 describe("renounced forwarder ownership", () => {
@@ -26,7 +26,7 @@ describe("renounced forwarder ownership", () => {
       events.map((e) => [e.name, e.data.previousOwner.toBase58(), e.data.newOwner.toBase58()]),
       [["ownershipTransferred", wallet.toBase58(), PublicKey.default.toBase58()]],
     );
-    await assertFails(reinitializeForwarder(forwarderProgram, wallet, Array(32).fill(1)).rpc(), {
+    await assertFails(reinitializeForwarder(forwarderProgram, wallet, randomRef()).rpc(), {
       program: forwarderProgram,
       error: "OwnableUnauthorizedAccount",
       account: "authority",

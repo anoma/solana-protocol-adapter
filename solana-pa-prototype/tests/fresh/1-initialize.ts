@@ -28,6 +28,13 @@ import {
 
 describe("protocol-adapter (initialize)", () => {
   const { funder } = useAdapterSuite({ initialize: false });
+  // `initialize` signed by the wallet, the upgrade authority, with the
+  // suite's owner, router and selector unless a test overrides one.
+  const init = ({
+    owner = provider.wallet.publicKey,
+    router = VERIFIER_ROUTER_ID,
+    selector = Array.from(PROOF_SELECTOR),
+  } = {}) => initializeAdapter(program, provider.wallet.publicKey, owner, router, selector);
 
   it("rejects initialization by a non-upgrade-authority signer", async () => {
     // Needs an adapter that was never initialized — otherwise the `init`
@@ -60,71 +67,32 @@ describe("protocol-adapter (initialize)", () => {
 
   // Mirrors OwnableUpgradeable's initializer: OwnableInvalidOwner(address(0)).
   it("rejects a zero owner", () =>
-    assertFails(
-      initializeAdapter(
-        program,
-        provider.wallet.publicKey,
-        PublicKey.default,
-        VERIFIER_ROUTER_ID,
-        Array.from(PROOF_SELECTOR),
-      ).rpc(),
-      { program, error: "OwnableInvalidOwner" },
-    ));
+    assertFails(init({ owner: PublicKey.default }).rpc(), { program, error: "OwnableInvalidOwner" }));
 
   // Mirrors pa-evm's constructor: ZeroRiscZeroVerifier{Router,Selector}NotAllowed.
   it("rejects a zero verifier router", () =>
-    assertFails(
-      initializeAdapter(
-        program,
-        provider.wallet.publicKey,
-        provider.wallet.publicKey,
-        PublicKey.default,
-        Array.from(PROOF_SELECTOR),
-      ).rpc(),
-      { program, error: "ZeroVerifierRouterNotAllowed" },
-    ));
+    assertFails(init({ router: PublicKey.default }).rpc(), { program, error: "ZeroVerifierRouterNotAllowed" }));
 
   it("rejects a zero proof selector", () =>
-    assertFails(
-      initializeAdapter(
-        program,
-        provider.wallet.publicKey,
-        provider.wallet.publicKey,
-        VERIFIER_ROUTER_ID,
-        [0, 0, 0, 0],
-      ).rpc(),
-      {
-        program,
-        error: "ZeroProofSelectorNotAllowed",
-      },
-    ));
+    assertFails(init({ selector: [0, 0, 0, 0] }).rpc(), { program, error: "ZeroProofSelectorNotAllowed" }));
 
   // Mirrors pa-evm's initializer's sanity check: RiscZeroVerifierPaused. The
   // localnet router registers PAUSED_MOCK_SELECTOR with its estop set.
   it("rejects a verifier the router has paused", () =>
-    assertFails(
-      initializeAdapter(
-        program,
-        provider.wallet.publicKey,
-        provider.wallet.publicKey,
-        VERIFIER_ROUTER_ID,
-        Array.from(PAUSED_MOCK_SELECTOR),
-      ).rpc(),
-      { program, error: "RiscZeroVerifierPaused" },
-    ));
+    assertFails(init({ selector: Array.from(PAUSED_MOCK_SELECTOR) }).rpc(), {
+      program,
+      error: "RiscZeroVerifierPaused",
+    }));
 
   it("rejects an account other than the router's verifier entry for the selector", () =>
     assertFails(
-      initializeAdapter(
-        program,
-        provider.wallet.publicKey,
-        provider.wallet.publicKey,
-        VERIFIER_ROUTER_ID,
-        Array.from(PROOF_SELECTOR),
-      )
+      init()
         .accountsPartial({ verifierEntry: getVerifierEntryPda(PAUSED_MOCK_SELECTOR)[0] })
         .rpc(),
-      { program, error: "InvalidVerifierEntry" },
+      {
+        program,
+        error: "InvalidVerifierEntry",
+      },
     ));
 
   it("stores the owner and the empty kind table, hands the upgrade authority to the program, and announces the owner, the initial root and the kind table, as pa-evm's initializer does", async () => {

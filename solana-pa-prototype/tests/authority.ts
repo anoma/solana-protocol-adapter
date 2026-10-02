@@ -9,15 +9,12 @@
  */
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { readFileSync } from "fs";
 import { pauseAdapter, setKindTableCommitment, upgradeAdapter } from "../client/instructions";
 import { BPF_LOADER_UPGRADEABLE } from "../client/pda";
-import { deployedExecutableHash, executableHash } from "../client/upgrade";
 import { localTransferAdapterOwnership } from "./utils/localOnly";
-import { assertFails, solanaCli, waitForSlotPast, writeBuffer } from "./utils/helpers";
-import { cpiEventsOf, provider, program, paState, useAdapterSuite } from "./utils/adapterSuite";
-
-const ADAPTER_SO = "target/deploy/protocol_adapter.so";
+import { ADAPTER_SO } from "./utils/constants";
+import { assertFails, solanaCli, writeBuffer } from "./utils/helpers";
+import { cpiEventsOf, provider, program, paState, upgradeThroughProgram, useAdapterSuite } from "./utils/adapterSuite";
 
 describe("protocol-adapter (ownership and upgrades) @localnet", () => {
   const { funder } = useAdapterSuite();
@@ -114,27 +111,9 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
     // suite upgrades to the build it already runs, which leaves the
     // deployment as it was.
     it("replaces the code with the owner's buffer, announces its executable hash, and runs it from the next slot", async () => {
-      const expected = executableHash(readFileSync(ADAPTER_SO));
-      const buffer = writeBuffer(provider, ADAPTER_SO);
-      const spill = Keypair.generate().publicKey;
-      const bufferRent = (await provider.connection.getAccountInfo(buffer))!.lamports;
-
-      const sig = await upgradeAdapter(program, wallet, buffer, spill).rpc();
-      const { tx, events } = await cpiEventsOf(sig);
-      assert.deepEqual(
-        events.map((e) => [e.name, Buffer.from(e.data.executableHash).toString("hex")]),
-        [["upgradedEvent", expected.toString("hex")]],
-        "upgrade announces the buffer's executable hash",
+      await upgradeThroughProgram(program, ADAPTER_SO, "upgradedEvent", (buffer, spill) =>
+        upgradeAdapter(program, wallet, buffer, spill),
       );
-      assert.deepEqual(
-        await deployedExecutableHash(provider.connection, program.programId),
-        expected,
-        "the program runs the buffer's code",
-      );
-      assert.isNull(await provider.connection.getAccountInfo(buffer), "the loader closes the buffer");
-      assert.equal(await provider.connection.getBalance(spill), bufferRent, "the buffer's rent goes to spill");
-
-      await waitForSlotPast(provider.connection, tx.slot);
       await setKindTableCommitment(program, wallet, kindTable).rpc();
     });
   });

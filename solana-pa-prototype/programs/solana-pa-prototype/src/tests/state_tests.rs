@@ -88,4 +88,9 @@ fn migrate_reads_the_previous_layout_field_for_field() {
         serialized(&state),
         "migrating a schema-2 account must reproduce every field in this layout"
     );
+    assert_eq!(
+        serialized(&migrated).len(),
+        PAStateAccount::space(migrated.depth(), migrated.denied_logic_refs.len()),
+        "migrate_state resizes the account to space() and serializes over every byte of it"
+    );
 }

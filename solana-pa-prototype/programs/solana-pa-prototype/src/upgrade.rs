@@ -10,6 +10,8 @@ use anchor_lang::solana_program::bpf_loader_upgradeable::{
 };
 use anchor_lang::solana_program::program::invoke_signed;
 
+use crate::state::UPGRADE_AUTHORITY_SEED;
+
 /// The loader's ProgramData account of `program_id`, where it records the
 /// upgrade authority; a `const fn`, so each program derives its own at
 /// compile time.
@@ -24,11 +26,10 @@ pub const fn program_data_address(program_id: &Pubkey) -> Pubkey {
 }
 
 /// Hand `program_id`'s upgrade authority from `current_authority` (a signer)
-/// to its PDA at `[seed]`, which signs for itself here: the loader's checked
-/// authority change requires both signatures.
+/// to its PDA at `[UPGRADE_AUTHORITY_SEED]`, which signs for itself here: the
+/// loader's checked authority change requires both signatures.
 pub fn hand_upgrade_authority_to_program<'info>(
     program_id: &Pubkey,
-    seed: &[u8],
     bump: u8,
     program_data: &AccountInfo<'info>,
     current_authority: &AccountInfo<'info>,
@@ -43,7 +44,7 @@ pub fn hand_upgrade_authority_to_program<'info>(
             upgrade_authority.clone(),
             loader.clone(),
         ],
-        &[&[seed, &[bump]]],
+        &[&[UPGRADE_AUTHORITY_SEED, &[bump]]],
     )?;
     Ok(())
 }
@@ -63,16 +64,11 @@ pub struct UpgradeAccounts<'a, 'info> {
 }
 
 /// Replace `program_id`'s code with `buffer`'s: hand the buffer from its
-/// authority (a signer) to the program's upgrade authority PDA at `[seed]`,
-/// as the loader requires the buffer's and the program's authorities to
-/// match, then upgrade, both signed by the PDA. The buffer's rent goes to
-/// `spill`.
-pub fn upgrade_program(
-    program_id: &Pubkey,
-    seed: &[u8],
-    bump: u8,
-    accounts: UpgradeAccounts,
-) -> Result<()> {
+/// authority (a signer) to the program's upgrade authority PDA, as the loader
+/// requires the buffer's and the program's authorities to match, then
+/// upgrade, both signed by the PDA. The buffer's rent goes to `spill`.
+pub fn upgrade_program(program_id: &Pubkey, bump: u8, accounts: UpgradeAccounts) -> Result<()> {
+    let signer: &[&[&[u8]]] = &[&[UPGRADE_AUTHORITY_SEED, &[bump]]];
     invoke_signed(
         &set_buffer_authority_checked(
             accounts.buffer.key,
@@ -85,7 +81,7 @@ pub fn upgrade_program(
             accounts.upgrade_authority.clone(),
             accounts.loader.clone(),
         ],
-        &[&[seed, &[bump]]],
+        signer,
     )?;
     invoke_signed(
         &upgrade(
@@ -104,7 +100,7 @@ pub fn upgrade_program(
             accounts.upgrade_authority.clone(),
             accounts.loader.clone(),
         ],
-        &[&[seed, &[bump]]],
+        signer,
     )?;
     Ok(())
 }

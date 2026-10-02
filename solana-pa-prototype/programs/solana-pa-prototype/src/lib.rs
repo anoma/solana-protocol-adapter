@@ -156,7 +156,6 @@ pub mod protocol_adapter {
         ));
         upgrade::hand_upgrade_authority_to_program(
             &crate::ID,
-            UPGRADE_AUTHORITY_SEED,
             ctx.bumps.upgrade_authority,
             &ctx.accounts.program_data.to_account_info(),
             &ctx.accounts.payer.to_account_info(),
@@ -531,7 +530,6 @@ pub mod protocol_adapter {
         emit_cpi!(UpgradedEvent { executable_hash });
         upgrade::upgrade_program(
             &crate::ID,
-            UPGRADE_AUTHORITY_SEED,
             ctx.bumps.upgrade_authority,
             upgrade::UpgradeAccounts {
                 program_data: &ctx.accounts.program_data.to_account_info(),
@@ -580,14 +578,9 @@ pub mod protocol_adapter {
             &ctx.accounts.authority.to_account_info(),
             &ctx.accounts.system_program.to_account_info(),
         )?;
-        {
-            let mut data = info.try_borrow_mut_data()?;
-            data.fill(0);
-            state.try_serialize(&mut &mut data[..])?;
-        }
+        state.try_serialize(&mut &mut info.try_borrow_mut_data()?[..])?;
         upgrade::hand_upgrade_authority_to_program(
             &crate::ID,
-            UPGRADE_AUTHORITY_SEED,
             ctx.bumps.upgrade_authority,
             &ctx.accounts.program_data.to_account_info(),
             &ctx.accounts.authority.to_account_info(),

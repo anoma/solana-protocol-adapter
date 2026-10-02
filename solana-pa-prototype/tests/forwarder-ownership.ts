@@ -8,15 +8,19 @@
  */
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { readFileSync } from "fs";
 import { reinitializeForwarder, upgradeForwarder } from "../client/instructions";
 import { BPF_LOADER_UPGRADEABLE, deriveConfigPda } from "../client/pda";
-import { deployedExecutableHash, executableHash } from "../client/upgrade";
 import { localTransferForwarderOwnership } from "./utils/localOnly";
-import { assertFails, randomRef, solanaCli, waitForSlotPast, writeBuffer } from "./utils/helpers";
-import { cpiEventsOf, ensureForwarderConfig, forwarderProgram, provider, useAdapterSuite } from "./utils/adapterSuite";
-
-const FORWARDER_SO = "target/deploy/spl_token_forwarder.so";
+import { FORWARDER_SO } from "./utils/constants";
+import { assertFails, randomRef, solanaCli, writeBuffer } from "./utils/helpers";
+import {
+  cpiEventsOf,
+  ensureForwarderConfig,
+  forwarderProgram,
+  provider,
+  upgradeThroughProgram,
+  useAdapterSuite,
+} from "./utils/adapterSuite";
 
 describe("forwarder ownership and upgrades @localnet", () => {
   const { funder } = useAdapterSuite();
@@ -111,22 +115,9 @@ describe("forwarder ownership and upgrades @localnet", () => {
     // ERC1967's Upgraded, naming the code by its executable hash. The suite
     // upgrades to the build it already runs.
     it("replaces the code with the owner's buffer, announces its executable hash, and runs it from the next slot", async () => {
-      const expected = executableHash(readFileSync(FORWARDER_SO));
-      const buffer = writeBuffer(provider, FORWARDER_SO);
-      const spill = Keypair.generate().publicKey;
-      const bufferRent = (await provider.connection.getAccountInfo(buffer))!.lamports;
-
-      const sig = await upgradeForwarder(forwarderProgram, wallet, buffer, spill).rpc();
-      const { tx, events } = await cpiEventsOf(sig, forwarderProgram);
-      assert.deepEqual(
-        events.map((e) => [e.name, Buffer.from(e.data.executableHash).toString("hex")]),
-        [["upgraded", expected.toString("hex")]],
+      await upgradeThroughProgram(forwarderProgram, FORWARDER_SO, "upgraded", (buffer, spill) =>
+        upgradeForwarder(forwarderProgram, wallet, buffer, spill),
       );
-      assert.deepEqual(await deployedExecutableHash(provider.connection, forwarderProgram.programId), expected);
-      assert.isNull(await provider.connection.getAccountInfo(buffer), "the loader closes the buffer");
-      assert.equal(await provider.connection.getBalance(spill), bufferRent, "the buffer's rent goes to spill");
-
-      await waitForSlotPast(provider.connection, tx.slot);
       await assertFails(reinitializeAs(null), { program: forwarderProgram, error: "InvalidInitialization" });
     });
   });

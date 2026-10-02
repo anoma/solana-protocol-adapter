@@ -1,6 +1,17 @@
-use crate::upgrade::executable_hash;
+use crate::upgrade::{executable_hash, program_data_address};
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::bpf_loader_upgradeable::UpgradeableLoaderState;
+use anchor_lang::solana_program::bpf_loader_upgradeable::{self, UpgradeableLoaderState};
+
+/// The compile-time ProgramData address is the loader's derivation, the only
+/// account each program's upgrade instructions accept as its ProgramData.
+#[test]
+fn program_data_address_is_the_loaders_derivation() {
+    for program_id in [crate::ID, Pubkey::new_unique()] {
+        let (expected, _) =
+            Pubkey::find_program_address(&[program_id.as_ref()], &bpf_loader_upgradeable::ID);
+        assert_eq!(program_data_address(&program_id), expected, "{program_id}");
+    }
+}
 
 fn buffer(state: UpgradeableLoaderState, code: &[u8]) -> Vec<u8> {
     let mut bytes = bincode::serialize(&state).unwrap();

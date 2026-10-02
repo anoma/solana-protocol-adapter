@@ -3,8 +3,7 @@
 use crate::state::{
     base64_of_hash, nonce_to_word_and_bit, pa_is_paused, Config, NonceBitmap, PreviousConfig,
     UnwrapInput, WrapInput, WrapMessage, CONFIG_PDA, CONFIG_SEED, ESCROW_AUTHORITY,
-    ESCROW_AUTHORITY_BUMP, ESCROW_SEED, NONCES_PER_WORD, NONCE_BITMAP_SEED, PROGRAM_DATA,
-    SIGNED_MESSAGE_LEN,
+    ESCROW_AUTHORITY_BUMP, ESCROW_SEED, NONCES_PER_WORD, NONCE_BITMAP_SEED, SIGNED_MESSAGE_LEN,
 };
 use anchor_lang::prelude::{borsh, AnchorDeserialize, Pubkey};
 use anchor_lang::AccountSerialize;
@@ -327,17 +326,6 @@ fn nonce_bitmap_account_is_discriminator_word_and_bump() {
 fn config_sizes_tell_the_layouts_apart() {
     assert_eq!(Config::ACCOUNT_SIZE, 8 + 32 * 4 + 8 + 32);
     assert_eq!(PreviousConfig::ACCOUNT_SIZE, 8 + 32 * 4 + 8);
-}
-
-/// The compile-time ProgramData address is the loader's derivation for this
-/// program, the only account the upgrade instructions accept.
-#[test]
-fn program_data_is_the_loaders_derivation() {
-    let (expected, _) = Pubkey::find_program_address(
-        &[crate::ID.as_ref()],
-        &anchor_lang::solana_program::bpf_loader_upgradeable::ID,
-    );
-    assert_eq!(PROGRAM_DATA, expected);
 }
 
 /// A previous-build config is this layout without the trailing owner:

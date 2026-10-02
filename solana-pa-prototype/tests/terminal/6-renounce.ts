@@ -37,6 +37,9 @@ describe("renounced adapter ownership", () => {
       error: "OwnableUnauthorizedAccount",
       account: "authority",
     });
+    // With the ownership renounced (and the forwarder's config closed by
+    // 5-forwarder-teardown), the wallet holds no owner's role, so the
+    // cluster test guard accepts it.
     refuseOwnerWallet(
       wallet,
       await ownerRoles(provider.connection, [program.programId, forwarderProgram.programId], program, forwarderProgram),

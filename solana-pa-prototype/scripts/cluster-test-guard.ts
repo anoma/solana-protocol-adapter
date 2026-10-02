@@ -6,12 +6,12 @@
  * a spec pause the adapter, replace its kind table, upgrade a program, or
  * renounce the ownership for good. The roles: each program's upgrade
  * authority while it is not the program's own upgrade authority PDA, and
- * the adapter's and the forwarder's stored owners. Run through ops.sh before any spec:
+ * the adapter's and the forwarder's stored owners. Run through ops.sh before
+ * any spec:
  *
  *   npx ts-node -P tsconfig.json scripts/cluster-test-guard.ts <program id>...
  */
-import * as anchor from "@anchor-lang/core";
-import { AnchorProvider, Program } from "@anchor-lang/core";
+import { AnchorProvider, Program, setProvider, workspace } from "@anchor-lang/core";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
@@ -63,9 +63,9 @@ async function main() {
   const programArgs = process.argv.slice(2);
   if (programArgs.length === 0) fail("usage: cluster-test-guard.ts <program id>...");
   const provider = AnchorProvider.env();
-  anchor.setProvider(provider);
-  const adapter = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
-  const forwarder = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
+  setProvider(provider);
+  const adapter = workspace.ProtocolAdapter as Program<ProtocolAdapter>;
+  const forwarder = workspace.SplTokenForwarder as Program<SplTokenForwarder>;
   refuseOwnerWallet(
     provider.wallet.publicKey,
     await ownerRoles(

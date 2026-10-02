@@ -382,9 +382,11 @@ export function transactionIdOf(actionTreeRoots: number[][]): Buffer {
 
 /** The Solana CLI against `provider`'s validator, signing with the suite's wallet, with JSON output. */
 export function solanaCli(provider: anchor.AnchorProvider, ...args: string[]): string {
+  const wallet = process.env.ANCHOR_WALLET;
+  if (!wallet) throw new Error("solanaCli signs with ANCHOR_WALLET, which is unset (anchor-test.sh sets it)");
   return execFileSync(
     "solana",
-    [...args, "--keypair", process.env.ANCHOR_WALLET!, "--url", provider.connection.rpcEndpoint, "--output", "json"],
+    [...args, "--keypair", wallet, "--url", provider.connection.rpcEndpoint, "--output", "json"],
     { encoding: "utf8" },
   );
 }

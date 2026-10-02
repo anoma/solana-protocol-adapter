@@ -46,11 +46,11 @@ export function initializeAdapter(
 // `authority`.
 
 /**
- * The compute limit `upgrade` runs under: the most a transaction may use,
+ * The most compute units a transaction may use. `upgrade` runs under it,
  * since it hashes the whole buffer (sha256's cost grows with the length)
  * before the loader's own work.
  */
-const UPGRADE_COMPUTE_UNIT_LIMIT = 1_400_000;
+export const MAX_COMPUTE_UNIT_LIMIT = 1_400_000;
 
 /**
  * `upgrade` by the owner: the program's code becomes `buffer`'s, a loader
@@ -65,7 +65,7 @@ export function upgradeAdapter(
   return program.methods
     .upgrade()
     .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority, buffer, spill })
-    .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: UPGRADE_COMPUTE_UNIT_LIMIT })]);
+    .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNIT_LIMIT })]);
 }
 
 /** `deny_logic_ref` by the owner, which pays for the entry. */
@@ -209,7 +209,7 @@ export function upgradeForwarder(
   return forwarder.methods
     .upgrade()
     .accountsPartial({ authority, buffer, spill })
-    .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: UPGRADE_COMPUTE_UNIT_LIMIT })]);
+    .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNIT_LIMIT })]);
 }
 
 /** `forward_emergency_call` by `caller`; callers add signers and send. */

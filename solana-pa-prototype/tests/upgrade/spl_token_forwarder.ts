@@ -19,12 +19,18 @@ import {
   deriveProgramDataPda,
   deriveUpgradeAuthorityPda,
 } from "../../client/pda";
-import { deployedExecutableHash, executableHash, upgradeAuthority } from "../../client/upgrade";
-import { assertFails, randomRef, solanaCli, waitForSlotPast, writeBuffer } from "../utils/helpers";
+import { upgradeAuthority } from "../../client/upgrade";
+import { assertFails, randomRef, solanaCli, waitForSlotPast } from "../utils/helpers";
 import { localMigrateConfig } from "../utils/localOnly";
-import { cpiEventsOf, forwarderProgram, program as adapter, provider, useAdapterSuite } from "../utils/adapterSuite";
-
-const FORWARDER_SO = "target/deploy/spl_token_forwarder.so";
+import { FORWARDER_SO } from "../utils/constants";
+import {
+  cpiEventsOf,
+  forwarderProgram,
+  program as adapter,
+  provider,
+  upgradeThroughProgram,
+  useAdapterSuite,
+} from "../utils/adapterSuite";
 
 /** The previous build, through its production IDL (anoma-pa-solana-client's copy of that build's). */
 const previous: Program<any> = new Program(
@@ -125,16 +131,9 @@ describe("spl-token-forwarder (upgraded in place across its config layout)", () 
     }));
 
   it("upgrades through the program from then on", async () => {
-    const buffer = writeBuffer(provider, FORWARDER_SO);
-    const sig = await upgradeForwarder(forwarderProgram, wallet, buffer, wallet).rpc();
-    const { tx, events } = await cpiEventsOf(sig, forwarderProgram);
-    const expected = executableHash(readFileSync(FORWARDER_SO));
-    assert.deepEqual(
-      events.map((e) => [e.name, Buffer.from(e.data.executableHash).toString("hex")]),
-      [["upgraded", expected.toString("hex")]],
+    await upgradeThroughProgram(forwarderProgram, FORWARDER_SO, "upgraded", (buffer, spill) =>
+      upgradeForwarder(forwarderProgram, wallet, buffer, spill),
     );
-    assert.deepEqual(await deployedExecutableHash(provider.connection, forwarderProgram.programId), expected);
-    await waitForSlotPast(provider.connection, tx.slot);
     await assertFails(reinitializeForwarder(forwarderProgram, wallet, randomRef()).rpc(), {
       program: forwarderProgram,
       error: "InvalidInitialization",

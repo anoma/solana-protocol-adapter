@@ -141,7 +141,6 @@ pub mod spl_token_forwarder {
         config.owner = initial_owner;
         protocol_adapter::upgrade::hand_upgrade_authority_to_program(
             &crate::ID,
-            UPGRADE_AUTHORITY_SEED,
             ctx.bumps.upgrade_authority,
             &ctx.accounts.program_data.to_account_info(),
             &ctx.accounts.authority.to_account_info(),
@@ -246,7 +245,6 @@ pub mod spl_token_forwarder {
         emit_cpi!(Upgraded { executable_hash });
         protocol_adapter::upgrade::upgrade_program(
             &crate::ID,
-            UPGRADE_AUTHORITY_SEED,
             ctx.bumps.upgrade_authority,
             protocol_adapter::upgrade::UpgradeAccounts {
                 program_data: &ctx.accounts.program_data.to_account_info(),
@@ -297,7 +295,6 @@ pub mod spl_token_forwarder {
         config.try_serialize(&mut &mut info.try_borrow_mut_data()?[..])?;
         protocol_adapter::upgrade::hand_upgrade_authority_to_program(
             &crate::ID,
-            UPGRADE_AUTHORITY_SEED,
             ctx.bumps.upgrade_authority,
             &ctx.accounts.program_data.to_account_info(),
             &ctx.accounts.authority.to_account_info(),

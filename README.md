@@ -37,7 +37,7 @@ cd solana-protocol-adapter/solana-pa-prototype
 
 The script:
 1. Syncs the program IDs to the committed keypairs and builds the programs.
-2. Starts one validator with the programs, the devnet verifier stack (the committed copy in `devnet-verifier/`) and the suite's settlement lookup table loaded at genesis, warped to slot 1, and runs every spec file under `tests/` against it, so the deployment builds up as much history as the suite makes: first `tests/fresh/` (initialization, which only works on a fresh deployment), then every other file, each building on whatever state it finds, then `tests/terminal/` in numbered order (denials, marker and forwarder teardown, renounced ownerships: changes no later test could run after).
+2. Starts one validator with the programs, the devnet verifier stack (the committed copy in `devnet-verifier/`) and the suite's settlement lookup table loaded at genesis, warped to slot 1, and runs every spec file under `tests/` except `tests/upgrade/` against it, so the deployment builds up as much history as the suite makes: first `tests/fresh/` (initialization, which only works on a fresh deployment), then every other file, each building on whatever state it finds, then `tests/terminal/` in numbered order (denials, marker and forwarder teardown, renounced ownerships: changes no later test could run after).
 3. Runs each upgrade-path file, `tests/upgrade/<program>.ts`, on a validator of its own that starts with that program's previous build (`tests/fixtures/previous/<program>.so`, the build deployed on devnet), which it upgrades in place and migrates.
 
 ### Proof Modes

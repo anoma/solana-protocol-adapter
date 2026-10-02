@@ -25,8 +25,15 @@ import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { TestForwarder } from "../../target/types/test_forwarder";
 import { MockVerifier } from "../../target/types/mock_verifier";
-import { initializeAdapter, initializeForwarder, pauseAdapter } from "../../client/instructions";
+import {
+  MAX_COMPUTE_UNIT_LIMIT,
+  initializeAdapter,
+  initializeForwarder,
+  pauseAdapter,
+} from "../../client/instructions";
 import { parseCpiEvents } from "../../client/events";
+import { deployedExecutableHash, executableHash } from "../../client/upgrade";
+import { readFileSync } from "fs";
 import { ensureSettlementLookupTable, fetchLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
   deriveConfigPda,
@@ -52,6 +59,8 @@ import {
   sendV0,
   TxDataUpload,
   uploadTxData as uploadTxDataTo,
+  waitForSlotPast,
+  writeBuffer,
 } from "./helpers";
 import { predictRootMarkerPda as predictRootMarkerPdaOf } from "./merkle";
 
@@ -139,10 +148,11 @@ export function deriveNullifierAccounts(nullifierB64s: string[]): AccountMeta[] 
   return deriveNullifierAccountsFromB64(nullifierB64s, paState, program.programId);
 }
 
-// The one set of initialize arguments every spec file deploys with: the
-// verifier router and the fixture's selector. Callers add `.signers()` when
-// the payer is not the provider wallet.
-/** `initialize` signed by `payer`, making the provider wallet the owner. */
+/**
+ * `initialize` signed by `payer`, making the provider wallet the owner, with
+ * the verifier router and the fixture's selector every spec file deploys
+ * with. Callers add `.signers()` when the payer is not the provider wallet.
+ */
 export const buildInitialize = (payer: PublicKey) =>
   initializeAdapter(program, payer, provider.wallet.publicKey, VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR));
 
@@ -250,10 +260,44 @@ export async function cpiEventsOf(sig: string, emitter: anchor.Program<any> = pr
   return { tx, events: parseCpiEvents(tx, emitter) };
 }
 
+/**
+ * UUPS upgradeToAndCall: `upgrade` (the target's own instruction, by its
+ * owner) replaces `target`'s code with the build at `so`, written into a
+ * buffer by the wallet. `event` (ERC1967's Upgraded) names the build by its
+ * executable hash, the program runs it, and the loader closes the buffer
+ * into `spill`. Returns once the new code runs, from the slot after.
+ */
+export async function upgradeThroughProgram(
+  target: anchor.Program<any>,
+  so: string,
+  event: string,
+  upgrade: (buffer: PublicKey, spill: PublicKey) => { rpc(): Promise<string> },
+) {
+  const expected = executableHash(readFileSync(so));
+  const buffer = writeBuffer(provider, so);
+  const spill = Keypair.generate().publicKey;
+  const bufferRent = (await provider.connection.getAccountInfo(buffer))!.lamports;
+
+  const { tx, events } = await cpiEventsOf(await upgrade(buffer, spill).rpc(), target);
+  assert.deepEqual(
+    events.map((e) => [e.name, Buffer.from(e.data.executableHash).toString("hex")]),
+    [[event, expected.toString("hex")]],
+    "upgrade announces the buffer's executable hash",
+  );
+  assert.deepEqual(
+    await deployedExecutableHash(provider.connection, target.programId),
+    expected,
+    "the program runs the buffer's code",
+  );
+  assert.isNull(await provider.connection.getAccountInfo(buffer), "the loader closes the buffer");
+  assert.equal(await provider.connection.getBalance(spill), bufferRent, "the buffer's rent goes to spill");
+  await waitForSlotPast(provider.connection, tx.slot);
+}
+
 /** The full CU budget and, unless `heapFrame` is false, the 256 KiB heap frame settlement needs. */
 function settleBudget(heapFrame: boolean) {
   return [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+    ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNIT_LIMIT }),
     ...(heapFrame ? [ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })] : []),
   ];
 }

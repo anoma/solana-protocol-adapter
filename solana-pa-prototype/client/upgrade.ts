@@ -9,8 +9,10 @@ import { createHash } from "crypto";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { deriveProgramDataPda } from "./pda";
 
+/** Offset of the authority's option tag in a ProgramData account: after the u32 account kind and the u64 deployment slot. */
+const PROGRAM_DATA_AUTHORITY_OFFSET = 12;
 /** Bytes before the code in a ProgramData account: the loader's state enum, slot and optional authority. */
-const PROGRAM_DATA_METADATA_LEN = 45;
+const PROGRAM_DATA_METADATA_LEN = PROGRAM_DATA_AUTHORITY_OFFSET + 1 + 32;
 /** Bytes before the code in a loader buffer: the loader's state enum and optional authority. */
 const BUFFER_METADATA_LEN = 37;
 
@@ -50,8 +52,8 @@ export async function upgradeAuthority(connection: Connection, programId: Public
   if (kind !== 3) {
     throw new Error(`${programData.toBase58()} is loader account kind ${kind}, not ProgramData (3)`);
   }
-  const tag = account.data[12];
+  const tag = account.data[PROGRAM_DATA_AUTHORITY_OFFSET];
   if (tag === 0) return null;
   if (tag !== 1) throw new Error(`${programData.toBase58()}: invalid authority option tag ${tag}`);
-  return new PublicKey(account.data.subarray(13, 45));
+  return new PublicKey(account.data.subarray(PROGRAM_DATA_AUTHORITY_OFFSET + 1, PROGRAM_DATA_METADATA_LEN));
 }
