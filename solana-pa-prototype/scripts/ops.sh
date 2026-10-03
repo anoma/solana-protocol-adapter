@@ -22,10 +22,10 @@ Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]
 Commands:
   deploy [${DEPLOY_TARGETS}|all]
                          First-time deploy (default target: all). Deploys the
-                         production build and initializes the SPL token
-                         forwarder config if deployed; the PA is initialized
-                         at once on localnet, while on devnet/mainnet its IDL
-                         is published and init is left for after the
+                         production build; on localnet the PA and the SPL
+                         token forwarder are initialized at once, while on
+                         devnet/mainnet each program's IDL is published and
+                         init / forwarder init are left for after the
                          metadata accounts are given to the owner.
   upgrade [${DEPLOY_TARGETS}|all]
                          Rebuild + upgrade existing programs in place: through
@@ -48,7 +48,8 @@ Commands:
   unpause                Resume settlement (owner-only; pa-evm's unpause())
   status                 Show deployment status + wallet balance
   balance                Show wallet address and balance
-  idl-publish            Publish the PA's production IDL on chain (the
+  idl-publish [${DEPLOY_TARGETS}|all]
+                         Publish each program's production IDL on chain (the
                          program's canonical Program Metadata IDL account;
                          devnet/mainnet only; signer must be the upgrade
                          authority to create it, its authority to update it)
@@ -570,22 +571,22 @@ cmd_deploy() {
     deploy_one "${PROGRAM_BY_TARGET[$t]}"
   done
 
-  # `initialize` hands the adapter's upgrade authority to the program, and
-  # only the upgrade authority creates the program's canonical metadata
-  # accounts. On a cluster with the Program Metadata program the IDL is
-  # published first, and `init` waits until the deployer has given those
-  # accounts to the owner, by hand (docs/OPERATIONS.md).
-  if [[ " $targets " == *" pa "* ]]; then
-    if [[ "$CLUSTER" == "localnet" ]]; then
+  # `initialize` hands each self-upgrading program's upgrade authority to the
+  # program, and only the upgrade authority creates the program's canonical
+  # metadata accounts. On a cluster with the Program Metadata program the IDLs
+  # are published first, and initialization waits until the deployer has given
+  # those accounts to the owner, by hand (docs/OPERATIONS.md).
+  if [[ "$CLUSTER" == "localnet" ]]; then
+    if [[ " $targets " == *" pa "* ]]; then
       init_pa
-    else
-      cmd_idl_publish
-      echo "Next, by hand: give the adapter's canonical metadata accounts to the owner, then run init" \
-        "(docs/OPERATIONS.md, Deploy and initialize)."
     fi
-  fi
-  if [[ " $targets " == *" stf "* ]]; then
-    init_forwarder
+    if [[ " $targets " == *" stf "* ]]; then
+      init_forwarder
+    fi
+  else
+    cmd_idl_publish
+    echo "Next, by hand: give each program's canonical metadata accounts to its owner, then run" \
+      "init and forwarder init (docs/OPERATIONS.md, Deploy and initialize)."
   fi
 
   echo ""
@@ -767,13 +768,14 @@ cmd_verify_build() {
   fi
 }
 
-# Publish the PA's production IDL on chain as the program's canonical
-# Program Metadata "idl" account (derived from the program ID), so explorers
-# and generic Anchor clients decode the program's instructions, accounts, and
-# events straight from the cluster. Builds the production IDL first — the
-# build self-checks that the dev-only instructions are absent, so a dev IDL
-# cannot be published by accident. Signer must be the program's upgrade
-# authority.
+# Publish each target program's production IDL on chain as the program's
+# canonical Program Metadata "idl" account (derived from the program ID), so
+# explorers and generic Anchor clients decode the program's instructions,
+# accounts, and events straight from the cluster. Builds the production IDLs
+# first — the build self-checks that the dev-only instructions are absent, so
+# a dev IDL cannot be published by accident. The program's upgrade authority
+# signs the write that creates the account; the account's authority signs
+# later ones.
 cmd_idl_publish() {
   require_cmd anchor
   # anchor idl runs the Program Metadata client through npx.
@@ -786,11 +788,25 @@ cmd_idl_publish() {
     exit 1
   fi
 
-  local pid idl_path="target/idl/protocol_adapter.json"
-  pid="$(get_program_id "protocol_adapter")"
-  require_deployed "$pid" "PA"
+  local targets t
+  targets="$(resolve_targets "$TARGET")"
+  for t in $targets; do
+    require_deployed "$(get_program_id "${PROGRAM_BY_TARGET[$t]}")" "$t" "deploy ${t}"
+  done
 
   build_programs_release
+
+  for t in $targets; do
+    publish_idl "${PROGRAM_BY_TARGET[$t]}"
+  done
+}
+
+# Publish <name>'s production IDL, built by build_programs_release, as the
+# program's canonical Program Metadata IDL account, and check the cluster
+# serves exactly that file.
+publish_idl() {
+  local name="$1" pid idl_path="target/idl/${1}.json"
+  pid="$(get_program_id "$name")"
 
   # Program Metadata `write idl`: creates the canonical IDL account on first
   # publish and overwrites it afterwards.
