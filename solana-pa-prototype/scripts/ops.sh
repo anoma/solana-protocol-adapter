@@ -906,6 +906,8 @@ cmd_clippy() {
     if [[ "${PROGRAM_DEV_FEATURES[$name]}" != "-" ]]; then
       cargo clippy -p "${PROGRAM_PACKAGE[$name]}" --features "${PROGRAM_DEV_FEATURES[$name]}" --all-targets -- -D warnings
     fi
+    # `cpi` is how another program depends on this one to call it.
+    cargo clippy -p "${PROGRAM_PACKAGE[$name]}" --features cpi --all-targets -- -D warnings
   done
 }
 

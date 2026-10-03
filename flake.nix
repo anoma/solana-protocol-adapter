@@ -27,28 +27,31 @@
           # Pinned to match CI exactly (RUST_VERSION in ci.yml).
           rustToolchain = pkgs.rust-bin.stable."1.98.1".default;
 
-          # nixos-26.05 ships anchor 1.0.2, not the 1.2.0 the programs build
-          # with, so the CLI is built here with the pinned toolchain.
+          # nixos-26.05 ships anchor 1.0.2, not the Anchor the programs build
+          # with, so the CLI is built here with the pinned toolchain, from the
+          # same commit as anchor-lang in solana-pa-prototype/Cargo.toml: the
+          # v1.2.1 release PR (solana-foundation/anchor#5134), until the
+          # published 1.2.1 replaces it (anoma/solana-protocol-adapter#124).
           anchorCli = (pkgs.makeRustPlatform {
             cargo = rustToolchain;
             rustc = rustToolchain;
-          }).buildRustPackage (finalAttrs: {
+          }).buildRustPackage {
             pname = "anchor";
-            version = "1.2.0";
+            version = "1.2.1";
 
             src = pkgs.fetchFromGitHub {
               owner = "otter-sec";
               repo = "anchor";
-              tag = "v${finalAttrs.version}";
-              hash = "sha256-lbNAMEqRYkyRojs8r9pDZI36DTBzHuyP7LSvHd5cZi8=";
+              rev = "2c9747a2d31bd5e94745cee6c083577f3e6675c0";
+              hash = "sha256-YyGyvSC4Tdiu/xmIRChCT8Y5Am5CteLSJbUyo0Cdfy8=";
               fetchSubmodules = true;
             };
 
-            cargoHash = "sha256-8AX5G2j9KMjq6vaby4/RGXXSDHNwJsYiEYHJsoeDJaM=";
+            cargoHash = "sha256-yaHGreugJzFRVdKEQLInL/X3ls0AgleV1EO6thmbsf8=";
 
             cargoBuildFlags = [ "-p" "anchor-cli" ];
             cargoTestFlags = [ "-p" "anchor-cli" ];
-          });
+          };
 
           solanaRelease = {
             "x86_64-linux" = {
