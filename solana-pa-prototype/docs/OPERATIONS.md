@@ -54,7 +54,7 @@ On localnet, which has no Program Metadata program, `deploy pa` initializes at o
 
 `deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which carries `close_markers_batch`; it is refused on every cluster but localnet, so a live deployment never has an instruction that deletes replay protection.
 
-`idl-publish` stores the production IDL in the program's canonical Program Metadata IDL account on chain (Anchor 1.x `anchor idl upgrade`, which runs the `@solana-program/program-metadata` client through `npx`; devnet and mainnet only), so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), then verifies the cluster serves exactly the published file. Rerun it after every `upgrade` that changes the interface.
+`idl-publish` stores each program's production IDL (`idl-publish pa`, `stf` or `btf`; all of them by default) in the program's canonical Program Metadata IDL account on chain (Anchor 1.x `anchor idl upgrade`, which runs the `@solana-program/program-metadata` client through `npx`; devnet and mainnet only), so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), then verifies the cluster serves exactly the published file. Rerun it after every `upgrade` that changes the interface.
 
 The program's display metadata — name, icon, description, project links, and the security contact (`security@anoma.foundation`, same as the EVM PA's `@custom:security-contact`) — lives in `docs/program-metadata.json` and is published to the program-metadata PDA that Solana Explorer reads:
 
@@ -178,9 +178,14 @@ The SPL token forwarder (`programs/spl-token-forwarder`) holds AnomaPay's wrappe
 ```sh
 export STF_LOGIC_REF=<32-byte hex verifying key of the AnomaPay resource logic>
 export STF_EMERGENCY_COMMITTEE=<base58 pubkey>
+export STF_OWNER=<the owner's pubkey>
 export STF_TOKEN_MINT=<base58 mint>          # optional: also creates the mint's escrow ATA
-./scripts/dev.sh deploy stf --cluster devnet  # or: forwarder init, for an already deployed program
+./scripts/dev.sh deploy stf --cluster devnet  # publishes the IDL, stops before init
+# by hand: give the forwarder's canonical IDL account to the owner (Deploy and initialize, above)
+./scripts/dev.sh forwarder init --cluster devnet
 ```
+
+On devnet and mainnet, `deploy stf` publishes the forwarder's IDL and stops before `initialize`, for the reason the adapter's deploy does: `initialize` gives the upgrade authority, which alone creates the program's canonical metadata accounts, to the program. On localnet it initializes at once.
 
 The program's upgrade authority, the deployer, initializes the config, as the EVM proxy runs its initializer at deployment; no other signer can. It hands the upgrade authority to the program's PDA. The config pins the adapter program id, the logic ref, the committee and the owner (`STF_OWNER`). A wrap is only executed when the adapter forwards it for a resource carrying that logic ref. One escrow authority, a PDA of the forwarder, owns every mint's escrow: the associated token account of the authority and the mint, as the EVM forwarder holds every token at its own address. `forwarder init` with `STF_TOKEN_MINT` creates a mint's escrow account, and the same command adds further mints later. Add each new mint's escrow account to the settlement lookup table as well (`lookup-table` with `STF_TOKEN_MINTS`).
 
