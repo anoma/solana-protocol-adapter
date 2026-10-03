@@ -94,10 +94,10 @@ Flags:
                    without rebuilding (for verify-build output); test: run the
                    cluster run against the programs already deployed (a
                    running local validator included)
-  --mode <m>       test: real (default) runs the suite against Groth16
-                   fixtures and the devnet-cloned verifier; mock runs it
-                   against mock fixtures and the localnet mock verifier.
-                   mock is localnet-only.
+  --mode <m>       test: real runs the suite against Groth16 fixtures and
+                   the devnet-cloned verifier; mock runs it against mock
+                   fixtures and the localnet mock verifier. mock is
+                   localnet-only. Default: PA_TEST_MODE, else real.
 
 Initialization parameters (required by deploy/init when the PA is a target):
   PA_VERIFIER_ROUTER   RISC0 verifier router program ID (base58).
@@ -127,7 +127,7 @@ RPC_OVERRIDE=""
 NO_IDL=false
 DEV_TEARDOWN=false
 PREBUILT=false
-TEST_MODE="real"
+TEST_MODE="${PA_TEST_MODE:-real}"
 SPEC_FILES=()
 
 while [[ $# -gt 0 ]]; do
@@ -162,7 +162,6 @@ while [[ $# -gt 0 ]]; do
     --mode)
       [[ $# -ge 2 ]] || { echo "❌ --mode requires a value" >&2; exit 1; }
       TEST_MODE="$2"
-      validate_test_mode "$TEST_MODE"
       shift 2
       ;;
     --*)
@@ -185,6 +184,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+validate_test_mode "$TEST_MODE"
 [[ -n "$COMMAND" ]] || usage
 
 # ---------- cluster resolution ----------
@@ -945,7 +945,7 @@ case "$COMMAND" in
     # Everything below is the cluster-subset path, where the mock verifier
     # is never deployed.
     if [[ "$TEST_MODE" == "mock" ]]; then
-      echo "❌ --mode mock is localnet-only (the mock verifier never deploys to a real cluster)" >&2
+      echo "❌ Mock mode (--mode mock or PA_TEST_MODE=mock) is localnet-only (the mock verifier never deploys to a real cluster)" >&2
       exit 1
     fi
     require_cmd solana
