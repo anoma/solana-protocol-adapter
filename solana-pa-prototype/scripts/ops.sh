@@ -585,8 +585,14 @@ cmd_deploy() {
     fi
   else
     cmd_idl_publish
-    echo "Next, by hand: give each program's canonical metadata accounts to its owner, then run" \
-      "init and forwarder init (docs/OPERATIONS.md, Deploy and initialize)."
+    if [[ " $targets " == *" pa "* ]]; then
+      echo "Next, by hand: give the adapter's canonical metadata accounts to its owner, then run init" \
+        "(docs/OPERATIONS.md, Deploy and initialize)."
+    fi
+    if [[ " $targets " == *" stf "* ]]; then
+      echo "Next, by hand: give the forwarder's canonical metadata accounts to its owner, then run" \
+        "forwarder init (docs/OPERATIONS.md, The SPL token forwarder)."
+    fi
   fi
 
   echo ""
@@ -805,7 +811,8 @@ cmd_idl_publish() {
 # program's canonical Program Metadata IDL account, and check the cluster
 # serves exactly that file.
 publish_idl() {
-  local name="$1" pid idl_path="target/idl/${1}.json"
+  local name="$1" pid idl_path
+  idl_path="target/idl/${name}.json"
   pid="$(get_program_id "$name")"
 
   # Program Metadata `write idl`: creates the canonical IDL account on first
