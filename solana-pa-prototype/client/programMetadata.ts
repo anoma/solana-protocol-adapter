@@ -87,26 +87,9 @@ export async function publishIdl(rpcUrl: string, walletPath: string, idlPath: st
     ...packDirectData({ content }),
   });
 
-  // Read back what the cluster now serves rather than assuming the write
-  // landed. The document need not keep the file's key order or whitespace.
-  const served = await fetchMetadataContent(client.rpc, program, "idl");
-  if (canonicalJson(served) !== canonicalJson(content)) {
+  // Read back what the cluster now serves rather than assuming the write landed.
+  if ((await fetchMetadataContent(client.rpc, program, "idl")) !== content) {
     throw new Error(`${program}'s canonical IDL account ${metadata} does not serve ${idlPath} after the write`);
   }
   return writer;
-}
-
-/** `json` with every object's keys sorted, so two encodings of one document compare equal. */
-function canonicalJson(json: string): string {
-  const canon = (v: unknown): unknown =>
-    Array.isArray(v)
-      ? v.map(canon)
-      : v !== null && typeof v === "object"
-        ? Object.fromEntries(
-            Object.keys(v)
-              .sort()
-              .map((k) => [k, canon((v as Record<string, unknown>)[k])]),
-          )
-        : v;
-  return JSON.stringify(canon(JSON.parse(json)));
 }

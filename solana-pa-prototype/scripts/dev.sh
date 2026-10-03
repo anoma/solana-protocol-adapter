@@ -96,9 +96,9 @@ case "${1:-}" in
     ;;
 
   validator)
-    # ops.sh validator uses start_validator (validator-deploy.sh), which
-    # loads the devnet programs and preloads the marker
-    # fixtures — a bare validator cannot settle anything.
+    # ops.sh validator uses start_validator (validator-deploy.sh), which loads
+    # the devnet programs and preloads the marker fixtures — a bare validator
+    # cannot settle anything.
     run_in_project "./scripts/ops.sh validator"
     ;;
 

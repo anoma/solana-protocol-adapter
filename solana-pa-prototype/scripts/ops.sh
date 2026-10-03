@@ -779,8 +779,8 @@ cmd_verify_build() {
 # accounts, and events straight from the cluster. Builds the production IDLs
 # first — the build self-checks that the dev-only instructions are absent, so
 # a dev IDL cannot be published by accident. The program's upgrade authority
-# signs the write that creates the account; the account's authority signs
-# later ones.
+# creates the account; it or the account's explicit authority updates it
+# (client/programMetadata.ts).
 cmd_idl_publish() {
   require_cmd npx
 
@@ -803,10 +803,7 @@ cmd_idl_publish() {
 publish_idl() {
   local name="$1" idl_path
   idl_path="target/idl/${name}.json"
-  # Writes as the upgrade authority or the account's explicit authority, then
-  # checks the cluster serves exactly that document (client/programMetadata.ts).
   run_ts scripts/publish-idl.ts "$idl_path"
-  echo "✅ On-chain IDL for $(get_program_id "$name") matches ${idl_path} (${CLUSTER})"
 }
 
 cmd_test() {
@@ -964,8 +961,9 @@ case "$COMMAND" in
     ;;
   validator)
     require_cmd solana-test-validator
-    # start_validator (validator-deploy.sh) preloads the devnet programs and the synthetic verifier-entry account fixtures
-    # — a bare validator cannot settle anything.
+    # start_validator (validator-deploy.sh) preloads the devnet programs and
+    # the synthetic verifier-entry account fixtures — a bare validator cannot
+    # settle anything.
     require_cmd solana
     start_validator
     trap 'stop_validator' EXIT INT TERM

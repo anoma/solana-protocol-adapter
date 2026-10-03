@@ -10,11 +10,11 @@
 import { mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { address } from "@solana/kit";
+import { address, createSolanaRpc } from "@solana/kit";
 import { Keypair, Transaction } from "@solana/web3.js";
 import { assert } from "chai";
 import { fetchMetadataContent } from "@solana-program/program-metadata";
-import { programMetadataClient, publishIdl } from "../client/programMetadata";
+import { publishIdl } from "../client/programMetadata";
 import { upgradeAuthority } from "../client/upgrade";
 import { localSetIdlAuthority, localSetUpgradeAuthorityIx } from "./utils/localOnly";
 import { provider, testForwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
@@ -34,8 +34,8 @@ describe("idl-publish @localnet", () => {
   };
   /** The IDL version the cluster serves for the test forwarder. */
   const servedVersion = async () => {
-    const client = await programMetadataClient(rpcUrl, wallet);
-    return JSON.parse(await fetchMetadataContent(client.rpc, address(program.toBase58()), "idl")).metadata.version;
+    return JSON.parse(await fetchMetadataContent(createSolanaRpc(rpcUrl), address(program.toBase58()), "idl")).metadata
+      .version;
   };
 
   it("creates the canonical IDL account as the program's upgrade authority", async () => {

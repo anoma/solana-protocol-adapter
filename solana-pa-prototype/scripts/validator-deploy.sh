@@ -27,8 +27,9 @@ ANCHOR_WALLET_PATH="${ANCHOR_WALLET:-$HOME/.config/solana/id.json}"
 
 # Programs and PDAs copied from devnet into every local validator's genesis:
 # the RISC0 verifier stack, and the Program Metadata program that holds the
-# programs' canonical IDL accounts. The copies are committed in DEVNET_CLONE_DIR, so tests
-# never touch the network; refresh_devnet_programs replaces them.
+# programs' canonical IDL accounts. The copies are committed in
+# DEVNET_CLONE_DIR, so tests never touch the network; refresh_devnet_programs
+# replaces them.
 VERIFIER_ROUTER="BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"
 GROTH16_VERIFIER="2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"
 ROUTER_PDA="9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"

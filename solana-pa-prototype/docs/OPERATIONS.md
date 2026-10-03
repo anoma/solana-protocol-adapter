@@ -50,7 +50,7 @@ npx @solana-program/program-metadata@latest set-authority security <PROGRAM_ID> 
   --keypair <deployer keypair> --rpc <rpc>
 ```
 
-On localnet, where no one else holds the metadata accounts, `deploy pa` initializes at once.
+On localnet, `deploy pa` publishes no IDL and initializes at once.
 
 `deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which carries `close_markers_batch`; it is refused on every cluster but localnet, so a live deployment never has an instruction that deletes replay protection.
 
