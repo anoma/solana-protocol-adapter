@@ -491,6 +491,22 @@ build_programs_dev() {
   done
 }
 
+# The development IDLs and TypeScript types alone, without the SBF compile:
+# what the TS scripts and spec files compile against, for a run against
+# programs that are already deployed. The specs reference dev-only
+# instructions (in tests a cluster run skips), so the types must be the
+# development build's, whichever build last wrote target/.
+build_dev_idls() {
+  local name
+  load_workspace_programs
+  echo "    Generating the development IDLs and types..."
+  mkdir -p target/idl target/types
+  for name in "${PROGRAM_NAMES[@]}"; do
+    dev_cargo_args "$name"
+    anchor idl build -p "$name" -o "target/idl/${name}.json" -t "target/types/${name}.ts" "${DEV_CARGO_ARGS[@]}"
+  done
+}
+
 # The production build: plain `anchor build` of the cluster programs, none of
 # their dev features. Each program with dev features gets its production IDL
 # checked against its development IDL, so this stays a self-checking command

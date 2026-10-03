@@ -100,7 +100,7 @@ solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
 
 ## The settlement lookup table
 
-Every settlement carries accounts that never change for a deployment: fourteen fixed ones (PAState, the system program, the verifier router, its router PDA and verifier entry, the verifier program, the event authority, the instructions and clock sysvars, the two forwarders, the SPL forwarder's config and escrow authority, and the SPL token program) plus each supported mint's escrow ATA. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps the first-wrap settlement (ed25519 authorization, inline bitmap init, settle) well inside the 1,232-byte packet.
+Every settlement carries accounts that never change for a deployment: fifteen fixed ones (PAState, the system program, the verifier router, its router PDA and verifier entry, the verifier program, the event authority, the instructions and clock sysvars, the two forwarders, the SPL forwarder's config, event authority and escrow authority, and the SPL token program) plus each supported mint's escrow ATA. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps the first-wrap settlement (ed25519 authorization, inline bitmap init, settle) well inside the 1,232-byte packet.
 
 ```sh
 ./scripts/dev.sh lookup-table --cluster devnet                      # create
@@ -192,6 +192,15 @@ STF_LOGIC_REF=<new 32-byte hex verifying key> ./scripts/dev.sh forwarder reiniti
 ```
 
 Escrow, nonce bitmaps and the committee are untouched. The instruction emits `Initialized` with the new version, as OpenZeppelin's reinitializer does; read the new ref from the config account. Resources wrapped under the previous ref leave through the new one once the adapter's kind table lists the previous version as an alias of the new one (anoma/risc0-kind-tables ADR-0008, rule R2): a transaction converts each into a resource under the new ref, which then unwraps. Until that table's commitment is installed (`set-kind-table`), they stay in escrow and can neither unwrap nor convert. The emergency path below is for a stopped adapter only.
+
+### Checking a devnet deployment with a wrap and an unwrap
+
+The integration suite's wraps run only on a fresh local deployment, so a devnet deployment, upgrade or logic-ref rotation is exercised end to end by hand, with fixture-gen's seeded test user and mint (their keys derive from public labels, so this is for devnet only) and anoma-pa-solana-client's `settle-fixture` tool:
+
+1. Prove a wrap against the kind table the adapter stores, under a forwarder nonce the seeded user has not used on this deployment: `./scripts/dev.sh gen-fixtures spl-token-wrap --kind-table <table.json> --wrap-nonce <n> <wrap.json>`.
+2. As the seeded user, mint the amount and approve the forwarder's escrow authority, then settle the wrap with `settle-fixture`.
+3. Read the deployment's commitments in tree order from an indexer (the Envio project's created tags ordered by block, transaction index, action log index and tag index) into a JSON array of hex strings, and check that their root equals the adapter's on-chain root.
+4. Prove the unwrap of the wrap's resource over that tree, `./scripts/dev.sh gen-fixtures spl-token-unwrap --kind-table <table.json> --wrap <wrap.json> --preceding-leaves <leaves.json> <unwrap.json>`, against the same kind table, where the leaves are the commitments before the wrap's, and settle it with `settle-fixture`.
 
 ### Upgrading the forwarder
 

@@ -6,12 +6,12 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 # Merkle paths over the adapter's tree, as integrators derive them.
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "5b2df9475d08f61566a96b68fecb92088276d398", default-features = false }
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287", default-features = false }
 arm = { package = "anoma-rm-risc0", version = "=2.0.0-rc.6", default-features = false, features = ["aggregation", "prove"] }
 arm-gadgets = { package = "anoma-rm-risc0-gadgets", version = "=2.0.0-rc.6" }
 # The AnomaPay transfer resource: its logic proves the SPL forwarder fixtures.
-transfer_library = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "f550cacad7dc176211db9e2990074c9e5df2e021" }
-transfer_witness = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "f550cacad7dc176211db9e2990074c9e5df2e021" }
+transfer_library = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "8969825eef8b676822207a420716fdad9b5eda24" }
+transfer_witness = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "8969825eef8b676822207a420716fdad9b5eda24" }
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 anchor-lang = "1.2.0"

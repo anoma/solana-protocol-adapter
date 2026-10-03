@@ -79,7 +79,7 @@ export function deriveNonceBitmapPda(
   return PublicKey.findProgramAddressSync([NONCE_BITMAP_SEED, user.toBuffer(), word], forwarderProgramId);
 }
 
-/** The adapter's event authority PDA, the signer of its `#[event_cpi]` self-invocations. Seed: `["__event_authority"]`. */
-export function deriveEventAuthorityPda(paProgramId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], paProgramId);
+/** A program's event authority PDA, the signer of its `#[event_cpi]` self-invocations. Seed: `["__event_authority"]`. */
+export function deriveEventAuthorityPda(programId: PublicKey): [PublicKey, number] {
+  return PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], programId);
 }

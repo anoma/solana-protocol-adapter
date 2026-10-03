@@ -7,12 +7,12 @@
 import { PublicKey } from "@solana/web3.js";
 import { spawnSync } from "child_process";
 import { assert } from "chai";
-import * as anchor from "@anchor-lang/core";
 import { CONFIG_VERSION } from "../../client/constants";
 import { initializeForwarder } from "../../client/instructions";
 import { deriveConfigPda, deriveProgramDataPda } from "../../client/pda";
-import { confirmedTransaction, makeFunder, randomRef, assertFails } from "../utils/helpers";
+import { makeFunder, randomRef, assertFails } from "../utils/helpers";
 import {
+  cpiEventsOf,
   forwarderLogicRef,
   forwarderCommittee as emergencyCommittee,
   forwarderProgram,
@@ -89,9 +89,7 @@ describe("forwarder initialize", () => {
     assert.ok(config.emergencyCaller.equals(PublicKey.default));
     assert.equal(config.version.toNumber(), CONFIG_VERSION, "the config is at this build's version");
 
-    const tx = await confirmedTransaction(provider.connection, sig);
-    const parser = new anchor.EventParser(forwarderProgram.programId, forwarderProgram.coder);
-    const events = [...parser.parseLogs(tx.meta!.logMessages!)];
+    const { events } = await cpiEventsOf(sig, forwarderProgram);
     assert.deepEqual(
       events.map((e) => [e.name, e.data.version.toNumber()]),
       [["initialized", CONFIG_VERSION]],

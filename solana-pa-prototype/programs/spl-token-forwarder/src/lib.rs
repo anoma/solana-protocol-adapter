@@ -110,7 +110,7 @@ pub mod spl_token_forwarder {
         config.emergency_committee = emergency_committee;
         config.emergency_caller = Pubkey::default();
         config.version = CONFIG_VERSION;
-        emit!(Initialized {
+        emit_cpi!(Initialized {
             version: CONFIG_VERSION
         });
         Ok(())
@@ -134,7 +134,7 @@ pub mod spl_token_forwarder {
         require!(logic_ref != [0u8; 32], ErrorCode::ZeroAddressNotAllowed);
         config.logic_ref = logic_ref;
         config.version = CONFIG_VERSION;
-        emit!(Initialized {
+        emit_cpi!(Initialized {
             version: CONFIG_VERSION
         });
         Ok(())
@@ -249,7 +249,7 @@ pub mod spl_token_forwarder {
             withdraw.amount,
         )?;
 
-        emit!(EmergencyWithdraw {
+        emit_cpi!(EmergencyWithdraw {
             token_mint: withdraw.token_mint,
             to: withdraw.recipient,
             amount: withdraw.amount,
@@ -277,7 +277,7 @@ pub mod spl_token_forwarder {
         );
         config.emergency_caller = new_emergency_caller;
 
-        emit!(EmergencyCallerSet {
+        emit_cpi!(EmergencyCallerSet {
             emergency_caller: new_emergency_caller,
             set_by: ctx.accounts.committee.key(),
         });
@@ -555,7 +555,7 @@ fn execute_wrap<'info>(ctx: &Context<'info, ForwardCall<'info>>, input: &[u8]) -
     nonce_bitmap.mark_used(bit_position);
     nonce_bitmap.exit(ctx.program_id)?;
 
-    emit!(Wrapped {
+    emit_cpi!(Wrapped {
         token_mint: wrap.token_mint,
         from: wrap.user,
         amount: wrap.amount,
@@ -594,7 +594,7 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
         unwrap.amount,
     )?;
 
-    emit!(Unwrapped {
+    emit_cpi!(Unwrapped {
         token_mint: unwrap.token_mint,
         to: unwrap.recipient,
         amount: unwrap.amount,
@@ -604,7 +604,10 @@ fn execute_unwrap(ctx: &Context<ForwardCall>, input: &[u8]) -> Result<()> {
 
 /// The upgrade authority initializes the config, as the EVM proxy runs its
 /// initializer atomically at deployment: whoever initializes names the
-/// adapter the forwarder obeys and the committee.
+/// adapter the forwarder obeys and the committee. `Initialized` is a CPI
+/// event: `event_authority` is the account `#[event_cpi]` adds, declared by
+/// its seeds so the IDL lets clients resolve it next to the `program` this
+/// struct already has, which the self-invocation needs.
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     #[account(mut)]
@@ -629,11 +632,16 @@ pub struct Initialize<'info> {
     pub program_data: Account<'info, ProgramData>,
 
     pub system_program: Program<'info, System>,
+
+    /// CHECK: Only the event authority can invoke self-CPI
+    #[account(seeds = [b"__event_authority"], bump = crate::EVENT_AUTHORITY_AND_BUMP.1)]
+    pub event_authority: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
 pub struct Version {}
 
+/// `Initialized` is a CPI event, as in [`Initialize`].
 #[derive(Accounts)]
 pub struct Reinitialize<'info> {
     pub authority: Signer<'info>,
@@ -649,6 +657,10 @@ pub struct Reinitialize<'info> {
     /// The loader records the upgrade authority here; it is the forwarder's owner.
     #[account(constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::UnauthorizedCaller)]
     pub program_data: Account<'info, ProgramData>,
+
+    /// CHECK: Only the event authority can invoke self-CPI
+    #[account(seeds = [b"__event_authority"], bump = crate::EVENT_AUTHORITY_AND_BUMP.1)]
+    pub event_authority: UncheckedAccount<'info>,
 }
 
 #[cfg(feature = "dev-config-version")]
@@ -686,8 +698,11 @@ pub struct InitNonceBitmap<'info> {
 }
 
 /// The adapter's CPI segment: the config, the instructions sysvar (caller
-/// verification and ed25519 introspection), then the operation's accounts
-/// as remaining accounts.
+/// verification and ed25519 introspection), the event authority and this
+/// program (`#[event_cpi]`: `Wrapped` and `Unwrapped` are CPI events, which
+/// log truncation cannot drop), then the operation's accounts as remaining
+/// accounts.
+#[event_cpi]
 #[derive(Accounts)]
 pub struct ForwardCall<'info> {
     #[account(address = CONFIG_PDA)]
@@ -698,6 +713,7 @@ pub struct ForwardCall<'info> {
     pub ix_sysvar: UncheckedAccount<'info>,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 pub struct ForwardEmergencyCall<'info> {
     #[account(mut)]
@@ -714,6 +730,7 @@ pub struct ForwardEmergencyCall<'info> {
     pub pa_state: UncheckedAccount<'info>,
 }
 
+#[event_cpi]
 #[derive(Accounts)]
 pub struct SetEmergencyCaller<'info> {
     pub committee: Signer<'info>,

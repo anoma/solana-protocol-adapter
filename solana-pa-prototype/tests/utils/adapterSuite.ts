@@ -249,15 +249,15 @@ const EVENT_IX_TAG_LE = Buffer.from([0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0
  * data is Anchor's event tag followed by the event's discriminator and Borsh
  * body. Read them in emission order from the confirmed transaction.
  */
-function parseCpiEvents(tx: anchor.web3.VersionedTransactionResponse) {
+function parseCpiEvents(tx: anchor.web3.VersionedTransactionResponse, emitter: anchor.Program<any>) {
   const keys = tx.transaction.message.getAccountKeys({
     accountKeysFromLookups: tx.meta?.loadedAddresses,
   });
-  const coder = new anchor.BorshCoder(program.idl);
+  const coder = new anchor.BorshCoder(emitter.idl);
   const events: { name: string; data: any }[] = [];
   for (const group of tx.meta?.innerInstructions ?? []) {
     for (const ix of group.instructions) {
-      if (!keys.get(ix.programIdIndex)?.equals(program.programId)) continue;
+      if (!keys.get(ix.programIdIndex)?.equals(emitter.programId)) continue;
       const data = Buffer.from(anchor.utils.bytes.bs58.decode(ix.data));
       if (data.length < 16 || !data.subarray(0, 8).equals(EVENT_IX_TAG_LE)) continue;
       const decoded = coder.events.decode(data.subarray(8).toString("base64"));
@@ -267,10 +267,10 @@ function parseCpiEvents(tx: anchor.web3.VersionedTransactionResponse) {
   return events;
 }
 
-/** The settlement's CPI events, once the transaction is confirmed. */
-export async function cpiEventsOf(sig: string) {
+/** The CPI events `emitter` (by default the adapter) emitted in transaction `sig`, once it is confirmed. */
+export async function cpiEventsOf(sig: string, emitter: anchor.Program<any> = program) {
   const tx = await confirmedTransaction(provider.connection, sig);
-  return { tx, events: parseCpiEvents(tx) };
+  return { tx, events: parseCpiEvents(tx, emitter) };
 }
 
 /** The full CU budget and, unless `heapFrame` is false, the 256 KiB heap frame settlement needs. */

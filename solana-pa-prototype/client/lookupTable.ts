@@ -39,6 +39,7 @@ export function settlementLookupKeys(s: SettlementKeySources): PublicKey[] {
   const [router] = getRouterPda(s.verifierRouter);
   const [verifierEntry] = getVerifierEntryPda(s.proofSelector, s.verifierRouter);
   const [forwarderConfig] = deriveConfigPda(s.splTokenForwarder);
+  const [forwarderEventAuthority] = deriveEventAuthorityPda(s.splTokenForwarder);
   return [
     paState,
     SystemProgram.programId,
@@ -52,6 +53,7 @@ export function settlementLookupKeys(s: SettlementKeySources): PublicKey[] {
     s.blockTimeForwarder,
     s.splTokenForwarder,
     forwarderConfig,
+    forwarderEventAuthority,
     deriveEscrowAuthority(s.splTokenForwarder),
     TOKEN_PROGRAM_ID,
     ...s.mints.map((mint) => escrowAccounts(s.splTokenForwarder, mint).escrowAta),

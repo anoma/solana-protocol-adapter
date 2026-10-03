@@ -37,7 +37,7 @@ describe("forwarder config (logic ref and direct-call guards) @localnet", () => 
           version: BN,
         ) => ReturnType<typeof forwarderProgram.methods.reinitialize>
       )(new BN(CONFIG_VERSION - 1))
-        .accounts({
+        .accountsPartial({
           authority: provider.wallet.publicKey,
           programData: deriveProgramDataPda(forwarderProgram.programId),
         })

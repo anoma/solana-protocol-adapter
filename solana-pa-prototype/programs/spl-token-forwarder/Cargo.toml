@@ -1,6 +1,6 @@
 [package]
 name = "spl-token-forwarder"
-version = "2.0.0-rc.1"
+version = "2.0.0-rc.2"
 description = "SPL Token forwarder for wrap/unwrap operations with Ed25519 signature verification"
 edition = "2021"
 
@@ -21,7 +21,7 @@ custom-panic = []
 dev-config-version = []
 
 [dependencies]
-anchor-lang = { workspace = true }
+anchor-lang = { workspace = true, features = ["event-cpi"] }
 solana-instructions-sysvar = "5.0"
 solana-sdk-ids = "3.1"
 solana-sha256-hasher = "3.1"
@@ -34,7 +34,7 @@ protocol-adapter = { path = "../solana-pa-prototype", default-features = false, 
 
 [dev-dependencies]
 # The off-chain encoder of this program's inputs; the parser tests read what it writes.
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "5b2df9475d08f61566a96b68fecb92088276d398", default-features = false }
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287", default-features = false }
 hex-literal = "1.1"
 
 [lints.rust]
