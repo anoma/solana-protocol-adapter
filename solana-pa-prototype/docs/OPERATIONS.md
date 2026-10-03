@@ -50,11 +50,11 @@ npx @solana-program/program-metadata@latest set-authority security <PROGRAM_ID> 
   --keypair <deployer keypair> --rpc <rpc>
 ```
 
-On localnet, which has no Program Metadata program, `deploy pa` initializes at once.
+On localnet, `deploy pa` publishes no IDL and initializes at once.
 
 `deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which carries `close_markers_batch`; it is refused on every cluster but localnet, so a live deployment never has an instruction that deletes replay protection.
 
-`idl-publish` stores each program's production IDL (`idl-publish pa`, `stf` or `btf`; all of them by default) in the program's canonical Program Metadata IDL account on chain (Anchor 1.x `anchor idl upgrade`, which runs the `@solana-program/program-metadata` client through `npx`; devnet and mainnet only), so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), then verifies the cluster serves exactly the published file. Rerun it after every `upgrade` that changes the interface.
+`idl-publish` stores each program's production IDL (`idl-publish pa`, `stf` or `btf`; all of them by default) in the program's canonical Program Metadata IDL account on chain, so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), writes it through the `@solana-program/program-metadata` library (`client/programMetadata.ts`), then verifies the cluster serves exactly the published file. The Program Metadata program lets two signers write a canonical account: the program's upgrade authority, and the account's explicit authority (`set-authority`, above). Its CLI, which `anchor idl upgrade` runs, admits only the first, so once `initialize` has given a program's upgrade authority to the program, only the library can update the IDL, signed by the owner as the account's authority. Rerun `idl-publish` after every `upgrade` that changes the interface.
 
 The program's display metadata — name, icon, description, project links, and the security contact (`security@anoma.foundation`, same as the EVM PA's `@custom:security-contact`) — lives in `docs/program-metadata.json` and is published to the program-metadata PDA that Solana Explorer reads:
 

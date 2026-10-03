@@ -14,4 +14,4 @@ These private keys are public. Anyone can deploy a program to one of these IDs o
 
 ## Verifier Programs
 
-The RISC0 verifier programs (router, Groth16 verifier) are copied from devnet rather than built here, so tests run the deployed binaries: `devnet-verifier/` holds a committed copy (`./scripts/dev.sh refresh-devnet-verifier --url <devnet rpc>` replaces it), and `start_validator` in `scripts/validator-deploy.sh` loads it at genesis.
+The RISC0 verifier programs (router, Groth16 verifier) and the Program Metadata program are copied from devnet rather than built here, so tests run the deployed binaries: `devnet-programs/` holds a committed copy (`./scripts/dev.sh refresh-devnet-programs --url <devnet rpc>` replaces it), and `start_validator` in `scripts/validator-deploy.sh` loads it at genesis.

@@ -17,6 +17,8 @@ import {
   localRenounceAdapterOwnership,
   localRenounceForwarderOwnership,
   localSetEmergencyCaller,
+  localSetIdlAuthority,
+  localSetUpgradeAuthorityIx,
   localTransferAdapterOwnership,
   localTransferForwarderOwnership,
 } from "./utils/localOnly";
@@ -46,6 +48,8 @@ describe("authority and closing instructions are local-only", () => {
     "close the forwarder config": () => localCloseConfig(forwarder, someone(), paState),
     "close nonce bitmaps": () => localCloseNonceBitmapsBatch(forwarder, someone(), paState, [someone()]),
     "close markers": () => localCloseMarkersBatch(adapter, someone(), [someone()]),
+    "move a program's upgrade authority": () =>
+      localSetUpgradeAuthorityIx(adapter.provider.connection, someone(), someone(), someone()),
   });
 
   for (const endpoint of LIVE_ENDPOINTS) {
@@ -60,6 +64,8 @@ describe("authority and closing instructions are local-only", () => {
       for (const [name, run] of Object.entries({
         "close all nonce bitmaps": () => localCloseAllNonceBitmaps(liveForwarder(), someone(), paState, []),
         "close all markers": () => localCloseAllMarkers(liveAdapter(), someone()),
+        "set an IDL account's authority": () =>
+          localSetIdlAuthority(endpoint, process.env.ANCHOR_WALLET!, someone(), someone()),
       })) {
         let refused = false;
         try {
@@ -82,9 +88,12 @@ describe("authority and closing instructions are local-only", () => {
 describe("no code outside tests/utils/localOnly.ts changes an authority or closes protocol accounts", () => {
   const ROOT = join(__dirname, "..");
   const LOCAL_ONLY = "tests/utils/localOnly.ts";
-  /** The forwarder and adapter instructions localOnly.ts alone may build, and any instruction to the loader. */
+  /**
+   * The forwarder and adapter instructions localOnly.ts alone may build, any
+   * instruction to the loader, and the Program Metadata program's SetAuthority.
+   */
   const TS_AUTHORITY_CALL =
-    /\.(transferOwnership|renounceOwnership|setEmergencyCaller|closeEscrow|closeConfig|closeNonceBitmapsBatch|closeMarkersBatch)\s*\(|programId:\s*BPF_LOADER_UPGRADEABLE/;
+    /\.(transferOwnership|renounceOwnership|setEmergencyCaller|closeEscrow|closeConfig|closeNonceBitmapsBatch|closeMarkersBatch|setAuthority)\s*\(|programId:\s*BPF_LOADER_UPGRADEABLE|getSetAuthority(?=Instruction\b)/;
   /** The Solana CLI commands that move or renounce an authority. */
   const SHELL_AUTHORITY_CALL = /\bset-upgrade-authority\b|\bset-buffer-authority\b|\bset-authority\b|--final\b/;
 

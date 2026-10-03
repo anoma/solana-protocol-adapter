@@ -37,7 +37,7 @@ cd solana-protocol-adapter/solana-pa-prototype
 
 The script:
 1. Syncs the program IDs to the committed keypairs and builds the programs.
-2. Starts one validator with the programs, the devnet verifier stack (the committed copy in `devnet-verifier/`) and the suite's settlement lookup table loaded at genesis, warped to slot 1, and runs every spec file under `tests/` against it, so the deployment builds up as much history as the suite makes: first `tests/fresh/` (initialization, which only works on a fresh deployment), then every other file, each building on whatever state it finds, then `tests/terminal/` in numbered order (denials, marker and forwarder teardown, renounced ownerships: changes no later test could run after).
+2. Starts one validator with the programs, the devnet verifier stack and Program Metadata program (the committed copy in `devnet-programs/`) and the suite's settlement lookup table loaded at genesis, warped to slot 1, and runs every spec file under `tests/` against it, so the deployment builds up as much history as the suite makes: first `tests/fresh/` (initialization, which only works on a fresh deployment), then every other file, each building on whatever state it finds, then `tests/terminal/` in numbered order (denials, marker and forwarder teardown, renounced ownerships: changes no later test could run after).
 
 ### Proof Modes
 
@@ -72,7 +72,7 @@ entry point for one fixture.
 | `./scripts/dev.sh fmt` / `clippy` | Format check / lints with CI's flags |
 | `./scripts/dev.sh anchor-build` | Development build of the programs (dev-teardown enabled) |
 | `./scripts/dev.sh release-build` | Production build (verifies dev-only instructions are absent) |
-| `./scripts/dev.sh validator` | Start a local validator with the verifier stack, without the workspace programs |
+| `./scripts/dev.sh validator` | Start a local validator with the devnet programs (verifier stack, Program Metadata), without the workspace programs |
 | `./scripts/dev.sh validator-deploy` | Build, start a validator with every program loaded at genesis, and keep it running for external clients |
 | `./scripts/dev.sh gen-fixtures` / `regen-fixtures` / `fixture-test` | Fixture generation and fixture-gen's tests |
 | `./scripts/dev.sh lock-check` / `lock-sync <pkg>` | Check / re-align the Cargo.lock files' shared dependencies |
@@ -451,7 +451,7 @@ Fixtures embed program IDs (the block-time forwarder's, the SPL token forwarder'
 
 ### Local Testing
 
-The local validator and the tests never touch the network. `devnet-verifier/` holds a committed copy of the RISC0 verifier router, the Groth16 verifier and their state accounts as they are on devnet (`DEVNET_CLONE_PROGRAMS`, `DEVNET_CLONE_ACCOUNTS` in `scripts/validator-deploy.sh`), and `start_validator` loads them at genesis. `./scripts/dev.sh refresh-devnet-verifier --url <devnet rpc>` replaces the copy with devnet's current state:
+The local validator and the tests never touch the network. `devnet-programs/` holds a committed copy of the RISC0 verifier router, the Groth16 verifier, their state accounts and the Program Metadata program as they are on devnet (`DEVNET_CLONE_PROGRAMS`, `DEVNET_CLONE_ACCOUNTS` in `scripts/validator-deploy.sh`), and `start_validator` loads them at genesis. `./scripts/dev.sh refresh-devnet-programs --url <devnet rpc>` replaces the copy with devnet's current state:
 
 | Address | Account |
 |---|---|

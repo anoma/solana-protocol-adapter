@@ -6,7 +6,8 @@
     "module": "commonjs",
     "target": "es2020",
     "esModuleInterop": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+    "skipLibCheck": true
   },
   "include": ["client/**/*.ts", "scripts/**/*.ts", "tests/**/*.ts"]
 }
