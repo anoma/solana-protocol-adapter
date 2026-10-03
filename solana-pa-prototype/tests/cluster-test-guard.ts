@@ -1,42 +1,51 @@
 /**
  * The cluster test run (`ops.sh test --cluster <c>`) settles, uploads and
- * pays with its wallet against a live deployment. A wallet that is a target
- * program's upgrade authority is that program's owner, so any spec it runs
- * could pause the deployment, replace its kind table, or renounce the
- * authority and leave the program final for good (scripts/cluster-test-guard.ts).
- * The guard refuses such a wallet before any spec runs.
+ * pays with its wallet against a live deployment. A wallet that holds an
+ * owner's role, a program's upgrade authority or the adapter's or the
+ * forwarder's stored owner, could have a spec pause the deployment, replace its kind table,
+ * upgrade a program or renounce the ownership for good
+ * (scripts/cluster-test-guard.ts). The guard refuses such a wallet before
+ * any spec runs.
  */
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { refuseUpgradeAuthorityWallet, upgradeAuthority } from "../scripts/cluster-test-guard";
-import { provider, program, forwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
+import { ownerRoles, refuseOwnerWallet } from "../scripts/cluster-test-guard";
+import { blockTimeForwarderId, provider, program, forwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
 
 describe("cluster test guard @localnet", () => {
   useAdapterSuite();
   const wallet = provider.wallet.publicKey;
-  const targets = () => [program.programId, forwarderProgram.programId];
+  const targets = () => [program.programId, blockTimeForwarderId, forwarderProgram.programId];
+  const roles = () => ownerRoles(provider.connection, targets(), program, forwarderProgram);
 
-  it("reads each program's upgrade authority from its ProgramData", async () => {
-    for (const id of targets()) {
-      const authority = await upgradeAuthority(provider.connection, id);
-      assert.isNotNull(authority, `${id.toBase58()} has an upgrade authority on the test validator`);
-      assert.equal(authority!.toBase58(), wallet.toBase58());
-    }
+  // The adapter's and the forwarder's upgrade authorities are their own
+  // PDAs, which no wallet holds, and their owners are stored; the
+  // block-time forwarder, which has no owner, keeps the wallet as its
+  // upgrade authority.
+  it("finds the stored owners and an upgrade authority that is not the program's PDA", async () => {
+    assert.deepEqual(
+      (await roles()).map((r) => [r.role, r.key.toBase58()]),
+      [
+        [`the upgrade authority of ${blockTimeForwarderId.toBase58()}`, wallet.toBase58()],
+        [`the owner of the adapter ${program.programId.toBase58()}`, wallet.toBase58()],
+        [`the owner of the forwarder ${forwarderProgram.programId.toBase58()}`, wallet.toBase58()],
+      ],
+    );
   });
 
-  it("refuses a wallet that is a target program's upgrade authority, naming the program", async () => {
-    let error: Error | undefined;
-    try {
-      await refuseUpgradeAuthorityWallet(provider.connection, wallet, targets());
-    } catch (e) {
-      error = e as Error;
-    }
-    assert.isDefined(error, "the guard accepted the upgrade-authority wallet");
-    assert.include(error!.message, wallet.toBase58());
-    assert.include(error!.message, program.programId.toBase58());
+  it("refuses a wallet that holds an owner's role, naming each role", async () => {
+    const held = await roles();
+    assert.throws(
+      () => refuseOwnerWallet(wallet, held),
+      new RegExp(
+        `${wallet.toBase58()} is the upgrade authority of ${blockTimeForwarderId.toBase58()} ` +
+          `and the owner of the adapter ${program.programId.toBase58()} ` +
+          `and the owner of the forwarder ${forwarderProgram.programId.toBase58()}`,
+      ),
+    );
   });
 
-  it("accepts a wallet that is no target program's upgrade authority", async () => {
-    await refuseUpgradeAuthorityWallet(provider.connection, Keypair.generate().publicKey, targets());
+  it("accepts a wallet that holds no owner's role", async () => {
+    refuseOwnerWallet(Keypair.generate().publicKey, await roles());
   });
 });

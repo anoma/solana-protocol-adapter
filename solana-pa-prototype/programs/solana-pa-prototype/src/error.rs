@@ -135,6 +135,22 @@ pub enum PAError {
     ZeroVerifierRouterNotAllowed,
     #[msg("Zero proof selector not allowed")]
     ZeroProofSelectorNotAllowed,
+
+    // Ownership, as OpenZeppelin's Ownable
+    /// `OwnableUnauthorizedAccount`: the signer is not the owner.
+    #[msg("The signer is not the adapter's owner")]
+    OwnableUnauthorizedAccount,
+    /// `OwnableInvalidOwner`: the zero key cannot be made the owner.
+    #[msg("The zero key cannot be the owner")]
+    OwnableInvalidOwner,
+
+    // State layout migration
+    #[msg("PAState is not a state account in the previous schema version")]
+    NotPreviousSchema,
+
+    // Upgrades
+    #[msg("Buffer is not a loader buffer holding a program")]
+    InvalidUpgradeBuffer,
 }
 
 impl From<SolanaArmError> for PAError {

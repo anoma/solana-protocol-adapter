@@ -65,7 +65,7 @@ describe("protocol-adapter (kind table commitment) @localnet", () => {
     const stranger = await funder.fresh(1);
     await assertFails(setKindTableCommitment(program, stranger.publicKey, randomRef()).signers([stranger]).rpc(), {
       program,
-      error: "Unauthorized",
+      error: "OwnableUnauthorizedAccount",
     });
     assert.deepEqual(await stored(), found, "the commitment is untouched");
   });

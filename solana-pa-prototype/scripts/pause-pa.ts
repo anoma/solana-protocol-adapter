@@ -1,7 +1,7 @@
 /**
  * Pause or unpause settlement, as pa-evm's owner does with `pause()` and
  * `unpause()`. Run through ops.sh (`pause` / `unpause`), which sets the
- * cluster and wallet; the wallet must be the program's upgrade authority.
+ * cluster and wallet; the wallet must be the adapter's owner.
  *
  *   npx ts-node -P tsconfig.json scripts/pause-pa.ts <pause|unpause>
  *

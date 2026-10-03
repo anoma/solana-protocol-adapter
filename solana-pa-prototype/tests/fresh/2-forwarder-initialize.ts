@@ -9,7 +9,8 @@ import { spawnSync } from "child_process";
 import { assert } from "chai";
 import { CONFIG_VERSION } from "../../client/constants";
 import { initializeForwarder } from "../../client/instructions";
-import { deriveConfigPda, deriveProgramDataPda } from "../../client/pda";
+import { deriveConfigPda, deriveProgramDataPda, deriveUpgradeAuthorityPda } from "../../client/pda";
+import { upgradeAuthority } from "../../client/upgrade";
 import { makeFunder, randomRef, assertFails } from "../utils/helpers";
 import {
   cpiEventsOf,
@@ -26,11 +27,12 @@ describe("forwarder initialize", () => {
 
   const logicRef = forwarderLogicRef();
 
-  // The upgrade authority, the forwarder's owner, initializes it: the EVM
-  // proxy runs its initializer atomically at deployment, so no one else ever
-  // can.
-  const initialize = (adapter: PublicKey, ref: number[], committee: PublicKey) =>
-    initializeForwarder(forwarderProgram, adapter, ref, committee, provider.wallet.publicKey).rpc();
+  // The program's upgrade authority, the deployer, initializes it, making
+  // the provider wallet the owner: the EVM proxy runs its initializer
+  // atomically at deployment, so no one else ever can.
+  const wallet = provider.wallet.publicKey;
+  const initialize = (adapter: PublicKey, ref: number[], committee: PublicKey, owner: PublicKey = wallet) =>
+    initializeForwarder(forwarderProgram, adapter, ref, committee, owner, wallet).rpc();
 
   it("rejects an initialize signed by anyone but the program's upgrade authority", async () => {
     const intruder = await funder.fresh(2);
@@ -41,10 +43,11 @@ describe("forwarder initialize", () => {
         logicRef,
         emergencyCommittee.publicKey,
         intruder.publicKey,
+        intruder.publicKey,
       )
         .signers([intruder])
         .rpc(),
-      { program: forwarderProgram, error: "UnauthorizedCaller", account: "program_data" },
+      { program: forwarderProgram, error: "Unauthorized", account: "program_data" },
     );
     assert.isNull(await provider.connection.getAccountInfo(configPda), "no config is created");
   });
@@ -53,16 +56,18 @@ describe("forwarder initialize", () => {
   // of the upgrade-authority check.
   it("rejects the upgrade authority of another program's ProgramData", () =>
     assertFails(
-      initializeForwarder(
-        forwarderProgram,
-        paProgram.programId,
-        logicRef,
-        emergencyCommittee.publicKey,
-        provider.wallet.publicKey,
-        deriveProgramDataPda(paProgram.programId),
-      ).rpc(),
-      { program: forwarderProgram, error: "UnauthorizedCaller", account: "program" },
+      initializeForwarder(forwarderProgram, paProgram.programId, logicRef, emergencyCommittee.publicKey, wallet, wallet)
+        .accountsPartial({ programData: deriveProgramDataPda(paProgram.programId) })
+        .rpc(),
+      { program: forwarderProgram, error: "Unauthorized", account: "program_data" },
     ));
+
+  // Mirrors OwnableUpgradeable's initializer: OwnableInvalidOwner(address(0)).
+  it("rejects a zero owner", () =>
+    assertFails(initialize(paProgram.programId, logicRef, emergencyCommittee.publicKey, PublicKey.default), {
+      program: forwarderProgram,
+      error: "OwnableInvalidOwner",
+    }));
 
   // Mirrors ForwarderBase.t.sol and EmergencyMigratableForwarderBase.t.sol:
   // test_constructor_reverts_if_the_{protocol_adapter_address,logic_ref,emergency_committe_address}_is_zero
@@ -77,9 +82,12 @@ describe("forwarder initialize", () => {
 
   // Mirrors ForwarderBase.t.sol getProtocolAdapter/getLogicRef and
   // EmergencyMigratableForwarderBase.t.sol emergencyCaller-is-zero-before-set.
-  // Mirrors OpenZeppelin's initializer: the config records the version it
-  // was initialized at, this build's, and announces it.
-  it("stores the adapter, logic ref and committee, with no emergency caller, at this build's version", async () => {
+  // Mirrors OpenZeppelin's initializer: the owner is set and announced first
+  // (OwnershipTransferred from the zero address), then the config records
+  // the version it was initialized at, this build's, and announces it. The
+  // upgrade authority moves to the program, as a UUPS implementation
+  // authorizes its own upgrades.
+  it("stores the adapter, logic ref, committee and owner, with no emergency caller, at this build's version, and hands the upgrade authority to the program", async () => {
     const sig = await initialize(paProgram.programId, logicRef, emergencyCommittee.publicKey);
 
     const config = await forwarderProgram.account.config.fetch(configPda);
@@ -88,11 +96,24 @@ describe("forwarder initialize", () => {
     assert.ok(config.emergencyCommittee.equals(emergencyCommittee.publicKey));
     assert.ok(config.emergencyCaller.equals(PublicKey.default));
     assert.equal(config.version.toNumber(), CONFIG_VERSION, "the config is at this build's version");
+    assert.equal(config.owner.toBase58(), wallet.toBase58(), "the initial owner is stored");
+    assert.equal(
+      (await upgradeAuthority(provider.connection, forwarderProgram.programId))?.toBase58(),
+      deriveUpgradeAuthorityPda(forwarderProgram.programId).toBase58(),
+      "the program's upgrade authority is its PDA",
+    );
 
     const { events } = await cpiEventsOf(sig, forwarderProgram);
     assert.deepEqual(
-      events.map((e) => [e.name, e.data.version.toNumber()]),
-      [["initialized", CONFIG_VERSION]],
+      events.map((e) =>
+        e.name === "initialized"
+          ? [e.name, e.data.version.toNumber()]
+          : [e.name, e.data.previousOwner.toBase58(), e.data.newOwner.toBase58()],
+      ),
+      [
+        ["ownershipTransferred", PublicKey.default.toBase58(), wallet.toBase58()],
+        ["initialized", CONFIG_VERSION],
+      ],
     );
   });
 
@@ -104,6 +125,7 @@ describe("forwarder initialize", () => {
           ...process.env,
           STF_LOGIC_REF: Buffer.from(ref).toString("hex"),
           STF_EMERGENCY_COMMITTEE: committee.toBase58(),
+          STF_OWNER: wallet.toBase58(),
         },
         encoding: "utf-8",
       });

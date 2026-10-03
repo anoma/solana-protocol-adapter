@@ -227,8 +227,16 @@ fixture_matches_program_id() {
 # outside tests/utils/ (the support modules), tests/fresh/ and
 # tests/terminal/, sorted. A cluster run runs these.
 history_spec_files() {
-  find tests -name '*.ts' -not -path 'tests/utils/*' -not -path 'tests/fresh/*' -not -path 'tests/terminal/*' |
+  find tests -name '*.ts' -not -path 'tests/utils/*' -not -path 'tests/fresh/*' -not -path 'tests/terminal/*' \
+    -not -path 'tests/upgrade/*' |
     LC_ALL=C sort
+}
+
+# The upgrade-path spec files, sorted: tests/upgrade/<program>.ts starts on
+# that program's previous build (tests/fixtures/previous/<program>.so),
+# upgrades it in place and migrates its accounts, each on its own validator.
+upgrade_spec_files() {
+  find tests/upgrade -name '*.ts' | LC_ALL=C sort
 }
 
 # Every spec file in the order the local suite runs them against one
@@ -622,11 +630,20 @@ refresh_devnet_verifier() {
 # Set WORKSPACE_PROGRAM_ARGS to the solana-test-validator arguments that load
 # every workspace program at genesis from target/deploy, upgradeable, with
 # the provider wallet as upgrade authority (what `anchor deploy` would set).
+# $1, if given, names a program to load at its previous build instead, from
+# tests/fixtures/previous/<name>.so: a cluster that has not been upgraded yet.
 workspace_program_args() {
-  local name so
+  local previous="${1:-}" name so
   WORKSPACE_PROGRAM_ARGS=()
+  if [[ -n "$previous" && -z "${PROGRAM_DEV_FEATURES[$previous]+set}" ]]; then
+    echo "❌ ${previous} is not a workspace program (PROGRAM_TABLE)." >&2
+    exit 1
+  fi
   for name in "${PROGRAM_NAMES[@]}"; do
     so="target/deploy/${name}.so"
+    if [[ "$name" == "$previous" ]]; then
+      so="tests/fixtures/previous/${name}.so"
+    fi
     if [[ ! -f "$so" ]]; then
       echo "❌ ${so} is missing; build the programs first ('./scripts/anchor-test.sh build', or the default phase)." >&2
       exit 1

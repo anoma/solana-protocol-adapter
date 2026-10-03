@@ -40,7 +40,7 @@ describe("protocol-adapter (logic-ref denylist)", () => {
     const intruder = await funder.fresh(1);
     await assertFails(denyLogicRef(program, intruder.publicKey, randomRef()).signers([intruder]).rpc(), {
       program,
-      error: "Unauthorized",
+      error: "OwnableUnauthorizedAccount",
     });
   });
 

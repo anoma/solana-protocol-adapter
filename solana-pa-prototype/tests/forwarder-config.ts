@@ -3,17 +3,18 @@
  * direct caller hits, on the config the deployment runs. Everything
  * forward_call does past its caller check needs the adapter as the CPI
  * caller, so those behaviours are tested through settlement
- * (spl-token-wrap-unwrap.ts); the emergency flow is forwarder-emergency.ts.
+ * (fresh/4-spl-token-wrap-unwrap.ts); the emergency flow is
+ * terminal/4-forwarder-emergency.ts.
  */
 import { BN } from "@anchor-lang/core";
-import { Keypair, PublicKey, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
+import { Keypair, SYSVAR_INSTRUCTIONS_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
 import { encodeUnwrapInput, reinitializeForwarder } from "../client/instructions";
 import { localSetEmergencyCaller } from "./utils/localOnly";
 import { CONFIG_VERSION, OP_UNWRAP } from "../client/constants";
-import { deriveConfigPda, deriveProgramDataPda } from "../client/pda";
+import { deriveConfigPda } from "../client/pda";
 import { makeFunder, randomRef, assertFails } from "./utils/helpers";
-import { ensureForwarderConfig, forwarderProgram, paState, program as paProgram, provider } from "./utils/adapterSuite";
+import { ensureForwarderConfig, forwarderProgram, paState, provider } from "./utils/adapterSuite";
 
 describe("forwarder config (logic ref and direct-call guards) @localnet", () => {
   const [configPda] = deriveConfigPda(forwarderProgram.programId);
@@ -26,8 +27,8 @@ describe("forwarder config (logic ref and direct-call guards) @localnet", () => 
   });
 
   describe("reinitialize", () => {
-    const reinitialize = (ref: number[], programData?: PublicKey) =>
-      reinitializeForwarder(forwarderProgram, provider.wallet.publicKey, ref, programData).rpc();
+    const reinitialize = (ref: number[]) =>
+      reinitializeForwarder(forwarderProgram, provider.wallet.publicKey, ref).rpc();
     // The development build's dev_set_config_version, looked up untyped, as
     // production types lack it: it puts the config below this build's
     // version, as an earlier build would have left it.
@@ -37,10 +38,7 @@ describe("forwarder config (logic ref and direct-call guards) @localnet", () => 
           version: BN,
         ) => ReturnType<typeof forwarderProgram.methods.reinitialize>
       )(new BN(CONFIG_VERSION - 1))
-        .accountsPartial({
-          authority: provider.wallet.publicKey,
-          programData: deriveProgramDataPda(forwarderProgram.programId),
-        })
+        .accountsPartial({ authority: provider.wallet.publicKey })
         .rpc();
 
     // Every later file wraps under the logic ref the deployment served.
@@ -53,11 +51,13 @@ describe("forwarder config (logic ref and direct-call guards) @localnet", () => 
       }
     });
 
-    it("rejects a signer that is not the program's upgrade authority", async () => {
+    // Only the owner rotates, as only the EVM forwarder's owner calls
+    // upgradeToAndCall with the reinitializer.
+    it("rejects a signer that is not the owner", async () => {
       const impostor = await funder.fresh(1);
       await assertFails(
         reinitializeForwarder(forwarderProgram, impostor.publicKey, randomRef()).signers([impostor]).rpc(),
-        { program: forwarderProgram, error: "UnauthorizedCaller", account: "program_data" },
+        { program: forwarderProgram, error: "OwnableUnauthorizedAccount", account: "authority" },
       );
       assert.deepEqual(
         (await forwarderProgram.account.config.fetch(configPda)).logicRef,
@@ -65,16 +65,6 @@ describe("forwarder config (logic ref and direct-call guards) @localnet", () => 
         "the config is untouched",
       );
     });
-
-    // The upgrade-authority check reads whatever ProgramData is passed; the
-    // program constraint pins it to this program's own. Another program with
-    // the same upgrade authority is the cheapest forgery.
-    it("rejects the upgrade authority of another program's ProgramData", () =>
-      assertFails(reinitialize(randomRef(), deriveProgramDataPda(paProgram.programId)), {
-        program: forwarderProgram,
-        error: "UnauthorizedCaller",
-        account: "program",
-      }));
 
     // Mirrors OpenZeppelin's reinitializer(n): InvalidInitialization once the
     // version is n. A config this build initialized is at its version, so

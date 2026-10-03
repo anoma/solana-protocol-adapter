@@ -929,7 +929,7 @@ async fn generate_anomapay_wrap_transaction(
 /// through the program's own `append_to_tree` on a fresh state, so the root
 /// carries the on-chain growth rule rather than a second implementation.
 fn pa_tree_root(leaves: &[Digest]) -> Result<Digest> {
-    let mut state = PAStateAccount::running(0, Pubkey::default(), [0; 4]);
+    let mut state = PAStateAccount::running(0, Pubkey::default(), Pubkey::default(), [0; 4]);
     for leaf in leaves {
         solana_pa::merkle::append_to_tree(&mut state, *leaf)
             .map_err(|e| anyhow!("replay append_to_tree: {e:?}"))?;

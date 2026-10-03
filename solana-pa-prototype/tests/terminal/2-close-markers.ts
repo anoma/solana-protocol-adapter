@@ -73,7 +73,7 @@ describe("protocol-adapter (Close instructions)", () => {
 
       await assertFails(localCloseMarkersBatch(program, fakeAuthority.publicKey, []).signers([fakeAuthority]).rpc(), {
         program,
-        error: "Unauthorized",
+        error: "OwnableUnauthorizedAccount",
       });
     });
   });

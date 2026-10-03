@@ -2,55 +2,58 @@
  * Refuse a cluster test run whose wallet owns a deployment under test.
  *
  * The cluster test run (`ops.sh test --cluster <c>`) signs with its wallet
- * against a live deployment. Each program's owner is its upgrade authority
- * (the loader's ProgramData records it), so a spec run by that wallet could
- * pause the adapter, replace its kind table, or renounce the authority and
- * leave the program final for good. Run through ops.sh before any spec:
+ * against a live deployment. A wallet that holds an owner's role could have
+ * a spec pause the adapter, replace its kind table, upgrade a program, or
+ * renounce the ownership for good. The roles: each program's upgrade
+ * authority while it is not the program's own upgrade authority PDA, and
+ * the adapter's and the forwarder's stored owners. Run through ops.sh before
+ * any spec:
  *
  *   npx ts-node -P tsconfig.json scripts/cluster-test-guard.ts <program id>...
  */
-import { AnchorProvider } from "@anchor-lang/core";
+import { AnchorProvider, Program, setProvider, workspace } from "@anchor-lang/core";
 import { Connection, PublicKey } from "@solana/web3.js";
-import { deriveProgramDataPda } from "../client/pda";
+import { ProtocolAdapter } from "../target/types/protocol_adapter";
+import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
+import { deriveConfigPda, derivePaStatePda, deriveUpgradeAuthorityPda } from "../client/pda";
+import { upgradeAuthority } from "../client/upgrade";
 import { fail, parsePubkey } from "./cli-utils";
 
-/**
- * A program's upgrade authority, or null when the program is final. The
- * ProgramData layout: u32 account kind (3), u64 deployment slot, then the
- * authority as a Borsh Option<Pubkey> (tag byte, 32 bytes).
- */
-export async function upgradeAuthority(connection: Connection, programId: PublicKey): Promise<PublicKey | null> {
-  const programData = deriveProgramDataPda(programId);
-  const account = await connection.getAccountInfo(programData);
-  if (!account) {
-    throw new Error(
-      `${programId.toBase58()} has no ProgramData (${programData.toBase58()}): not an upgradeable program`,
-    );
-  }
-  const kind = account.data.readUInt32LE(0);
-  if (kind !== 3) {
-    throw new Error(`${programData.toBase58()} is loader account kind ${kind}, not ProgramData (3)`);
-  }
-  const tag = account.data[12];
-  if (tag === 0) return null;
-  if (tag !== 1) throw new Error(`${programData.toBase58()}: invalid authority option tag ${tag}`);
-  return new PublicKey(account.data.subarray(13, 45));
-}
+/** A key with an owner's role, and the role, for the refusal message. */
+export type OwnerRole = { role: string; key: PublicKey };
 
-/** Throw when `wallet` is the upgrade authority of any of `programIds`. */
-export async function refuseUpgradeAuthorityWallet(
+/**
+ * Every owner's role in the deployment: each of `programIds`' upgrade
+ * authority unless it is the program's own PDA (or the program is final),
+ * and the adapter's and the forwarder's stored owners once they are
+ * initialized.
+ */
+export async function ownerRoles(
   connection: Connection,
-  wallet: PublicKey,
   programIds: PublicKey[],
-): Promise<void> {
-  const owned: string[] = [];
+  adapter: Program<ProtocolAdapter>,
+  forwarder: Program<SplTokenForwarder>,
+): Promise<OwnerRole[]> {
+  const roles: OwnerRole[] = [];
   for (const id of programIds) {
     const authority = await upgradeAuthority(connection, id);
-    if (authority?.equals(wallet)) owned.push(id.toBase58());
+    if (authority && !authority.equals(deriveUpgradeAuthorityPda(id))) {
+      roles.push({ role: `the upgrade authority of ${id.toBase58()}`, key: authority });
+    }
   }
-  if (owned.length > 0) {
+  const state = await adapter.account.paStateAccount.fetchNullable(derivePaStatePda(adapter.programId)[0]);
+  if (state) roles.push({ role: `the owner of the adapter ${adapter.programId.toBase58()}`, key: state.owner });
+  const config = await forwarder.account.config.fetchNullable(deriveConfigPda(forwarder.programId)[0]);
+  if (config) roles.push({ role: `the owner of the forwarder ${forwarder.programId.toBase58()}`, key: config.owner });
+  return roles;
+}
+
+/** Throw when `wallet` holds any of `roles`, naming each. */
+export function refuseOwnerWallet(wallet: PublicKey, roles: OwnerRole[]): void {
+  const held = roles.filter((r) => r.key.equals(wallet)).map((r) => r.role);
+  if (held.length > 0) {
     throw new Error(
-      `the test wallet ${wallet.toBase58()} is the upgrade authority (the owner) of ${owned.join(", ")}; ` +
+      `the test wallet ${wallet.toBase58()} is ${held.join(" and ")}; ` +
         "a cluster test run must use a wallet that owns nothing under test",
     );
   }
@@ -60,10 +63,17 @@ async function main() {
   const programArgs = process.argv.slice(2);
   if (programArgs.length === 0) fail("usage: cluster-test-guard.ts <program id>...");
   const provider = AnchorProvider.env();
-  await refuseUpgradeAuthorityWallet(
-    provider.connection,
+  setProvider(provider);
+  const adapter = workspace.ProtocolAdapter as Program<ProtocolAdapter>;
+  const forwarder = workspace.SplTokenForwarder as Program<SplTokenForwarder>;
+  refuseOwnerWallet(
     provider.wallet.publicKey,
-    programArgs.map((p) => parsePubkey("program id", p)),
+    await ownerRoles(
+      provider.connection,
+      programArgs.map((p) => parsePubkey("program id", p)),
+      adapter,
+      forwarder,
+    ),
   );
   console.log("✅ The test wallet owns none of the programs under test.");
 }

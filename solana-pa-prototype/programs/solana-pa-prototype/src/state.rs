@@ -9,7 +9,11 @@ use arm_core::Digest;
 /// The layout number of `PAStateAccount` this binary reads and writes.
 /// Bumped on every change to the account layout; unrelated to release names.
 #[constant]
-pub const SCHEMA_VERSION: u8 = 2;
+pub const SCHEMA_VERSION: u8 = 3;
+
+/// The schema version `migrate_state` migrates from.
+#[constant]
+pub const PREVIOUS_SCHEMA_VERSION: u8 = 2;
 
 /// The commitment of the empty kind table, under which every resource
 /// kind is derived via hash-to-curve: the table every deployment starts
@@ -28,13 +32,19 @@ pub struct PAStateAccount {
     /// every layout: a later binary that changes the layout reads this byte
     /// through an unchecked account to decide whether it may migrate. Every
     /// instruction that reads this account — all but `initialize`, which
-    /// creates it, and the development-only `dev_set_schema_version` —
-    /// refuses an account whose version is not `SCHEMA_VERSION`. A layout
-    /// change bumps the constant, may add, remove or reorder the other
-    /// fields, and ships a migration instruction that parses the previous
-    /// layout explicitly, run once right after the in-place upgrade.
+    /// creates it, `migrate_state`, which requires the previous version, and
+    /// the development-only `dev_set_schema_version` — refuses an account
+    /// whose version is not `SCHEMA_VERSION`. A layout change bumps the
+    /// constant and may add, remove or reorder the other fields:
+    /// `migrate_state` parses the previous layout explicitly.
     pub schema_version: u8,
     pub bump: u8,
+    /// The adapter's owner, as OpenZeppelin's `OwnableUpgradeable` stores
+    /// pa-evm's: it signs every owner-only instruction, upgrades the program
+    /// (`upgrade`), and moves or renounces the ownership
+    /// (`transfer_ownership`, `renounce_ownership`). The all-zero key once
+    /// renounced, which no one can sign for.
+    pub owner: Pubkey,
     /// Verifier router program ID, set at initialization.
     /// Mirrors pa-evm's immutable `RISC_ZERO_VERIFIER_ROUTER`.
     pub verifier_router: Pubkey,
@@ -122,12 +132,18 @@ impl PAStateAccount {
         self.frontier[level] = digest.into();
     }
 
-    /// A running adapter with an empty commitment tree on the empty kind
-    /// table: the state `initialize` writes.
-    pub fn running(bump: u8, verifier_router: Pubkey, proof_selector: [u8; 4]) -> Self {
+    /// A running adapter owned by `owner`, with an empty commitment tree on
+    /// the empty kind table: the state `initialize` writes.
+    pub fn running(
+        bump: u8,
+        owner: Pubkey,
+        verifier_router: Pubkey,
+        proof_selector: [u8; 4],
+    ) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             bump,
+            owner,
             verifier_router,
             proof_selector,
             kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
@@ -143,22 +159,64 @@ impl PAStateAccount {
     }
 }
 
+/// The state account in schema version 2 (`PREVIOUS_SCHEMA_VERSION`), which
+/// `migrate_state` reads: this layout without the owner, whose role the
+/// program's upgrade authority played. Deserialized from the account's bytes
+/// after the discriminator.
+#[derive(AnchorDeserialize)]
+pub struct PreviousPAState {
+    pub schema_version: u8,
+    pub bump: u8,
+    pub verifier_router: Pubkey,
+    pub proof_selector: [u8; 4],
+    pub kind_table_commitment: [u8; 32],
+    pub paused: bool,
+    pub root: [u8; 32],
+    pub next_index: u64,
+    pub current_depth: u8,
+    pub frontier: Vec<[u8; 32]>,
+    pub min_expiry_slots: u64,
+    pub max_expiry_slots: u64,
+    pub denied_logic_refs: Vec<[u8; 32]>,
+}
+
+impl PreviousPAState {
+    /// This layout with the previous fields, owned by `owner`.
+    pub fn migrate(self, owner: Pubkey) -> PAStateAccount {
+        PAStateAccount {
+            schema_version: SCHEMA_VERSION,
+            bump: self.bump,
+            owner,
+            verifier_router: self.verifier_router,
+            proof_selector: self.proof_selector,
+            kind_table_commitment: self.kind_table_commitment,
+            paused: self.paused,
+            root: self.root,
+            next_index: self.next_index,
+            current_depth: self.current_depth,
+            frontier: self.frontier,
+            min_expiry_slots: self.min_expiry_slots,
+            max_expiry_slots: self.max_expiry_slots,
+            denied_logic_refs: self.denied_logic_refs,
+        }
+    }
+}
+
 #[constant]
 pub const PA_STATE_SEED: &[u8] = b"pa_state";
 
+/// Seed of the PDA that is the program's upgrade authority once initialized:
+/// the loader accepts an upgrade only signed by it, which only this program
+/// can sign, and only in `upgrade`, for the owner. pa-evm's UUPS
+/// implementation likewise authorizes its own upgrades (`_authorizeUpgrade`,
+/// owner only).
+#[constant]
+pub const UPGRADE_AUTHORITY_SEED: &[u8] = b"upgrade_authority";
+
 /// This program's ProgramData account, derived at compile time, where the
-/// loader records the upgrade authority. That authority is the adapter's
-/// owner, as pa-evm's owner is the one who authorizes its upgrades: it signs
-/// every owner-only instruction, and moving or renouncing it
-/// (`solana program set-upgrade-authority`, `--final`) moves or renounces
-/// the ownership.
-pub const PROGRAM_DATA: Pubkey = Pubkey::new_from_array(
-    anchor_lang::derive_program_address(
-        &[&crate::ID_CONST.to_bytes()],
-        &anchor_lang::solana_program::bpf_loader_upgradeable::ID.to_bytes(),
-    )
-    .0,
-);
+/// loader records the upgrade authority: the deployer until `initialize` (or
+/// `migrate_state`) hands it to the `UPGRADE_AUTHORITY_SEED` PDA.
+pub const PROGRAM_DATA: Pubkey = crate::upgrade::program_data_address(&crate::ID_CONST);
 
 /// Chunked transaction upload buffer.
 #[account]

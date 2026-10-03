@@ -97,6 +97,7 @@ pub mod state;
 #[cfg(test)]
 mod tests;
 pub mod types;
+pub mod upgrade;
 
 use arm_core::aggregation_instance::AggregationInstance;
 use arm_core::transaction::{Delta, Transaction};
@@ -109,18 +110,27 @@ use state::*;
 pub mod protocol_adapter {
     use super::*;
 
-    /// Initialize a new PAState account.
+    /// Initialize a new PAState account, owned by `initial_owner`.
     ///
-    /// Takes no remaining accounts. The empty-tree root equals `PADDING_LEAF`,
-    /// which `is_root_valid` accepts unconditionally, so transactions built
-    /// against the initial tree stay valid without a genesis marker. Like
-    /// pa-evm's initializer, it starts on the empty kind table and announces
-    /// it; `set_kind_table_commitment` installs any other table.
+    /// Signed by the program's upgrade authority, the deployer, who alone may
+    /// initialize it; it hands that authority to the program's
+    /// `UPGRADE_AUTHORITY_SEED` PDA, so from then on only `upgrade`, for the
+    /// owner, upgrades the program. Takes no remaining accounts. The
+    /// empty-tree root equals `PADDING_LEAF`, which `is_root_valid` accepts
+    /// unconditionally, so transactions built against the initial tree stay
+    /// valid without a genesis marker. Like pa-evm's initializer, it sets the
+    /// owner, starts on the empty kind table, and announces both;
+    /// `set_kind_table_commitment` installs any other table.
     pub fn initialize<'info>(
         ctx: Context<'info, Initialize<'info>>,
+        initial_owner: Pubkey,
         verifier_router: Pubkey,
         proof_selector: [u8; 4],
     ) -> Result<()> {
+        require!(
+            initial_owner != Pubkey::default(),
+            PAError::OwnableInvalidOwner
+        );
         require!(
             verifier_router != Pubkey::default(),
             PAError::ZeroVerifierRouterNotAllowed
@@ -140,13 +150,26 @@ pub mod protocol_adapter {
         );
         ctx.accounts.pa_state.set_inner(PAStateAccount::running(
             ctx.bumps.pa_state,
+            initial_owner,
             verifier_router,
             proof_selector,
         ));
+        upgrade::hand_upgrade_authority_to_program(
+            &crate::ID,
+            ctx.bumps.upgrade_authority,
+            &ctx.accounts.program_data.to_account_info(),
+            &ctx.accounts.payer.to_account_info(),
+            &ctx.accounts.upgrade_authority.to_account_info(),
+            &ctx.accounts.bpf_loader_upgradeable.to_account_info(),
+        )?;
 
-        // pa-evm's initializer adds the empty tree's root, then installs the
-        // empty kind table. Its ownership is the upgrade authority the loader
-        // already records (PROGRAM_DATA), so no ownership event.
+        // pa-evm's initializer sets the owner (OwnableUpgradeable's
+        // `OwnershipTransferred` from the zero address), adds the empty
+        // tree's root, then installs the empty kind table.
+        emit_cpi!(OwnershipTransferredEvent {
+            previous_owner: Pubkey::default(),
+            new_owner: initial_owner,
+        });
         emit_cpi!(CommitmentTreeRootAddedEvent {
             root: EMPTY_TREE_ROOT_INITIAL.into(),
         });
@@ -384,16 +407,12 @@ pub mod protocol_adapter {
     /// While paused, `settle` and `settle_from_txdata` refuse every
     /// transaction; nothing else is gated.
     ///
-    /// A permanent shutdown is a pause followed by setting
-    /// `program_data.upgrade_authority_address` to `None`: with no upgrade
-    /// authority, no one can unpause or upgrade. Do that only once the
-    /// deployment is truly retired, because `initialize` requires
-    /// `program_data.upgrade_authority_address == Some(payer.key())`, so this
-    /// program ID can never be initialized again. `close_markers_batch`, which
-    /// requires a paused adapter, exists only in `dev-teardown` builds (never
-    /// present in production) to reclaim marker rent so a *development*
-    /// deployment can be re-initialized in place.
-    pub fn pause(ctx: Context<SetPause>) -> Result<()> {
+    /// A permanent shutdown is a pause followed by `renounce_ownership`, as
+    /// on pa-evm: with no owner, no one can unpause or upgrade.
+    /// `close_markers_batch`, which requires a paused adapter, exists only in
+    /// `dev-teardown` builds (never present in production) to reclaim a
+    /// development deployment's marker rent.
+    pub fn pause(ctx: Context<OwnerOnly>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         require!(!state.paused, PAError::EnforcedPause);
         state.paused = true;
@@ -405,7 +424,7 @@ pub mod protocol_adapter {
 
     /// Resume settlement. Mirrors pa-evm's `unpause()`: owner-only, refused
     /// while not paused (`ExpectedPause`), announced with `UnpausedEvent`.
-    pub fn unpause(ctx: Context<SetPause>) -> Result<()> {
+    pub fn unpause(ctx: Context<OwnerOnly>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         require!(state.paused, PAError::ExpectedPause);
         state.paused = false;
@@ -432,7 +451,7 @@ pub mod protocol_adapter {
     /// a circuit version is listed, and transactions proven against the
     /// previous table are rejected from this point on.
     pub fn set_kind_table_commitment(
-        ctx: Context<SetKindTableCommitment>,
+        ctx: Context<OwnerOnly>,
         new_kind_table_commitment: [u8; 32],
     ) -> Result<()> {
         require!(
@@ -457,7 +476,7 @@ pub mod protocol_adapter {
             !state.is_logic_ref_denied(&logic_ref),
             PAError::LogicRefAlreadyDenied
         );
-        resize_state(
+        resize_account(
             &state.to_account_info(),
             PAStateAccount::space(state.depth(), state.denied_logic_refs.len() + 1),
             &ctx.accounts.authority.to_account_info(),
@@ -465,6 +484,113 @@ pub mod protocol_adapter {
         )?;
         state.denied_logic_refs.push(logic_ref);
         emit_cpi!(LogicRefDeniedEvent { logic_ref });
+        Ok(())
+    }
+
+    /// Move the ownership to `new_owner`. Mirrors OwnableUpgradeable's
+    /// `transferOwnership`: owner only, effective at once, the zero key
+    /// refused (`OwnableInvalidOwner`), announced with
+    /// `OwnershipTransferredEvent`.
+    pub fn transfer_ownership(ctx: Context<OwnerOnly>, new_owner: Pubkey) -> Result<()> {
+        require!(new_owner != Pubkey::default(), PAError::OwnableInvalidOwner);
+        let previous_owner = std::mem::replace(&mut ctx.accounts.pa_state.owner, new_owner);
+        emit_cpi!(OwnershipTransferredEvent {
+            previous_owner,
+            new_owner,
+        });
+        Ok(())
+    }
+
+    /// Give up the ownership for good. Mirrors OwnableUpgradeable's
+    /// `renounceOwnership`: owner only; the owner becomes the zero key, so
+    /// no owner-only instruction, `upgrade` included, can run again.
+    pub fn renounce_ownership(ctx: Context<OwnerOnly>) -> Result<()> {
+        let previous_owner = std::mem::take(&mut ctx.accounts.pa_state.owner);
+        emit_cpi!(OwnershipTransferredEvent {
+            previous_owner,
+            new_owner: Pubkey::default(),
+        });
+        Ok(())
+    }
+
+    /// Replace this program's code with the code in `buffer`. Mirrors the
+    /// UUPS `upgradeToAndCall` pa-evm's owner calls: owner only
+    /// (`_authorizeUpgrade`), announced with `UpgradedEvent`, which names the
+    /// new code by its executable hash as ERC1967's `Upgraded` names the new
+    /// implementation. The buffer's authority must be the owner, who wrote
+    /// it; the program hands it to its upgrade authority PDA, which signs the
+    /// upgrade, and its rent goes to `spill`. The new code
+    /// runs from the next slot, so a release that changes a layout ships a
+    /// migration the owner runs after it.
+    pub fn upgrade(ctx: Context<UpgradeProgram>) -> Result<()> {
+        // The event first: the self-invocation that carries it must run this
+        // code, which the loader replaces below.
+        let executable_hash = upgrade::executable_hash(&ctx.accounts.buffer.try_borrow_data()?)
+            .ok_or(PAError::InvalidUpgradeBuffer)?;
+        emit_cpi!(UpgradedEvent { executable_hash });
+        upgrade::upgrade_program(
+            &crate::ID,
+            ctx.bumps.upgrade_authority,
+            upgrade::UpgradeAccounts {
+                program_data: &ctx.accounts.program_data.to_account_info(),
+                program: &ctx.accounts.upgraded_program.to_account_info(),
+                buffer: &ctx.accounts.buffer.to_account_info(),
+                buffer_authority: &ctx.accounts.authority.to_account_info(),
+                spill: &ctx.accounts.spill.to_account_info(),
+                rent: &ctx.accounts.rent.to_account_info(),
+                clock: &ctx.accounts.clock.to_account_info(),
+                upgrade_authority: &ctx.accounts.upgrade_authority.to_account_info(),
+                loader: &ctx.accounts.bpf_loader_upgradeable.to_account_info(),
+            },
+        )
+    }
+
+    /// Bring a state account in the previous schema version to this one,
+    /// owned by the upgrade authority that signs, and hand the program's
+    /// upgrade authority to its `UPGRADE_AUTHORITY_SEED` PDA. In the previous
+    /// version the upgrade authority was the owner; from this one the owner
+    /// is stored and upgrades go through `upgrade`. The counterpart of the
+    /// call pa-evm's owner passes to `upgradeToAndCall`: run once, after the
+    /// in-place upgrade and before any other instruction, which all refuse
+    /// the previous version. It parses the previous layout rather than
+    /// reinterpreting its bytes, pays for the account's growth, and
+    /// announces the owner as `initialize` does.
+    pub fn migrate_state(ctx: Context<MigrateState>) -> Result<()> {
+        let info = ctx.accounts.pa_state.to_account_info();
+        require_keys_eq!(*info.owner, crate::ID, PAError::NotPreviousSchema);
+        let owner = ctx.accounts.authority.key();
+        let state = {
+            let data = info.try_borrow_data()?;
+            let body = data
+                .strip_prefix(PAStateAccount::DISCRIMINATOR)
+                .ok_or(PAError::NotPreviousSchema)?;
+            require!(
+                body.first() == Some(&PREVIOUS_SCHEMA_VERSION),
+                PAError::NotPreviousSchema
+            );
+            PreviousPAState::deserialize(&mut &body[..])
+                .map_err(|_| PAError::NotPreviousSchema)?
+                .migrate(owner)
+        };
+        resize_account(
+            &info,
+            PAStateAccount::space(state.depth(), state.denied_logic_refs.len()),
+            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+        state.try_serialize(&mut &mut info.try_borrow_mut_data()?[..])?;
+        upgrade::hand_upgrade_authority_to_program(
+            &crate::ID,
+            ctx.bumps.upgrade_authority,
+            &ctx.accounts.program_data.to_account_info(),
+            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.upgrade_authority.to_account_info(),
+            &ctx.accounts.bpf_loader_upgradeable.to_account_info(),
+        )?;
+        emit_cpi!(OwnershipTransferredEvent {
+            previous_owner: Pubkey::default(),
+            new_owner: owner,
+        });
         Ok(())
     }
 
@@ -557,7 +683,7 @@ fn maybe_grow_account<'info>(
         return Ok(());
     }
 
-    resize_state(
+    resize_account(
         pa_state_info,
         PAStateAccount::space(target_depth, state.denied_logic_refs.len()),
         payer,
@@ -571,28 +697,29 @@ fn maybe_grow_account<'info>(
     Ok(())
 }
 
-/// Resize the state account to `size`, `payer` topping up its rent first.
-fn resize_state<'info>(
-    pa_state_info: &AccountInfo<'info>,
+/// Resize a program-owned account to `size`, `payer` topping up its rent
+/// first. Shared with the SPL token forwarder's config migration.
+pub fn resize_account<'info>(
+    account: &AccountInfo<'info>,
     size: usize,
     payer: &AccountInfo<'info>,
     system_program: &AccountInfo<'info>,
 ) -> Result<()> {
     let minimum_balance = Rent::get()?.minimum_balance(size);
-    let current_balance = pa_state_info.lamports();
+    let current_balance = account.lamports();
     if minimum_balance > current_balance {
         anchor_lang::system_program::transfer(
             CpiContext::new(
                 system_program.key(),
                 anchor_lang::system_program::Transfer {
                     from: payer.clone(),
-                    to: pa_state_info.clone(),
+                    to: account.clone(),
                 },
             ),
             minimum_balance - current_balance,
         )?;
     }
-    pa_state_info.resize(size)?;
+    account.resize(size)?;
     Ok(())
 }
 
@@ -843,22 +970,35 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
 
     /// This program's ProgramData, where the loader records the upgrade
-    /// authority: the adapter's owner, who alone initializes it.
+    /// authority: the deployer, who alone initializes the adapter and hands
+    /// the authority to `upgrade_authority`.
     #[account(
+        mut,
         address = PROGRAM_DATA @ PAError::Unauthorized,
         constraint = program_data.upgrade_authority_address == Some(payer.key())
             @ PAError::Unauthorized
     )]
     pub program_data: Account<'info, ProgramData>,
 
+    /// CHECK: The PDA that becomes the program's upgrade authority; the
+    /// seeds pin it.
+    #[account(seeds = [UPGRADE_AUTHORITY_SEED], bump)]
+    pub upgrade_authority: UncheckedAccount<'info>,
+
+    /// CHECK: The upgradeable loader, which the address pins.
+    #[account(address = anchor_lang::solana_program::bpf_loader_upgradeable::ID)]
+    pub bpf_loader_upgradeable: UncheckedAccount<'info>,
+
     /// CHECK: The handler requires the router's verifier entry for the
     /// initialized selector (`verifier_paused`).
     pub verifier_entry: UncheckedAccount<'info>,
 }
 
+/// The accounts of an instruction only the owner may call, as pa-evm's
+/// `onlyOwner`.
 #[event_cpi]
 #[derive(Accounts)]
-pub struct SetPause<'info> {
+pub struct OwnerOnly<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
@@ -868,16 +1008,91 @@ pub struct SetPause<'info> {
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
+    #[account(constraint = authority.key() == pa_state.owner @ PAError::OwnableUnauthorizedAccount)]
+    pub authority: Signer<'info>,
+}
+
+#[event_cpi]
+#[derive(Accounts)]
+pub struct UpgradeProgram<'info> {
+    #[account(
+        seeds = [PA_STATE_SEED],
+        bump = pa_state.bump,
+        constraint = pa_state.schema_version == SCHEMA_VERSION
+            @ PAError::UnsupportedStateSchema,
+    )]
+    pub pa_state: Account<'info, PAStateAccount>,
+
+    #[account(constraint = authority.key() == pa_state.owner @ PAError::OwnableUnauthorizedAccount)]
     pub authority: Signer<'info>,
 
+    /// CHECK: This program's ProgramData, which the loader rewrites; the
+    /// address pins it.
+    #[account(mut, address = PROGRAM_DATA)]
+    pub program_data: UncheckedAccount<'info>,
+
+    /// CHECK: This program's account, which the loader requires writable;
+    /// the address pins it.
+    #[account(mut, address = crate::ID)]
+    pub upgraded_program: UncheckedAccount<'info>,
+
+    /// CHECK: The loader buffer holding the new code, whose authority the
+    /// loader requires to be the owner, who signs; `executable_hash` refuses
+    /// any other account.
+    #[account(mut)]
+    pub buffer: UncheckedAccount<'info>,
+
+    /// CHECK: Receives the buffer's rent; any account.
+    #[account(mut)]
+    pub spill: UncheckedAccount<'info>,
+
+    /// CHECK: The program's upgrade authority PDA, which signs the upgrade;
+    /// the seeds pin it.
+    #[account(seeds = [UPGRADE_AUTHORITY_SEED], bump)]
+    pub upgrade_authority: UncheckedAccount<'info>,
+
+    pub rent: Sysvar<'info, Rent>,
+    pub clock: Sysvar<'info, Clock>,
+
+    /// CHECK: The upgradeable loader, which the address pins.
+    #[account(address = anchor_lang::solana_program::bpf_loader_upgradeable::ID)]
+    pub bpf_loader_upgradeable: UncheckedAccount<'info>,
+}
+
+#[event_cpi]
+#[derive(Accounts)]
+pub struct MigrateState<'info> {
+    /// The upgrade authority, the owner in the previous schema version,
+    /// which pays for the account's growth and becomes the stored owner.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: The seeds pin the address; the handler requires this program
+    /// as owner and the previous schema's layout, which the typed account
+    /// cannot read.
+    #[account(mut, seeds = [PA_STATE_SEED], bump)]
+    pub pa_state: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+
     /// This program's ProgramData, where the loader records the upgrade
-    /// authority: the adapter's owner.
+    /// authority, which the handler hands to `upgrade_authority`.
     #[account(
+        mut,
         address = PROGRAM_DATA @ PAError::Unauthorized,
         constraint = program_data.upgrade_authority_address == Some(authority.key())
             @ PAError::Unauthorized
     )]
     pub program_data: Account<'info, ProgramData>,
+
+    /// CHECK: The PDA that becomes the program's upgrade authority; the
+    /// seeds pin it.
+    #[account(seeds = [UPGRADE_AUTHORITY_SEED], bump)]
+    pub upgrade_authority: UncheckedAccount<'info>,
+
+    /// CHECK: The upgradeable loader, which the address pins.
+    #[account(address = anchor_lang::solana_program::bpf_loader_upgradeable::ID)]
+    pub bpf_loader_upgradeable: UncheckedAccount<'info>,
 }
 
 #[event_cpi]
@@ -892,44 +1107,14 @@ pub struct DenyLogicRef<'info> {
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
-    /// The authority, which pays for the denylist's growth.
-    #[account(mut)]
+    /// The owner, which pays for the denylist's growth.
+    #[account(
+        mut,
+        constraint = authority.key() == pa_state.owner @ PAError::OwnableUnauthorizedAccount
+    )]
     pub authority: Signer<'info>,
 
     pub system_program: Program<'info, System>,
-
-    /// This program's ProgramData, where the loader records the upgrade
-    /// authority: the adapter's owner.
-    #[account(
-        address = PROGRAM_DATA @ PAError::Unauthorized,
-        constraint = program_data.upgrade_authority_address == Some(authority.key())
-            @ PAError::Unauthorized
-    )]
-    pub program_data: Account<'info, ProgramData>,
-}
-
-#[event_cpi]
-#[derive(Accounts)]
-pub struct SetKindTableCommitment<'info> {
-    #[account(
-        mut,
-        seeds = [PA_STATE_SEED],
-        bump = pa_state.bump,
-        constraint = pa_state.schema_version == SCHEMA_VERSION
-            @ PAError::UnsupportedStateSchema,
-    )]
-    pub pa_state: Account<'info, PAStateAccount>,
-
-    pub authority: Signer<'info>,
-
-    /// This program's ProgramData, where the loader records the upgrade
-    /// authority: the adapter's owner.
-    #[account(
-        address = PROGRAM_DATA @ PAError::Unauthorized,
-        constraint = program_data.upgrade_authority_address == Some(authority.key())
-            @ PAError::Unauthorized
-    )]
-    pub program_data: Account<'info, ProgramData>,
 }
 
 #[derive(Accounts)]
@@ -1146,16 +1331,8 @@ pub struct UpdateExpiryConfig<'info> {
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
+    #[account(constraint = authority.key() == pa_state.owner @ PAError::OwnableUnauthorizedAccount)]
     pub authority: Signer<'info>,
-
-    /// This program's ProgramData, where the loader records the upgrade
-    /// authority: the adapter's owner.
-    #[account(
-        address = PROGRAM_DATA @ PAError::Unauthorized,
-        constraint = program_data.upgrade_authority_address == Some(authority.key())
-            @ PAError::Unauthorized
-    )]
-    pub program_data: Account<'info, ProgramData>,
 }
 
 #[cfg(feature = "dev-teardown")]
@@ -1169,17 +1346,11 @@ pub struct CloseMarkersBatch<'info> {
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
-    #[account(mut)]
-    pub authority: Signer<'info>,
-
-    /// This program's ProgramData, where the loader records the upgrade
-    /// authority: the adapter's owner.
     #[account(
-        address = PROGRAM_DATA @ PAError::Unauthorized,
-        constraint = program_data.upgrade_authority_address == Some(authority.key())
-            @ PAError::Unauthorized
+        mut,
+        constraint = authority.key() == pa_state.owner @ PAError::OwnableUnauthorizedAccount
     )]
-    pub program_data: Account<'info, ProgramData>,
+    pub authority: Signer<'info>,
 }
 
 #[cfg(feature = "dev-teardown")]
@@ -1192,16 +1363,8 @@ pub struct DevSetSchemaVersion<'info> {
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
+    #[account(constraint = authority.key() == pa_state.owner @ PAError::OwnableUnauthorizedAccount)]
     pub authority: Signer<'info>,
-
-    /// This program's ProgramData, where the loader records the upgrade
-    /// authority: the adapter's owner.
-    #[account(
-        address = PROGRAM_DATA @ PAError::Unauthorized,
-        constraint = program_data.upgrade_authority_address == Some(authority.key())
-            @ PAError::Unauthorized
-    )]
-    pub program_data: Account<'info, ProgramData>,
 }
 
 // Four separate event structs with identical fields: each produces a distinct Anchor
@@ -1251,6 +1414,26 @@ pub struct PausedEvent {
 #[event]
 pub struct UnpausedEvent {
     pub account: Pubkey,
+}
+
+/// Mirrors OpenZeppelin Ownable: `event OwnershipTransferred(address indexed
+/// previousOwner, address indexed newOwner);`. The zero key stands for no
+/// owner: the previous owner when `initialize` or `migrate_state` sets the
+/// first one, the new owner when `renounce_ownership` gives it up.
+#[event]
+pub struct OwnershipTransferredEvent {
+    pub previous_owner: Pubkey,
+    pub new_owner: Pubkey,
+}
+
+/// Mirrors ERC1967: `event Upgraded(address indexed implementation);`. A
+/// Solana program keeps its address across upgrades, so the new code is
+/// named by its executable hash: sha256 of the code without trailing zero
+/// bytes, which `solana-verify get-program-hash` reports for the deployed
+/// program.
+#[event]
+pub struct UpgradedEvent {
+    pub executable_hash: [u8; 32],
 }
 
 /// Mirrors pa-evm: `event CommitmentTreeRootAdded(bytes32 root);`: the

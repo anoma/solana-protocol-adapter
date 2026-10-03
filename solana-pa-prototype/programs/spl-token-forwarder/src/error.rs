@@ -91,4 +91,21 @@ pub enum ErrorCode {
 
     #[msg("The config is already at this build's CONFIG_VERSION - rotating the logic ref takes a build that raises it")]
     InvalidInitialization,
+
+    /// OpenZeppelin Ownable's `OwnableUnauthorizedAccount`: the signer is not the owner.
+    #[msg("The signer is not the forwarder's owner")]
+    OwnableUnauthorizedAccount,
+
+    /// OpenZeppelin Ownable's `OwnableInvalidOwner`: the zero key cannot be made the owner.
+    #[msg("The zero key cannot be the owner")]
+    OwnableInvalidOwner,
+
+    #[msg("The config is not a config in the previous build's layout")]
+    NotPreviousConfig,
+
+    #[msg("Buffer is not a loader buffer holding a program")]
+    InvalidUpgradeBuffer,
+
+    #[msg("Unauthorized: the signer does not hold the authority this instruction requires")]
+    Unauthorized,
 }

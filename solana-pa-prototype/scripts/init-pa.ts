@@ -11,10 +11,18 @@ async function main() {
 
   const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 
-  // `initialize` pins the router and selector this deployment will trust for
-  // the lifetime of the PAState account. There is no safe default: guessing
-  // wrong installs the wrong verifier. Both must be supplied explicitly. The
-  // adapter starts on the empty kind table; set-kind-table installs another.
+  // `initialize` sets the owner and pins the router and selector this
+  // deployment will trust for the lifetime of the PAState account. There is
+  // no safe default: guessing wrong hands the adapter to the wrong key or
+  // installs the wrong verifier. All three must be supplied explicitly. The
+  // signer, the program's upgrade authority, hands that authority to the
+  // program. The adapter starts on the empty kind table; set-kind-table
+  // installs another.
+  const owner = requirePubkey(
+    "PA_OWNER",
+    "the adapter's initial owner, who alone pauses, upgrades and configures it, as a base58 pubkey.\n" +
+      "   This script will not guess a default — initializing with the wrong owner hands the adapter to that key.",
+  );
   const verifierRouter = requirePubkey(
     "PA_VERIFIER_ROUTER",
     "the RISC0 verifier router program ID this deployment must trust, as a base58 pubkey.\n" +
@@ -38,10 +46,11 @@ async function main() {
 
   console.log("Initializing PA...");
   console.log(`  PAState PDA: ${paState.toBase58()}`);
+  console.log(`  Owner: ${owner.toBase58()}`);
   console.log(`  Verifier router: ${verifierRouter.toBase58()}`);
   console.log(`  Proof selector: 0x${Buffer.from(proofSelector).toString("hex")}`);
 
-  await initializeAdapter(program, provider.wallet.publicKey, verifierRouter, proofSelector).rpc();
+  await initializeAdapter(program, provider.wallet.publicKey, owner, verifierRouter, proofSelector).rpc();
 
   console.log("✅ PA initialized");
 }

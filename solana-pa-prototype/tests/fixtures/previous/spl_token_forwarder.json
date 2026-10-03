@@ -1,0 +1,1059 @@
+{
+  "address": "BsfuXpxw8oCmZXnYijyQkUYNcCnuskFZbYizmWLnpSU7",
+  "metadata": {
+    "name": "spl_token_forwarder",
+    "version": "2.0.0-rc.2",
+    "spec": "0.1.0",
+    "description": "SPL Token forwarder for wrap/unwrap operations with Ed25519 signature verification"
+  },
+  "instructions": [
+    {
+      "name": "close_config",
+      "docs": [
+        "Close the config PDA; its rent goes to the committee. Call last.",
+        "Requires the adapter to be paused."
+      ],
+      "discriminator": [
+        145,
+        9,
+        72,
+        157,
+        95,
+        125,
+        61,
+        85
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Emergency committee, receives the config's rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "address": "6wu5mRw8RN1euy4AUsQoHTU5HraEGGXYhmrucG41bMdq"
+        },
+        {
+          "name": "pa_state"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_escrow",
+      "docs": [
+        "Drain a mint's escrow to the recipient and close the escrow token",
+        "account; its rent goes to the committee. Requires the adapter to be",
+        "paused."
+      ],
+      "discriminator": [
+        139,
+        171,
+        94,
+        146,
+        191,
+        91,
+        144,
+        50
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Emergency committee, receives the closed escrow ATA's rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "address": "6wu5mRw8RN1euy4AUsQoHTU5HraEGGXYhmrucG41bMdq"
+        },
+        {
+          "name": "escrow_ata",
+          "writable": true
+        },
+        {
+          "name": "escrow_authority",
+          "address": "G78SQtzYuo4YKDEECzh25rckXeJFjLMXy44iWKKG5rDG"
+        },
+        {
+          "name": "recipient_ata",
+          "writable": true
+        },
+        {
+          "name": "token_mint"
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "pa_state"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_nonce_bitmaps_batch",
+      "docs": [
+        "Close the nonce bitmaps passed as remaining accounts; their rent goes",
+        "to the committee. Requires the adapter to be paused."
+      ],
+      "discriminator": [
+        212,
+        67,
+        15,
+        190,
+        226,
+        141,
+        142,
+        101
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "Emergency committee, receives the closed bitmaps' rent."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "address": "6wu5mRw8RN1euy4AUsQoHTU5HraEGGXYhmrucG41bMdq"
+        },
+        {
+          "name": "pa_state"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "forward_call",
+      "docs": [
+        "Forward a wrap or unwrap call from the Protocol Adapter.",
+        "",
+        "Like the EVM V2 `ForwarderBaseUpgradeable.forwardCall()`, this does not check the",
+        "adapter's paused state: the adapter does not call forwarders while paused."
+      ],
+      "discriminator": [
+        159,
+        170,
+        224,
+        10,
+        253,
+        105,
+        108,
+        222
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "address": "6wu5mRw8RN1euy4AUsQoHTU5HraEGGXYhmrucG41bMdq"
+        },
+        {
+          "name": "ix_sysvar",
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "logic_ref",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "input",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "forward_emergency_call",
+      "docs": [
+        "Withdraw from escrow while the adapter is paused, as the emergency",
+        "caller. The operand is an `UnwrapInput`. The EVM V1 forwarder's",
+        "forwardEmergencyCall(); V2 has no emergency path (anoma/dos-pm#86)."
+      ],
+      "discriminator": [
+        236,
+        144,
+        86,
+        28,
+        9,
+        25,
+        177,
+        0
+      ],
+      "accounts": [
+        {
+          "name": "caller",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "address": "6wu5mRw8RN1euy4AUsQoHTU5HraEGGXYhmrucG41bMdq"
+        },
+        {
+          "name": "pa_state"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "input",
+          "type": "bytes"
+        }
+      ]
+    },
+    {
+      "name": "init_nonce_bitmap",
+      "docs": [
+        "Create the nonce bitmap for one 256-nonce word of `user`, paid by",
+        "whoever signs. Permissionless: the bitmap holds nothing but used",
+        "bits, and a wrap requires it to exist. The adapter forwards no",
+        "signer to a forwarder, so the account cannot be created during the",
+        "wrap itself; a submitter sends this instruction ahead of settlement",
+        "when the word's bitmap is missing."
+      ],
+      "discriminator": [
+        214,
+        13,
+        125,
+        121,
+        72,
+        220,
+        241,
+        42
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "nonce_bitmap",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  110,
+                  111,
+                  110,
+                  99,
+                  101,
+                  95,
+                  98,
+                  105,
+                  116,
+                  109,
+                  97,
+                  112
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "user"
+              },
+              {
+                "kind": "arg",
+                "path": "word_index"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "_user",
+          "type": "pubkey"
+        },
+        {
+          "name": "_word_index",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "docs": [
+        "Initialize the forwarder config with emergency committee.",
+        "",
+        "As the EVM V2 forwarder's initializer: no zero adapter or logic ref.",
+        "The committee, which has no V2 counterpart, must also be nonzero."
+      ],
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "program",
+          "docs": [
+            "The program account proves `program_data` is this program's own",
+            "ProgramData address rather than any account shaped like one."
+          ],
+          "address": "BsfuXpxw8oCmZXnYijyQkUYNcCnuskFZbYizmWLnpSU7"
+        },
+        {
+          "name": "program_data",
+          "docs": [
+            "The loader records the upgrade authority here; it is the forwarder's owner."
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "protocol_adapter",
+          "type": "pubkey"
+        },
+        {
+          "name": "logic_ref",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "emergency_committee",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "reinitialize",
+      "docs": [
+        "Rotate the logic ref, once per build that raises CONFIG_VERSION.",
+        "Mirrors the EVM forwarder's rotation: the owner upgrades the proxy to",
+        "an implementation whose `reinitializer(n)` writes the new ref",
+        "(`upgradeToAndCall`), and escrow and nonces stay. Here",
+        "the upgrade authority upgrades the program in place and then calls",
+        "this; it runs only while the config's version is below this build's.",
+        "Resources under the previous ref leave through the new one once the",
+        "kind table lists the previous version as its alias: a transaction",
+        "converts them, and the new resource unwraps."
+      ],
+      "discriminator": [
+        135,
+        255,
+        205,
+        161,
+        223,
+        162,
+        94,
+        137
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "address": "6wu5mRw8RN1euy4AUsQoHTU5HraEGGXYhmrucG41bMdq"
+        },
+        {
+          "name": "program",
+          "docs": [
+            "The program account proves `program_data` is this program's own",
+            "ProgramData address rather than any account shaped like one."
+          ],
+          "address": "BsfuXpxw8oCmZXnYijyQkUYNcCnuskFZbYizmWLnpSU7"
+        },
+        {
+          "name": "program_data",
+          "docs": [
+            "The loader records the upgrade authority here; it is the forwarder's owner."
+          ]
+        },
+        {
+          "name": "event_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  95,
+                  95,
+                  101,
+                  118,
+                  101,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "logic_ref",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "set_emergency_caller",
+      "docs": [
+        "Set the emergency caller, once, by the committee while the adapter",
+        "is paused. The EVM V1 forwarder's setEmergencyCaller(); V2 has no",
+        "emergency path (anoma/dos-pm#86)."
+      ],
+      "discriminator": [
+        220,
+        233,
+        248,
+        6,
+        234,
+        58,
+        82,
+        134
+      ],
+      "accounts": [
+        {
+          "name": "committee",
+          "signer": true
+        },
+        {
+          "name": "config",
+          "writable": true,
+          "address": "6wu5mRw8RN1euy4AUsQoHTU5HraEGGXYhmrucG41bMdq"
+        },
+        {
+          "name": "pa_state"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_emergency_caller",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "version",
+      "docs": [
+        "The release this build is. Mirrors the EVM forwarder's `VERSION`:",
+        "read from the deployed program (by simulation), it names the code an",
+        "address runs, which an in-place upgrade changes."
+      ],
+      "discriminator": [
+        118,
+        65,
+        195,
+        198,
+        129,
+        216,
+        252,
+        192
+      ],
+      "accounts": [],
+      "args": [],
+      "returns": "string"
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Config",
+      "discriminator": [
+        155,
+        12,
+        170,
+        224,
+        30,
+        250,
+        204,
+        130
+      ]
+    },
+    {
+      "name": "NonceBitmap",
+      "discriminator": [
+        154,
+        14,
+        30,
+        131,
+        149,
+        1,
+        169,
+        146
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "EmergencyCallerSet",
+      "discriminator": [
+        23,
+        219,
+        26,
+        66,
+        233,
+        253,
+        158,
+        79
+      ]
+    },
+    {
+      "name": "EmergencyWithdraw",
+      "discriminator": [
+        128,
+        80,
+        236,
+        119,
+        137,
+        129,
+        241,
+        144
+      ]
+    },
+    {
+      "name": "Initialized",
+      "discriminator": [
+        208,
+        213,
+        115,
+        98,
+        115,
+        82,
+        201,
+        209
+      ]
+    },
+    {
+      "name": "Unwrapped",
+      "discriminator": [
+        25,
+        86,
+        93,
+        80,
+        145,
+        113,
+        86,
+        93
+      ]
+    },
+    {
+      "name": "Wrapped",
+      "discriminator": [
+        11,
+        127,
+        145,
+        31,
+        206,
+        134,
+        73,
+        130
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidInput",
+      "msg": "Invalid input data"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidWrapInputLength",
+      "msg": "Invalid wrap input length"
+    },
+    {
+      "code": 6002,
+      "name": "InvalidUnwrapInputLength",
+      "msg": "Invalid unwrap input length - expected 72 bytes"
+    },
+    {
+      "code": 6003,
+      "name": "InvalidTokenAccountData",
+      "msg": "Invalid token account data - too short or malformed"
+    },
+    {
+      "code": 6004,
+      "name": "InsufficientRemainingAccounts",
+      "msg": "Insufficient remaining accounts - check logs for expected count"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidTokenProgram",
+      "msg": "Invalid token program - expected SPL Token program ID"
+    },
+    {
+      "code": 6006,
+      "name": "WrongTokenAccountOwner",
+      "msg": "Token account owner mismatch - the account does not belong to the party the transfer names"
+    },
+    {
+      "code": 6007,
+      "name": "WrongTokenAccountMint",
+      "msg": "Token account mint mismatch - the account does not hold the mint the transfer names"
+    },
+    {
+      "code": 6008,
+      "name": "UnknownOperation",
+      "msg": "Unknown operation code"
+    },
+    {
+      "code": 6009,
+      "name": "UnauthorizedCaller",
+      "msg": "Unauthorized caller - only Protocol Adapter can call forward_call"
+    },
+    {
+      "code": 6010,
+      "name": "UnauthorizedLogicRef",
+      "msg": "Unauthorized logic_ref - this forwarder doesn't handle this resource type"
+    },
+    {
+      "code": 6011,
+      "name": "DeadlineExpired",
+      "msg": "Signature deadline has expired"
+    },
+    {
+      "code": 6012,
+      "name": "NonceAlreadyUsed",
+      "msg": "Nonce has already been used (replay attack prevented)"
+    },
+    {
+      "code": 6013,
+      "name": "Ed25519InstructionNotFound",
+      "msg": "Ed25519 instruction not found at specified index"
+    },
+    {
+      "code": 6014,
+      "name": "InvalidEd25519Instruction",
+      "msg": "Invalid Ed25519 instruction format"
+    },
+    {
+      "code": 6015,
+      "name": "Ed25519PubkeyMismatch",
+      "msg": "Ed25519 public key mismatch"
+    },
+    {
+      "code": 6016,
+      "name": "Ed25519MessageMismatch",
+      "msg": "Ed25519 message mismatch"
+    },
+    {
+      "code": 6017,
+      "name": "EmergencyCallerAlreadySet",
+      "msg": "Emergency caller already set"
+    },
+    {
+      "code": 6018,
+      "name": "EmergencyCallerNotSet",
+      "msg": "Emergency caller not set"
+    },
+    {
+      "code": 6019,
+      "name": "ProtocolAdapterNotPaused",
+      "msg": "Protocol Adapter not paused - cannot perform emergency operations"
+    },
+    {
+      "code": 6020,
+      "name": "InvalidPaState",
+      "msg": "Invalid PA state account - does not match derived PDA from protocol_adapter"
+    },
+    {
+      "code": 6021,
+      "name": "ZeroAddressNotAllowed",
+      "msg": "Zero address not allowed"
+    },
+    {
+      "code": 6022,
+      "name": "InvalidEscrowAuthority",
+      "msg": "Invalid escrow authority"
+    },
+    {
+      "code": 6023,
+      "name": "InvalidNonceBitmapPda",
+      "msg": "Invalid nonce bitmap PDA - doesn't match derived address"
+    },
+    {
+      "code": 6024,
+      "name": "NonceBitmapMissing",
+      "msg": "Nonce bitmap account does not exist - create it with init_nonce_bitmap before the wrap"
+    },
+    {
+      "code": 6025,
+      "name": "TokenTransferFailed",
+      "msg": "Token transfer failed - check the SPL Token error in the logs"
+    },
+    {
+      "code": 6026,
+      "name": "UnwrapToEscrow",
+      "msg": "Unwrap recipient is the escrow authority - the tokens would never leave escrow"
+    },
+    {
+      "code": 6027,
+      "name": "InvalidInitialization",
+      "msg": "The config is already at this build's CONFIG_VERSION - rotating the logic ref takes a build that raises it"
+    }
+  ],
+  "types": [
+    {
+      "name": "Config",
+      "docs": [
+        "Configuration account for the forwarder.",
+        "",
+        "The adapter and logic ref mirror the EVM V2 forwarder's",
+        "`ForwarderBaseUpgradeable` state, and `version` its `Initializable`",
+        "version. The emergency committee and caller are the EVM V1 forwarder's",
+        "emergency mechanism, which V2 dropped (anoma/dos-pm#86)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol_adapter",
+            "docs": [
+              "The Protocol Adapter program ID that can call forward_call"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "logic_ref",
+            "docs": [
+              "The logic reference (verifying key) this forwarder handles"
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "emergency_committee",
+            "docs": [
+              "Emergency committee that can set emergency_caller"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "emergency_caller",
+            "docs": [
+              "Emergency caller set by committee (zero = not set)"
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "version",
+            "docs": [
+              "The version the config was last initialized at, as OpenZeppelin",
+              "Initializable's `_initialized`: `initialize` records CONFIG_VERSION,",
+              "and `reinitialize` raises it to CONFIG_VERSION once."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EmergencyCallerSet",
+      "docs": [
+        "The EVM V1 forwarder's `event EmergencyCallerSet(address caller);` (V1 emergency mechanism, anoma/dos-pm#86)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "emergency_caller",
+            "type": "pubkey"
+          },
+          {
+            "name": "set_by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "EmergencyWithdraw",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "to",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "caller",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Initialized",
+      "docs": [
+        "Mirrors OpenZeppelin Initializable: `event Initialized(uint64 version);`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "NonceBitmap",
+      "docs": [
+        "One 256-nonce word of a user's wrap nonces (Permit2's bitmap pattern).",
+        "",
+        "Seeds: [\"nonce_bitmap\", user, word_index_le_bytes]. Created by anyone",
+        "through `init_nonce_bitmap`, which pays its rent; a wrap only reads and",
+        "sets bits, so no signer reaches the forwarder through the adapter's CPI."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "bits",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "bump",
+            "docs": [
+              "The canonical bump of the bitmap's address, stored by `init_nonce_bitmap`."
+            ],
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Unwrapped",
+      "docs": [
+        "Mirrors EVM: `event Unwrapped(address indexed token, address indexed to, uint128 amount);`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "to",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Wrapped",
+      "docs": [
+        "Mirrors EVM: `event Wrapped(address indexed token, address indexed from, uint128 amount);`"
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "from",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "action_tree_root",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "constants": [
+    {
+      "name": "CONFIG_SEED",
+      "type": "bytes",
+      "value": "[99, 111, 110, 102, 105, 103]"
+    },
+    {
+      "name": "CONFIG_VERSION",
+      "docs": [
+        "The config version this build initializes to and reinitializes to, as",
+        "the `n` of an OpenZeppelin `reinitializer(n)`. A build that rotates the",
+        "logic ref raises it by one, so its `reinitialize` runs once."
+      ],
+      "type": "u64",
+      "value": "3"
+    },
+    {
+      "name": "ESCROW_SEED",
+      "docs": [
+        "Seed of the escrow authority."
+      ],
+      "type": "bytes",
+      "value": "[101, 115, 99, 114, 111, 119]"
+    },
+    {
+      "name": "NONCES_PER_WORD",
+      "type": "u64",
+      "value": "256"
+    },
+    {
+      "name": "NONCE_BITMAP_SEED",
+      "docs": [
+        "Nonce bitmap PDA, one per user per 256-nonce word."
+      ],
+      "type": "bytes",
+      "value": "[110, 111, 110, 99, 101, 95, 98, 105, 116, 109, 97, 112]"
+    },
+    {
+      "name": "OP_UNWRAP",
+      "type": "u8",
+      "value": "1"
+    }
+  ]
+}

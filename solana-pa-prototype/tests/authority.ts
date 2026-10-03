@@ -1,20 +1,22 @@
 /**
- * The adapter's owner is the program's upgrade authority, as pa-evm's owner
- * (OpenZeppelin's OwnableUpgradeable) is the one who authorizes its
- * upgrades: every owner-only instruction checks its signer against the
- * upgrade authority the loader records in the program's ProgramData, so
- * moving or renouncing the upgrade authority moves or renounces the
- * ownership. Every test leaves the provider wallet as the upgrade authority;
- * renouncing it is terminal/5-renounce.ts, among the suite's last files.
+ * The adapter's owner, as pa-evm's (OpenZeppelin's OwnableUpgradeable): it is
+ * stored in the state, signs every owner-only instruction, moves with
+ * `transfer_ownership`, and alone upgrades the program, whose upgrade
+ * authority is the program's own PDA, as pa-evm's UUPS implementation
+ * authorizes its own upgrades. Every test leaves the provider wallet as the
+ * owner and the deployed code as it found it; renouncing the ownership is
+ * terminal/6-renounce.ts, the suite's last file.
  */
-import { Transaction } from "@solana/web3.js";
-import { pauseAdapter, setKindTableCommitment } from "../client/instructions";
-import { deriveProgramDataPda } from "../client/pda";
-import { localSetUpgradeAuthority } from "./utils/localOnly";
-import { assertFails } from "./utils/helpers";
-import { provider, program, paState, forwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
+import { Keypair, PublicKey } from "@solana/web3.js";
+import { assert } from "chai";
+import { pauseAdapter, setKindTableCommitment, upgradeAdapter } from "../client/instructions";
+import { BPF_LOADER_UPGRADEABLE } from "../client/pda";
+import { localTransferAdapterOwnership } from "./utils/localOnly";
+import { ADAPTER_SO } from "./utils/constants";
+import { assertFails, solanaCli, writeBuffer } from "./utils/helpers";
+import { cpiEventsOf, provider, program, paState, upgradeThroughProgram, useAdapterSuite } from "./utils/adapterSuite";
 
-describe("protocol-adapter (authority) @localnet", () => {
+describe("protocol-adapter (ownership and upgrades) @localnet", () => {
   const { funder } = useAdapterSuite();
   const wallet = provider.wallet.publicKey;
   // The owner-only call these tests make: rewriting the kind table the
@@ -24,49 +26,95 @@ describe("protocol-adapter (authority) @localnet", () => {
     kindTable = Array.from((await program.account.paStateAccount.fetch(paState)).kindTableCommitment);
   });
 
-  it("rejects pause from a signer that is not the upgrade authority", async () => {
-    const nonAuthority = await funder.fresh(1);
-    await assertFails(pauseAdapter(program, nonAuthority.publicKey).signers([nonAuthority]).rpc(), {
+  it("rejects pause from a signer that is not the owner", async () => {
+    const stranger = await funder.fresh(1);
+    await assertFails(pauseAdapter(program, stranger.publicKey).signers([stranger]).rpc(), {
       program,
-      error: "Unauthorized",
-      account: "program_data",
+      error: "OwnableUnauthorizedAccount",
+      account: "authority",
     });
   });
 
-  // The upgrade-authority check reads whatever ProgramData is passed, so the
-  // account is pinned to this program's. Another program with the same
-  // upgrade authority is the cheapest forgery.
-  it("rejects the upgrade authority of another program's ProgramData", () =>
-    assertFails(
-      setKindTableCommitment(program, wallet, kindTable)
-        .accountsPartial({ programData: deriveProgramDataPda(forwarderProgram.programId) })
-        .rpc(),
-      { program, error: "Unauthorized", account: "program_data" },
-    ));
-
-  // Mirrors OwnableUpgradeable.transferOwnership: the ownership moves with
-  // the upgrade authority, at once.
-  it("moves with the upgrade authority", async () => {
-    const successor = await funder.fresh(1);
-    await provider.sendAndConfirm(
-      new Transaction().add(
-        localSetUpgradeAuthority(provider.connection, program.programId, wallet, successor.publicKey),
-      ),
-    );
-
-    await assertFails(setKindTableCommitment(program, wallet, kindTable).rpc(), {
-      program,
-      error: "Unauthorized",
-      account: "program_data",
+  describe("transfer_ownership", () => {
+    it("rejects a signer that is not the owner", async () => {
+      const stranger = await funder.fresh(1);
+      await assertFails(
+        localTransferAdapterOwnership(program, stranger.publicKey, stranger.publicKey).signers([stranger]).rpc(),
+        { program, error: "OwnableUnauthorizedAccount", account: "authority" },
+      );
     });
-    await setKindTableCommitment(program, successor.publicKey, kindTable).signers([successor]).rpc();
 
-    await provider.sendAndConfirm(
-      new Transaction().add(
-        localSetUpgradeAuthority(provider.connection, program.programId, successor.publicKey, wallet),
-      ),
-      [successor],
-    );
-    await setKindTableCommitment(program, wallet, kindTable).rpc();
+    // OwnableUpgradeable.transferOwnership: OwnableInvalidOwner(address(0)).
+    it("rejects the zero key", () =>
+      assertFails(localTransferAdapterOwnership(program, wallet, PublicKey.default).rpc(), {
+        program,
+        error: "OwnableInvalidOwner",
+      }));
+
+    // OwnableUpgradeable.transferOwnership: the ownership moves at once,
+    // announced with OwnershipTransferred(previous, new).
+    it("moves the ownership at once and announces it", async () => {
+      const successor = await funder.fresh(1);
+      const sig = await localTransferAdapterOwnership(program, wallet, successor.publicKey).rpc();
+      const { events } = await cpiEventsOf(sig);
+      assert.deepEqual(
+        events.map((e) => [e.name, e.data.previousOwner.toBase58(), e.data.newOwner.toBase58()]),
+        [["ownershipTransferredEvent", wallet.toBase58(), successor.publicKey.toBase58()]],
+      );
+
+      await assertFails(setKindTableCommitment(program, wallet, kindTable).rpc(), {
+        program,
+        error: "OwnableUnauthorizedAccount",
+        account: "authority",
+      });
+      await setKindTableCommitment(program, successor.publicKey, kindTable).signers([successor]).rpc();
+
+      await localTransferAdapterOwnership(program, successor.publicKey, wallet).signers([successor]).rpc();
+      await setKindTableCommitment(program, wallet, kindTable).rpc();
+    });
+  });
+
+  describe("upgrade", () => {
+    it("rejects a signer that is not the owner", async () => {
+      const stranger = await funder.fresh(1);
+      await assertFails(
+        upgradeAdapter(program, stranger.publicKey, Keypair.generate().publicKey, stranger.publicKey)
+          .signers([stranger])
+          .rpc(),
+        { program, error: "OwnableUnauthorizedAccount", account: "authority" },
+      );
+    });
+
+    it("rejects an account that is not a loader buffer", () =>
+      assertFails(upgradeAdapter(program, wallet, paState, wallet).rpc(), {
+        program,
+        error: "InvalidUpgradeBuffer",
+      }));
+
+    // The loader requires the buffer's authority to match the program's: the
+    // program hands the owner's buffer to its PDA, so a buffer someone other
+    // than the owner wrote is refused there.
+    it("rejects a buffer someone other than the owner wrote", async () => {
+      const successor = await funder.fresh(1);
+      const buffer = writeBuffer(provider, ADAPTER_SO);
+      await localTransferAdapterOwnership(program, wallet, successor.publicKey).rpc();
+      await assertFails(
+        upgradeAdapter(program, successor.publicKey, buffer, successor.publicKey).signers([successor]).rpc(),
+        { program: BPF_LOADER_UPGRADEABLE, reason: /^Incorrect authority provided$/ },
+      );
+      await localTransferAdapterOwnership(program, successor.publicKey, wallet).signers([successor]).rpc();
+      solanaCli(provider, "program", "close", buffer.toBase58(), "--bypass-warning");
+    });
+
+    // UUPS upgradeToAndCall: the owner replaces the code, announced with
+    // ERC1967's Upgraded, here naming the code by its executable hash. The
+    // suite upgrades to the build it already runs, which leaves the
+    // deployment as it was.
+    it("replaces the code with the owner's buffer, announces its executable hash, and runs it from the next slot", async () => {
+      await upgradeThroughProgram(program, ADAPTER_SO, "upgradedEvent", (buffer, spill) =>
+        upgradeAdapter(program, wallet, buffer, spill),
+      );
+      await setKindTableCommitment(program, wallet, kindTable).rpc();
+    });
   });
 });
