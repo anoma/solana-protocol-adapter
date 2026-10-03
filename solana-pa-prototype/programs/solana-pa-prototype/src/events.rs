@@ -13,8 +13,10 @@ use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::invoke_signed;
 
 /// Instruction data of a CPI event: Anchor's event tag, then the event's own
-/// discriminator and Borsh body, serialized once into a buffer sized exactly
-/// (the BPF bump allocator never frees a grown-out buffer).
+/// discriminator and Borsh body. The body is measured first and then written
+/// into a buffer of exactly that size: the BPF bump allocator never frees a
+/// grown-out buffer, and the counting pass costs fewer compute units than the
+/// reallocations of a growing one.
 pub fn event_instruction_data<E: anchor_lang::Event>(event: &E) -> Result<Vec<u8>> {
     let mut data = Vec::with_capacity(
         anchor_lang::event::EVENT_IX_TAG_LE.len()
