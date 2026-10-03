@@ -76,7 +76,7 @@
 
           solanaVersion = "4.3.0";
 
-          # The platform-tools release cargo-build-sbf 4.3.0 and Anchor 1.2.0
+          # The platform-tools release cargo-build-sbf 4.3.0 and Anchor 1.2.1
           # both default to (Rust 1.95, LLVM 22).
           platformToolsVersion = "v1.57";
 
