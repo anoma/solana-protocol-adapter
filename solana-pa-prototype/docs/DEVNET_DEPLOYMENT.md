@@ -48,7 +48,7 @@ Deployed 2026-10-01 from `anthony/devnet-v2-redeploy` (production builds under n
 | Router PDA | `9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S` |
 | Verifier Entry PDA (selector `0x73c457ba`) | `4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey` |
 
-The local test validator loads a committed copy of the devnet verifier stack (`devnet-verifier/`; `DEVNET_CLONE_PROGRAMS` and `DEVNET_CLONE_ACCOUNTS` in `scripts/validator-deploy.sh` list it). The router's on-chain owner is `FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh` (this project's January deployment wallet).
+The local test validator loads a committed copy of the devnet verifier stack and the Program Metadata program (`devnet-programs/`; `DEVNET_CLONE_PROGRAMS` and `DEVNET_CLONE_ACCOUNTS` in `scripts/validator-deploy.sh` list it). The router's on-chain owner is `FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh` (this project's January deployment wallet).
 
 ## Retired deployments
 

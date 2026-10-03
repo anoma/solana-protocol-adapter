@@ -51,8 +51,8 @@ Commands:
   idl-publish [${DEPLOY_TARGETS}|all]
                          Publish each program's production IDL on chain (the
                          program's canonical Program Metadata IDL account;
-                         devnet/mainnet only; signer must be the upgrade
-                         authority to create it, its authority to update it)
+                         signer must be the upgrade authority to create it,
+                         the upgrade authority or its authority to update it)
   test [--cluster <c>] [spec file...]
                          No cluster (or localnet): full deterministic local
                          integration flow, every spec file on one validator.
@@ -76,11 +76,11 @@ Commands:
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
   validator              Start the local test validator (RISC0 verifier stack
-                         copied from devnet, marker fixtures preloaded)
-  refresh-devnet-verifier --url <rpc>
-                         Replace the committed copy of the devnet RISC0
-                         verifier stack (devnet-verifier/) with devnet's
-                         current state
+                         and Program Metadata program copied from devnet,
+                         marker fixtures preloaded)
+  refresh-devnet-programs --url <rpc>
+                         Replace the committed copy of the devnet programs
+                         (devnet-programs/) with devnet's current state
   validator-deploy       Sync IDs, build, start the validator with all
                          programs loaded at genesis, and keep it running
 
@@ -572,9 +572,9 @@ cmd_deploy() {
 
   # `initialize` hands each self-upgrading program's upgrade authority to the
   # program, and only the upgrade authority creates the program's canonical
-  # metadata accounts. On a cluster with the Program Metadata program the IDLs
-  # are published first, and initialization waits until the deployer has given
-  # those accounts to the owner, by hand (docs/OPERATIONS.md).
+  # metadata accounts. On devnet and mainnet the IDLs are published first, and
+  # initialization waits until the deployer has given those accounts to the
+  # owner, by hand (docs/OPERATIONS.md).
   if [[ "$CLUSTER" == "localnet" ]]; then
     if [[ " $targets " == *" pa "* ]]; then
       init_pa
@@ -782,16 +782,7 @@ cmd_verify_build() {
 # signs the write that creates the account; the account's authority signs
 # later ones.
 cmd_idl_publish() {
-  require_cmd anchor
-  # anchor idl runs the Program Metadata client through npx.
   require_cmd npx
-
-  # The Anchor CLI skips IDL writes against a localhost RPC and exits 0, and
-  # a local validator has no Program Metadata program to write to.
-  if [[ "$CLUSTER" == "localnet" ]]; then
-    echo "❌ idl-publish targets devnet or mainnet; a local validator has no Program Metadata program." >&2
-    exit 1
-  fi
 
   local targets t
   targets="$(resolve_targets "$TARGET")"
@@ -810,39 +801,12 @@ cmd_idl_publish() {
 # program's canonical Program Metadata IDL account, and check the cluster
 # serves exactly that file.
 publish_idl() {
-  local name="$1" pid idl_path
+  local name="$1" idl_path
   idl_path="target/idl/${name}.json"
-  pid="$(get_program_id "$name")"
-
-  # Program Metadata `write idl`: creates the canonical IDL account on first
-  # publish and overwrites it afterwards.
-  anchor idl upgrade "$pid" \
-    --filepath "$idl_path" \
-    --provider.cluster "$RPC_URL" \
-    --provider.wallet "$WALLET"
-
-  # Read back what the cluster now serves rather than assuming the write
-  # landed; a mismatch here must fail loudly. The fetched document need not
-  # keep the file's key order or whitespace, so compare canonicalized JSON.
-  local fetched
-  fetched="$(mktemp)"
-  anchor idl fetch "$pid" --provider.cluster "$RPC_URL" --out "$fetched"
-  if ! node -e '
-    const fs = require("fs");
-    const canon = (v) =>
-      Array.isArray(v) ? v.map(canon)
-      : v && typeof v === "object"
-        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])]))
-        : v;
-    const read = (p) => JSON.stringify(canon(JSON.parse(fs.readFileSync(p, "utf-8"))));
-    process.exit(read(process.argv[1]) === read(process.argv[2]) ? 0 : 1);
-  ' "$fetched" "$idl_path"; then
-    echo "❌ Fetched on-chain IDL does not match ${idl_path}" >&2
-    rm -f "$fetched"
-    exit 1
-  fi
-  rm -f "$fetched"
-  echo "✅ On-chain IDL for ${pid} matches ${idl_path} (${CLUSTER})"
+  # Writes as the upgrade authority or the account's explicit authority, then
+  # checks the cluster serves exactly that document (client/programMetadata.ts).
+  run_ts scripts/publish-idl.ts "$idl_path"
+  echo "✅ On-chain IDL for $(get_program_id "$name") matches ${idl_path} (${CLUSTER})"
 }
 
 cmd_test() {
@@ -989,19 +953,18 @@ case "$COMMAND" in
     fi
     cmd_verify_build
     ;;
-  refresh-devnet-verifier)
+  refresh-devnet-programs)
     if [[ -z "$RPC_OVERRIDE" ]]; then
-      echo "❌ refresh-devnet-verifier reads devnet through --url <rpc>; there is no default endpoint." >&2
+      echo "❌ refresh-devnet-programs reads devnet through --url <rpc>; there is no default endpoint." >&2
       exit 1
     fi
     require_cmd solana
     require_cmd jq
-    refresh_devnet_verifier "$RPC_OVERRIDE"
+    refresh_devnet_programs "$RPC_OVERRIDE"
     ;;
   validator)
     require_cmd solana-test-validator
-    # start_validator (validator-deploy.sh) preloads the RISC0 verifier stack
-    # copied from devnet and the synthetic verifier-entry account fixtures
+    # start_validator (validator-deploy.sh) preloads the devnet programs and the synthetic verifier-entry account fixtures
     # — a bare validator cannot settle anything.
     require_cmd solana
     start_validator

@@ -4,16 +4,20 @@
  * `transfer_ownership` and `renounce_ownership`, the forwarder's
  * `set_emergency_caller`, `close_escrow`, `close_config` and
  * `close_nonce_bitmaps_batch` (wrap replay protection), and the adapter's
- * dev-build `close_markers_batch` (settlement replay protection). They exist
+ * dev-build `close_markers_batch` (settlement replay protection), the
+ * loader's `SetAuthority` and the Program Metadata program's `SetAuthority`
+ * on a canonical IDL account. They exist
  * for the tests and refuse any RPC endpoint that is not this machine's, so no
  * repository code can do any of this on devnet or mainnet; there, it is done
  * by hand (docs/OPERATIONS.md).
  */
 import { Program } from "@anchor-lang/core";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import { address } from "@solana/kit";
+import { Connection, Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
-import { derivePaStatePda } from "../../client/pda";
+import { BPF_LOADER_UPGRADEABLE, deriveProgramDataPda, derivePaStatePda } from "../../client/pda";
+import { canonicalIdlAccount, programMetadataClient } from "../../client/programMetadata";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const BATCH_SIZE = 20;
@@ -34,6 +38,52 @@ export function assertLocalValidator(connection: Connection): void {
         "on devnet and mainnet they are made by hand",
     );
   }
+}
+
+/** The loader's `SetAuthority`: `programId`'s upgrade authority moves from `current` (a signer) to `newAuthority`. */
+export function localSetUpgradeAuthorityIx(
+  connection: Connection,
+  programId: PublicKey,
+  current: PublicKey,
+  newAuthority: PublicKey,
+): TransactionInstruction {
+  assertLocalValidator(connection);
+  return new TransactionInstruction({
+    programId: BPF_LOADER_UPGRADEABLE,
+    keys: [
+      { pubkey: deriveProgramDataPda(programId), isSigner: false, isWritable: true },
+      { pubkey: current, isSigner: true, isWritable: false },
+      { pubkey: newAuthority, isSigner: false, isWritable: false },
+    ],
+    // UpgradeableLoaderInstruction::SetAuthority, a u32 little-endian variant index.
+    data: Buffer.from([4, 0, 0, 0]),
+  });
+}
+
+/**
+ * The Program Metadata program's `SetAuthority` on `program`'s canonical IDL
+ * account: `newAuthority` becomes its explicit authority, signed by the
+ * program's upgrade authority, the keypair file `walletPath`.
+ */
+export async function localSetIdlAuthority(
+  rpcUrl: string,
+  walletPath: string,
+  program: PublicKey,
+  newAuthority: PublicKey,
+): Promise<void> {
+  assertLocalValidator(new Connection(rpcUrl));
+  const client = await programMetadataClient(rpcUrl, walletPath);
+  const programAddress = address(program.toBase58());
+  const { metadata, programData } = await canonicalIdlAccount(client, programAddress);
+  await client.programMetadata.instructions
+    .setAuthority({
+      account: metadata,
+      authority: client.identity,
+      program: programAddress,
+      programData,
+      newAuthority: address(newAuthority.toBase58()),
+    })
+    .sendTransaction();
 }
 
 /** The adapter's `transfer_ownership` by its owner `authority`, to `newOwner`. */

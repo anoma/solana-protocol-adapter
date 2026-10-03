@@ -1,5 +1,5 @@
 // RISC0 verifier infrastructure deployed on devnet, copied into each local
-// validator's genesis (the committed copy in devnet-verifier/, loaded by validator-deploy.sh's start_validator).
+// validator's genesis (the committed copy in devnet-programs/, loaded by validator-deploy.sh's start_validator).
 
 import { PublicKey } from "@solana/web3.js";
 
