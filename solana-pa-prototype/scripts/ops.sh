@@ -900,6 +900,7 @@ cmd_test() {
 # them, so each such program is linted a second time with them enabled.
 cmd_clippy() {
   load_workspace_programs
+  check_program_ids_not_in_tree
   cargo clippy --workspace --all-targets -- -D warnings
   local name
   for name in "${PROGRAM_NAMES[@]}"; do

@@ -145,6 +145,28 @@ require_cmd() {
   fi
 }
 
+# Program addresses are configuration (env/<cluster>.env) and program
+# keypairs are secrets (env/<cluster>.keys.env, never committed): fail if any
+# keypair file is tracked or any program declares its address as a literal.
+# Requires load_workspace_programs.
+check_program_ids_not_in_tree() {
+  local tracked name literal failed=0
+  tracked="$(git ls-files -- '*-keypair.json' 'keypairs/*.json')"
+  if [[ -n "$tracked" ]]; then
+    echo "❌ Program keypairs are tracked; they belong outside the repository, named in env/<cluster>.keys.env:" >&2
+    echo "$tracked" >&2
+    failed=1
+  fi
+  for name in "${PROGRAM_NAMES[@]}"; do
+    if literal="$(grep -n 'declare_id!("' "${PROGRAM_SRC[$name]}")"; then
+      echo "❌ ${PROGRAM_SRC[$name]} declares its address as a literal; it comes from env/<cluster>.env:" >&2
+      echo "$literal" >&2
+      failed=1
+    fi
+  done
+  return "$failed"
+}
+
 read_declare_id() {
   sed -n 's/^declare_id!("\([^"]*\)").*/\1/p' "$1" | head -n 1
 }
