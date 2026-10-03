@@ -67,8 +67,7 @@ pub struct Initialized {
 
 /// Mirrors OpenZeppelin Ownable: `event OwnershipTransferred(address indexed
 /// previousOwner, address indexed newOwner);`. The zero key stands for no
-/// owner: the previous owner when `initialize` or `migrate_config` sets the
-/// first one, the new owner when `renounce_ownership` gives it up.
+/// owner: the previous owner when `initialize` sets the first one, the new owner when `renounce_ownership` gives it up.
 #[event]
 pub struct OwnershipTransferred {
     pub previous_owner: Pubkey,
@@ -258,54 +257,6 @@ pub mod spl_token_forwarder {
                 loader: &ctx.accounts.bpf_loader_upgradeable.to_account_info(),
             },
         )
-    }
-
-    /// Bring a config in the previous build's layout to this one, owned by
-    /// the upgrade authority that signs, and hand the program's upgrade
-    /// authority to its PDA, as the adapter's `migrate_state`. In the
-    /// previous build the upgrade authority was the owner; from this one the
-    /// owner is stored and upgrades go through `upgrade`. The counterpart of
-    /// the call the EVM forwarder's owner passes to `upgradeToAndCall`: run
-    /// once, after the in-place upgrade. It parses the previous layout, pays
-    /// for the account's growth, and announces the owner as `initialize`
-    /// does.
-    pub fn migrate_config(ctx: Context<MigrateConfig>) -> Result<()> {
-        let info = ctx.accounts.config.to_account_info();
-        require_keys_eq!(*info.owner, crate::ID, ErrorCode::NotPreviousConfig);
-        let owner = ctx.accounts.authority.key();
-        let config = {
-            let data = info.try_borrow_data()?;
-            require!(
-                data.len() == PreviousConfig::ACCOUNT_SIZE,
-                ErrorCode::NotPreviousConfig
-            );
-            let body = data
-                .strip_prefix(Config::DISCRIMINATOR)
-                .ok_or(ErrorCode::NotPreviousConfig)?;
-            PreviousConfig::deserialize(&mut &body[..])
-                .map_err(|_| ErrorCode::NotPreviousConfig)?
-                .migrate(owner)
-        };
-        protocol_adapter::resize_account(
-            &info,
-            Config::ACCOUNT_SIZE,
-            &ctx.accounts.authority.to_account_info(),
-            &ctx.accounts.system_program.to_account_info(),
-        )?;
-        config.try_serialize(&mut &mut info.try_borrow_mut_data()?[..])?;
-        protocol_adapter::upgrade::hand_upgrade_authority_to_program(
-            &crate::ID,
-            ctx.bumps.upgrade_authority,
-            &ctx.accounts.program_data.to_account_info(),
-            &ctx.accounts.authority.to_account_info(),
-            &ctx.accounts.upgrade_authority.to_account_info(),
-            &ctx.accounts.bpf_loader_upgradeable.to_account_info(),
-        )?;
-        emit_cpi!(OwnershipTransferred {
-            previous_owner: Pubkey::default(),
-            new_owner: owner,
-        });
-        Ok(())
     }
 
     /// Create the nonce bitmap for one 256-nonce word of `user`, paid by
@@ -853,49 +804,6 @@ pub struct UpgradeProgram<'info> {
 
     pub rent: Sysvar<'info, Rent>,
     pub clock: Sysvar<'info, Clock>,
-
-    /// CHECK: The upgradeable loader, which the address pins.
-    #[account(address = anchor_lang::solana_program::bpf_loader_upgradeable::ID)]
-    pub bpf_loader_upgradeable: UncheckedAccount<'info>,
-}
-
-/// `OwnershipTransferred` is a CPI event, as in [`Initialize`].
-#[derive(Accounts)]
-pub struct MigrateConfig<'info> {
-    /// The upgrade authority, the owner in the previous build, which pays for
-    /// the config's growth and becomes the stored owner.
-    #[account(mut)]
-    pub authority: Signer<'info>,
-
-    /// CHECK: The address pins the config; the handler requires this
-    /// program as owner and the previous layout, which the typed account
-    /// cannot read.
-    #[account(mut, address = CONFIG_PDA)]
-    pub config: UncheckedAccount<'info>,
-
-    /// This program, which the `OwnershipTransferred` event's
-    /// self-invocation needs.
-    pub program: Program<'info, crate::program::SplTokenForwarder>,
-
-    /// This program's ProgramData, where the loader records the upgrade
-    /// authority, which the handler hands to `upgrade_authority`.
-    #[account(
-        mut,
-        address = crate::PROGRAM_DATA @ ErrorCode::Unauthorized,
-        constraint = program_data.upgrade_authority_address == Some(authority.key()) @ ErrorCode::Unauthorized
-    )]
-    pub program_data: Account<'info, ProgramData>,
-
-    pub system_program: Program<'info, System>,
-
-    /// CHECK: Only the event authority can invoke self-CPI
-    #[account(seeds = [b"__event_authority"], bump = crate::EVENT_AUTHORITY_AND_BUMP.1)]
-    pub event_authority: UncheckedAccount<'info>,
-
-    /// CHECK: The PDA that becomes the program's upgrade authority; the
-    /// seeds pin it.
-    #[account(seeds = [UPGRADE_AUTHORITY_SEED], bump)]
-    pub upgrade_authority: UncheckedAccount<'info>,
 
     /// CHECK: The upgradeable loader, which the address pins.
     #[account(address = anchor_lang::solana_program::bpf_loader_upgradeable::ID)]

@@ -40,35 +40,6 @@ impl Config {
     pub const ACCOUNT_SIZE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
 }
 
-/// The config in the previous build's layout, which `migrate_config` reads:
-/// this layout without the owner, whose role the program's upgrade authority
-/// played. Its size tells it apart, the config being fixed-size.
-#[derive(AnchorDeserialize)]
-pub struct PreviousConfig {
-    pub protocol_adapter: Pubkey,
-    pub logic_ref: [u8; 32],
-    pub emergency_committee: Pubkey,
-    pub emergency_caller: Pubkey,
-    pub version: u64,
-}
-
-impl PreviousConfig {
-    /// The previous build's config account size: the discriminator and the fields.
-    pub const ACCOUNT_SIZE: usize = Config::ACCOUNT_SIZE - size_of::<Pubkey>();
-
-    /// This layout with the previous fields, owned by `owner`.
-    pub fn migrate(self, owner: Pubkey) -> Config {
-        Config {
-            protocol_adapter: self.protocol_adapter,
-            logic_ref: self.logic_ref,
-            emergency_committee: self.emergency_committee,
-            emergency_caller: self.emergency_caller,
-            version: self.version,
-            owner,
-        }
-    }
-}
-
 /// The config version this build initializes to and reinitializes to, as
 /// the `n` of an OpenZeppelin `reinitializer(n)`. A build that rotates the
 /// logic ref raises it by one, so its `reinitialize` runs once.
@@ -99,8 +70,8 @@ pub const CONFIG_PDA: Pubkey = Pubkey::new_from_array(
     anchor_lang::derive_program_address(&[CONFIG_SEED], &crate::ID_CONST.to_bytes()).0,
 );
 /// This program's ProgramData account, derived at compile time, where the
-/// loader records the upgrade authority: the deployer until `initialize` (or
-/// `migrate_config`) hands it to the program's upgrade authority PDA.
+/// loader records the upgrade authority: the deployer until `initialize`
+/// hands it to the program's upgrade authority PDA.
 pub const PROGRAM_DATA: Pubkey = protocol_adapter::upgrade::program_data_address(&crate::ID_CONST);
 /// Seed of the escrow authority.
 #[constant]

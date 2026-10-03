@@ -10,7 +10,7 @@
  * `path` prints which upgrade path the program's upgrade authority leaves:
  * `program` when the authority is the program's own PDA (upgrade through
  * the program), `loader` when it is the wallet (the loader's own upgrade,
- * before `initialize` or `migrate_state` hands the authority over). Any
+ * before `initialize` hands the authority over). Any
  * other authority, or none, is an error. `upgrade` verifies that the
  * program then runs the buffer's code and announced its hash.
  */

@@ -100,9 +100,6 @@ pub enum ErrorCode {
     #[msg("The zero key cannot be the owner")]
     OwnableInvalidOwner,
 
-    #[msg("The config is not a config in the previous build's layout")]
-    NotPreviousConfig,
-
     #[msg("Buffer is not a loader buffer holding a program")]
     InvalidUpgradeBuffer,
 

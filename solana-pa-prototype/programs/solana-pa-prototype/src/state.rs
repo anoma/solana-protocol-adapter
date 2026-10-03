@@ -11,10 +11,6 @@ use arm_core::Digest;
 #[constant]
 pub const SCHEMA_VERSION: u8 = 3;
 
-/// The schema version `migrate_state` migrates from.
-#[constant]
-pub const PREVIOUS_SCHEMA_VERSION: u8 = 2;
-
 /// The commitment of the empty kind table, under which every resource
 /// kind is derived via hash-to-curve: the table every deployment starts
 /// on, as pa-evm's `_EMPTY_KIND_TABLE_COMMITMENT`.
@@ -32,11 +28,11 @@ pub struct PAStateAccount {
     /// every layout: a later binary that changes the layout reads this byte
     /// through an unchecked account to decide whether it may migrate. Every
     /// instruction that reads this account — all but `initialize`, which
-    /// creates it, `migrate_state`, which requires the previous version, and
-    /// the development-only `dev_set_schema_version` — refuses an account
-    /// whose version is not `SCHEMA_VERSION`. A layout change bumps the
-    /// constant and may add, remove or reorder the other fields:
-    /// `migrate_state` parses the previous layout explicitly.
+    /// creates it, and the development-only `dev_set_schema_version` —
+    /// refuses an account whose version is not `SCHEMA_VERSION`. A layout
+    /// change bumps the constant and may add, remove or reorder the other
+    /// fields: the release that makes it ships a migration that parses the
+    /// previous layout explicitly.
     pub schema_version: u8,
     pub bump: u8,
     /// The adapter's owner, as OpenZeppelin's `OwnableUpgradeable` stores
@@ -159,49 +155,6 @@ impl PAStateAccount {
     }
 }
 
-/// The state account in schema version 2 (`PREVIOUS_SCHEMA_VERSION`), which
-/// `migrate_state` reads: this layout without the owner, whose role the
-/// program's upgrade authority played. Deserialized from the account's bytes
-/// after the discriminator.
-#[derive(AnchorDeserialize)]
-pub struct PreviousPAState {
-    pub schema_version: u8,
-    pub bump: u8,
-    pub verifier_router: Pubkey,
-    pub proof_selector: [u8; 4],
-    pub kind_table_commitment: [u8; 32],
-    pub paused: bool,
-    pub root: [u8; 32],
-    pub next_index: u64,
-    pub current_depth: u8,
-    pub frontier: Vec<[u8; 32]>,
-    pub min_expiry_slots: u64,
-    pub max_expiry_slots: u64,
-    pub denied_logic_refs: Vec<[u8; 32]>,
-}
-
-impl PreviousPAState {
-    /// This layout with the previous fields, owned by `owner`.
-    pub fn migrate(self, owner: Pubkey) -> PAStateAccount {
-        PAStateAccount {
-            schema_version: SCHEMA_VERSION,
-            bump: self.bump,
-            owner,
-            verifier_router: self.verifier_router,
-            proof_selector: self.proof_selector,
-            kind_table_commitment: self.kind_table_commitment,
-            paused: self.paused,
-            root: self.root,
-            next_index: self.next_index,
-            current_depth: self.current_depth,
-            frontier: self.frontier,
-            min_expiry_slots: self.min_expiry_slots,
-            max_expiry_slots: self.max_expiry_slots,
-            denied_logic_refs: self.denied_logic_refs,
-        }
-    }
-}
-
 #[constant]
 pub const PA_STATE_SEED: &[u8] = b"pa_state";
 
@@ -214,8 +167,8 @@ pub const PA_STATE_SEED: &[u8] = b"pa_state";
 pub const UPGRADE_AUTHORITY_SEED: &[u8] = b"upgrade_authority";
 
 /// This program's ProgramData account, derived at compile time, where the
-/// loader records the upgrade authority: the deployer until `initialize` (or
-/// `migrate_state`) hands it to the `UPGRADE_AUTHORITY_SEED` PDA.
+/// loader records the upgrade authority: the deployer until `initialize`
+/// hands it to the `UPGRADE_AUTHORITY_SEED` PDA.
 pub const PROGRAM_DATA: Pubkey = crate::upgrade::program_data_address(&crate::ID_CONST);
 
 /// Chunked transaction upload buffer.

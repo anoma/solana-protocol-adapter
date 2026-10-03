@@ -144,10 +144,6 @@ pub enum PAError {
     #[msg("The zero key cannot be the owner")]
     OwnableInvalidOwner,
 
-    // State layout migration
-    #[msg("PAState is not a state account in the previous schema version")]
-    NotPreviousSchema,
-
     // Upgrades
     #[msg("Buffer is not a loader buffer holding a program")]
     InvalidUpgradeBuffer,

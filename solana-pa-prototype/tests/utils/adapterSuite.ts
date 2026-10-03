@@ -304,8 +304,7 @@ function settleBudget(heapFrame: boolean) {
 
 /**
  * `settle_from_txdata` with the full CU budget and, unless `heapFrame` is
- * false, the 256 KiB heap frame settlement needs, through `adapter`: this
- * build's program, or a previous build's (tests/upgrade/).
+ * false, the 256 KiB heap frame settlement needs.
  */
 export function settleFromTxDataBuilder(
   authority: PublicKey,
@@ -314,9 +313,8 @@ export function settleFromTxDataBuilder(
   newRootMarker: PublicKey | null,
   remainingAccounts: AccountMeta[],
   heapFrame = true,
-  adapter: anchor.Program<any> = program,
 ) {
-  return adapter.methods
+  return program.methods
     .settleFromTxdata(uploadId)
     .accountsPartial({
       paState,

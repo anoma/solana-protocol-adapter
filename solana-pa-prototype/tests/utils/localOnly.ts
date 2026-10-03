@@ -1,9 +1,7 @@
 /**
  * The only builders in this repository for instructions that change an
  * authority or close protocol accounts for good: both programs'
- * `transfer_ownership` and `renounce_ownership`, the adapter's
- * `migrate_state` and the forwarder's `migrate_config` (which hand the
- * program's upgrade authority to its PDA), the forwarder's
+ * `transfer_ownership` and `renounce_ownership`, the forwarder's
  * `set_emergency_caller`, `close_escrow`, `close_config` and
  * `close_nonce_bitmaps_batch` (wrap replay protection), and the adapter's
  * dev-build `close_markers_batch` (settlement replay protection). They exist
@@ -58,16 +56,6 @@ export function localRenounceAdapterOwnership(program: Program<ProtocolAdapter>,
     .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
 }
 
-/**
- * The adapter's `migrate_state` by the program's upgrade authority, after an
- * in-place upgrade from the previous schema version: it becomes the stored
- * owner and hands the upgrade authority to the program's PDA.
- */
-export function localMigrateState(program: Program<ProtocolAdapter>, authority: PublicKey) {
-  assertLocalValidator(program.provider.connection);
-  return program.methods.migrateState().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
-}
-
 /** The forwarder's `transfer_ownership` by its owner `authority`, to `newOwner`. */
 export function localTransferForwarderOwnership(
   forwarder: Program<SplTokenForwarder>,
@@ -82,16 +70,6 @@ export function localTransferForwarderOwnership(
 export function localRenounceForwarderOwnership(forwarder: Program<SplTokenForwarder>, authority: PublicKey) {
   assertLocalValidator(forwarder.provider.connection);
   return forwarder.methods.renounceOwnership().accountsPartial({ authority });
-}
-
-/**
- * The forwarder's `migrate_config` by the program's upgrade authority, after
- * an in-place upgrade from the previous build: it becomes the stored owner
- * and hands the upgrade authority to the program's PDA.
- */
-export function localMigrateConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey) {
-  assertLocalValidator(forwarder.provider.connection);
-  return forwarder.methods.migrateConfig().accountsPartial({ authority });
 }
 
 /** `set_emergency_caller` by the committee; only while the adapter at `paState` is paused. */
