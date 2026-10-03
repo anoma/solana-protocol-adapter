@@ -1,11 +1,12 @@
 import * as anchor from "@anchor-lang/core";
+import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { setKindTableCommitment } from "../client/instructions";
 import { requireHexBytes } from "./cli-utils";
 
 async function main() {
-  const provider = anchor.AnchorProvider.env();
+  const provider = confirmedProvider();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
