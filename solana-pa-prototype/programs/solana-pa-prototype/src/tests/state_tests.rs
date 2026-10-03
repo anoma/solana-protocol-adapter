@@ -55,42 +55,17 @@ fn empty_kind_table_commitment_is_the_commitment_of_no_entries() {
     );
 }
 
-/// A schema-2 account is this layout without the 32-byte owner after the
-/// bump: removing those bytes from an encoding of this layout yields an
-/// account the previous build wrote, and migrating it must restore every
-/// field, with the migrating owner.
+/// Growing the tree and denying a logic ref resize the account to `space()`
+/// and serialize into it, so `space()` must be the exact encoding length.
 #[test]
-fn migrate_reads_the_previous_layout_field_for_field() {
-    use crate::state::{PreviousPAState, PREVIOUS_SCHEMA_VERSION};
-    let owner = Pubkey::new_unique();
+fn space_is_the_encoding_of_a_grown_state_with_denials() {
     let mut state = PAStateAccount {
-        owner,
-        paused: true,
-        next_index: 7,
-        min_expiry_slots: 123,
-        max_expiry_slots: 4567,
-        kind_table_commitment: [9; 32],
         denied_logic_refs: vec![[5; 32], [6; 32]],
         ..create_test_pa_state()
     };
     state.grow();
-    state.set_frontier(1, arm_core::Digest::from_bytes([3; 32]));
-
-    let mut previous = serialized(&state);
-    previous.drain(10..42);
-    previous[8] = PREVIOUS_SCHEMA_VERSION;
-    let migrated = PreviousPAState::deserialize(&mut &previous[8..])
-        .expect("the previous layout deserializes")
-        .migrate(owner);
-
     assert_eq!(
-        serialized(&migrated),
-        serialized(&state),
-        "migrating a schema-2 account must reproduce every field in this layout"
-    );
-    assert_eq!(
-        serialized(&migrated).len(),
-        PAStateAccount::space(migrated.depth(), migrated.denied_logic_refs.len()),
-        "migrate_state resizes the account to space() and serializes over every byte of it"
+        serialized(&state).len(),
+        PAStateAccount::space(state.depth(), state.denied_logic_refs.len()),
     );
 }

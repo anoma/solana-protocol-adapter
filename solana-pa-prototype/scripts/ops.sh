@@ -371,9 +371,8 @@ SELF_UPGRADING_PROGRAMS=(protocol_adapter spl_token_forwarder)
 
 # Upgrade <name> in place along the path its upgrade authority leaves: through
 # the program when the authority is the program's own PDA, through the
-# loader while the wallet still holds it (before `initialize` or
-# `migrate_state` hands it over), and through the loader for a program that
-# never owns its upgrades.
+# loader while the wallet still holds it (before `initialize` hands it
+# over), and through the loader for a program that never owns its upgrades.
 upgrade_one() {
   local name="$1" path
   if [[ " ${SELF_UPGRADING_PROGRAMS[*]} " != *" ${name} "* ]]; then

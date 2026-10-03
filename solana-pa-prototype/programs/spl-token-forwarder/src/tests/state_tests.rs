@@ -1,11 +1,11 @@
 //! Tests for the wire formats, the nonce bitmap, and the adapter-state read.
 
 use crate::state::{
-    base64_of_hash, nonce_to_word_and_bit, pa_is_paused, Config, NonceBitmap, PreviousConfig,
-    UnwrapInput, WrapInput, WrapMessage, CONFIG_PDA, CONFIG_SEED, ESCROW_AUTHORITY,
-    ESCROW_AUTHORITY_BUMP, ESCROW_SEED, NONCES_PER_WORD, NONCE_BITMAP_SEED, SIGNED_MESSAGE_LEN,
+    base64_of_hash, nonce_to_word_and_bit, pa_is_paused, Config, NonceBitmap, UnwrapInput,
+    WrapInput, WrapMessage, CONFIG_PDA, CONFIG_SEED, ESCROW_AUTHORITY, ESCROW_AUTHORITY_BUMP,
+    ESCROW_SEED, NONCES_PER_WORD, NONCE_BITMAP_SEED, SIGNED_MESSAGE_LEN,
 };
-use anchor_lang::prelude::{borsh, AnchorDeserialize, Pubkey};
+use anchor_lang::prelude::{borsh, Pubkey};
 use anchor_lang::AccountSerialize;
 use protocol_adapter::state::PAStateAccount;
 
@@ -319,42 +319,10 @@ fn nonce_bitmap_account_is_discriminator_word_and_bump() {
     assert_eq!(NonceBitmap::ACCOUNT_SIZE, 8 + 32 + 1);
 }
 
-/// The config is the discriminator, four keys, the version and the owner;
-/// the previous build's lacks the owner, and its size is what tells
-/// `migrate_config` the layout apart.
+/// The config is the discriminator, four keys, the version and the owner.
 #[test]
-fn config_sizes_tell_the_layouts_apart() {
+fn config_is_discriminator_four_keys_version_and_owner() {
     assert_eq!(Config::ACCOUNT_SIZE, 8 + 32 * 4 + 8 + 32);
-    assert_eq!(PreviousConfig::ACCOUNT_SIZE, 8 + 32 * 4 + 8);
-}
-
-/// A previous-build config is this layout without the trailing owner:
-/// removing it from an encoding of this layout yields an account the
-/// previous build wrote, and migrating it must restore every field, with
-/// the migrating owner.
-#[test]
-fn migrate_reads_the_previous_config_field_for_field() {
-    let owner = Pubkey::new_unique();
-    let config = Config {
-        protocol_adapter: Pubkey::new_unique(),
-        logic_ref: [7; 32],
-        emergency_committee: Pubkey::new_unique(),
-        emergency_caller: Pubkey::new_unique(),
-        version: 3,
-        owner,
-    };
-    let mut bytes = Vec::new();
-    config.try_serialize(&mut bytes).unwrap();
-    let previous = &bytes[8..bytes.len() - 32];
-    let migrated = PreviousConfig::deserialize(&mut &previous[..])
-        .expect("the previous layout deserializes")
-        .migrate(owner);
-    let mut migrated_bytes = Vec::new();
-    migrated.try_serialize(&mut migrated_bytes).unwrap();
-    assert_eq!(
-        migrated_bytes, bytes,
-        "migrating must reproduce every field in this layout"
-    );
 }
 
 // =============================================================================

@@ -1903,7 +1903,7 @@ dependencies = [
 
 [[package]]
 name = "protocol-adapter"
-version = "2.0.0-rc.2"
+version = "2.0.0-rc.3"
 dependencies = [
  "anchor-lang",
  "anoma-rm-core",
@@ -3943,7 +3943,7 @@ checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
 
 [[package]]
 name = "spl-token-forwarder"
-version = "2.0.0-rc.3"
+version = "2.0.0-rc.4"
 dependencies = [
  "anchor-lang",
  "anoma-pa-solana-client",
