@@ -15,6 +15,7 @@
  *   STF_TOKEN_MINTS  comma-separated base58 mints (optional)
  */
 import * as anchor from "@anchor-lang/core";
+import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
 import { BlockTimeForwarder } from "../target/types/block_time_forwarder";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
@@ -25,7 +26,7 @@ import { pubkeyList, requirePubkey } from "./cli-utils";
 import { getVerifierEntryPda, verifierOfEntry } from "../client/verifier";
 
 async function main() {
-  const provider = anchor.AnchorProvider.env();
+  const provider = confirmedProvider();
   anchor.setProvider(provider);
   const wallet = provider.wallet as anchor.Wallet;
   const adapter = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;

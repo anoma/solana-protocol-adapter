@@ -39,6 +39,7 @@
  *   STF_AMOUNT              raw token units (emergency-withdraw)
  */
 import * as anchor from "@anchor-lang/core";
+import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
 import { getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
@@ -48,7 +49,7 @@ import { emergencyWithdraw, escrowAccounts, initializeForwarder, reinitializeFor
 import { deriveConfigPda, derivePaStatePda } from "../client/pda";
 import { fail, requireHexBytes, requirePubkey, requireRawAmount } from "./cli-utils";
 
-const provider = anchor.AnchorProvider.env();
+const provider = confirmedProvider();
 anchor.setProvider(provider);
 const wallet = provider.wallet as anchor.Wallet;
 const connection = provider.connection;

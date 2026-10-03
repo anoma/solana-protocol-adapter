@@ -8,6 +8,7 @@
  * Idempotent: an adapter already in the requested state is left as it is.
  */
 import * as anchor from "@anchor-lang/core";
+import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { pauseAdapter, unpauseAdapter } from "../client/instructions";
@@ -20,7 +21,7 @@ async function main() {
   }
   const pause = action === "pause";
 
-  const provider = anchor.AnchorProvider.env();
+  const provider = confirmedProvider();
   anchor.setProvider(provider);
   const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
   const [paState] = derivePaStatePda(program.programId);

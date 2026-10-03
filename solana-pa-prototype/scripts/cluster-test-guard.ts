@@ -11,7 +11,8 @@
  *
  *   npx ts-node -P tsconfig.json scripts/cluster-test-guard.ts <program id>...
  */
-import { AnchorProvider, Program, setProvider, workspace } from "@anchor-lang/core";
+import { Program, setProvider, workspace } from "@anchor-lang/core";
+import { confirmedProvider } from "../client/provider";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
@@ -62,7 +63,7 @@ export function refuseOwnerWallet(wallet: PublicKey, roles: OwnerRole[]): void {
 async function main() {
   const programArgs = process.argv.slice(2);
   if (programArgs.length === 0) fail("usage: cluster-test-guard.ts <program id>...");
-  const provider = AnchorProvider.env();
+  const provider = confirmedProvider();
   setProvider(provider);
   const adapter = workspace.ProtocolAdapter as Program<ProtocolAdapter>;
   const forwarder = workspace.SplTokenForwarder as Program<SplTokenForwarder>;

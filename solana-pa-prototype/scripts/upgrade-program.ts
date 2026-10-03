@@ -15,6 +15,7 @@
  * program then runs the buffer's code and announced its hash.
  */
 import * as anchor from "@anchor-lang/core";
+import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
@@ -50,7 +51,7 @@ function selfUpgradingProgram(name: string): SelfUpgrading {
 
 async function main() {
   const [command, name, bufferArg] = process.argv.slice(2);
-  const provider = anchor.AnchorProvider.env();
+  const provider = confirmedProvider();
   anchor.setProvider(provider);
   const { program, upgrade, event } = selfUpgradingProgram(name);
   const wallet = provider.wallet.publicKey;
