@@ -1223,6 +1223,7 @@ dependencies = [
  "solana-message 4.4.1",
  "solana-rpc-client",
  "solana-signer",
+ "solana-system-interface 3.2.0",
  "solana-transaction 4.1.6",
  "surfpool-sdk",
  "tokio",

@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anoma_pa_testkit::environment::{Environment as CoreEnvironment, Prover, State, StateBuilder};
 use anoma_pa_testkit::transaction::Transaction;
 use anyhow::Context;
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use surfpool_sdk::{Pubkey, Surfnet};
 
@@ -55,6 +56,29 @@ impl<P: Prover<Transaction = Transaction>> CoreEnvironment for Environment<P> {
 }
 
 impl<P> Environment<P> {
+    /// Deploys `so` at `program`, upgradeable, with `upgrade_authority` as its
+    /// upgrade authority: a consumer's own program, such as a forwarder.
+    pub fn deploy_program(
+        &self,
+        program: Pubkey,
+        so: &[u8],
+        upgrade_authority: Pubkey,
+    ) -> anyhow::Result<()> {
+        runtime::deploy(&self.surfnet, program, so, upgrade_authority)
+    }
+
+    /// Sends `instructions` as one transaction the default signer pays for,
+    /// signed by it and `signers`, and waits for it to be confirmed: a
+    /// consumer's setup, such as minting a token and approving a delegate.
+    pub async fn send(
+        &self,
+        instructions: &[Instruction],
+        signers: &[&Keypair],
+    ) -> anyhow::Result<()> {
+        let adapter = &self.protocol_adapter;
+        runtime::send_signed(&adapter.rpc, &adapter.payer, signers, instructions, &[]).await
+    }
+
     /// The environment on `surfnet`, whose adapter `pa` is initialized: the
     /// protocol adapter read from it, and the test state.
     pub(in crate::envs) async fn assemble<F>(

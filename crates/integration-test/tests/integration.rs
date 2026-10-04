@@ -128,3 +128,48 @@ async fn the_lookup_table_serves_the_keys_a_forwarder_adds() -> anyhow::Result<(
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_consumer_deploys_its_program_and_sends_its_setup() -> anyhow::Result<()> {
+    use solana_keypair::Keypair;
+
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let rpc = env.protocol_adapter.rpc.clone();
+    let payer = env.protocol_adapter.payer.pubkey();
+
+    let program = Keypair::new().pubkey();
+    env.deploy_program(
+        program,
+        include_bytes!("../programs/mock_verifier.so"),
+        payer,
+    )?;
+    anyhow::ensure!(
+        rpc.get_account(&program).await?.executable,
+        "the deployed program is not executable"
+    );
+    let program_data = anoma_pa_solana_client::derive_program_data_address(&program);
+    let data = rpc.get_account_data(&program_data).await?;
+    // UpgradeableLoaderState::ProgramData: tag (4), slot (8), Option<Pubkey>.
+    anyhow::ensure!(
+        data[12] == 1 && data[13..45] == payer.to_bytes(),
+        "the program's upgrade authority is not the one given"
+    );
+
+    let account = Keypair::new();
+    env.send(
+        &[solana_system_interface::instruction::create_account(
+            &payer,
+            &account.pubkey(),
+            1_000_000,
+            0,
+            &solana_system_interface::program::ID,
+        )],
+        &[&account],
+    )
+    .await?;
+    anyhow::ensure!(
+        rpc.get_balance(&account.pubkey()).await? == 1_000_000,
+        "the account the extra signer created holds the wrong balance"
+    );
+    Ok(())
+}

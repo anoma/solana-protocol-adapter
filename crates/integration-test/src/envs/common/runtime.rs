@@ -53,13 +53,27 @@ pub(in crate::envs) async fn send(
     instructions: &[Instruction],
     tables: &[AddressLookupTableAccount],
 ) -> anyhow::Result<()> {
+    send_signed(rpc, payer, &[], instructions, tables).await
+}
+
+/// `send`, with `signers` signing besides `payer`.
+pub(in crate::envs) async fn send_signed(
+    rpc: &RpcClient,
+    payer: &Keypair,
+    signers: &[&Keypair],
+    instructions: &[Instruction],
+    tables: &[AddressLookupTableAccount],
+) -> anyhow::Result<()> {
     let blockhash = rpc
         .get_latest_blockhash()
         .await
         .context("failed to fetch a blockhash")?;
     let message = v0::Message::try_compile(&payer.pubkey(), instructions, tables, blockhash)
         .context("failed to compile the transaction")?;
-    let transaction = VersionedTransaction::try_new(VersionedMessage::V0(message), &[payer])
+    let all_signers: Vec<&Keypair> = std::iter::once(payer)
+        .chain(signers.iter().copied())
+        .collect();
+    let transaction = VersionedTransaction::try_new(VersionedMessage::V0(message), &all_signers)
         .context("failed to sign the transaction")?;
     rpc.send_and_confirm_transaction(&transaction)
         .await
