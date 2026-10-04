@@ -80,10 +80,6 @@ Commands:
                          at the local addresses, written to the
                          integration-test harness's programs/; with --check,
                          fails when a committed binary is not the fresh build
-  harness-test [--cluster devnet]
-                         The integration-test harness's tests on its local
-                         runtime; with --cluster devnet, its e2e cases on a
-                         fork of devnet (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN)
   validator            Start the local test validator (RISC0 verifier stack
                          and Program Metadata program copied from devnet,
                          marker fixtures preloaded)
@@ -96,7 +92,7 @@ Commands:
 Flags:
   --cluster <c>    Target cluster (required except test/unit-test/build-dev/build-release/
                    clippy/validator/validator-deploy/harness-programs; optional for
-                   verify-build and harness-test). Program addresses come from env/localnet.env
+                   verify-build). Program addresses come from env/localnet.env
                    and, for another cluster, env/<cluster>.env on top; a
                    first deploy reads each program's keypair path from the
                    uncommitted env/<cluster>.keys.env
@@ -224,13 +220,25 @@ PRINT_EXPLORER=false
 ALLOW_DEV_TEARDOWN=false
 WALLET=""
 
-# Set RPC_URL to CLUSTER's endpoint: --url, else <CLUSTER>_RPC_URL (the
-# local validator's on localnet).
-resolve_rpc_url() {
+resolve_cluster() {
+  local default_wallet=""
   case "$CLUSTER" in
-    localnet) RPC_URL="$CLUSTER_URL" ;;
-    devnet) RPC_URL="${DEVNET_RPC_URL:-}" ;;
-    mainnet) RPC_URL="${MAINNET_RPC_URL:-}" ;;
+    localnet)
+      # validator-deploy.sh's defaults for the local test validator
+      RPC_URL="$CLUSTER_URL"
+      default_wallet="$ANCHOR_WALLET_PATH"
+      ALLOW_DEV_TEARDOWN=true
+      ;;
+    devnet)
+      RPC_URL="${DEVNET_RPC_URL:-}"
+      EXPLORER_QS="?cluster=devnet"
+      PRINT_EXPLORER=true
+      default_wallet="${PROJECT_DIR}/scripts/devnet-wallet.json"
+      ;;
+    mainnet)
+      RPC_URL="${MAINNET_RPC_URL:-}"
+      PRINT_EXPLORER=true
+      ;;
     "")
       echo "❌ Missing --cluster <localnet|devnet|mainnet>" >&2
       exit 1
@@ -250,26 +258,6 @@ resolve_rpc_url() {
     echo "❌ No RPC endpoint for ${CLUSTER}: pass --url <rpc> or set ${CLUSTER^^}_RPC_URL." >&2
     exit 1
   fi
-}
-
-resolve_cluster() {
-  local default_wallet=""
-  resolve_rpc_url
-  case "$CLUSTER" in
-    localnet)
-      # validator-deploy.sh's defaults for the local test validator
-      default_wallet="$ANCHOR_WALLET_PATH"
-      ALLOW_DEV_TEARDOWN=true
-      ;;
-    devnet)
-      EXPLORER_QS="?cluster=devnet"
-      PRINT_EXPLORER=true
-      default_wallet="${PROJECT_DIR}/scripts/devnet-wallet.json"
-      ;;
-    mainnet)
-      PRINT_EXPLORER=true
-      ;;
-  esac
 
   WALLET="${WALLET_OVERRIDE:-$default_wallet}"
   if [[ -z "$WALLET" ]]; then
@@ -795,58 +783,31 @@ HARNESS_PROGRAMS=(protocol_adapter mock_verifier)
 HARNESS_PROGRAMS_DIR="${PROJECT_DIR}/../crates/integration-test/programs"
 
 # Build the harness programs deterministically and write them to
-# HARNESS_PROGRAMS_DIR; with --check, fail instead when a committed binary's
-# executable hash is not the fresh build's.
+# HARNESS_PROGRAMS_DIR; with --check, fail instead when a committed binary is
+# not, byte for byte, the fresh build.
 cmd_harness_programs() {
   local name built committed failed=0
   for name in "${HARNESS_PROGRAMS[@]}"; do
     deterministic_build "$name"
-    built="$(solana-verify get-executable-hash "target/deploy/${name}.so")"
+    built="target/deploy/${name}.so"
+    committed="${HARNESS_PROGRAMS_DIR}/${name}.so"
     if [[ "$CHECK" == "true" ]]; then
-      if [[ ! -f "${HARNESS_PROGRAMS_DIR}/${name}.so" ]]; then
-        echo "❌ ${HARNESS_PROGRAMS_DIR}/${name}.so is missing; write it with ./scripts/dev.sh harness-programs." >&2
+      if [[ ! -f "$committed" ]]; then
+        echo "❌ ${committed} is missing; write it with ./scripts/dev.sh harness-programs." >&2
         failed=1
-        continue
-      fi
-      committed="$(solana-verify get-executable-hash "${HARNESS_PROGRAMS_DIR}/${name}.so")"
-      if [[ "$built" == "$committed" ]]; then
-        echo "✅ ${name}: the committed binary is the deterministic build (${built})"
+      elif cmp -s "$built" "$committed"; then
+        echo "✅ ${name}: the committed binary is the deterministic build"
       else
-        echo "❌ ${name}: the committed binary (${committed}) is not the deterministic build (${built}); rewrite it with ./scripts/dev.sh harness-programs." >&2
+        echo "❌ ${name}: the committed binary is not the deterministic build; rewrite it with ./scripts/dev.sh harness-programs." >&2
         failed=1
       fi
     else
       mkdir -p "$HARNESS_PROGRAMS_DIR"
-      cp "target/deploy/${name}.so" "${HARNESS_PROGRAMS_DIR}/${name}.so"
-      echo "Wrote ${HARNESS_PROGRAMS_DIR}/${name}.so (${built})"
+      cp "$built" "$committed"
+      echo "Wrote ${committed} ($(solana-verify get-executable-hash "$committed"))"
     fi
   done
   return "$failed"
-}
-
-# The integration-test harness's tests (crates/integration-test). Without a
-# cluster, on its local runtime; with --cluster devnet, its e2e cases on a
-# runtime forking devnet through the cluster's RPC endpoint, proven by the
-# queue at QUEUE_BASE_URL (QUEUE_AUTH_TOKEN), one test at a time.
-cmd_harness_test() {
-  local crate="${PROJECT_DIR}/../crates/integration-test"
-  case "${CLUSTER:-}" in
-    "")
-      (cd "$crate" && cargo test)
-      ;;
-    devnet)
-      resolve_rpc_url
-      if [[ -z "${QUEUE_BASE_URL:-}" || -z "${QUEUE_AUTH_TOKEN:-}" ]]; then
-        echo "❌ The e2e cases prove with the queue: set QUEUE_BASE_URL and QUEUE_AUTH_TOKEN." >&2
-        exit 1
-      fi
-      (cd "$crate" && DEVNET_RPC_URL="$RPC_URL" RUST_TEST_THREADS=1 cargo test --features e2e e2e_test)
-      ;;
-    *)
-      echo "❌ harness-test runs locally, or with --cluster devnet on a fork of devnet." >&2
-      exit 1
-      ;;
-  esac
 }
 
 # Deterministic (verifiable) build of the PA via solana-verify's pinned
@@ -1057,10 +1018,6 @@ case "$COMMAND" in
       exit 1
     fi
     cmd_harness_programs
-    ;;
-  harness-test)
-    require_cmd cargo
-    cmd_harness_test
     ;;
   refresh-devnet-programs)
     if [[ -z "$RPC_OVERRIDE" ]]; then

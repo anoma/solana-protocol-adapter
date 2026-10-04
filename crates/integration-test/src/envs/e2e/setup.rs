@@ -8,14 +8,11 @@ use anoma_rm_risc0::compliance::KindTableEntry;
 use anoma_rm_risc0::constants::{init_kind_table_from_entries, kind_table_hash};
 use anyhow::Context;
 use solana_keypair::Keypair;
-use surfpool_sdk::Pubkey;
 
 use super::super::common::addresses::{DEVNET, program_id};
-use super::super::common::protocol_adapter::{ProtocolAdapter, read_state};
-use super::super::common::runtime;
 use super::Environment;
 use super::config::E2eConfig;
-use crate::state;
+use crate::state::cluster::Cluster;
 
 impl Environment {
     pub async fn setup_bare() -> anyhow::Result<Self> {
@@ -32,53 +29,27 @@ impl Environment {
         // so its address comes from the deployment record rather than a fresh
         // deployment; forking keeps devnet's state from being mutated.
         let payer = Arc::new(Keypair::new());
-        let surfnet = runtime::builder(&payer)
+        let surfnet = super::super::common::runtime::builder(&payer)
             .offline(false)
             .remote_rpc_url(config.devnet_rpc_url.clone())
             .start()
             .await
             .context("failed to start the surfpool runtime forking devnet")?;
-        let rpc = runtime::client(&surfnet);
-
         let pa = program_id(DEVNET, "PROTOCOL_ADAPTER")?;
-        let pa_state = read_state(&rpc, &pa).await?;
-        load_kind_table(pa_state.kind_table_commitment)?;
-
-        let router = Pubkey::new_from_array(pa_state.verifier_router);
-        let verifier = runtime::verifier_program(&rpc, router, pa_state.proof_selector).await?;
-        let lookup_table = runtime::create_settlement_lookup_table(
-            &rpc,
-            &payer,
-            pa,
-            router,
-            pa_state.proof_selector,
-            verifier,
-        )
-        .await?;
-
         let prover = QueueProver::new(&config.queue_base_url, &config.queue_auth_token)
             .context("failed to build queue prover")?;
 
-        let state = {
-            let mut builder = StateBuilder::new();
-            state::insert(
-                &mut builder,
-                surfnet.rpc_url().to_string(),
-                payer.clone(),
-                pa,
-            );
-            insert_additional(&mut builder)
-                .await
-                .context("failed to insert additional data into state")?;
-            builder.finalize()
-        };
-
-        Ok(Self {
-            protocol_adapter: ProtocolAdapter::new(rpc, payer, pa, verifier, lookup_table).await?,
+        let env = Self::assemble(
             surfnet,
-            state,
+            Cluster::Devnet,
+            payer,
+            pa,
             prover,
-        })
+            insert_additional,
+        )
+        .await?;
+        load_kind_table(env.protocol_adapter.state().await?.kind_table_commitment)?;
+        Ok(env)
     }
 }
 

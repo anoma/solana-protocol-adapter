@@ -93,7 +93,7 @@ jobs:
 
   # The integration-test harness (crates/integration-test, its own
   # workspace): its local tests on surfpool. Its e2e cases need devnet and the
-  # proving queue (dev.sh harness-test --cluster devnet).
+  # proving queue (dev.sh harness-test --e2e).
   harness:
     name: Harness
     runs-on: ubuntu-latest
@@ -122,8 +122,8 @@ jobs:
         run: cargo clippy --all-targets --features e2e -- -D warnings
 
       - name: Run tests
-        working-directory: ./solana-pa-prototype
-        run: ./scripts/ops.sh harness-test
+        working-directory: ./crates/integration-test
+        run: cargo test
 
   # The integration-test harness ships the programs it loads; each must be
   # the deterministic build of this commit.
@@ -140,6 +140,10 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ env.RUST_VERSION }}
+
+      # Caches ~/.cargo/bin, so solana-verify is built once per version.
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Install solana-verify
         run: cargo install solana-verify --version 0.5.2 --locked

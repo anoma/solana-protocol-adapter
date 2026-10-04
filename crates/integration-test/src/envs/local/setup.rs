@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
 use anoma_pa_solana_client::derive_verifier_router_pdas;
+use anoma_pa_solana_client::settlement_input::MOCK_SELECTOR;
 use anoma_pa_testkit::environment::StateBuilder;
+use anoma_pa_testkit::prover::LocalProver;
 use anyhow::Context;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
@@ -9,12 +11,8 @@ use surfpool_sdk::Pubkey;
 
 use super::super::common::addresses::{LOCALNET, program_id};
 use super::super::common::runtime;
-use super::{Environment, ProtocolAdapter};
-use crate::state;
-
-/// The selector the mock verifier is registered under, and the verifier
-/// parameters of pa-testkit's local proof (`[u32::MAX; 8]`) begin with.
-const MOCK_SELECTOR: [u8; 4] = [0xff; 4];
+use super::Environment;
+use crate::state::cluster::Cluster;
 
 /// The programs the harness ships: the deterministic builds at the local
 /// addresses (`dev.sh harness-programs`).
@@ -59,7 +57,7 @@ impl Environment {
         let pa = program_id(LOCALNET, "PROTOCOL_ADAPTER")?;
         let mock_verifier = program_id(LOCALNET, "MOCK_VERIFIER")?;
 
-        runtime::deploy(&surfnet, &rpc, router, VERIFIER_ROUTER_SO, payer.pubkey()).await?;
+        runtime::deploy(&surfnet, router, VERIFIER_ROUTER_SO, payer.pubkey())?;
         anyhow::ensure!(
             runtime::set_account_dump(&surfnet, VERIFIER_ROUTER_STATE)? == router_state,
             "the committed router state is not the router's state account {router_state}"
@@ -69,53 +67,24 @@ impl Environment {
             "the committed mock verifier entry is not the router's entry {mock_entry} for \
              selector {MOCK_SELECTOR:02x?}"
         );
-        runtime::deploy(
-            &surfnet,
-            &rpc,
-            mock_verifier,
-            MOCK_VERIFIER_SO,
-            payer.pubkey(),
-        )
-        .await?;
-        runtime::deploy(&surfnet, &rpc, pa, PROTOCOL_ADAPTER_SO, payer.pubkey()).await?;
+        runtime::deploy(&surfnet, mock_verifier, MOCK_VERIFIER_SO, payer.pubkey())?;
+        runtime::deploy(&surfnet, pa, PROTOCOL_ADAPTER_SO, payer.pubkey())?;
         let entry_verifier = runtime::verifier_program(&rpc, router, MOCK_SELECTOR).await?;
         anyhow::ensure!(
             entry_verifier == mock_verifier,
             "the mock verifier entry names {entry_verifier}, the mock verifier is {mock_verifier} \
              (env/localnet.env)"
         );
-
         runtime::initialize(&rpc, &payer, pa, router, MOCK_SELECTOR).await?;
-        let lookup_table = runtime::create_settlement_lookup_table(
-            &rpc,
-            &payer,
-            pa,
-            router,
-            MOCK_SELECTOR,
-            mock_verifier,
-        )
-        .await?;
 
-        let state = {
-            let mut builder = StateBuilder::new();
-            state::insert(
-                &mut builder,
-                surfnet.rpc_url().to_string(),
-                payer.clone(),
-                pa,
-            );
-            insert_additional(&mut builder)
-                .await
-                .context("failed to insert additional data into state")?;
-            builder.finalize()
-        };
-
-        Ok(Self {
-            protocol_adapter: ProtocolAdapter::new(rpc, payer, pa, mock_verifier, lookup_table)
-                .await?,
+        Self::assemble(
             surfnet,
-            state,
-            prover: anoma_pa_testkit::prover::LocalProver,
-        })
+            Cluster::Localnet,
+            payer,
+            pa,
+            LocalProver,
+            insert_additional,
+        )
+        .await
     }
 }

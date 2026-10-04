@@ -5,7 +5,7 @@ use anoma_pa_solana_client::{
     PADDING_LEAF, PAStateAccount, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
     derive_pa_state_pda, derive_root_marker_pda, plan_settlement,
 };
-use anoma_pa_testkit::commitment_tree::{FrontierCommitmentTree, depth_at};
+use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree;
 use anoma_pa_testkit::environment::CommitmentTree as _;
 use anoma_pa_testkit::environment::ProtocolAdapter as CoreProtocolAdapter;
 use anoma_pa_testkit::environment::Transaction as CoreTransaction;
@@ -19,8 +19,9 @@ use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
-use super::runtime::send;
+use super::runtime::{create_settlement_lookup_table, send, verifier_program};
 
+/// The Solana protocol adapter, settling through transaction-data uploads.
 pub struct ProtocolAdapter {
     pub rpc: Arc<RpcClient>,
     /// Pays for and signs every upload and settlement.
@@ -36,36 +37,33 @@ pub struct ProtocolAdapter {
 }
 
 impl ProtocolAdapter {
-    /// The adapter `program`, with the commitment tree its state holds.
+    /// The initialized adapter `program`: the verifier its router and
+    /// selector name, a settlement lookup table `payer` creates for it, and
+    /// the commitment tree its state holds.
     pub(in crate::envs) async fn new(
         rpc: Arc<RpcClient>,
         payer: Arc<Keypair>,
         program: Pubkey,
-        verifier_program: Pubkey,
-        lookup_table: AddressLookupTableAccount,
     ) -> anyhow::Result<Self> {
         let state = read_state(&rpc, &program).await?;
-        let count =
-            usize::try_from(state.next_index).context("the commitment count exceeds usize")?;
-        let sides = state
-            .frontier
-            .get(..depth_at(count))
-            .with_context(|| {
-                format!(
-                    "the adapter stores {} frontier nodes at {count} leaves",
-                    state.frontier.len()
-                )
-            })?
-            .iter()
-            .map(|side| Digest::from_bytes(*side))
-            .collect();
+        let router = Pubkey::new_from_array(state.verifier_router);
+        let verifier_program = verifier_program(&rpc, router, state.proof_selector).await?;
+        let lookup_table = create_settlement_lookup_table(
+            &rpc,
+            &payer,
+            program,
+            router,
+            state.proof_selector,
+            verifier_program,
+        )
+        .await?;
         let adapter = Self {
             rpc,
             payer,
             program,
             verifier_program,
             lookup_table,
-            commitment_tree: FrontierCommitmentTree::new(count, sides)?,
+            commitment_tree: crate::commitment_tree::from_state(&state)?,
             next_upload_id: 0,
         };
         adapter.ensure_latest_root(&state)?;
@@ -173,11 +171,15 @@ impl CoreProtocolAdapter for ProtocolAdapter {
             .await
             .context("failed to create the transaction-data upload")?;
         let settled = async {
-            for (i, write) in plan.writes.into_iter().enumerate() {
-                send(rpc, payer, &[write], &[])
-                    .await
-                    .with_context(|| format!("failed to write chunk {i} of the upload"))?;
-            }
+            // Each write names its offset, so the chunks land in any order.
+            futures::future::try_join_all(plan.writes.into_iter().enumerate().map(
+                |(i, write)| async move {
+                    send(rpc, payer, &[write], &[])
+                        .await
+                        .with_context(|| format!("failed to write chunk {i} of the upload"))
+                },
+            ))
+            .await?;
             send(
                 rpc,
                 payer,

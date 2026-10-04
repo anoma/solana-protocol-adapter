@@ -563,12 +563,11 @@ fn require_aggregation_mut(tx: &mut Transaction) -> Result<&mut Aggregation> {
         .ok_or_else(|| anyhow!("transaction has no aggregation"))
 }
 
-/// Extract the Groth16 selector from a transaction's seal-encoded
-/// aggregation proof.
-fn extract_selector(tx: &Transaction) -> Result<String> {
+/// The verifier selector of a transaction's seal-encoded aggregation proof.
+fn seal_selector(tx: &Transaction) -> Result<[u8; 4]> {
     let seal: Seal = Seal::try_from_slice(&require_aggregation(tx)?.proof)
         .context("decode Seal from aggregation proof bytes")?;
-    Ok(format!("0x{}", hex::encode(seal.selector)))
+    Ok(seal.selector)
 }
 
 /// Flip one bit of a tag of the aggregation instance's first action: its
@@ -1663,7 +1662,10 @@ fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
     mutate_tag_keep_structure(&mut tx_tampered)?;
     let tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
 
-    let selector = extract_selector(tx).context("extract selector from proof")?;
+    let selector = format!(
+        "0x{}",
+        hex::encode(seal_selector(tx).context("extract selector from proof")?)
+    );
     eprintln!("  selector: {selector}");
 
     Ok(DerivedFixtureFields {
@@ -1694,9 +1696,7 @@ fn finalize_and_write_fixture(
     // (aggregation_proof_type, selector).
     let proof_type = timed_phase("encode_seal", || {
         *tx = settlement_transaction(tx.clone()).context("encode the aggregation seal")?;
-        let seal = Seal::try_from_slice(&require_aggregation(tx)?.proof)
-            .context("decode Seal from aggregation proof bytes")?;
-        Ok(if seal.selector == MOCK_SELECTOR {
+        Ok(if seal_selector(tx)? == MOCK_SELECTOR {
             "mock"
         } else {
             "groth16"

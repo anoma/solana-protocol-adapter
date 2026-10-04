@@ -4,9 +4,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anoma_pa_solana_client::{
-    adapter_settlement_lookup_keys, derive_verifier_entry_pda, initialize_ix,
+    adapter_settlement_lookup_keys, decode_verifier_entry, derive_verifier_entry_pda, initialize_ix,
 };
 use anyhow::Context;
+use base64::Engine;
+use serde::Deserialize;
 use solana_address_lookup_table_interface::instruction::{
     create_lookup_table, extend_lookup_table,
 };
@@ -18,7 +20,7 @@ use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
-use surfpool_sdk::cheatcodes::builders::{DeployProgram, SetAccount};
+use surfpool_sdk::cheatcodes::builders::{CheatcodeBuilder, DeployProgram, SetAccount};
 use surfpool_sdk::{BlockProductionMode, Pubkey, Surfnet, SurfnetBuilder};
 
 /// The SOL the default signer starts with. surfpool refuses an airdrop of a
@@ -67,73 +69,82 @@ pub(in crate::envs) async fn send(
     Ok(())
 }
 
+/// surfpool's `surfnet_setProgramAuthority`: the upgrade authority of an
+/// upgradeable program.
+struct SetProgramAuthority {
+    program: Pubkey,
+    authority: Pubkey,
+}
+
+impl CheatcodeBuilder for SetProgramAuthority {
+    const METHOD: &'static str = "surfnet_setProgramAuthority";
+
+    fn build(self) -> serde_json::Value {
+        serde_json::json!([self.program.to_string(), self.authority.to_string()])
+    }
+}
+
 /// Deploys `so` at `program`, upgradeable, with `authority` as its upgrade
 /// authority.
-pub(in crate::envs) async fn deploy(
+pub(in crate::envs) fn deploy(
     surfnet: &Surfnet,
-    rpc: &RpcClient,
     program: Pubkey,
     so: &[u8],
     authority: Pubkey,
 ) -> anyhow::Result<()> {
-    surfnet
-        .cheatcodes()
+    let cheats = surfnet.cheatcodes();
+    cheats
         .deploy(DeployProgram::new(program).so_bytes(so.to_vec()))
         .with_context(|| format!("failed to deploy {program}"))?;
-    let _: serde_json::Value = rpc
-        .send(
-            solana_rpc_client_api::request::RpcRequest::Custom {
-                method: "surfnet_setProgramAuthority",
-            },
-            serde_json::json!([program.to_string(), authority.to_string()]),
-        )
-        .await
+    cheats
+        .execute(SetProgramAuthority { program, authority })
         .with_context(|| format!("failed to set the upgrade authority of {program}"))?;
     Ok(())
 }
 
-/// Writes an account dump in `solana account --output json` form, as the
-/// adapter repository commits its devnet copies and genesis fixtures.
-pub(in crate::envs) fn set_account_dump(surfnet: &Surfnet, dump: &str) -> anyhow::Result<Pubkey> {
-    use base64::Engine;
+/// An account dump in `solana account --output json` form, as the adapter
+/// repository commits its devnet copies and genesis fixtures.
+#[derive(Deserialize)]
+struct AccountDump {
+    pubkey: String,
+    account: DumpedAccount,
+}
 
-    let value: serde_json::Value =
-        serde_json::from_str(dump).context("the account dump is not JSON")?;
-    let field = |path: &str| {
-        value
-            .pointer(path)
-            .with_context(|| format!("the account dump has no {path}"))
-    };
-    let address: Pubkey = field("/pubkey")?
-        .as_str()
-        .context("pubkey is not a string")?
-        .parse()
-        .context("pubkey is not base58")?;
+#[derive(Deserialize)]
+struct DumpedAccount {
+    lamports: u64,
+    /// The data and its encoding, which is base64.
+    data: (String, String),
+    owner: String,
+    executable: bool,
+}
+
+/// Writes the account `dump` describes, and returns its address.
+pub(in crate::envs) fn set_account_dump(surfnet: &Surfnet, dump: &str) -> anyhow::Result<Pubkey> {
+    let AccountDump { pubkey, account } =
+        serde_json::from_str(dump).context("the account dump is not one")?;
+    let address: Pubkey = pubkey.parse().context("the dump's pubkey is not base58")?;
+    anyhow::ensure!(
+        account.data.1 == "base64",
+        "the dump of {address} encodes its data as {}, not base64",
+        account.data.1
+    );
     let data = base64::engine::general_purpose::STANDARD
-        .decode(
-            field("/account/data/0")?
-                .as_str()
-                .context("data is not a string")?,
-        )
-        .context("data is not base64")?;
+        .decode(&account.data.0)
+        .context("the dump's data is not base64")?;
     surfnet
         .cheatcodes()
         .execute(
             SetAccount::new(address)
-                .lamports(field("/account/lamports")?.as_u64().context("lamports")?)
+                .lamports(account.lamports)
                 .data(data)
                 .owner(
-                    field("/account/owner")?
-                        .as_str()
-                        .context("owner is not a string")?
+                    account
+                        .owner
                         .parse()
-                        .context("owner is not base58")?,
+                        .context("the dump's owner is not base58")?,
                 )
-                .executable(
-                    field("/account/executable")?
-                        .as_bool()
-                        .context("executable is not a bool")?,
-                ),
+                .executable(account.executable),
         )
         .with_context(|| format!("failed to set account {address}"))?;
     Ok(address)
@@ -164,24 +175,20 @@ pub(in crate::envs) async fn initialize(
     .context("failed to initialize the protocol adapter")
 }
 
-/// The verifier program the router's entry for `selector` names. The entry is
-/// the router's `VerifierEntry { selector: [u8; 4], verifier: Pubkey, paused:
-/// bool }` behind Anchor's 8-byte discriminator.
+/// The verifier program the router's entry for `selector` names.
 pub(in crate::envs) async fn verifier_program(
     rpc: &RpcClient,
     router: Pubkey,
     selector: [u8; 4],
 ) -> anyhow::Result<Pubkey> {
-    const VERIFIER: std::ops::Range<usize> = 12..44;
     let entry = derive_verifier_entry_pda(&router, selector);
     let data = rpc
         .get_account_data(&entry)
         .await
         .with_context(|| format!("the router has no verifier entry {entry}"))?;
-    let verifier = data
-        .get(VERIFIER)
-        .with_context(|| format!("the verifier entry {entry} holds {} bytes", data.len()))?;
-    Ok(Pubkey::try_from(verifier).expect("a 32-byte slice is an address"))
+    let decoded =
+        decode_verifier_entry(&data).with_context(|| format!("the verifier entry {entry}"))?;
+    Ok(Pubkey::new_from_array(decoded.verifier))
 }
 
 /// Creates the deployment's settlement lookup table with the adapter's part of

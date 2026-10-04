@@ -76,7 +76,7 @@ entry point for one fixture.
 | `./scripts/dev.sh validator` | Start a local validator with the devnet programs (verifier stack, Program Metadata), without the workspace programs |
 | `./scripts/dev.sh validator-deploy` | Build, start a validator with every program loaded at genesis, and keep it running for external clients |
 | `./scripts/dev.sh gen-fixtures` / `regen-fixtures` / `fixture-test` | Fixture generation and fixture-gen's tests |
-| `./scripts/dev.sh harness-test [--cluster devnet]` | The integration-test harness's tests on surfpool; with `--cluster devnet`, its e2e cases on a fork of devnet, proven by the queue (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`) |
+| `./scripts/dev.sh harness-test [--e2e]` | The integration-test harness's tests on surfpool; with `--e2e`, its e2e cases on a fork of devnet (`DEVNET_RPC_URL`), proven by the queue (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`) |
 | `./scripts/dev.sh harness-programs [--check]` | Write the harness's program binaries (the deterministic builds); `--check` fails when the committed ones are not |
 | `./scripts/dev.sh lock-check` / `lock-sync <pkg>` | Check / re-align the Cargo.lock files' shared dependencies |
 | `./scripts/dev.sh update-deps` | Regenerate `yarn.lock` |
@@ -337,7 +337,7 @@ anoma_pa_testkit::execute_tx(&mut env, tx).await?;
 - **`local`** (default feature): an offline [surfpool](https://github.com/txtx/surfpool) runtime with the verifier router copy, the mock verifier, and the adapter build the crate ships (`crates/integration-test/programs/`, the deterministic build of the tag, which CI checks), initialized with the mock selector; pa-testkit's local prover.
 - **`e2e`**: a runtime forking devnet (`DEVNET_RPC_URL`), on the adapter devnet runs with the state it holds, the kind table recorded for devnet checked against the one it stores; pa-testkit's queue prover (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`).
 
-`ProtocolAdapter::execute` settles the way every submitter does (the client crate's `settlement_input` and `plan_settlement`: upload, settle as a v0 transaction through a settlement lookup table, close), and the commitment tree pa-testkit builds from the adapter's frontier must give the root the adapter stores after each settlement. The test state holds the runtime's RPC endpoint, the funded default signer and the adapter's address (`state::rpc_url`, `default_signer`, `pa_program`).
+`ProtocolAdapter::execute` settles the way every submitter does (the client crate's `settlement_input` and `plan_settlement`: upload, settle as a v0 transaction through a settlement lookup table, close), and the commitment tree pa-testkit builds from the adapter's frontier must give the root the adapter stores after each settlement. The test state holds, as pa-evm's harness keeps them, the cluster and the runtime's RPC endpoint (`state::cluster`), the funded default signer (`state::actors`) and the adapter's address (`state::pa`); `suite_tests!` emits pa-testkit's chain-agnostic tests for an environment.
 
 ## Building a Client
 

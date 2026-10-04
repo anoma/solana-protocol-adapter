@@ -63,8 +63,8 @@ A consumer that pins the harness gets its source, not built programs. The harnes
 
 The harness's own tests, in a CI job of the adapter repository:
 
-- pa-testkit's chain-agnostic suite (`suite`), which holds pa-evm's integration tests as functions over any `Environment`: a trivial, an n:m, a multi-action and two consume-only transactions settle; the prover refuses invalid witnesses; a transaction whose aggregation seal is tampered with is refused (here with the mock verifier's `ClaimDigestMismatch`);
-- after each settlement, the host-side tree's root equals the adapter's;
+- pa-testkit's chain-agnostic suite (`suite`, emitted per environment by `suite_tests!`), which holds pa-evm's integration tests as functions over any `Environment`: a trivial, an n:m, a multi-action and two consume-only transactions settle; the prover refuses invalid witnesses; a transaction whose aggregation seal is tampered with is refused (here with the mock verifier's `ClaimDigestMismatch`);
+- after each settlement, the host-side tree's root equals the adapter's (`execute` checks it, so every settling test does);
 - the adapter's stored frontier is the sides `FrontierCommitmentTree` starts from, for every count up to 33 leaves;
 - a transaction consuming a root the adapter does not store fails before anything is sent, naming the action and resource;
 - the settlement-input conversion of each of the three receipts (unit tests in the client crate);

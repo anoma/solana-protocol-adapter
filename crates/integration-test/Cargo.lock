@@ -1183,7 +1183,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.4.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=b8d2eb63d3938a1405d058dfedc11277092bd844#b8d2eb63d3938a1405d058dfedc11277092bd844"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=71eaff2f5796584f9c8a3ef3e8ddf648ac36b7cd#71eaff2f5796584f9c8a3ef3e8ddf648ac36b7cd"
 dependencies = [
  "anoma-rm-risc0",
  "base64 0.22.1",
@@ -1212,7 +1212,8 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "dotenvy",
- "rstest",
+ "futures 0.3.34",
+ "serde",
  "serde_json",
  "solana-address-lookup-table-interface 3.1.0",
  "solana-commitment-config",
@@ -1220,7 +1221,6 @@ dependencies = [
  "solana-keypair",
  "solana-message 4.4.1",
  "solana-rpc-client",
- "solana-rpc-client-api",
  "solana-signer",
  "solana-transaction 4.1.6",
  "surfpool-sdk",
@@ -1230,7 +1230,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-testkit"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/anoma/pa-testkit?rev=05449c966475cde00762c5cc14ed89f561e02523#05449c966475cde00762c5cc14ed89f561e02523"
+source = "git+https://github.com/anoma/pa-testkit?rev=af955de04d2213412d5da5cdd8ac268ebe5e5093#af955de04d2213412d5da5cdd8ac268ebe5e5093"
 dependencies = [
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
@@ -4284,12 +4284,6 @@ name = "futures-task"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cd417de3d1d015fc3bfd2b1ea46dfc7bab72ef86f1cc7cc9c78e728b34a6d1fd"
-
-[[package]]
-name = "futures-timer"
-version = "3.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af43fadb8a98512d547e37b4e92e0ced13e205c061b87b4623eff01d918d6968"
 
 [[package]]
 name = "futures-util"
@@ -7560,12 +7554,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "relative-path"
-version = "1.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
-
-[[package]]
 name = "reqwest"
 version = "0.11.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7986,35 +7974,6 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "rstest"
-version = "0.26.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5a3193c063baaa2a95a33f03035c8a72b83d97a54916055ba22d35ed3839d49"
-dependencies = [
- "futures-timer",
- "futures-util",
- "rstest_macros",
-]
-
-[[package]]
-name = "rstest_macros"
-version = "0.26.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c845311f0ff7951c5506121a9ad75aec44d083c31583b2ea5a30bcb0b0abba0"
-dependencies = [
- "cfg-if 1.0.5",
- "glob",
- "proc-macro-crate 3.5.0",
- "proc-macro2",
- "quote",
- "regex",
- "relative-path",
- "rustc_version 0.4.1",
- "syn 2.0.119",
- "unicode-ident",
 ]
 
 [[package]]
