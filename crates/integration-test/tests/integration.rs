@@ -20,6 +20,7 @@ mod local {
             "Error Code: ClaimDigestMismatch. Error Number: 6600. Error Message: mock seal claim \
              digest mismatch."
         ),
+        output_mismatch = Needle::Static("Error Code: ExternalCallOutputMismatch."),
     );
 }
 

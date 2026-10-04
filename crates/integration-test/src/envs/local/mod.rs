@@ -1,3 +1,4 @@
+mod block_time_forwarder;
 mod setup;
 
 pub use super::common::protocol_adapter::ProtocolAdapter;

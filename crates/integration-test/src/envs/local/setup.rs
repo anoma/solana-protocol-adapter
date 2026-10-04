@@ -19,6 +19,7 @@ use crate::state::cluster::Cluster;
 const PROTOCOL_ADAPTER_SO: &[u8] = include_bytes!("../../../programs/protocol_adapter.so");
 const MOCK_VERIFIER_SO: &[u8] = include_bytes!("../../../programs/mock_verifier.so");
 const TEST_FORWARDER_SO: &[u8] = include_bytes!("../../../programs/test_forwarder.so");
+const BLOCK_TIME_FORWARDER_SO: &[u8] = include_bytes!("../../../programs/block_time_forwarder.so");
 
 /// The devnet verifier router the adapter repository commits a copy of, with
 /// its router state.
@@ -53,6 +54,20 @@ impl Environment {
         self.deploy_program(
             program,
             TEST_FORWARDER_SO,
+            self.protocol_adapter.payer.pubkey(),
+        )?;
+        Ok(program)
+    }
+
+    /// Deploys the adapter repository's example block-time forwarder
+    /// (`programs/block-time-forwarder`) at its local address, which it
+    /// returns: a program whose `forward_call` returns how the time it is
+    /// given compares with the clock's.
+    pub fn deploy_block_time_forwarder(&self) -> anyhow::Result<Pubkey> {
+        let program = program_id(LOCALNET, "BLOCK_TIME_FORWARDER")?;
+        self.deploy_program(
+            program,
+            BLOCK_TIME_FORWARDER_SO,
             self.protocol_adapter.payer.pubkey(),
         )?;
         Ok(program)
