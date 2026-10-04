@@ -94,7 +94,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|refresh-devnet-programs)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -259,6 +259,9 @@ PYEOF
     echo "               Regenerate the complete fixture set for one proof mode"
     echo "               (sequential; real mode is hours of CPU proving)"
     echo "  fixture-test Run fixture-gen tests"
+    echo "  harness-programs [--check]"
+    echo "               Write the integration-test harness's program binaries (the"
+    echo "               deterministic builds); --check fails when they are not"
     echo "  validator    Start a local Solana validator (devnet programs only)"
     echo "  validator-deploy Build, start a validator with every program loaded"
     echo "               at genesis, and keep it running"

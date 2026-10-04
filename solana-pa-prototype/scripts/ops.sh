@@ -75,7 +75,12 @@ Commands:
   verify-build [--cluster <c>]
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
-  validator              Start the local test validator (RISC0 verifier stack
+  harness-programs [--check]
+                         Deterministic builds of the PA and the mock verifier
+                         at the local addresses, written to the
+                         integration-test harness's programs/; with --check,
+                         fails when a committed binary is not the fresh build
+  validator             Start the local test validator (RISC0 verifier stack
                          and Program Metadata program copied from devnet,
                          marker fixtures preloaded)
   refresh-devnet-programs --url <rpc>
@@ -142,6 +147,7 @@ RPC_OVERRIDE=""
 NO_IDL=false
 DEV_TEARDOWN=false
 PREBUILT=false
+CHECK=false
 TEST_MODE="${PA_TEST_MODE:-real}"
 SPEC_FILES=()
 
@@ -172,6 +178,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --prebuilt)
       PREBUILT=true
+      shift
+      ;;
+    --check)
+      CHECK=true
       shift
       ;;
     --mode)
@@ -746,28 +756,69 @@ cmd_balance() {
 # table has the Solana version pinned there.
 SOLANA_VERIFY_VERSION="0.5.2"
 
+# Deterministic build of program <name> at the loaded program addresses, into
+# target/deploy/<name>.so. solana-verify builds in a container from the
+# repository alone, passing its trailing arguments to `cargo build`; the
+# program addresses go in as cargo [env] configuration, which a remote
+# verification repeats.
+deterministic_build() {
+  local library="$1" name address_config=()
+  # A missing solana-verify fails the substitution ("command not found") and
+  # the comparison both.
+  if [[ "$(solana-verify --version)" != "solana-verify ${SOLANA_VERIFY_VERSION}" ]]; then
+    echo "❌ The deterministic build needs solana-verify ${SOLANA_VERIFY_VERSION}. Install with:" >&2
+    echo "   cargo install solana-verify --version ${SOLANA_VERIFY_VERSION} --locked" >&2
+    exit 1
+  fi
+  for name in "${PROGRAM_NAMES[@]}"; do
+    address_config+=(--config "env.$(program_id_var "$name")=\"$(get_program_id "$name")\"")
+  done
+  checked_sbf_build solana-verify build --library-name "$library" --arch "$SBPF_ARCH" -- "${address_config[@]}"
+}
+
+# The programs the integration-test harness loads, as it ships them: the
+# deterministic builds at the local addresses (env/localnet.env), so a
+# consumer pinning the harness by tag runs exactly the program of that tag.
+HARNESS_PROGRAMS=(protocol_adapter mock_verifier)
+HARNESS_PROGRAMS_DIR="${PROJECT_DIR}/../crates/integration-test/programs"
+
+# Build the harness programs deterministically and write them to
+# HARNESS_PROGRAMS_DIR; with --check, fail instead when a committed binary's
+# executable hash is not the fresh build's.
+cmd_harness_programs() {
+  local name built committed failed=0
+  for name in "${HARNESS_PROGRAMS[@]}"; do
+    deterministic_build "$name"
+    built="$(solana-verify get-executable-hash "target/deploy/${name}.so")"
+    if [[ "$CHECK" == "true" ]]; then
+      if [[ ! -f "${HARNESS_PROGRAMS_DIR}/${name}.so" ]]; then
+        echo "❌ ${HARNESS_PROGRAMS_DIR}/${name}.so is missing; write it with ./scripts/dev.sh harness-programs." >&2
+        failed=1
+        continue
+      fi
+      committed="$(solana-verify get-executable-hash "${HARNESS_PROGRAMS_DIR}/${name}.so")"
+      if [[ "$built" == "$committed" ]]; then
+        echo "✅ ${name}: the committed binary is the deterministic build (${built})"
+      else
+        echo "❌ ${name}: the committed binary (${committed}) is not the deterministic build (${built}); rewrite it with ./scripts/dev.sh harness-programs." >&2
+        failed=1
+      fi
+    else
+      mkdir -p "$HARNESS_PROGRAMS_DIR"
+      cp "target/deploy/${name}.so" "${HARNESS_PROGRAMS_DIR}/${name}.so"
+      echo "Wrote ${HARNESS_PROGRAMS_DIR}/${name}.so (${built})"
+    fi
+  done
+  return "$failed"
+}
+
 # Deterministic (verifiable) build of the PA via solana-verify's pinned
 # Docker image; with a cluster, also compares against the deployed program's
 # hash. The resulting target/deploy/protocol_adapter.so is the artifact that
 # must be shipped (deploy/upgrade --prebuilt) for verification to succeed —
 # any local rebuild produces different bytes.
 cmd_verify_build() {
-  # A missing solana-verify fails the substitution ("command not found") and
-  # the comparison both.
-  if [[ "$(solana-verify --version)" != "solana-verify ${SOLANA_VERIFY_VERSION}" ]]; then
-    echo "❌ verify-build needs solana-verify ${SOLANA_VERIFY_VERSION}. Install with:" >&2
-    echo "   cargo install solana-verify --version ${SOLANA_VERIFY_VERSION} --locked" >&2
-    exit 1
-  fi
-
-  # solana-verify builds in a container from the repository alone, passing
-  # its trailing arguments to `cargo build`; the program addresses go in as
-  # cargo [env] configuration, which a remote verification repeats.
-  local name address_config=()
-  for name in "${PROGRAM_NAMES[@]}"; do
-    address_config+=(--config "env.$(program_id_var "$name")=\"$(get_program_id "$name")\"")
-  done
-  checked_sbf_build solana-verify build --library-name protocol_adapter --arch "$SBPF_ARCH" -- "${address_config[@]}"
+  deterministic_build protocol_adapter
 
   local built
   built="$(solana-verify get-executable-hash target/deploy/protocol_adapter.so)"
@@ -962,6 +1013,13 @@ case "$COMMAND" in
       resolve_cluster
     fi
     cmd_verify_build
+    ;;
+  harness-programs)
+    if [[ -n "$CLUSTER" ]]; then
+      echo "❌ harness-programs builds at the local addresses; it takes no --cluster." >&2
+      exit 1
+    fi
+    cmd_harness_programs
     ;;
   refresh-devnet-programs)
     if [[ -z "$RPC_OVERRIDE" ]]; then

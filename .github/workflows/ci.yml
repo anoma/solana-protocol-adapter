@@ -91,6 +91,29 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: ./scripts/ops.sh unit-test
 
+  # The integration-test harness ships the programs it loads; each must be
+  # the deterministic build of this commit.
+  harness-programs:
+    name: Harness Programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - name: Install solana-verify
+        run: cargo install solana-verify --version 0.5.2 --locked
+
+      - name: Check the committed binaries are the deterministic builds
+        working-directory: ./solana-pa-prototype
+        run: ./scripts/ops.sh harness-programs --check
+
   # Build the programs once; the per-mode test jobs below reuse the
   # artifacts instead of repeating the SBF build.
   anchor-build:
