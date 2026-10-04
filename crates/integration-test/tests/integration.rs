@@ -58,3 +58,73 @@ async fn a_root_the_adapter_does_not_store_fails_before_anything_is_sent() -> an
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_to_a_program_no_forwarder_is_registered_for_fails_before_anything_is_sent()
+-> anyhow::Result<()> {
+    use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};
+    use anoma_rm_risc0::logic_instance::ExpirableBlob;
+
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    let actions = trivial::build_many(1, 81).context("failed to build trivial actions")?;
+    let mut tx = prove_actions(&env, &actions).await?;
+    let program = solana_signer::Signer::pubkey(&solana_keypair::Keypair::new());
+    let call = SolanaExternalCall {
+        program_id: program.to_bytes(),
+        instruction_data: vec![0],
+        expected_output: vec![1],
+        output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
+    };
+    tx.as_arm_mut()
+        .aggregation
+        .as_mut()
+        .context("the transaction is aggregated")?
+        .instance
+        .actions[0]
+        .created_publics[0]
+        .app_data
+        .external_payload = vec![ExpirableBlob {
+        blob: anoma_rm_risc0::utils::bytes_to_words(&call.encode()),
+        deletion_criterion: 0,
+    }];
+
+    let payer = env.protocol_adapter.payer.pubkey();
+    let rpc = env.protocol_adapter.rpc.clone();
+    let before = rpc.get_balance(&payer).await?;
+    expect_integration_panic(Needle::Regexp(regex::Regex::new(&regex::escape(
+        &format!("external call 0 is to {program}, for which no forwarder is registered"),
+    ))?))(execute_tx(&mut env, tx).await)?;
+    anyhow::ensure!(
+        rpc.get_balance(&payer).await? == before,
+        "the payer paid for a transaction that must not be sent"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_lookup_table_serves_the_keys_a_forwarder_adds() -> anyhow::Result<()> {
+    use solana_address_lookup_table_interface::state::AddressLookupTable;
+
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    let keys: Vec<_> = (0..3)
+        .map(|_| solana_signer::Signer::pubkey(&solana_keypair::Keypair::new()))
+        .collect();
+    env.protocol_adapter
+        .extend_lookup_table(keys.clone())
+        .await?;
+
+    let table = env.protocol_adapter.lookup_table.key;
+    let data = env.protocol_adapter.rpc.get_account_data(&table).await?;
+    let stored = AddressLookupTable::deserialize(&data)?.addresses.to_vec();
+    anyhow::ensure!(
+        stored == env.protocol_adapter.lookup_table.addresses,
+        "the table stores {stored:?}, the harness compiles against {:?}",
+        env.protocol_adapter.lookup_table.addresses
+    );
+    anyhow::ensure!(
+        stored.ends_with(&keys),
+        "the table does not end with the added keys"
+    );
+    Ok(())
+}

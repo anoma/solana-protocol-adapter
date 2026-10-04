@@ -9,9 +9,7 @@ use anoma_pa_solana_client::{
 use anyhow::Context;
 use base64::Engine;
 use serde::Deserialize;
-use solana_address_lookup_table_interface::instruction::{
-    create_lookup_table, extend_lookup_table,
-};
+use solana_address_lookup_table_interface::instruction::create_lookup_table;
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_commitment_config::CommitmentConfig;
 use solana_instruction::Instruction;
@@ -192,8 +190,7 @@ pub(in crate::envs) async fn verifier_program(
 }
 
 /// Creates the deployment's settlement lookup table with the adapter's part of
-/// it, and returns it once the runtime serves its keys: a table's new keys are
-/// usable from the slot after the one that added them.
+/// it, and returns it once the runtime serves its keys.
 pub(in crate::envs) async fn create_settlement_lookup_table(
     rpc: &RpcClient,
     payer: &Keypair,
@@ -204,25 +201,45 @@ pub(in crate::envs) async fn create_settlement_lookup_table(
 ) -> anyhow::Result<AddressLookupTableAccount> {
     let recent_slot = rpc.get_slot().await.context("failed to fetch the slot")?;
     let (create, table) = create_lookup_table(payer.pubkey(), payer.pubkey(), recent_slot);
-    let keys = adapter_settlement_lookup_keys(&pa, &router, selector, &verifier);
-    let extend = extend_lookup_table(table, payer.pubkey(), Some(payer.pubkey()), keys.clone());
-    send(rpc, payer, &[create, extend], &[])
+    send(rpc, payer, &[create], &[])
         .await
         .context("failed to create the settlement lookup table")?;
+    let keys = adapter_settlement_lookup_keys(&pa, &router, selector, &verifier);
+    extend_lookup_table(rpc, payer, table, &keys).await?;
+    Ok(AddressLookupTableAccount {
+        key: table,
+        addresses: keys,
+    })
+}
 
+/// Adds `keys` to the lookup table `table`, whose authority is `payer`, and
+/// returns once the runtime serves them: a table's new keys are usable from
+/// the slot after the one that added them.
+pub(in crate::envs) async fn extend_lookup_table(
+    rpc: &RpcClient,
+    payer: &Keypair,
+    table: Pubkey,
+    keys: &[Pubkey],
+) -> anyhow::Result<()> {
+    let extend = solana_address_lookup_table_interface::instruction::extend_lookup_table(
+        table,
+        payer.pubkey(),
+        Some(payer.pubkey()),
+        keys.to_vec(),
+    );
+    send(rpc, payer, &[extend], &[])
+        .await
+        .with_context(|| format!("failed to extend the lookup table {table}"))?;
     let extended_in = AddressLookupTable::deserialize(
         &rpc.get_account_data(&table)
             .await
-            .context("the settlement lookup table does not exist")?,
+            .with_context(|| format!("the lookup table {table} does not exist"))?,
     )
-    .context("failed to decode the settlement lookup table")?
+    .context("failed to decode the lookup table")?
     .meta
     .last_extended_slot;
     while rpc.get_slot().await.context("failed to fetch the slot")? <= extended_in {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    Ok(AddressLookupTableAccount {
-        key: table,
-        addresses: keys,
-    })
+    Ok(())
 }

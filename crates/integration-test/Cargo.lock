@@ -1183,7 +1183,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.4.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=71eaff2f5796584f9c8a3ef3e8ddf648ac36b7cd#71eaff2f5796584f9c8a3ef3e8ddf648ac36b7cd"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=f4fc7ca6b2196c0d2d15cad02d3577b3f48081df#f4fc7ca6b2196c0d2d15cad02d3577b3f48081df"
 dependencies = [
  "anoma-rm-risc0",
  "base64 0.22.1",
@@ -1213,6 +1213,7 @@ dependencies = [
  "base64 0.22.1",
  "dotenvy",
  "futures 0.3.34",
+ "regex",
  "serde",
  "serde_json",
  "solana-address-lookup-table-interface 3.1.0",

@@ -18,7 +18,7 @@ local = ["anoma-pa-testkit/local"]
 e2e = ["anoma-pa-testkit/e2e", "dep:anoma-risc0-kind-tables", "dep:dotenvy"]
 
 [dependencies]
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "71eaff2f5796584f9c8a3ef3e8ddf648ac36b7cd", features = [
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "f4fc7ca6b2196c0d2d15cad02d3577b3f48081df", features = [
   "arm",
 ] }
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "af955de04d2213412d5da5cdd8ac268ebe5e5093", default-features = false, features = [
@@ -46,4 +46,5 @@ surfpool-sdk = "=1.6.0"
 tokio = { version = "1", features = ["time"] }
 
 [dev-dependencies]
+regex = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

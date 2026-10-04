@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use anoma_pa_solana_client::settlement_input::{settled_resources, settlement_input};
+use anoma_pa_solana_client::settlement_input::{
+    external_calls, settled_resources, settlement_input,
+};
 use anoma_pa_solana_client::{
     PADDING_LEAF, PAStateAccount, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
     derive_pa_state_pda, derive_root_marker_pda, plan_settlement,
@@ -19,7 +21,8 @@ use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
-use super::runtime::{create_settlement_lookup_table, send, verifier_program};
+use super::runtime::{create_settlement_lookup_table, extend_lookup_table, send, verifier_program};
+use crate::forwarders::Forwarders;
 
 /// The Solana protocol adapter, settling through transaction-data uploads.
 pub struct ProtocolAdapter {
@@ -32,6 +35,9 @@ pub struct ProtocolAdapter {
     pub verifier_program: Pubkey,
     pub lookup_table: AddressLookupTableAccount,
     pub commitment_tree: FrontierCommitmentTree,
+    /// The forwarders the settled transactions call, which supply each
+    /// call's accounts.
+    pub forwarders: Forwarders,
     /// The next transaction-data upload's id; each settlement takes one.
     next_upload_id: u64,
 }
@@ -64,10 +70,19 @@ impl ProtocolAdapter {
             verifier_program,
             lookup_table,
             commitment_tree: crate::commitment_tree::from_state(&state)?,
+            forwarders: Forwarders::default(),
             next_upload_id: 0,
         };
         adapter.ensure_latest_root(&state)?;
         Ok(adapter)
+    }
+
+    /// Adds `keys` to the settlement lookup table, once it serves them: a
+    /// forwarder's fixed accounts, as a deployment's table holds them.
+    pub async fn extend_lookup_table(&mut self, keys: Vec<Pubkey>) -> anyhow::Result<()> {
+        extend_lookup_table(&self.rpc, &self.payer, self.lookup_table.key, &keys).await?;
+        self.lookup_table.addresses.extend(keys);
+        Ok(())
     }
 
     /// The adapter's state account, as it is now.
@@ -143,6 +158,10 @@ impl CoreProtocolAdapter for ProtocolAdapter {
         self.assert_root_consistency(&tx, &state).await?;
 
         let resources = settled_resources(&tx)?;
+        let (preceding, call_segments) = self
+            .forwarders
+            .accounts(&self.rpc, &external_calls(&tx)?)
+            .await?;
         let input = settlement_input(tx)?;
         let upload_id = self.next_upload_id;
         self.next_upload_id += 1;
@@ -163,8 +182,10 @@ impl CoreProtocolAdapter for ProtocolAdapter {
             nullifiers: &resources.nullifiers,
             consumed_roots: &resources.consumed_roots,
             created: &resources.created,
-            call_segments: Vec::new(),
+            call_segments,
         })?;
+        let mut settle = preceding;
+        settle.extend(plan.settle);
 
         let (rpc, payer) = (&*self.rpc, &*self.payer);
         send(rpc, payer, &[plan.init], &[])
@@ -183,7 +204,7 @@ impl CoreProtocolAdapter for ProtocolAdapter {
             send(
                 rpc,
                 payer,
-                &plan.settle,
+                &settle,
                 std::slice::from_ref(&self.lookup_table),
             )
             .await

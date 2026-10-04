@@ -6,4 +6,5 @@
 
 pub mod commitment_tree;
 pub mod envs;
+pub mod forwarders;
 pub mod state;
