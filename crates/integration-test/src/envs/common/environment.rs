@@ -68,12 +68,10 @@ impl<P> Environment<P> {
         runtime::deploy(&self.surfnet, program, so, upgrade_authority)
     }
 
-    /// Writes `so` to a new loader buffer whose authority is `authority`, the
-    /// default signer paying, and returns the buffer: the code an upgrade
-    /// instruction installs.
-    pub async fn write_buffer(&self, so: &[u8], authority: &Keypair) -> anyhow::Result<Pubkey> {
-        let adapter = &self.protocol_adapter;
-        runtime::write_buffer(&adapter.rpc, &adapter.payer, authority, so).await
+    /// Places `so` in a new loader buffer whose authority is `authority`, and
+    /// returns the buffer: the code an upgrade instruction installs.
+    pub async fn write_buffer(&self, so: &[u8], authority: Pubkey) -> anyhow::Result<Pubkey> {
+        runtime::write_buffer(&self.surfnet, &self.protocol_adapter.rpc, authority, so).await
     }
 
     /// Sends `instructions` as one transaction the default signer pays for,

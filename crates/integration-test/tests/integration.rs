@@ -273,7 +273,7 @@ async fn a_consumer_writes_the_loader_buffer_an_upgrade_installs() -> anyhow::Re
     let env = SolanaLocalEnv::setup_bare().await?;
     let so = include_bytes!("../programs/mock_verifier.so");
     let authority = Keypair::new();
-    let buffer = env.write_buffer(so, &authority).await?;
+    let buffer = env.write_buffer(so, authority.pubkey()).await?;
 
     let account = env.protocol_adapter.rpc.get_account(&buffer).await?;
     anyhow::ensure!(
@@ -298,16 +298,27 @@ async fn a_consumer_writes_the_loader_buffer_an_upgrade_installs() -> anyhow::Re
     Ok(())
 }
 
+// A consumer's setup may name the payer among its signers (a mint whose
+// authority is the payer); the payer signs once.
 #[tokio::test(flavor = "multi_thread")]
-async fn a_consumer_writes_a_loader_buffer_whose_authority_is_the_payer() -> anyhow::Result<()> {
+async fn a_consumer_names_the_payer_among_its_signers() -> anyhow::Result<()> {
+    use solana_keypair::Keypair;
+
     let env = SolanaLocalEnv::setup_bare().await?;
-    let so = include_bytes!("../programs/mock_verifier.so");
     let payer = env.protocol_adapter.payer.clone();
-    let buffer = env.write_buffer(so, &payer).await?;
-    let account = env.protocol_adapter.rpc.get_account(&buffer).await?;
+    let to = Keypair::new().pubkey();
+    env.send(
+        &[solana_system_interface::instruction::transfer(
+            &payer.pubkey(),
+            &to,
+            1_000_000,
+        )],
+        &[&payer],
+    )
+    .await?;
     anyhow::ensure!(
-        account.data.ends_with(so),
-        "the buffer does not hold the program written to it"
+        env.protocol_adapter.rpc.get_balance(&to).await? == 1_000_000,
+        "the transfer the payer signed did not land"
     );
     Ok(())
 }

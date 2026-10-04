@@ -12,12 +12,10 @@ use serde::Deserialize;
 use solana_address_lookup_table_interface::instruction::create_lookup_table;
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_commitment_config::CommitmentConfig;
-use solana_hash::Hash;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
-use solana_packet::PACKET_DATA_SIZE;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_signature::Signature;
 use solana_signer::Signer;
@@ -90,71 +88,37 @@ pub(in crate::envs) async fn send_signed(
         .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
-/// Writes `so` to a new loader buffer whose authority is `authority`, `payer`
-/// paying for it, and returns the buffer: the code an upgrade installs. Each
-/// write is as large as one packet allows and names its offset, so the
-/// writes go out at once.
+/// Places `so` in a new loader buffer whose authority is `authority`, and
+/// returns the buffer: the code an upgrade installs. Like `deploy`, it sets
+/// the account the loader's writes would leave, the loader's buffer state
+/// followed by the code, at the rent-exempt balance; a program the size of
+/// the adapter would take hundreds of write transactions.
 pub(in crate::envs) async fn write_buffer(
+    surfnet: &Surfnet,
     rpc: &RpcClient,
-    payer: &Keypair,
-    authority: &Keypair,
+    authority: Pubkey,
     so: &[u8],
 ) -> anyhow::Result<Pubkey> {
-    let buffer = Keypair::new();
+    let buffer = Keypair::new().pubkey();
+    let mut data = bincode::serialize(&UpgradeableLoaderState::Buffer {
+        authority_address: Some(authority),
+    })
+    .context("failed to encode the buffer state")?;
+    data.extend_from_slice(so);
     let lamports = rpc
-        .get_minimum_balance_for_rent_exemption(UpgradeableLoaderState::size_of_buffer(so.len()))
+        .get_minimum_balance_for_rent_exemption(data.len())
         .await
         .context("failed to read the buffer's rent")?;
-    let create = solana_loader_v3_interface::instruction::create_buffer(
-        &payer.pubkey(),
-        &buffer.pubkey(),
-        &authority.pubkey(),
-        lamports,
-        so.len(),
-    )
-    .context("failed to build the buffer's creation")?;
-    send_signed(rpc, payer, &[&buffer], &create, &[])
-        .await
-        .context("failed to create the loader buffer")?;
-
-    // A write's chunk takes what a packet leaves after the same write with a
-    // probe chunk. The message encodes the instruction data's length in one
-    // byte below 128 and in two from there on, as for every full chunk; the
-    // probe chunk's data (16 bytes of header and the chunk) is past 128.
-    let write = |offset: usize, chunk: &[u8]| {
-        solana_loader_v3_interface::instruction::write(
-            &buffer.pubkey(),
-            &authority.pubkey(),
-            offset as u32,
-            chunk.to_vec(),
+    surfnet
+        .cheatcodes()
+        .execute(
+            SetAccount::new(buffer)
+                .lamports(lamports)
+                .data(data)
+                .owner(solana_sdk_ids::bpf_loader_upgradeable::id()),
         )
-    };
-    const PROBE: usize = 128;
-    let probe = v0::Message::try_compile(
-        &payer.pubkey(),
-        &[write(0, &[0; PROBE])],
-        &[],
-        Hash::default(),
-    )
-    .context("failed to compile a buffer write")?;
-    let probe = VersionedTransaction {
-        signatures: vec![Signature::default(); usize::from(probe.header.num_required_signatures)],
-        message: VersionedMessage::V0(probe),
-    };
-    let chunk_len = PACKET_DATA_SIZE + PROBE
-        - bincode::serialize(&probe)
-            .context("failed to serialize a buffer write")?
-            .len();
-    futures::future::try_join_all(so.chunks(chunk_len).enumerate().map(|(i, chunk)| {
-        let ix = write(i * chunk_len, chunk);
-        async move {
-            send_signed(rpc, payer, &[authority], &[ix], &[])
-                .await
-                .with_context(|| format!("failed to write chunk {i} of the buffer"))
-        }
-    }))
-    .await?;
-    Ok(buffer.pubkey())
+        .with_context(|| format!("failed to set the buffer {buffer}"))?;
+    Ok(buffer)
 }
 
 /// surfpool's `surfnet_setProgramAuthority`: the upgrade authority of an
