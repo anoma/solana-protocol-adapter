@@ -297,3 +297,17 @@ async fn a_consumer_writes_the_loader_buffer_an_upgrade_installs() -> anyhow::Re
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_consumer_writes_a_loader_buffer_whose_authority_is_the_payer() -> anyhow::Result<()> {
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let so = include_bytes!("../programs/mock_verifier.so");
+    let payer = env.protocol_adapter.payer.clone();
+    let buffer = env.write_buffer(so, &payer).await?;
+    let account = env.protocol_adapter.rpc.get_account(&buffer).await?;
+    anyhow::ensure!(
+        account.data.ends_with(so),
+        "the buffer does not hold the program written to it"
+    );
+    Ok(())
+}

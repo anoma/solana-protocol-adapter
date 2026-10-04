@@ -74,8 +74,14 @@ pub(in crate::envs) async fn send_signed(
         .context("failed to fetch a blockhash")?;
     let message = v0::Message::try_compile(&payer.pubkey(), instructions, tables, blockhash)
         .context("failed to compile the transaction")?;
+    // A signer that is also the payer signs once.
     let all_signers: Vec<&Keypair> = std::iter::once(payer)
-        .chain(signers.iter().copied())
+        .chain(
+            signers
+                .iter()
+                .copied()
+                .filter(|signer| signer.pubkey() != payer.pubkey()),
+        )
         .collect();
     let transaction = VersionedTransaction::try_new(VersionedMessage::V0(message), &all_signers)
         .context("failed to sign the transaction")?;
@@ -132,7 +138,7 @@ pub(in crate::envs) async fn write_buffer(
     )
     .context("failed to compile a buffer write")?;
     let probe = VersionedTransaction {
-        signatures: vec![Signature::default(); 2],
+        signatures: vec![Signature::default(); usize::from(probe.header.num_required_signatures)],
         message: VersionedMessage::V0(probe),
     };
     let chunk_len = PACKET_DATA_SIZE + PROBE
