@@ -30,6 +30,13 @@ const VERIFIER_ROUTER_STATE: &str = include_str!(
     "../../../../../solana-pa-prototype/devnet-programs/9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S.json"
 );
 
+/// The Program Metadata program, which holds programs' published IDLs, from
+/// the devnet copy the adapter repository's local validator loads.
+const PROGRAM_METADATA: &str = "ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S";
+const PROGRAM_METADATA_SO: &[u8] = include_bytes!(
+    "../../../../../solana-pa-prototype/devnet-programs/ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S.so"
+);
+
 /// The router's verifier entry registering the mock verifier under
 /// `MOCK_SELECTOR`, as the adapter's local suite loads it.
 const MOCK_VERIFIER_ENTRY: &str = include_str!(
@@ -73,6 +80,13 @@ impl Environment {
         let mock_verifier = program_id(LOCALNET, "MOCK_VERIFIER")?;
 
         runtime::deploy(&surfnet, router, VERIFIER_ROUTER_SO, payer.pubkey())?;
+        let program_metadata: Pubkey = PROGRAM_METADATA.parse().expect("a base58 address");
+        runtime::deploy(
+            &surfnet,
+            program_metadata,
+            PROGRAM_METADATA_SO,
+            payer.pubkey(),
+        )?;
         anyhow::ensure!(
             runtime::set_account_dump(&surfnet, VERIFIER_ROUTER_STATE)? == router_state,
             "the committed router state is not the router's state account {router_state}"

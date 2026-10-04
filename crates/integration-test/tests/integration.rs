@@ -322,3 +322,15 @@ async fn a_consumer_names_the_payer_among_its_signers() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_local_environment_runs_the_program_metadata_program() -> anyhow::Result<()> {
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let program: surfpool_sdk::Pubkey = "ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S".parse()?;
+    let account = env.protocol_adapter.rpc.get_account(&program).await?;
+    anyhow::ensure!(
+        account.executable && account.owner == solana_sdk_ids::bpf_loader_upgradeable::id(),
+        "{program} is not an upgradeable program: {account:?}"
+    );
+    Ok(())
+}
