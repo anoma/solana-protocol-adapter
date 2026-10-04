@@ -234,3 +234,33 @@ async fn the_test_forwarders_log_mode_fills_the_transactions_log() -> anyhow::Re
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_settlement_reads_back_with_the_keys_its_lookup_table_loaded() -> anyhow::Result<()> {
+    use anoma_pa_solana_integration_test::executed::Executed;
+
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    let actions = trivial::build_many(1, 93).context("failed to build trivial actions")?;
+    let tx = prove_actions(&env, &actions).await?;
+    let signature = env.protocol_adapter.settle(tx).await?;
+    let executed = Executed::read(&env.protocol_adapter.rpc, &signature).await?;
+
+    let (pa_state, _) = anoma_pa_solana_client::derive_pa_state_pda(&env.protocol_adapter.program);
+    anyhow::ensure!(
+        executed.transaction.signatures == [signature],
+        "the transaction read back is signed {:?}, not {signature}",
+        executed.transaction.signatures
+    );
+    anyhow::ensure!(
+        executed.loaded.contains(&pa_state)
+            && !executed
+                .transaction
+                .message
+                .static_account_keys()
+                .contains(&pa_state),
+        "the adapter state {pa_state} is not loaded from the settlement lookup table: loaded \
+         {:?}",
+        executed.loaded
+    );
+    Ok(())
+}
