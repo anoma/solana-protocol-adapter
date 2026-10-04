@@ -1224,6 +1224,7 @@ dependencies = [
  "solana-keypair",
  "solana-loader-v3-interface 7.0.0",
  "solana-message 4.4.1",
+ "solana-packet",
  "solana-rpc-client",
  "solana-rpc-client-types",
  "solana-sdk-ids 3.1.0",

@@ -9,6 +9,7 @@
 //! | 0x01      | Returns `Ok` without calling `set_return_data`    | ExternalCallOutputMismatch  |
 //! | 0x02      | Relays `forward_call` to `remaining_accounts[0]`  | forwarder caller check      |
 //! | 0x03      | Logs `input[1]` lines of 100 bytes, returns `Ok`  | events survive log truncation |
+//! | 0x04      | Writes `input[1..]` to `remaining_accounts[0]` and returns it | writable segment accounts, output of a state change |
 //!
 //! Empty input is treated as mode 0x00. Mode 0x03 is called directly, as an
 //! instruction of its own: it fills a transaction's 10,000-byte program-log
@@ -29,6 +30,9 @@ pub const MODE_RELAY: u8 = 0x02;
 /// Called directly by the integration suite, which reads it from the IDL.
 #[constant]
 pub const MODE_LOG: u8 = 0x03;
+/// Writes the rest of the input to the start of the first remaining account,
+/// which this program owns, and returns it.
+pub const MODE_WRITE: u8 = 0x04;
 /// Return data of a relay whose inner call succeeded.
 pub const RELAY_OK: u8 = 0x2a;
 
@@ -55,6 +59,7 @@ pub mod test_forwarder {
                 }
                 Ok(())
             }
+            MODE_WRITE => write(ctx.remaining_accounts, &input[1..]),
             _ => Err(ErrorCode::IntentionalFailure.into()),
         }
     }
@@ -92,6 +97,19 @@ fn relay<'info>(accounts: &[AccountInfo<'info>], payload: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Write `bytes` to the start of `accounts[0]`'s data and return them: a
+/// forwarder that changes state, through an account its segment passes
+/// writable, and reports what it did.
+fn write(accounts: &[AccountInfo], bytes: &[u8]) -> Result<()> {
+    let target = accounts.first().ok_or(ErrorCode::WriteTargetMissing)?;
+    let mut data = target.try_borrow_mut_data()?;
+    data.get_mut(..bytes.len())
+        .ok_or(ErrorCode::WriteTargetTooSmall)?
+        .copy_from_slice(bytes);
+    set_return_data(bytes);
+    Ok(())
+}
+
 #[derive(Accounts)]
 pub struct ForwardCallAccounts {}
 
@@ -105,4 +123,8 @@ pub enum ErrorCode {
     RelayPayloadTooShort,
     #[msg("Log mode needs the number of lines to log")]
     LogLineCountMissing,
+    #[msg("Write mode needs the account to write as its first account")]
+    WriteTargetMissing,
+    #[msg("Write mode's account is smaller than the bytes to write")]
+    WriteTargetTooSmall,
 }

@@ -53,6 +53,10 @@ surfpool-sdk = "=1.6.0"
 tokio = { version = "1", features = ["sync", "time"] }
 
 [dev-dependencies]
+anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", rev = "919c7787259eca02b8cedb079a639ad31e04ae51", features = [
+  "arm",
+] }
 regex = "1"
+solana-packet = "4"
 solana-system-interface = { version = "3.2", features = ["bincode"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
