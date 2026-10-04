@@ -47,8 +47,8 @@ const MOCK_VERIFIER_ENTRY: &str = include_str!(
 impl Environment {
     /// Deploys the adapter repository's test forwarder (`programs/test-forwarder`)
     /// at its local address, which it returns: a program whose `forward_call`
-    /// fails, returns nothing, logs, or relays the call to another program,
-    /// as its instruction data says.
+    /// fails, returns nothing, logs, writes an account it owns, or relays the
+    /// call to another program, as its instruction data says.
     pub fn deploy_test_forwarder(&self) -> anyhow::Result<Pubkey> {
         let program = program_id(LOCALNET, "TEST_FORWARDER")?;
         self.deploy_program(
@@ -82,7 +82,7 @@ impl Environment {
         F: AsyncFnOnce(&mut StateBuilder) -> anyhow::Result<()>,
     {
         let payer = Arc::new(Keypair::new());
-        let surfnet = runtime::start(|| runtime::builder(&payer).offline(true))
+        let surfnet = runtime::start(&payer, |builder| builder)
             .await
             .context("failed to start the surfpool runtime")?;
         let rpc = runtime::client(&surfnet);

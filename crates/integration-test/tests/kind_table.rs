@@ -3,15 +3,12 @@
 
 use anoma_pa_solana_client::set_kind_table_commitment_ix;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
+use anoma_pa_solana_integration_test::kind_table;
 use anoma_pa_testkit::assert::{Needle, expect_integration_panic};
 use anoma_pa_testkit::fixtures::passthrough;
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_pa_testkit::witness::AppData;
 use anoma_pa_testkit::{execute_tx, prove_actions};
-use anoma_risc0_kind_tables::{SolanaCluster, table};
-use anoma_rm_risc0::compliance::KindTableEntry;
-use anoma_rm_risc0::constants::{init_kind_table_from_entries, kind_table_hash};
-use anyhow::Context;
 use solana_signer::Signer;
 
 // A transaction proven against a kind table the adapter does not hold is
@@ -19,18 +16,7 @@ use solana_signer::Signer;
 #[tokio::test(flavor = "multi_thread")]
 async fn settles_a_transaction_proven_against_the_kind_table_the_authority_installs()
 -> anyhow::Result<()> {
-    let entries = table::staging::table(SolanaCluster::Devnet)
-        .context("no kind table is recorded for solana-devnet")?
-        .entries
-        .iter()
-        .map(KindTableEntry::from)
-        .collect();
-    init_kind_table_from_entries(entries).context("failed to load the kind table")?;
-    let devnet = kind_table_hash()
-        .context("no kind table loaded")?
-        .as_bytes();
-    let devnet: [u8; 32] = devnet.try_into()?;
-
+    let devnet = kind_table::load_devnet()?;
     let mut env = SolanaLocalEnv::setup_bare().await?;
     let held = env.protocol_adapter.state().await?.kind_table_commitment;
     anyhow::ensure!(

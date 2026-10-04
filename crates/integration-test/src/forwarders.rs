@@ -15,6 +15,7 @@ use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use surfpool_sdk::Pubkey;
 
 /// What a settlement passes a forwarder for one call.
+#[derive(Clone)]
 pub struct CallAccounts {
     /// The call's CPI segment: the forwarder program, then the accounts its
     /// instruction takes.

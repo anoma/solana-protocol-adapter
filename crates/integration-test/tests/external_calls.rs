@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use anoma_pa_solana_client::events::{PaEvent, decode_event_instruction};
+use anoma_pa_solana_client::events::PaEvent;
 use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
 use anoma_pa_solana_integration_test::executed::Executed;
@@ -40,12 +40,7 @@ impl Forwarder for Fixed {
         _rpc: &'a RpcClient,
         _call: &'a SolanaExternalCall,
     ) -> BoxFuture<'a, anyhow::Result<CallAccounts>> {
-        Box::pin(async move {
-            Ok(CallAccounts {
-                segment: self.0.segment.clone(),
-                preceding: self.0.preceding.clone(),
-            })
-        })
+        Box::pin(async move { Ok(self.0.clone()) })
     }
 }
 
@@ -87,35 +82,33 @@ async fn setup() -> anyhow::Result<Setup> {
 }
 
 impl Setup {
-    /// Registers the test forwarder's calls to take `segment` after the
-    /// forwarder, with `preceding` before the settlement.
-    fn register(&mut self, segment: Vec<AccountMeta>, preceding: Vec<Instruction>) {
-        let segment = std::iter::once(AccountMeta::new_readonly(self.forwarder, false))
-            .chain(segment)
-            .collect();
-        self.env.protocol_adapter.forwarders.register(
-            self.forwarder,
-            Arc::new(Fixed(CallAccounts { segment, preceding })),
-        );
-    }
-
     /// Proves a pass-through action, with nonces from `seed`, that calls the
-    /// test forwarder with `input`, expecting `expected`, and passes it
-    /// `extra_accounts` accounts after the forwarder.
+    /// test forwarder with `input`, expecting `expected`, and has the
+    /// forwarder's calls take `segment` after the forwarder, with `preceding`
+    /// before the settlement.
     async fn prove_call(
-        &self,
+        &mut self,
         seed: u8,
+        segment: Vec<AccountMeta>,
+        preceding: Vec<Instruction>,
         input: Vec<u8>,
         expected: &[u8],
-        extra_accounts: u8,
     ) -> anyhow::Result<Transaction> {
+        let segment: Vec<AccountMeta> =
+            std::iter::once(AccountMeta::new_readonly(self.forwarder, false))
+                .chain(segment)
+                .collect();
         let call = SolanaExternalCall {
             program_id: self.forwarder.to_bytes(),
             instruction_data: input,
             expected_output: expected.to_vec(),
             output_mode: OutputMode::ReturnData,
-            num_accounts: 1 + extra_accounts,
+            num_accounts: u8::try_from(segment.len())?,
         };
+        self.env.protocol_adapter.forwarders.register(
+            self.forwarder,
+            Arc::new(Fixed(CallAccounts { segment, preceding })),
+        );
         let app_data = AppData {
             external_payload: vec![ExpirableBlob {
                 blob: bytes_to_words(&call.encode()),
@@ -125,6 +118,40 @@ impl Setup {
         };
         let action = passthrough::build(seed, app_data, passthrough::Overrides::default())?;
         prove_actions(&self.env, &[action.witnesses]).await
+    }
+
+    /// A call that writes `WRITTEN` to the account, which it passes writable,
+    /// and expects it back.
+    async fn prove_write(
+        &mut self,
+        seed: u8,
+        preceding: Vec<Instruction>,
+    ) -> anyhow::Result<Transaction> {
+        let segment = vec![AccountMeta::new(self.account, false)];
+        self.prove_call(seed, segment, preceding, write_input(&WRITTEN), &WRITTEN)
+            .await
+    }
+
+    /// That write, relayed by the test forwarder to the program after it in
+    /// the segment: itself.
+    async fn prove_relayed_write(
+        &mut self,
+        seed: u8,
+        preceding: Vec<Instruction>,
+    ) -> anyhow::Result<Transaction> {
+        let segment = vec![
+            AccountMeta::new_readonly(self.forwarder, false),
+            AccountMeta::new(self.account, false),
+        ];
+        let input = relay_input(PASSTHROUGH_LOGIC_VK.into(), &write_input(&WRITTEN));
+        self.prove_call(seed, segment, preceding, input, &[RELAY_OK])
+            .await
+    }
+
+    /// Settles `tx` and reads the settlement back.
+    async fn settle(&mut self, tx: Transaction) -> anyhow::Result<Executed> {
+        let signature = self.env.protocol_adapter.settle(tx).await?;
+        Executed::read(&self.env.protocol_adapter.rpc, &signature).await
     }
 
     /// The first bytes of the written account.
@@ -138,13 +165,9 @@ impl Setup {
         Ok(data[..WRITTEN.len()].to_vec())
     }
 
-    /// The adapter's events of the settlement `executed`, in the order it
-    /// emitted them.
+    /// The adapter's events of the settlement `executed`.
     fn events(&self, executed: &Executed) -> anyhow::Result<Vec<PaEvent>> {
-        Ok(executed
-            .cpi_events(&self.env.protocol_adapter.program)
-            .map(decode_event_instruction)
-            .collect::<Result<Vec<_>, _>>()?)
+        executed.adapter_events(&self.env.protocol_adapter.program)
     }
 }
 
@@ -153,8 +176,7 @@ impl Setup {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_forwarder_writes_an_account_its_segment_passes_writable() -> anyhow::Result<()> {
     let mut s = setup().await?;
-    s.register(vec![AccountMeta::new(s.account, false)], vec![]);
-    let tx = s.prove_call(1, write_input(&WRITTEN), &WRITTEN, 1).await?;
+    let tx = s.prove_write(1, vec![]).await?;
     execute_tx(&mut s.env, tx).await?;
     let written = s.written().await?;
     anyhow::ensure!(
@@ -171,8 +193,10 @@ async fn a_forwarder_writes_an_account_its_segment_passes_writable() -> anyhow::
 async fn refuses_a_call_whose_forwarder_changes_state_and_returns_other_than_expected()
 -> anyhow::Result<()> {
     let mut s = setup().await?;
-    s.register(vec![AccountMeta::new(s.account, false)], vec![]);
-    let tx = s.prove_call(2, write_input(&WRITTEN), &[9; 4], 1).await?;
+    let segment = vec![AccountMeta::new(s.account, false)];
+    let tx = s
+        .prove_call(2, segment, vec![], write_input(&WRITTEN), &[9; 4])
+        .await?;
     expect_integration_panic(Needle::Static("Error Code: ExternalCallOutputMismatch."))(
         execute_tx(&mut s.env, tx).await,
     )?;
@@ -190,17 +214,8 @@ async fn refuses_a_call_whose_forwarder_changes_state_and_returns_other_than_exp
 #[tokio::test(flavor = "multi_thread")]
 async fn a_forwarder_calls_a_second_program_its_segment_names() -> anyhow::Result<()> {
     let mut s = setup().await?;
-    s.register(
-        vec![
-            AccountMeta::new_readonly(s.forwarder, false),
-            AccountMeta::new(s.account, false),
-        ],
-        vec![],
-    );
-    let input = relay_input(PASSTHROUGH_LOGIC_VK.into(), &write_input(&WRITTEN));
-    let tx = s.prove_call(3, input, &[RELAY_OK], 2).await?;
-    let signature = s.env.protocol_adapter.settle(tx).await?;
-    let executed = Executed::read(&s.env.protocol_adapter.rpc, &signature).await?;
+    let tx = s.prove_relayed_write(3, vec![]).await?;
+    let executed = s.settle(tx).await?;
     // The adapter runs at depth 1, the forwarder at 2, the relayed call at 3.
     let relayed = format!("Program {} invoke [3]", s.forwarder);
     anyhow::ensure!(
@@ -222,13 +237,8 @@ async fn a_forwarder_calls_a_second_program_its_segment_names() -> anyhow::Resul
 async fn a_settlement_settles_after_other_instructions_in_its_transaction() -> anyhow::Result<()> {
     let mut s = setup().await?;
     let preceding = log_ix(&s.forwarder, 1);
-    s.register(
-        vec![AccountMeta::new(s.account, false)],
-        vec![preceding.clone()],
-    );
-    let tx = s.prove_call(4, write_input(&WRITTEN), &WRITTEN, 1).await?;
-    let signature = s.env.protocol_adapter.settle(tx).await?;
-    let executed = Executed::read(&s.env.protocol_adapter.rpc, &signature).await?;
+    let tx = s.prove_write(4, vec![preceding.clone()]).await?;
+    let executed = s.settle(tx).await?;
     let message = &executed.transaction.message;
     let first = &message.instructions()[0];
     anyhow::ensure!(
@@ -252,13 +262,9 @@ async fn the_adapters_events_survive_a_truncated_log() -> anyhow::Result<()> {
     // line with its "Program log: " prefix; the test forwarder's lines are
     // 100 bytes, so this many fill it before the settlement logs anything.
     let lines = 10_000_usize.div_ceil("Program log: ".len() + 100);
-    s.register(
-        vec![AccountMeta::new(s.account, false)],
-        vec![log_ix(&s.forwarder, u8::try_from(lines)?)],
-    );
-    let tx = s.prove_call(5, write_input(&WRITTEN), &WRITTEN, 1).await?;
-    let signature = s.env.protocol_adapter.settle(tx).await?;
-    let executed = Executed::read(&s.env.protocol_adapter.rpc, &signature).await?;
+    let flood = log_ix(&s.forwarder, u8::try_from(lines)?);
+    let tx = s.prove_write(5, vec![flood]).await?;
+    let executed = s.settle(tx).await?;
     anyhow::ensure!(
         executed.logs.iter().any(|line| line == "Log truncated"),
         "the settlement's log is not truncated: {:?}",
@@ -287,10 +293,8 @@ async fn the_adapters_events_survive_a_truncated_log() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn the_action_executed_event_carries_its_resources_logic_refs() -> anyhow::Result<()> {
     let mut s = setup().await?;
-    s.register(vec![AccountMeta::new(s.account, false)], vec![]);
-    let tx = s.prove_call(6, write_input(&WRITTEN), &WRITTEN, 1).await?;
-    let signature = s.env.protocol_adapter.settle(tx).await?;
-    let executed = Executed::read(&s.env.protocol_adapter.rpc, &signature).await?;
+    let tx = s.prove_write(6, vec![]).await?;
+    let executed = s.settle(tx).await?;
     let events = s.events(&executed)?;
     let [action] = events
         .iter()
@@ -323,25 +327,18 @@ async fn the_action_executed_event_carries_its_resources_logic_refs() -> anyhow:
 async fn the_largest_settlement_fits_one_packet_with_its_fixed_accounts_looked_up()
 -> anyhow::Result<()> {
     let mut s = setup().await?;
-    s.register(
-        vec![
-            AccountMeta::new_readonly(s.forwarder, false),
-            AccountMeta::new(s.account, false),
-        ],
-        vec![log_ix(&s.forwarder, 1)],
-    );
     // As a deployment's table holds a forwarder's fixed accounts.
     s.env
         .protocol_adapter
         .extend_lookup_table(vec![s.forwarder, s.account])
         .await?;
-    let input = relay_input(PASSTHROUGH_LOGIC_VK.into(), &write_input(&WRITTEN));
 
     let mut settled = Vec::new();
     for seed in [7, 8] {
-        let tx = s.prove_call(seed, input.clone(), &[RELAY_OK], 2).await?;
-        let signature = s.env.protocol_adapter.settle(tx).await?;
-        let executed = Executed::read(&s.env.protocol_adapter.rpc, &signature).await?;
+        let tx = s
+            .prove_relayed_write(seed, vec![log_ix(&s.forwarder, 1)])
+            .await?;
+        let executed = s.settle(tx).await?;
         let size = bincode::serialize(&executed.transaction)?.len();
         let message = &executed.transaction.message;
         println!(
@@ -356,30 +353,26 @@ async fn the_largest_settlement_fits_one_packet_with_its_fixed_accounts_looked_u
         settled.push(executed);
     }
 
-    let keys = |executed: &Executed| -> Vec<Pubkey> {
-        let message = &executed.transaction.message;
-        message
-            .static_account_keys()
-            .iter()
-            .chain(&executed.loaded)
-            .copied()
-            .collect()
-    };
-    let other = keys(&settled[1]);
-    let message = &settled[0].transaction.message;
+    let (first, second) = (&settled[0], &settled[1]);
+    let message = &first.transaction.message;
+    let statics = message.static_account_keys();
     let invoked: Vec<Pubkey> = message
         .instructions()
         .iter()
-        .map(|ix| message.static_account_keys()[usize::from(ix.program_id_index)])
+        .map(|ix| statics[usize::from(ix.program_id_index)])
         .collect();
-    let signers =
-        &message.static_account_keys()[..usize::from(message.header().num_required_signatures)];
-    for key in keys(&settled[0]) {
-        if !other.contains(&key) || invoked.contains(&key) || signers.contains(&key) {
-            continue;
-        }
+    let signers = &statics[..usize::from(message.header().num_required_signatures)];
+    let in_second = |key: &Pubkey| {
+        second
+            .transaction
+            .message
+            .static_account_keys()
+            .contains(key)
+            || second.loaded.contains(key)
+    };
+    for key in statics {
         anyhow::ensure!(
-            settled[0].loaded.contains(&key),
+            !in_second(key) || invoked.contains(key) || signers.contains(key),
             "{key}, an account of every such settlement, is static, not looked up: the \
              settlement lookup table lacks it"
         );

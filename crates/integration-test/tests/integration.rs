@@ -178,7 +178,7 @@ async fn a_consumer_deploys_its_program_and_sends_its_setup() -> anyhow::Result<
 #[tokio::test(flavor = "multi_thread")]
 async fn a_settlements_events_read_back_in_the_order_the_adapter_emitted_them() -> anyhow::Result<()>
 {
-    use anoma_pa_solana_client::events::{PaEvent, decode_event_instruction};
+    use anoma_pa_solana_client::events::PaEvent;
     use anoma_pa_solana_client::settlement_input::settled_resources;
     use anoma_pa_solana_integration_test::executed::Executed;
 
@@ -189,10 +189,7 @@ async fn a_settlements_events_read_back_in_the_order_the_adapter_emitted_them() 
 
     let signature = env.protocol_adapter.settle(tx).await?;
     let executed = Executed::read(&env.protocol_adapter.rpc, &signature).await?;
-    let events = executed
-        .cpi_events(&env.protocol_adapter.program)
-        .map(decode_event_instruction)
-        .collect::<Result<Vec<_>, _>>()?;
+    let events = executed.adapter_events(&env.protocol_adapter.program)?;
     let settled: Vec<[u8; 32]> = events
         .iter()
         .filter_map(|event| match event {

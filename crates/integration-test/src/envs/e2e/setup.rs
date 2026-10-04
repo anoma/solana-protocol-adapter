@@ -2,10 +2,6 @@ use std::sync::Arc;
 
 use anoma_pa_testkit::environment::StateBuilder;
 use anoma_pa_testkit::prover::QueueProver;
-use anoma_risc0_kind_tables::SolanaCluster;
-use anoma_risc0_kind_tables::table;
-use anoma_rm_risc0::compliance::KindTableEntry;
-use anoma_rm_risc0::constants::{init_kind_table_from_entries, kind_table_hash};
 use anyhow::Context;
 use solana_keypair::Keypair;
 
@@ -30,10 +26,8 @@ impl Environment {
         // so its address comes from the deployment record rather than a fresh
         // deployment; forking keeps devnet's state from being mutated.
         let payer = Arc::new(Keypair::new());
-        let surfnet = runtime::start(|| {
-            runtime::builder(&payer)
-                .offline(false)
-                .remote_rpc_url(config.devnet_rpc_url.clone())
+        let surfnet = runtime::start(&payer, |builder| {
+            builder.remote_rpc_url(config.devnet_rpc_url.clone())
         })
         .await
         .context("failed to start the surfpool runtime forking devnet")?;
@@ -50,26 +44,16 @@ impl Environment {
             insert_additional,
         )
         .await?;
-        load_kind_table(env.protocol_adapter.state().await?.kind_table_commitment)?;
+        // The tests prove against devnet's kind table, which the adapter must
+        // store.
+        let loaded = crate::kind_table::load_devnet()?;
+        let stored = env.protocol_adapter.state().await?.kind_table_commitment;
+        anyhow::ensure!(
+            stored == loaded,
+            "the protocol adapter stores the kind table {}, the tests prove against {}",
+            anoma_rm_risc0::Digest::from_bytes(stored),
+            anoma_rm_risc0::Digest::from_bytes(loaded)
+        );
         Ok(env)
     }
-}
-
-/// Loads the kind table recorded for devnet, and checks that the adapter
-/// stores its commitment.
-fn load_kind_table(stored: [u8; 32]) -> anyhow::Result<()> {
-    let entries = table::staging::table(SolanaCluster::Devnet)
-        .context("no kind table is recorded for solana-devnet")?
-        .entries
-        .iter()
-        .map(KindTableEntry::from)
-        .collect();
-    init_kind_table_from_entries(entries).context("failed to load the kind table")?;
-    let loaded = kind_table_hash().context("no kind table loaded")?;
-    anyhow::ensure!(
-        stored == loaded.as_bytes(),
-        "the protocol adapter stores the kind table {}, the tests prove against {loaded}",
-        anoma_rm_risc0::Digest::from_bytes(stored)
-    );
-    Ok(())
 }

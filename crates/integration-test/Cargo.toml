@@ -15,7 +15,7 @@ publish = false
 [features]
 default = ["local"]
 local = ["anoma-pa-testkit/local"]
-e2e = ["anoma-pa-testkit/e2e", "dep:anoma-risc0-kind-tables", "dep:dotenvy"]
+e2e = ["anoma-pa-testkit/e2e", "dep:dotenvy"]
 
 [dependencies]
 anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "4b1758b5b3037533ebbfccbec3e376d028323f3b", features = [
@@ -24,7 +24,7 @@ anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-clien
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "bcf09547598bfcbf1ab30aecdad3279d7ba85acb", default-features = false, features = [
   "fixtures",
 ] }
-anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", rev = "919c7787259eca02b8cedb079a639ad31e04ae51", optional = true, features = [
+anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", rev = "919c7787259eca02b8cedb079a639ad31e04ae51", features = [
   "arm",
 ] }
 anoma-rm-risc0 = { version = "=2.0.0-rc.6", default-features = false, features = ["transaction"] }
@@ -50,12 +50,9 @@ solana-signer = "3"
 solana-transaction = "4"
 solana-transaction-status-client-types = "4"
 surfpool-sdk = "=1.6.0"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
-anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", rev = "919c7787259eca02b8cedb079a639ad31e04ae51", features = [
-  "arm",
-] }
 regex = "1"
 solana-packet = "4"
 solana-system-interface = { version = "3.2", features = ["bincode"] }
