@@ -6,6 +6,7 @@ Port of the [EVM Protocol Adapter V2](https://github.com/anoma/pa-evm/tree/next)
 
 ```
 solana-protocol-adapter/
+├── crates/integration-test/ # the integration-test harness other repositories test against
 └── solana-pa-prototype/     # Solana PA implementation
     ├── programs/            # the adapter, the SPL token forwarder, and test programs
     ├── client/              # instruction builders shared by the operator scripts and the tests
@@ -75,6 +76,8 @@ entry point for one fixture.
 | `./scripts/dev.sh validator` | Start a local validator with the devnet programs (verifier stack, Program Metadata), without the workspace programs |
 | `./scripts/dev.sh validator-deploy` | Build, start a validator with every program loaded at genesis, and keep it running for external clients |
 | `./scripts/dev.sh gen-fixtures` / `regen-fixtures` / `fixture-test` | Fixture generation and fixture-gen's tests |
+| `./scripts/dev.sh harness-test [--cluster devnet]` | The integration-test harness's tests on surfpool; with `--cluster devnet`, its e2e cases on a fork of devnet, proven by the queue (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`) |
+| `./scripts/dev.sh harness-programs [--check]` | Write the harness's program binaries (the deterministic builds); `--check` fails when the committed ones are not |
 | `./scripts/dev.sh lock-check` / `lock-sync <pkg>` | Check / re-align the Cargo.lock files' shared dependencies |
 | `./scripts/dev.sh update-deps` | Regenerate `yarn.lock` |
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
@@ -314,6 +317,27 @@ After the nullifier markers, each external call takes the next `num_accounts` ac
 5. **Update tests** to include your forwarder's program and required accounts in `remaining_accounts`.
 
 ---
+
+## Testing Against the Adapter From Another Repository
+
+`crates/integration-test` (`anoma-pa-solana-integration-test`) implements [pa-testkit](https://github.com/anoma/pa-testkit)'s `Environment` for this adapter, as pa-evm's `anoma-pa-evm-integration-test` does for EVM. A test proves actions with pa-testkit and settles them on a real adapter:
+
+```toml
+anoma-pa-solana-integration-test = { git = "https://github.com/anoma/solana-protocol-adapter", tag = "<tag>" }
+```
+
+```rust
+use anoma_pa_solana_integration_test::envs::local::Environment;
+
+let mut env = Environment::setup_bare().await?;
+let tx = anoma_pa_testkit::prove_actions(&env, &actions).await?;
+anoma_pa_testkit::execute_tx(&mut env, tx).await?;
+```
+
+- **`local`** (default feature): an offline [surfpool](https://github.com/txtx/surfpool) runtime with the verifier router copy, the mock verifier, and the adapter build the crate ships (`crates/integration-test/programs/`, the deterministic build of the tag, which CI checks), initialized with the mock selector; pa-testkit's local prover.
+- **`e2e`**: a runtime forking devnet (`DEVNET_RPC_URL`), on the adapter devnet runs with the state it holds, the kind table recorded for devnet checked against the one it stores; pa-testkit's queue prover (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`).
+
+`ProtocolAdapter::execute` settles the way every submitter does (the client crate's `settlement_input` and `plan_settlement`: upload, settle as a v0 transaction through a settlement lookup table, close), and the commitment tree pa-testkit builds from the adapter's frontier must give the root the adapter stores after each settlement. The test state holds the runtime's RPC endpoint, the funded default signer and the adapter's address (`state::rpc_url`, `default_signer`, `pa_program`).
 
 ## Building a Client
 

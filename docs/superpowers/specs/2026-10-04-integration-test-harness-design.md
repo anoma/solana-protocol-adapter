@@ -33,7 +33,7 @@ Two features, as in pa-evm.
 
 then initializes the adapter (the default signer as owner, the router, selector `0xffffffff`, the empty kind table) and creates the settlement lookup table. It proves with pa-testkit's `LocalProver`, whose mock seal carries verifier parameters `[u32::MAX; 8]`, that is selector `0xffffffff`.
 
-**`e2e`**: surfpool forking devnet (`remote_rpc_url`, the operator's RPC endpoint from the environment), the adapter at its `env/devnet.env` address with the state devnet holds, and the kind table devnet's adapter stores, checked against the deployment as pa-evm's e2e checks it. It proves with pa-testkit's `QueueProver`.
+**`e2e`**: surfpool forking devnet (`remote_rpc_url`, the operator's RPC endpoint from the environment), the adapter at its `env/devnet.env` address with the state devnet holds, and the kind table risc0-kind-tables records for solana-devnet, checked against the one devnet's adapter stores, as pa-evm's e2e checks it. It creates its own settlement lookup table on the fork, the same way `local` does, so it depends on no table record. It proves with pa-testkit's `QueueProver`.
 
 ## The protocol adapter
 
@@ -44,13 +44,13 @@ then initializes the adapter (the default signer as owner, the router, selector 
 3. uploads it in chunks to a transaction-data account, settles it as a v0 transaction through the settlement lookup table, and closes the account;
 4. adds the created commitments to the host-side commitment tree.
 
-`CommitmentTree` starts from the frontier the adapter's `PAState` stores and adds the leaves settlements create; `root` and `path_to` answer from it, as pa-evm's tree starts from the adapter's stored sides.
+The commitment tree is pa-testkit's `FrontierCommitmentTree`: it starts from the frontier the adapter's `PAState` stores (its commitment count and, per level, the last left node) and adds the leaves settlements create; `root` and `path_to` answer from it. It is pa-evm's tree, which starts from the adapter's stored sides, moved into pa-testkit because nothing in it is chain-specific; only reading the frontier is the harness's.
 
 ## Code shared through the client crate
 
 Two pieces of the work exist today outside any library: the conversion of a proven ARM transaction into the adapter's settlement input (in `tools/fixture-gen`), and the assembly of the settlement transactions (in anoma-pa-solana-client's `tools/settle-fixture`). They move into `anoma-pa-solana-client`, behind a feature, as pa-evm's bindings crate holds `conversion.rs`; fixture-gen, `settle-fixture` and the harness all call them:
 
-- **Settlement input.** Re-encode the aggregation proof as the adapter's router `Seal`, then serialize the transaction with bincode. Three receipts occur: a real Groth16 receipt (arm's `encode_seal`); a dev-mode `Fake` receipt (fixture-gen's mock proving); and pa-testkit's `LocalProver` receipt, a Groth16 receipt with verifier parameters `[u32::MAX; 8]`. The two mock receipts become the 260-byte mock seal: selector `0xffffffff`, the claim digest in `pi_c[..32]`, checked against the digest recomputed from the transaction.
+- **Settlement input.** Re-encode the aggregation proof as the adapter's router `Seal`, then serialize the transaction with bincode. Three receipts occur: a real Groth16 receipt (arm's `encode_seal`); a dev-mode `Fake` receipt (fixture-gen's mock proving); and pa-testkit's `LocalProver` receipt, a Groth16 receipt with verifier parameters `[u32::MAX; 8]`. The two mock receipts become the 260-byte mock seal: selector `0xffffffff`, the receipt's claim digest in `pi_c[..32]`. The conversion re-encodes the receipt as it is, as arm's `encode_seal` does for the EVM adapter; whether the seal proves the transaction's claim is the verifier's to decide, so a tampered seal reaches the adapter and its refusal can be tested.
 - **Settlement transactions.** The instructions to create, fill and close the transaction-data account and to settle, the accounts settlement needs (nullifier PDAs, historical-root markers, the new-root marker, each external call's segment), the adapter's `initialize`, and the settlement lookup table's keys.
 
 The client crate builds on `solana-program` 2.1 and `settle-fixture` on Solana 2.2 crates, while the programs (Anchor 1.2.1) and surfpool use the 3.x and 4.x Solana crates, whose types do not interoperate. The client's Solana dependencies move to the versions the programs use.
@@ -63,8 +63,9 @@ A consumer that pins the harness gets its source, not built programs. The harnes
 
 The harness's own tests, in a CI job of the adapter repository:
 
-- a trivial action from pa-testkit's fixtures settles on `local`, and the host-side tree's root equals the adapter's;
-- a transaction whose aggregation seal is tampered with is refused;
+- pa-testkit's chain-agnostic suite (`suite`), which holds pa-evm's integration tests as functions over any `Environment`: a trivial, an n:m, a multi-action and two consume-only transactions settle; the prover refuses invalid witnesses; a transaction whose aggregation seal is tampered with is refused (here with the mock verifier's `ClaimDigestMismatch`);
+- after each settlement, the host-side tree's root equals the adapter's;
+- the adapter's stored frontier is the sides `FrontierCommitmentTree` starts from, for every count up to 33 leaves;
 - a transaction consuming a root the adapter does not store fails before anything is sent, naming the action and resource;
 - the settlement-input conversion of each of the three receipts (unit tests in the client crate);
 - the committed binaries equal a fresh build;
