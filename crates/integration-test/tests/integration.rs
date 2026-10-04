@@ -264,3 +264,36 @@ async fn a_settlement_reads_back_with_the_keys_its_lookup_table_loaded() -> anyh
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_consumer_writes_the_loader_buffer_an_upgrade_installs() -> anyhow::Result<()> {
+    use solana_keypair::Keypair;
+    use solana_loader_v3_interface::state::UpgradeableLoaderState;
+
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let so = include_bytes!("../programs/mock_verifier.so");
+    let authority = Keypair::new();
+    let buffer = env.write_buffer(so, &authority).await?;
+
+    let account = env.protocol_adapter.rpc.get_account(&buffer).await?;
+    anyhow::ensure!(
+        account.owner == solana_sdk_ids::bpf_loader_upgradeable::id(),
+        "the buffer is owned by {}, not the upgradeable loader",
+        account.owner
+    );
+    let metadata = UpgradeableLoaderState::size_of_buffer_metadata();
+    let state: UpgradeableLoaderState = bincode::deserialize(&account.data[..metadata])?;
+    anyhow::ensure!(
+        state
+            == UpgradeableLoaderState::Buffer {
+                authority_address: Some(authority.pubkey()),
+            },
+        "the buffer's state is {state:?}, not a buffer of {}",
+        authority.pubkey()
+    );
+    anyhow::ensure!(
+        account.data[metadata..] == so[..],
+        "the buffer does not hold the program written to it"
+    );
+    Ok(())
+}
