@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared build, program-ID-sync, and validator lifecycle functions.
+# Shared program-address, build, and validator lifecycle functions.
 # Source this file from other scripts; do not execute directly.
 # Consumers: anchor-test.sh (local integration flow) and ops.sh (cluster ops).
 #
@@ -47,10 +47,10 @@ MOCK_SELECTOR="0xffffffff"
 VALIDATOR_PID=""
 
 # The workspace programs (every package under programs/), one row each,
-# keyed by the program's [lib] name: its Anchor program name, its key in
-# Anchor.toml, and the basename of its binary and keypair in target/deploy/.
-# Every build, program-ID sync, genesis load, deploy, lint, and cleanup
-# iterates this table; load_workspace_programs fails if it and programs/
+# keyed by the program's [lib] name: its Anchor program name, the basename of
+# its binary in target/deploy/, and (upper-cased) the prefix of its address
+# variable <NAME>_PROGRAM_ID. Every build, genesis load, deploy, lint, and
+# cleanup iterates this table; load_workspace_programs fails if it and programs/
 # disagree. Columns:
 #   target        ops.sh deploy target; "-" marks a localnet-only program
 #                 (integration-suite support, never deployed to a cluster)
@@ -121,7 +121,7 @@ load_workspace_programs() {
   while read -r lib pkg src; do
     if [[ -z "${PROGRAM_DEV_FEATURES[$lib]+set}" ]]; then
       echo "    ❌ Program '${lib}' (package ${pkg}) is not in PROGRAM_TABLE (scripts/validator-deploy.sh)." >&2
-      echo "       Builds, ID sync, and deploys iterate that table; add a row for it." >&2
+      echo "       Builds, genesis loads, and deploys iterate that table; add a row for it." >&2
       exit 1
     fi
     PROGRAM_PACKAGE[$lib]="$pkg"
@@ -167,13 +167,58 @@ check_program_ids_not_in_tree() {
   return "$failed"
 }
 
-read_declare_id() {
-  sed -n 's/^declare_id!("\([^"]*\)").*/\1/p' "$1" | head -n 1
+# The variable holding <name>'s address, which its declare_id! reads at
+# compile time: protocol_adapter → PROTOCOL_ADAPTER_PROGRAM_ID.
+program_id_var() {
+  echo "${1^^}_PROGRAM_ID"
 }
 
-# The program ID of <name>, from its deploy keypair.
+# Export every program's address variable for <cluster>. env/localnet.env
+# names every program. For another cluster, env/<cluster>.env then names
+# every program deployed there; the localnet-only programs keep their
+# env/localnet.env addresses, since a cluster run still builds every
+# program's IDL.
+load_program_ids() {
+  local cluster="$1" file name var
+  file="${PROJECT_DIR}/env/localnet.env"
+  if [[ ! -f "$file" ]]; then
+    echo "❌ ${file} is missing; it names every program's local address." >&2
+    exit 1
+  fi
+  set -a
+  source "$file"
+  set +a
+  if [[ "$cluster" != "localnet" ]]; then
+    file="${PROJECT_DIR}/env/${cluster}.env"
+    if [[ ! -f "$file" ]]; then
+      echo "❌ ${file} is missing; it names the address of every program deployed to ${cluster}." >&2
+      exit 1
+    fi
+    for target in "${PROGRAM_TARGETS[@]}"; do
+      var="$(program_id_var "${PROGRAM_BY_TARGET[$target]}")"
+      if ! grep -q "^${var}=" "$file"; then
+        echo "❌ ${file} names no address for ${PROGRAM_BY_TARGET[$target]} (${var})." >&2
+        exit 1
+      fi
+    done
+    set -a
+    source "$file"
+    set +a
+  fi
+  for name in "${PROGRAM_NAMES[@]}"; do
+    var="$(program_id_var "$name")"
+    if [[ -z "${!var:-}" ]]; then
+      echo "❌ No address for ${name}: ${var} is unset after loading env/localnet.env." >&2
+      exit 1
+    fi
+  done
+}
+
+# The address of <name>. Requires load_program_ids.
 get_program_id() {
-  solana-keygen pubkey "target/deploy/${1}-keypair.json"
+  local var
+  var="$(program_id_var "$1")"
+  echo "${!var}"
 }
 
 ensure_wallet() {
@@ -296,46 +341,6 @@ wait_for_validator() {
   return 1
 }
 
-# ── Sync helpers ───────────────────────────────────────────────────────
-
-# Point <name>'s declare_id! and Anchor.toml entries at its deploy keypair.
-# Requires load_workspace_programs.
-sync_program_id() {
-  local name="$1"
-  local keypair="target/deploy/${name}-keypair.json"
-  local lib_rs="${PROGRAM_SRC[$name]}"
-
-  local id
-  id="$(get_program_id "$name")"
-
-  # Safety: verify the keypair matches what's committed in git.
-  # If someone accidentally regenerated a keypair, this catches it
-  # before we silently rewrite declare_id! to a new program ID.
-  # A keypair not yet committed has nothing to compare against.
-  # (`HEAD:./path` resolves against the working directory; a bare
-  # `HEAD:path` resolves against the repository root.)
-  if git cat-file -e "HEAD:./${keypair}"; then
-    local committed_id
-    committed_id="$(git show "HEAD:./${keypair}" | solana-keygen pubkey /dev/stdin)"
-    if [[ "$committed_id" != "$id" ]]; then
-      echo "    ❌ ${name} keypair was regenerated! Local: $id, committed: $committed_id" >&2
-      echo "    Restore with: git checkout HEAD -- $keypair" >&2
-      exit 1
-    fi
-  fi
-
-  local current
-  current="$(read_declare_id "$lib_rs")"
-
-  if [[ "$current" != "$id" ]]; then
-    echo "    ${name} program ID mismatch: $current -> $id" >&2
-    sed -i -E "s/^declare_id!\(\"[^\"]+\"\);/declare_id!(\"${id}\");/" "$lib_rs"
-    sed -i -E "s/^${name} = \"[^\"]+\"$/${name} = \"${id}\"/" Anchor.toml
-  else
-    echo "    ${name} program ID already synced: $id" >&2
-  fi
-}
-
 # ── Main functions ─────────────────────────────────────────────────────
 
 require_commands() {
@@ -347,39 +352,6 @@ require_commands() {
   require_cmd jq
   require_cmd yarn
   require_cmd curl
-}
-
-# Restore committed program keypairs from git if missing locally.
-# Returns nonzero if any keypair is still missing afterward (not in git).
-restore_program_keypairs() {
-  local name missing=false
-  for name in "${PROGRAM_NAMES[@]}"; do
-    if [[ ! -f "target/deploy/${name}-keypair.json" ]]; then
-      missing=true
-      break
-    fi
-  done
-  if [[ "$missing" == "true" ]]; then
-    # git show/checkout use paths relative to repo root, not working dir
-    local git_root
-    git_root="$(git rev-parse --show-prefix)"
-    if git cat-file -e "HEAD:${git_root}target/deploy/protocol_adapter-keypair.json"; then
-      echo "    Restoring program keypairs from git..."
-      git checkout HEAD -- target/deploy/
-    fi
-  fi
-  for name in "${PROGRAM_NAMES[@]}"; do
-    [[ -f "target/deploy/${name}-keypair.json" ]] || return 1
-  done
-}
-
-# Keypairs are committed to the repo. If missing locally, restore from git.
-# If not in git (fresh repo / CI), generate them via anchor build.
-ensure_program_keypairs() {
-  if ! restore_program_keypairs; then
-    echo "    Generating program keypairs (first build)..."
-    build_programs_dev noidl
-  fi
 }
 
 # yarn install, regenerating the lockfile if it is out of sync.
@@ -466,25 +438,6 @@ ensure_lockfile_sync() {
     echo "" >&2
     echo "Fix: ./scripts/dev.sh lock-sync <package>" >&2
     return 1
-  fi
-}
-
-sync_program_ids() {
-  ensure_node_modules
-  ensure_program_keypairs
-  load_workspace_programs
-
-  local name mv_before
-  mv_before="$(read_declare_id "${PROGRAM_SRC[mock_verifier]}")"
-  for name in "${PROGRAM_NAMES[@]}"; do
-    sync_program_id "$name"
-  done
-
-  # The preloaded mock VerifierEntry genesis account embeds the mock
-  # verifier's ID — regenerate it on rotation.
-  if [[ "$(read_declare_id "${PROGRAM_SRC[mock_verifier]}")" != "$mv_before" ]]; then
-    echo "    mock_verifier ID changed — regenerating mock verifier-entry account fixture" >&2
-    npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts "$(get_program_id mock_verifier)" >&2
   fi
 }
 
@@ -646,8 +599,9 @@ refresh_devnet_programs() {
 }
 
 # Set WORKSPACE_PROGRAM_ARGS to the solana-test-validator arguments that load
-# every workspace program at genesis from target/deploy, upgradeable, with
-# the provider wallet as upgrade authority (what `anchor deploy` would set).
+# every workspace program at genesis from target/deploy at its address,
+# upgradeable, with the provider wallet as upgrade authority (what
+# `anchor deploy` would set). Requires load_program_ids.
 workspace_program_args() {
   local name so
   WORKSPACE_PROGRAM_ARGS=()
@@ -657,7 +611,27 @@ workspace_program_args() {
       echo "❌ ${so} is missing; build the programs first ('./scripts/anchor-test.sh build', or the default phase)." >&2
       exit 1
     fi
-    WORKSPACE_PROGRAM_ARGS+=(--upgradeable-program "target/deploy/${name}-keypair.json" "$so" "$ANCHOR_WALLET_PATH")
+    WORKSPACE_PROGRAM_ARGS+=(--upgradeable-program "$(get_program_id "$name")" "$so" "$ANCHOR_WALLET_PATH")
+  done
+}
+
+# The synthetic VerifierEntry accounts preloaded at genesis embed the mock
+# verifier's address; fail if any embeds another address than
+# env/localnet.env's. Requires load_program_ids.
+check_mock_verifier_entries() {
+  local mock_verifier file
+  mock_verifier="$(get_program_id mock_verifier)"
+  for file in tests/fixtures/verifier-entries/verifier-entry-*.json; do
+    if ! node -e '
+      const bs58 = require("bs58").default || require("bs58");
+      const entry = JSON.parse(require("fs").readFileSync(process.argv[1], "utf-8"));
+      const data = Buffer.from(entry.account.data[0], "base64");
+      process.exit(data.includes(Buffer.from(bs58.decode(process.argv[2]))) ? 0 : 1);
+    ' "$file" "$mock_verifier"; then
+      echo "❌ ${file} does not embed the mock verifier address ${mock_verifier} (env/localnet.env)." >&2
+      echo "   Regenerate the entries: npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts ${mock_verifier}" >&2
+      exit 1
+    fi
   done
 }
 
@@ -712,6 +686,7 @@ start_validator() {
       account_args+=(--account "$addr" "$file")
     done
   }
+  check_mock_verifier_entries
   add_genesis_accounts tests/fixtures/verifier-entries verifier-entry-
 
   solana-test-validator \

@@ -24,7 +24,10 @@ pub use error::ErrorCode;
 use protocol_adapter::state::UPGRADE_AUTHORITY_SEED;
 pub use state::*;
 
-declare_id!("BsfuXpxw8oCmZXnYijyQkUYNcCnuskFZbYizmWLnpSU7");
+// The address comes from env/<cluster>.env, which the build scripts export.
+declare_id!(Pubkey::from_str_const(env!(
+    "SPL_TOKEN_FORWARDER_PROGRAM_ID"
+)));
 
 /// Mirrors EVM: `event Wrapped(address indexed token, address indexed from, uint128 amount);`
 #[event]

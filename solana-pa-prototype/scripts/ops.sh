@@ -70,8 +70,6 @@ Commands:
                          the declared dev-only instructions)
   clippy                 Lint every program, and each one with dev features
                          again with them enabled
-  sync-ids               Sync declare_id!/Anchor.toml to the committed
-                         program keypairs (use after rotating IDs)
   verify-build [--cluster <c>]
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
@@ -81,13 +79,17 @@ Commands:
   refresh-devnet-programs --url <rpc>
                          Replace the committed copy of the devnet programs
                          (devnet-programs/) with devnet's current state
-  validator-deploy       Sync IDs, build, start the validator with all
-                         programs loaded at genesis, and keep it running
+  validator-deploy       Build, start the validator with all programs
+                         loaded at genesis, and keep it running
 
 Flags:
   --cluster <c>    Target cluster (required except test/build-dev/build-release/
-                   clippy/sync-ids/validator/validator-deploy; optional for
-                   verify-build)
+                   clippy/validator/validator-deploy; optional for
+                   verify-build). Program addresses come from env/localnet.env
+                   and, for another cluster, env/<cluster>.env on top; a
+                   first deploy reads each program's keypair path from the
+                   uncommitted env/<cluster>.keys.env
+                   (<NAME>_PROGRAM_KEYPAIR=<path>).
   --wallet <path>  Wallet keypair. Defaults: devnet → scripts/devnet-wallet.json,
                    localnet → ~/.config/solana/id.json, mainnet → none (required).
                    The wallet must exist; nothing is auto-generated.
@@ -343,21 +345,27 @@ extend_program_data_if_needed() {
 
 deploy_one() {
   local name="$1"
-  local program_id
+  local program_id program_id_arg
   program_id="$(get_program_id "$name")"
+  # Creating a program at its address takes the address's keypair; a program
+  # already there is redeployed by address.
+  program_id_arg="$program_id"
+  if ! is_deployed "$program_id"; then
+    program_id_arg="$(program_keypair "$name")"
+  fi
 
   extend_program_data_if_needed "$name" "$program_id"
   echo "Deploying ${name} (${program_id})..."
   if ! solana program deploy \
     "target/deploy/${name}.so" \
     --keypair "$WALLET" \
-    --program-id "target/deploy/${name}-keypair.json" \
+    --program-id "$program_id_arg" \
     --url "$RPC_URL" 2>&1; then
     echo ""
     echo "❌ Deploy failed for ${name}."
-    echo "If the program was previously closed, the ID is permanently burned."
-    echo "To recover: delete target/deploy/${name}-keypair.json, run 'anchor build --no-idl'"
-    echo "to generate a new keypair, then deploy again."
+    echo "If the program was previously closed, the address is permanently burned:"
+    echo "generate a new keypair outside the repository, set its address in"
+    echo "env/${CLUSTER}.env and its path in env/${CLUSTER}.keys.env, then deploy again."
     exit 1
   fi
   echo "  ✅ ${name} deployed: ${program_id}"
@@ -450,34 +458,42 @@ build_for_deploy() {
   fi
 }
 
-# Cluster deploys never generate fresh program IDs implicitly: an ID that
-# isn't committed (or already present locally) would deploy to an address
-# nothing else knows about.
-require_deploy_keypairs() {
-  if ! restore_program_keypairs; then
-    echo "❌ Program keypairs are missing from target/deploy/ and not in git." >&2
-    echo "   Generate them with './scripts/dev.sh anchor-build', commit the ones" >&2
-    echo "   you intend to deploy, then re-run." >&2
+# The path of <name>'s keypair, from the uncommitted env/<cluster>.keys.env
+# (<NAME>_PROGRAM_KEYPAIR=<path>). It must be the keypair of the address
+# env/<cluster>.env gives the program: the binary has that address compiled
+# in, and every PDA derivation depends on it.
+program_keypair() {
+  local name="$1" keys var path address actual
+  keys="${PROJECT_DIR}/env/${CLUSTER}.keys.env"
+  var="${name^^}_PROGRAM_KEYPAIR"
+  if [[ -f "$keys" ]]; then
+    path="$(set -a; source "$keys"; echo "${!var:-}")"
+  fi
+  address="$(get_program_id "$name")"
+  if [[ -z "${path:-}" ]]; then
+    echo "❌ ${name} is not deployed at ${address}; creating it takes its keypair." >&2
+    echo "   Name the keypair's path in ${keys}: ${var}=<path>" >&2
     exit 1
   fi
+  if [[ ! -f "$path" ]]; then
+    echo "❌ ${var} names ${path}, which does not exist." >&2
+    exit 1
+  fi
+  actual="$(solana-keygen pubkey "$path")"
+  if [[ "$actual" != "$address" ]]; then
+    echo "❌ ${path} is the keypair of ${actual}, but env/${CLUSTER}.env gives ${name} the address ${address}." >&2
+    exit 1
+  fi
+  echo "$path"
 }
 
-# The deployed binary bakes in declare_id!, and every PDA derivation depends
-# on it. If declare_id! and the deploy keypair disagree, the deployment is
-# broken in ways that only surface at settlement time — catch it here.
-assert_declare_id_synced() {
-  local targets="$1"
-  local t name lib_rs declared actual
-  load_workspace_programs
-  for t in $targets; do
+# Check, before building, that every target not yet deployed has its keypair.
+require_program_keypairs() {
+  local t name
+  for t in $1; do
     name="${PROGRAM_BY_TARGET[$t]}"
-    lib_rs="${PROGRAM_SRC[$name]}"
-    declared="$(read_declare_id "$lib_rs")"
-    actual="$(get_program_id "$name")"
-    if [[ "$declared" != "$actual" ]]; then
-      echo "❌ ${name}: declare_id! (${declared}) does not match the deploy keypair (${actual})." >&2
-      echo "   Sync them before deploying (anchor-test runs sync_program_ids, or fix ${lib_rs})." >&2
-      exit 1
+    if ! is_deployed "$(get_program_id "$name")"; then
+      program_keypair "$name" >/dev/null
     fi
   done
 }
@@ -561,8 +577,7 @@ cmd_deploy() {
     require_forwarder_init_params
   fi
 
-  require_deploy_keypairs
-  assert_declare_id_synced "$targets"
+  require_program_keypairs "$targets"
   ensure_balance "$(estimate_balance_needed "$targets")"
   build_for_deploy
 
@@ -607,8 +622,6 @@ cmd_upgrade() {
 
   require_cmd anchor
 
-  require_deploy_keypairs
-  assert_declare_id_synced "$targets"
 
   # Verify target programs are already deployed
   for t in $targets; do
@@ -695,36 +708,29 @@ cmd_status() {
 
   for t in "${PROGRAM_TARGETS[@]}"; do
     local name="${PROGRAM_BY_TARGET[$t]}"
-    local keypair="target/deploy/${name}-keypair.json"
-    if [[ -f "$keypair" ]]; then
-      local pid
-      pid="$(solana-keygen pubkey "$keypair")"
-      if is_deployed "$pid"; then
-        echo "${t} (${name}): ✅ deployed — ${pid}"
-      else
-        echo "${t} (${name}): not deployed — ${pid}"
-      fi
-      print_explorer_link "$pid"
+    local pid
+    pid="$(get_program_id "$name")"
+    if is_deployed "$pid"; then
+      echo "${t} (${name}): ✅ deployed — ${pid}"
     else
-      echo "${t} (${name}): no keypair (run anchor build first)"
+      echo "${t} (${name}): not deployed — ${pid}"
     fi
+    print_explorer_link "$pid"
   done
   echo ""
 
   # PAState PDA
-  if [[ -f "target/deploy/protocol_adapter-keypair.json" ]]; then
-    local pa_pid pa_state_addr out
-    pa_pid="$(get_program_id "protocol_adapter")"
-    pa_state_addr="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" | awk 'NR == 1 { print $1 }')"
-    if [[ -n "$pa_state_addr" ]]; then
-      if out="$(solana account "$pa_state_addr" --url "$RPC_URL" 2>&1)"; then
-        echo "PAState PDA: ✅ initialized — ${pa_state_addr}"
-      elif [[ "$out" == "Error: AccountNotFound: pubkey=${pa_state_addr}" ]]; then
-        echo "PAState PDA: not initialized — ${pa_state_addr}"
-      else
-        echo "❌ solana account ${pa_state_addr} failed: ${out}" >&2
-        exit 1
-      fi
+  local pa_pid pa_state_addr out
+  pa_pid="$(get_program_id "protocol_adapter")"
+  pa_state_addr="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" | awk 'NR == 1 { print $1 }')"
+  if [[ -n "$pa_state_addr" ]]; then
+    if out="$(solana account "$pa_state_addr" --url "$RPC_URL" 2>&1)"; then
+      echo "PAState PDA: ✅ initialized — ${pa_state_addr}"
+    elif [[ "$out" == "Error: AccountNotFound: pubkey=${pa_state_addr}" ]]; then
+      echo "PAState PDA: not initialized — ${pa_state_addr}"
+    else
+      echo "❌ solana account ${pa_state_addr} failed: ${out}" >&2
+      exit 1
     fi
   fi
 }
@@ -752,7 +758,14 @@ cmd_verify_build() {
     exit 1
   fi
 
-  checked_sbf_build solana-verify build --library-name protocol_adapter --arch "$SBPF_ARCH"
+  # solana-verify builds in a container from the repository alone, passing
+  # its trailing arguments to `cargo build`; the program addresses go in as
+  # cargo [env] configuration, which a remote verification repeats.
+  local name address_config=()
+  for name in "${PROGRAM_NAMES[@]}"; do
+    address_config+=(--config "env.$(program_id_var "$name")=\"$(get_program_id "$name")\"")
+  done
+  checked_sbf_build solana-verify build --library-name protocol_adapter --arch "$SBPF_ARCH" -- "${address_config[@]}"
 
   local built
   built="$(solana-verify get-executable-hash target/deploy/protocol_adapter.so)"
@@ -915,6 +928,7 @@ cmd_clippy() {
 # ---------- dispatch ----------
 
 cd "$PROJECT_DIR"
+load_program_ids "${CLUSTER:-localnet}"
 
 case "$COMMAND" in
   build-dev)
@@ -924,16 +938,6 @@ case "$COMMAND" in
     else
       build_programs_dev
     fi
-    ;;
-  sync-ids)
-    # Adopt the program IDs in target/deploy/ (restored from git, or freshly
-    # committed when rotating to new IDs): sync declare_id! and Anchor.toml,
-    # and regenerate the mock verifier-entry fixture that embeds an ID.
-    require_cmd anchor
-    require_cmd solana-keygen
-    require_cmd yarn
-    require_cmd node
-    sync_program_ids
     ;;
   build-release)
     require_cmd anchor
@@ -974,13 +978,13 @@ case "$COMMAND" in
     tail -f "$VALIDATOR_LOG"
     ;;
   validator-deploy)
-    # Full local stack, kept running: sync IDs, build, start the validator
+    # Full local stack, kept running: build, start the validator
     # with every program loaded at genesis, then hold it up for external
     # clients (harnesses, manual testing). Ctrl-C tears the validator down.
     require_commands
     ensure_wallet
     ensure_lockfile_sync
-    sync_program_ids
+    ensure_node_modules
     build_programs_dev
     workspace_program_args
     start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
@@ -994,7 +998,7 @@ case "$COMMAND" in
     # on localnet) — the validation path for verify-build artifacts, which
     # the full flow would rebuild and clobber.
     if [[ "$PREBUILT" != "true" && ( -z "$CLUSTER" || "$CLUSTER" == "localnet" ) ]]; then
-      # Full deterministic local flow: sync IDs, build, then the spec files
+      # Full deterministic local flow: build, then the spec files
       # (all, or the ones given) on one validator with the programs loaded at
       # genesis. Guard against Cargo.lock skew first.
       ensure_lockfile_sync

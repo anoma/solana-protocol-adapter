@@ -36,7 +36,7 @@ cd solana-protocol-adapter/solana-pa-prototype
 ```
 
 The script:
-1. Syncs the program IDs to the committed keypairs and builds the programs.
+1. Builds the programs at the addresses in `env/localnet.env`.
 2. Starts one validator with the programs, the devnet verifier stack and Program Metadata program (the committed copy in `devnet-programs/`) and the suite's settlement lookup table loaded at genesis, warped to slot 1, and runs every spec file under `tests/` against it, so the deployment builds up as much history as the suite makes: first `tests/fresh/` (initialization, which only works on a fresh deployment), then every other file, each building on whatever state it finds, then `tests/terminal/` in numbered order (denials, marker and forwarder teardown, renounced ownerships: changes no later test could run after).
 
 ### Proof Modes
@@ -80,7 +80,7 @@ entry point for one fixture.
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
 | `./scripts/dev.sh shell` / `run <cmd>` | Interactive Nix shell / one command in it |
-| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-ref`, `forwarder`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `sync-ids`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
+| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-ref`, `forwarder`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
 
 ### Rebuilding From Scratch
 
@@ -282,7 +282,8 @@ After the nullifier markers, each external call takes the next `num_accounts` ac
    use anchor_lang::prelude::*;
    use anchor_lang::solana_program::program::set_return_data;
 
-   declare_id!("...");  // Synced to the program's keypair by sync-ids
+   // The address comes from env/<cluster>.env (env/README.md).
+   declare_id!(Pubkey::from_str_const(env!("MY_FORWARDER_PROGRAM_ID")));
 
    #[program]
    pub mod my_forwarder {
@@ -306,7 +307,7 @@ After the nullifier markers, each external call takes the next `num_accounts` ac
    }
    ```
 
-3. **Register and build**: add a row to `PROGRAM_TABLE` in `scripts/validator-deploy.sh` (every program under `programs/` needs one, or builds fail), then run `./scripts/dev.sh sync-ids` and `./scripts/dev.sh anchor-build`.
+3. **Register and build**: add a row to `PROGRAM_TABLE` in `scripts/validator-deploy.sh` (every program under `programs/` needs one, or builds fail), give the program an address in `env/localnet.env` (`MY_FORWARDER_PROGRAM_ID=<any public key>`: the local validator loads it at genesis there, so no keypair is needed), then run `./scripts/dev.sh anchor-build`.
 
 4. **Update `fixture-gen`** to encode a `SolanaExternalCall` with your forwarder's program ID, input, expected output and account count.
 
@@ -505,9 +506,9 @@ lsof -i :8899
 
 ### DeclaredProgramIdMismatch (Error 4100)
 
-Program ID in source doesn't match keypair. `anchor-test` syncs IDs automatically; outside it, run:
+A program runs at another address than the one compiled into it: its binary in `target/deploy/` was built from another cluster's `env/<cluster>.env`, or before an address there changed. Rebuild it:
 ```bash
-./scripts/dev.sh sync-ids
+./scripts/dev.sh anchor-build
 ```
 
 ### Fixture Generation Fails

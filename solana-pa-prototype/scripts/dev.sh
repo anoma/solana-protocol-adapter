@@ -36,6 +36,10 @@ run_in_project() {
 # shellcheck source=validator-deploy.sh
 source "${SCRIPT_DIR}/validator-deploy.sh"
 
+# Every command here builds or runs against the local addresses; cluster
+# operations (dispatched to ops.sh) load their cluster's on top.
+load_program_ids localnet
+
 # Run `cargo update -p <pkg>` against every present lockfile so all three stay
 # pinned to the same commit. Use after bumping a git-dep branch HEAD.
 sync_lockfiles_for_package() {
@@ -90,7 +94,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|sync-ids|idl-publish|verify-build|refresh-devnet-programs)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|refresh-devnet-programs)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -268,9 +272,9 @@ PYEOF
     echo "  lock-sync <pkg>  Update <pkg> in every Cargo.lock so they re-align"
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
     echo ""
-    echo "Cluster operations (take --cluster <localnet|devnet|mainnet>, except"
-    echo "sync-ids, and verify-build where it is optional;"
-    echo "see ./scripts/ops.sh for all flags, wallet defaults, and required env):"
+    echo "Cluster operations (take --cluster <localnet|devnet|mainnet>, optional for"
+    echo "verify-build; program addresses come from env/<cluster>.env; see"
+    echo "./scripts/ops.sh for all flags, wallet defaults, and required env):"
     echo "  deploy [${DEPLOY_TARGETS}|all]    First-time deploy (production build; --dev-teardown opts in)"
     echo "  upgrade [${DEPLOY_TARGETS}|all]   Rebuild + deploy over existing programs"
     echo "  init                   Initialize PA state (idempotent; needs PA_OWNER,"
@@ -284,7 +288,6 @@ PYEOF
     echo "  verify-build           Deterministic solana-verify build of the PA; with"
     echo "                         --cluster, compares against the deployed program"
     echo "  pause / unpause        Pause or resume settlement (owner-only)"
-    echo "  sync-ids               Sync declare_id!/Anchor.toml to the committed keypairs"
     echo "  status                 Show deployment status + wallet balance"
     echo "  balance                Show wallet address and balance"
     exit 1

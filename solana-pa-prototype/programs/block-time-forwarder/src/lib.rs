@@ -13,7 +13,10 @@
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::program::set_return_data;
 
-declare_id!("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf");
+// The address comes from env/<cluster>.env, which the build scripts export.
+declare_id!(Pubkey::from_str_const(env!(
+    "BLOCK_TIME_FORWARDER_PROGRAM_ID"
+)));
 
 #[constant]
 pub const RESULT_LT: u8 = 0; // expected < current
