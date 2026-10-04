@@ -466,7 +466,7 @@ Fixtures contain pre-generated RM transactions with valid proofs, committed beca
 
 `./scripts/dev.sh regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH]` regenerates the whole set (a salt sets every nonce and forwarder nonce apart from earlier runs, so the set settles on a deployment that already holds another run's); `./scripts/dev.sh gen-fixtures <shape> [options] OUT` generates one (`gen-fixtures --help` lists the shapes). Proving runs locally by default; its Groth16 step needs a container runtime (the Nix shell provides podman behind a `docker` wrapper). Setting `QUEUE_BASE_URL` and `QUEUE_AUTH_TOKEN`, or passing `--prover queue`, sends the proving jobs to the AnomaPay workers queue instead.
 
-`fixture-gen` builds `passthrough-logic-guest` in a container during its build, with the RISC0 guest toolchain the `risczero/risc0-guest-builder` image provides.
+The fixtures' external calls ride on pa-testkit's pass-through logic (`anoma_pa_testkit::fixtures::passthrough`), whose guest pa-testkit ships prebuilt.
 
 ### Fixture Staleness
 
@@ -539,7 +539,7 @@ A program runs at another address than the one compiled into it: its binary in `
 
 ### Fixture Generation Fails
 
-`fixture-gen` needs a container runtime for guest compilation (`passthrough-logic-guest`) and for local Groth16 proving. Check it is available and that `fixture-gen` builds and starts:
+`fixture-gen` needs a container runtime for local Groth16 proving. Check it is available and that `fixture-gen` builds and starts:
 ```bash
 ./scripts/dev.sh run docker --version
 ./scripts/dev.sh run cargo build --locked --manifest-path tools/fixture-gen/Cargo.toml

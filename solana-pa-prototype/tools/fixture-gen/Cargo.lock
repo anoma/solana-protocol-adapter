@@ -446,6 +446,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "anoma-pa-testkit"
+version = "1.0.0-rc.1"
+source = "git+https://github.com/anoma/pa-testkit?rev=166cfea77fcdc12ba4f2ba44181734902fbf526d#166cfea77fcdc12ba4f2ba44181734902fbf526d"
+dependencies = [
+ "anoma-rm-risc0",
+ "anoma-rm-risc0-gadgets",
+ "anyhow",
+ "bincode",
+ "hex",
+ "k256",
+ "regex",
+ "risc0-zkvm",
+]
+
+[[package]]
 name = "anoma-rm-core"
 version = "2.0.0-rc.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2510,6 +2525,7 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anoma-pa-solana-client 0.4.0 (git+https://github.com/anoma/anoma-pa-solana-client?rev=4b1758b5b3037533ebbfccbec3e376d028323f3b)",
+ "anoma-pa-testkit",
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
  "anyhow",
@@ -2522,7 +2538,6 @@ dependencies = [
  "heliax-ap-orchestrator-sdk",
  "hex",
  "k256",
- "passthrough-logic-methods",
  "protocol-adapter",
  "rand_chacha 0.3.1",
  "risc0-zkvm",
@@ -4083,14 +4098,6 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
-]
-
-[[package]]
-name = "passthrough-logic-methods"
-version = "0.1.0"
-dependencies = [
- "risc0-binfmt",
- "risc0-zkos-v1compat",
 ]
 
 [[package]]

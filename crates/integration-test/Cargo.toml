@@ -21,7 +21,7 @@ e2e = ["anoma-pa-testkit/e2e", "dep:anoma-risc0-kind-tables", "dep:dotenvy"]
 anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "4b1758b5b3037533ebbfccbec3e376d028323f3b", features = [
   "arm",
 ] }
-anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "af955de04d2213412d5da5cdd8ac268ebe5e5093", default-features = false, features = [
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "166cfea77fcdc12ba4f2ba44181734902fbf526d", default-features = false, features = [
   "fixtures",
 ] }
 anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", rev = "919c7787259eca02b8cedb079a639ad31e04ae51", optional = true, features = [

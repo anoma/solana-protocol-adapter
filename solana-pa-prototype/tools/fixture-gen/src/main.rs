@@ -42,7 +42,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use passthrough_logic_methods::{PASSTHROUGH_LOGIC_GUEST_ELF, PASSTHROUGH_LOGIC_GUEST_ID};
+use anoma_pa_testkit::fixtures::passthrough::{PASSTHROUGH_LOGIC_PK, PASSTHROUGH_LOGIC_VK};
 
 /// The kind table a fixture commits to unless `--kind-table` names another:
 /// the committed empty table. The compliance circuit hashes the witness's
@@ -1067,7 +1067,7 @@ fn deterministic_ephemeral_resource(
 ) -> Result<(Resource, NullifierKey, Digest, Resource)> {
     let nf_key = NullifierKey::default();
     let consumed_resource = Resource {
-        logic_ref: Digest::new(PASSTHROUGH_LOGIC_GUEST_ID),
+        logic_ref: PASSTHROUGH_LOGIC_VK,
         quantity: 1,
         is_ephemeral: true,
         nonce: fixture_nonce(fixture_name, index),
@@ -1117,7 +1117,7 @@ async fn prove_action(
     consumed_app_data: AppData,
     created_app_data: AppData,
 ) -> Result<Action> {
-    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
+    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
 
     let consumed = &compliance_witness.consumed_data[0];
     let consumed_nf = consumed
@@ -1144,7 +1144,7 @@ async fn prove_action(
     prove_compliance_and_logic(
         prover,
         compliance_witness,
-        PASSTHROUGH_LOGIC_GUEST_ELF,
+        PASSTHROUGH_LOGIC_PK,
         &passthrough_vk,
         consumed_instance,
         created_instance,
@@ -1422,7 +1422,7 @@ async fn generate_consume_only_transaction(
     let root = ActionTree::new(vec![consumed_nf])
         .root()
         .map_err(|e| anyhow!("compute action tree root: {e:?}"))?;
-    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
+    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
     let consumed_instance = LogicInstance {
         tag: consumed_nf,
         is_consumed: true,
@@ -1440,7 +1440,7 @@ async fn generate_consume_only_transaction(
         async {
             prove_logic(
                 prover,
-                PASSTHROUGH_LOGIC_GUEST_ELF,
+                PASSTHROUGH_LOGIC_PK,
                 &passthrough_vk,
                 consumed_instance,
             )
@@ -1767,7 +1767,7 @@ fn build_historical_root_consumer_witness(
     committer_nf_key: NullifierKey,
     merkle_path: MerklePath,
 ) -> Result<ComplianceWitness> {
-    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
+    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
 
     let consumed_nf = committed_resource
         .nullifier(&committer_nf_key)
@@ -2560,7 +2560,7 @@ mod tests {
         init_test_kind_table();
         let (consumed, nf_key, consumed_nf, created) =
             deterministic_ephemeral_resource(fixture_name, 0).unwrap();
-        let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
+        let passthrough_vk = PASSTHROUGH_LOGIC_VK;
         let created_cm = created.commitment();
 
         let witness = single_action_compliance_witness(
@@ -2589,13 +2589,13 @@ mod tests {
         };
 
         let (cp, cj) = arm::proving_system::prove(
-            PASSTHROUGH_LOGIC_GUEST_ELF,
+            PASSTHROUGH_LOGIC_PK,
             &consumed_instance,
             LocalProofType::Succinct,
         )
         .unwrap();
         let (crp, crj) = arm::proving_system::prove(
-            PASSTHROUGH_LOGIC_GUEST_ELF,
+            PASSTHROUGH_LOGIC_PK,
             &created_instance,
             LocalProofType::Succinct,
         )
