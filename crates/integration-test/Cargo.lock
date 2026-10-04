@@ -1250,7 +1250,7 @@ dependencies = [
 [[package]]
 name = "anoma-risc0-kind-tables"
 version = "1.0.0-rc.4"
-source = "git+https://github.com/anoma/risc0-kind-tables?rev=789bbb92c7c10480dee87d47395e38fd7bfc0957#789bbb92c7c10480dee87d47395e38fd7bfc0957"
+source = "git+https://github.com/anoma/risc0-kind-tables?rev=919c7787259eca02b8cedb079a639ad31e04ae51#919c7787259eca02b8cedb079a639ad31e04ae51"
 dependencies = [
  "alloy",
  "alloy-chains",
