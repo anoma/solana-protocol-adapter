@@ -89,7 +89,7 @@ jobs:
 
       - name: Run tests
         working-directory: ./solana-pa-prototype
-        run: cargo test --workspace
+        run: ./scripts/ops.sh unit-test
 
   # Build the programs once; the per-mode test jobs below reuse the
   # artifacts instead of repeating the SBF build.

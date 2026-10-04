@@ -71,7 +71,7 @@ case "${1:-}" in
     ;;
 
   test)
-    run_in_project "cargo test --workspace"
+    run_in_project "./scripts/ops.sh unit-test"
     ;;
 
   anchor-build)

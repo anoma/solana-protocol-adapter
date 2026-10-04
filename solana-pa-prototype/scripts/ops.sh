@@ -70,6 +70,8 @@ Commands:
                          the declared dev-only instructions)
   clippy                 Lint every program, and each one with dev features
                          again with them enabled
+  unit-test              The Rust unit tests (cargo test --workspace) at the
+                         local addresses
   verify-build [--cluster <c>]
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
@@ -83,7 +85,7 @@ Commands:
                          loaded at genesis, and keep it running
 
 Flags:
-  --cluster <c>    Target cluster (required except test/build-dev/build-release/
+  --cluster <c>    Target cluster (required except test/unit-test/build-dev/build-release/
                    clippy/validator/validator-deploy; optional for
                    verify-build). Program addresses come from env/localnet.env
                    and, for another cluster, env/<cluster>.env on top; a
@@ -948,6 +950,10 @@ case "$COMMAND" in
     require_cmd cargo
     require_cmd node
     cmd_clippy
+    ;;
+  unit-test)
+    require_cmd cargo
+    cargo test --workspace
     ;;
   verify-build)
     if [[ -n "$CLUSTER" ]]; then
