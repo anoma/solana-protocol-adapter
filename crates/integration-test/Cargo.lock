@@ -1183,10 +1183,9 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.4.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=4b1758b5b3037533ebbfccbec3e376d028323f3b#4b1758b5b3037533ebbfccbec3e376d028323f3b"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=bb04ed226ffb314b9ff19b0b6fa6c495fa4b29ac#bb04ed226ffb314b9ff19b0b6fa6c495fa4b29ac"
 dependencies = [
  "anoma-rm-risc0",
- "base64 0.22.1",
  "bincode",
  "hkdf",
  "hmac 0.12.1",
@@ -1197,8 +1196,6 @@ dependencies = [
  "solana-instruction 3.4.1",
  "solana-pubkey 3.0.0",
  "solana-sdk-ids 3.1.0",
- "spl-associated-token-account-interface",
- "spl-token-interface 3.0.0",
 ]
 
 [[package]]

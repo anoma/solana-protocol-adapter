@@ -18,7 +18,7 @@ local = ["anoma-pa-testkit/local"]
 e2e = ["anoma-pa-testkit/e2e", "dep:dotenvy"]
 
 [dependencies]
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "4b1758b5b3037533ebbfccbec3e376d028323f3b", features = [
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "bb04ed226ffb314b9ff19b0b6fa6c495fa4b29ac", features = [
   "arm",
 ] }
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "bcf09547598bfcbf1ab30aecdad3279d7ba85acb", default-features = false, features = [
