@@ -779,7 +779,7 @@ deterministic_build() {
 # The programs the integration-test harness loads, as it ships them: the
 # deterministic builds at the local addresses (env/localnet.env), so a
 # consumer pinning the harness by tag runs exactly the program of that tag.
-HARNESS_PROGRAMS=(protocol_adapter mock_verifier)
+HARNESS_PROGRAMS=(protocol_adapter mock_verifier test_forwarder)
 HARNESS_PROGRAMS_DIR="${PROJECT_DIR}/../crates/integration-test/programs"
 
 # Build the harness programs deterministically and write them to

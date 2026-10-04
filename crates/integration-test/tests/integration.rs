@@ -173,3 +173,64 @@ async fn a_consumer_deploys_its_program_and_sends_its_setup() -> anyhow::Result<
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_settlements_events_read_back_in_the_order_the_adapter_emitted_them() -> anyhow::Result<()>
+{
+    use anoma_pa_solana_client::events::{PaEvent, decode_event_instruction};
+    use anoma_pa_solana_client::settlement_input::settled_resources;
+    use anoma_pa_solana_integration_test::executed::Executed;
+
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    let actions = trivial::build_many(2, 91).context("failed to build trivial actions")?;
+    let tx = prove_actions(&env, &actions).await?;
+    let nullifiers = settled_resources(tx.as_arm())?.nullifiers;
+
+    let signature = env.protocol_adapter.settle(tx).await?;
+    let executed = Executed::read(&env.protocol_adapter.rpc, &signature).await?;
+    let events = executed
+        .cpi_events(&env.protocol_adapter.program)
+        .map(decode_event_instruction)
+        .collect::<Result<Vec<_>, _>>()?;
+    let settled: Vec<[u8; 32]> = events
+        .iter()
+        .filter_map(|event| match event {
+            PaEvent::ActionExecuted(action) => Some(action.nullifiers.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    anyhow::ensure!(
+        settled == nullifiers,
+        "the ActionExecuted events name the nullifiers {settled:02x?}, the transaction consumes \
+         {nullifiers:02x?}"
+    );
+    anyhow::ensure!(
+        matches!(events.last(), Some(PaEvent::TransactionExecuted(_))),
+        "the last event is {:?}, not TransactionExecuted",
+        events.last()
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_test_forwarders_log_mode_fills_the_transactions_log() -> anyhow::Result<()> {
+    use anoma_pa_solana_integration_test::executed::Executed;
+    use anoma_pa_solana_integration_test::test_forwarder;
+
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let program = env.deploy_test_forwarder()?;
+    // Agave keeps 10,000 bytes of program log per transaction, counting each
+    // line with its "Program log: " prefix; 100 of the forwarder's 100-byte
+    // lines exceed it.
+    let signature = env
+        .send(&[test_forwarder::log_ix(&program, 100)], &[])
+        .await?;
+    let executed = Executed::read(&env.protocol_adapter.rpc, &signature).await?;
+    anyhow::ensure!(
+        executed.logs.iter().any(|line| line == "Log truncated"),
+        "the transaction's log is not truncated: {:?}",
+        executed.logs
+    );
+    Ok(())
+}

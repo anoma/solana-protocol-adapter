@@ -18,6 +18,7 @@ use crate::state::cluster::Cluster;
 /// addresses (`dev.sh harness-programs`).
 const PROTOCOL_ADAPTER_SO: &[u8] = include_bytes!("../../../programs/protocol_adapter.so");
 const MOCK_VERIFIER_SO: &[u8] = include_bytes!("../../../programs/mock_verifier.so");
+const TEST_FORWARDER_SO: &[u8] = include_bytes!("../../../programs/test_forwarder.so");
 
 /// The devnet verifier router the adapter repository commits a copy of, with
 /// its router state.
@@ -36,6 +37,20 @@ const MOCK_VERIFIER_ENTRY: &str = include_str!(
 );
 
 impl Environment {
+    /// Deploys the adapter repository's test forwarder (`programs/test-forwarder`)
+    /// at its local address, which it returns: a program whose `forward_call`
+    /// fails, returns nothing, logs, or relays the call to another program,
+    /// as its instruction data says.
+    pub fn deploy_test_forwarder(&self) -> anyhow::Result<Pubkey> {
+        let program = program_id(LOCALNET, "TEST_FORWARDER")?;
+        self.deploy_program(
+            program,
+            TEST_FORWARDER_SO,
+            self.protocol_adapter.payer.pubkey(),
+        )?;
+        Ok(program)
+    }
+
     pub async fn setup_bare() -> anyhow::Result<Self> {
         Self::setup(async |_| anyhow::Ok(())).await
     }

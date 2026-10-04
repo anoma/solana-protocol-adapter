@@ -18,6 +18,7 @@ use anyhow::Context;
 use solana_keypair::Keypair;
 use solana_message::AddressLookupTableAccount;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use solana_signature::Signature;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
@@ -143,13 +144,11 @@ impl ProtocolAdapter {
         }
         Ok(())
     }
-}
 
-impl CoreProtocolAdapter for ProtocolAdapter {
-    type Transaction = Transaction;
-    type CommitmentTree = FrontierCommitmentTree;
-
-    async fn execute(&mut self, transaction: Self::Transaction) -> anyhow::Result<()> {
+    /// Settles `transaction` the way every submitter does (its data uploaded,
+    /// the settlement, the upload closed), and returns the settlement's
+    /// signature, which a test reads the settlement's log and events with.
+    pub async fn settle(&mut self, transaction: Transaction) -> anyhow::Result<Signature> {
         let created_commitments: Vec<Digest> = transaction.created_commitments()?.collect();
         let tx = transaction.into_arm();
 
@@ -216,10 +215,21 @@ impl CoreProtocolAdapter for ProtocolAdapter {
         send(rpc, payer, &[plan.close], &[])
             .await
             .context("failed to close the transaction-data upload")?;
-        settled?;
+        let signature = settled?;
 
         self.commitment_tree.add(created_commitments);
-        self.ensure_latest_root(&self.state().await?)
+        self.ensure_latest_root(&self.state().await?)?;
+        Ok(signature)
+    }
+}
+
+impl CoreProtocolAdapter for ProtocolAdapter {
+    type Transaction = Transaction;
+    type CommitmentTree = FrontierCommitmentTree;
+
+    async fn execute(&mut self, transaction: Self::Transaction) -> anyhow::Result<()> {
+        self.settle(transaction).await?;
+        Ok(())
     }
 
     fn commitment_tree(&self) -> &Self::CommitmentTree {

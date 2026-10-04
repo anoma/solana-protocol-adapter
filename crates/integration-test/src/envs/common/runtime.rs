@@ -16,6 +16,7 @@ use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use surfpool_sdk::cheatcodes::builders::{CheatcodeBuilder, DeployProgram, SetAccount};
@@ -45,14 +46,14 @@ pub(in crate::envs) fn client(surfnet: &Surfnet) -> Arc<RpcClient> {
 }
 
 /// Sends `instructions` as one v0 transaction compiled against `tables`,
-/// signed by `payer`, and waits for it to be confirmed. A refused transaction
-/// fails with the runtime's simulation logs.
+/// signed by `payer`, and waits for it to be confirmed; returns its
+/// signature. A refused transaction fails with the runtime's simulation logs.
 pub(in crate::envs) async fn send(
     rpc: &RpcClient,
     payer: &Keypair,
     instructions: &[Instruction],
     tables: &[AddressLookupTableAccount],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Signature> {
     send_signed(rpc, payer, &[], instructions, tables).await
 }
 
@@ -63,7 +64,7 @@ pub(in crate::envs) async fn send_signed(
     signers: &[&Keypair],
     instructions: &[Instruction],
     tables: &[AddressLookupTableAccount],
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Signature> {
     let blockhash = rpc
         .get_latest_blockhash()
         .await
@@ -77,8 +78,7 @@ pub(in crate::envs) async fn send_signed(
         .context("failed to sign the transaction")?;
     rpc.send_and_confirm_transaction(&transaction)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(())
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// surfpool's `surfnet_setProgramAuthority`: the upgrade authority of an
@@ -184,7 +184,8 @@ pub(in crate::envs) async fn initialize(
         &[],
     )
     .await
-    .context("failed to initialize the protocol adapter")
+    .context("failed to initialize the protocol adapter")?;
+    Ok(())
 }
 
 /// The verifier program the router's entry for `selector` names.

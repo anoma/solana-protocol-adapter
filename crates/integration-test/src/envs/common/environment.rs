@@ -5,6 +5,7 @@ use anoma_pa_testkit::transaction::Transaction;
 use anyhow::Context;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
+use solana_signature::Signature;
 use surfpool_sdk::{Pubkey, Surfnet};
 
 use super::protocol_adapter::ProtocolAdapter;
@@ -70,11 +71,12 @@ impl<P> Environment<P> {
     /// Sends `instructions` as one transaction the default signer pays for,
     /// signed by it and `signers`, and waits for it to be confirmed: a
     /// consumer's setup, such as minting a token and approving a delegate.
+    /// Returns its signature.
     pub async fn send(
         &self,
         instructions: &[Instruction],
         signers: &[&Keypair],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Signature> {
         let adapter = &self.protocol_adapter;
         runtime::send_signed(&adapter.rpc, &adapter.payer, signers, instructions, &[]).await
     }

@@ -1183,7 +1183,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.4.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=2c702fd5f773bcca1f30b42fca4ea62afaa2bc27#2c702fd5f773bcca1f30b42fca4ea62afaa2bc27"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=8e215443494c96f0b915ef235fe181a046a973f1#8e215443494c96f0b915ef235fe181a046a973f1"
 dependencies = [
  "anoma-rm-risc0",
  "base64 0.22.1",
@@ -1211,6 +1211,7 @@ dependencies = [
  "anoma-rm-risc0",
  "anyhow",
  "base64 0.22.1",
+ "bs58",
  "dotenvy",
  "futures 0.3.34",
  "regex",
@@ -1222,9 +1223,12 @@ dependencies = [
  "solana-keypair",
  "solana-message 4.4.1",
  "solana-rpc-client",
+ "solana-rpc-client-types",
+ "solana-signature",
  "solana-signer",
  "solana-system-interface 3.2.0",
  "solana-transaction 4.1.6",
+ "solana-transaction-status-client-types",
  "surfpool-sdk",
  "tokio",
 ]
