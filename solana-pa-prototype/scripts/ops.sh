@@ -80,7 +80,11 @@ Commands:
                          at the local addresses, written to the
                          integration-test harness's programs/; with --check,
                          fails when a committed binary is not the fresh build
-  validator             Start the local test validator (RISC0 verifier stack
+  harness-test [--cluster devnet]
+                         The integration-test harness's tests on its local
+                         runtime; with --cluster devnet, its e2e cases on a
+                         fork of devnet (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN)
+  validator            Start the local test validator (RISC0 verifier stack
                          and Program Metadata program copied from devnet,
                          marker fixtures preloaded)
   refresh-devnet-programs --url <rpc>
@@ -91,8 +95,8 @@ Commands:
 
 Flags:
   --cluster <c>    Target cluster (required except test/unit-test/build-dev/build-release/
-                   clippy/validator/validator-deploy; optional for
-                   verify-build). Program addresses come from env/localnet.env
+                   clippy/validator/validator-deploy/harness-programs; optional for
+                   verify-build and harness-test). Program addresses come from env/localnet.env
                    and, for another cluster, env/<cluster>.env on top; a
                    first deploy reads each program's keypair path from the
                    uncommitted env/<cluster>.keys.env
@@ -220,25 +224,13 @@ PRINT_EXPLORER=false
 ALLOW_DEV_TEARDOWN=false
 WALLET=""
 
-resolve_cluster() {
-  local default_wallet=""
+# Set RPC_URL to CLUSTER's endpoint: --url, else <CLUSTER>_RPC_URL (the
+# local validator's on localnet).
+resolve_rpc_url() {
   case "$CLUSTER" in
-    localnet)
-      # validator-deploy.sh's defaults for the local test validator
-      RPC_URL="$CLUSTER_URL"
-      default_wallet="$ANCHOR_WALLET_PATH"
-      ALLOW_DEV_TEARDOWN=true
-      ;;
-    devnet)
-      RPC_URL="${DEVNET_RPC_URL:-}"
-      EXPLORER_QS="?cluster=devnet"
-      PRINT_EXPLORER=true
-      default_wallet="${PROJECT_DIR}/scripts/devnet-wallet.json"
-      ;;
-    mainnet)
-      RPC_URL="${MAINNET_RPC_URL:-}"
-      PRINT_EXPLORER=true
-      ;;
+    localnet) RPC_URL="$CLUSTER_URL" ;;
+    devnet) RPC_URL="${DEVNET_RPC_URL:-}" ;;
+    mainnet) RPC_URL="${MAINNET_RPC_URL:-}" ;;
     "")
       echo "❌ Missing --cluster <localnet|devnet|mainnet>" >&2
       exit 1
@@ -258,6 +250,26 @@ resolve_cluster() {
     echo "❌ No RPC endpoint for ${CLUSTER}: pass --url <rpc> or set ${CLUSTER^^}_RPC_URL." >&2
     exit 1
   fi
+}
+
+resolve_cluster() {
+  local default_wallet=""
+  resolve_rpc_url
+  case "$CLUSTER" in
+    localnet)
+      # validator-deploy.sh's defaults for the local test validator
+      default_wallet="$ANCHOR_WALLET_PATH"
+      ALLOW_DEV_TEARDOWN=true
+      ;;
+    devnet)
+      EXPLORER_QS="?cluster=devnet"
+      PRINT_EXPLORER=true
+      default_wallet="${PROJECT_DIR}/scripts/devnet-wallet.json"
+      ;;
+    mainnet)
+      PRINT_EXPLORER=true
+      ;;
+  esac
 
   WALLET="${WALLET_OVERRIDE:-$default_wallet}"
   if [[ -z "$WALLET" ]]; then
@@ -812,6 +824,31 @@ cmd_harness_programs() {
   return "$failed"
 }
 
+# The integration-test harness's tests (crates/integration-test). Without a
+# cluster, on its local runtime; with --cluster devnet, its e2e cases on a
+# runtime forking devnet through the cluster's RPC endpoint, proven by the
+# queue at QUEUE_BASE_URL (QUEUE_AUTH_TOKEN), one test at a time.
+cmd_harness_test() {
+  local crate="${PROJECT_DIR}/../crates/integration-test"
+  case "${CLUSTER:-}" in
+    "")
+      (cd "$crate" && cargo test)
+      ;;
+    devnet)
+      resolve_rpc_url
+      if [[ -z "${QUEUE_BASE_URL:-}" || -z "${QUEUE_AUTH_TOKEN:-}" ]]; then
+        echo "❌ The e2e cases prove with the queue: set QUEUE_BASE_URL and QUEUE_AUTH_TOKEN." >&2
+        exit 1
+      fi
+      (cd "$crate" && DEVNET_RPC_URL="$RPC_URL" RUST_TEST_THREADS=1 cargo test --features e2e e2e_test)
+      ;;
+    *)
+      echo "❌ harness-test runs locally, or with --cluster devnet on a fork of devnet." >&2
+      exit 1
+      ;;
+  esac
+}
+
 # Deterministic (verifiable) build of the PA via solana-verify's pinned
 # Docker image; with a cluster, also compares against the deployed program's
 # hash. The resulting target/deploy/protocol_adapter.so is the artifact that
@@ -1020,6 +1057,10 @@ case "$COMMAND" in
       exit 1
     fi
     cmd_harness_programs
+    ;;
+  harness-test)
+    require_cmd cargo
+    cmd_harness_test
     ;;
   refresh-devnet-programs)
     if [[ -z "$RPC_OVERRIDE" ]]; then

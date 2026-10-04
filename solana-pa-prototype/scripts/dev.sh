@@ -94,7 +94,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|harness-test|refresh-devnet-programs)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -150,11 +150,11 @@ case "${1:-}" in
     ;;
 
   fmt)
-    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
+    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check && cargo fmt --manifest-path ../crates/integration-test/Cargo.toml -- --check"
     ;;
 
   clippy)
-    run_in_project "./scripts/ops.sh clippy && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings"
+    run_in_project "./scripts/ops.sh clippy && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings && cargo clippy --manifest-path ../crates/integration-test/Cargo.toml --all-targets --features e2e -- -D warnings"
     ;;
 
   coverage)
@@ -262,6 +262,9 @@ PYEOF
     echo "  harness-programs [--check]"
     echo "               Write the integration-test harness's program binaries (the"
     echo "               deterministic builds); --check fails when they are not"
+    echo "  harness-test [--cluster devnet]"
+    echo "               The integration-test harness's tests; with --cluster devnet,"
+    echo "               its e2e cases on a fork of devnet (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN)"
     echo "  validator    Start a local Solana validator (devnet programs only)"
     echo "  validator-deploy Build, start a validator with every program loaded"
     echo "               at genesis, and keep it running"
