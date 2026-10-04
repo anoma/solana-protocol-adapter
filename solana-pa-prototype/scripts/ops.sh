@@ -22,10 +22,9 @@ Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]
 Commands:
   deploy [${DEPLOY_TARGETS}|all]
                          First-time deploy (default target: all). Deploys the
-                         production build; on localnet the PA and the SPL
-                         token forwarder are initialized at once, while on
-                         devnet/mainnet each program's IDL is published and
-                         init / forwarder init are left for after the
+                         production build; on localnet the PA is initialized
+                         at once, while on devnet/mainnet each program's IDL
+                         is published and init is left for after the
                          metadata accounts are given to the owner.
   upgrade [${DEPLOY_TARGETS}|all]
                          Rebuild + upgrade existing programs in place: through
@@ -37,13 +36,9 @@ Commands:
   deny-logic-ref         Deny PA_DENIED_LOGIC_REF: no settlement consumes or
                          creates a resource carrying it again. Cannot be
                          undone (owner wallet).
-  forwarder <cmd>        SPL token forwarder operations: init, reinitialize,
-                         emergency-withdraw. Parameters are STF_*
-                         environment variables; see scripts/forwarder.ts.
   lookup-table           Create the deployment's settlement lookup table, or
                          extend the one in PA_LOOKUP_TABLE with any missing
-                         key; STF_TOKEN_MINTS adds mints' escrow accounts.
-                         See scripts/lookup-table.ts.
+                         key. See scripts/lookup-table.ts.
   pause                  Pause settlement (owner-only; pa-evm's pause())
   unpause                Resume settlement (owner-only; pa-evm's unpause())
   status                 Show deployment status + wallet balance
@@ -124,15 +119,6 @@ Initialization parameters (required by deploy/init when the PA is a target):
                        Devnet: ${GROTH16_SELECTOR}
 
 The PA starts on the empty kind table; set-kind-table installs another.
-
-Forwarder initialization parameters (required by deploy/forwarder init when
-the SPL token forwarder is a target):
-  STF_LOGIC_REF        32-byte hex logic ref the forwarder serves
-  STF_EMERGENCY_COMMITTEE
-                       base58 pubkey of the emergency committee
-  STF_OWNER            base58 pubkey of the forwarder's initial owner, who
-                       alone upgrades it and rotates its logic ref
-  STF_TOKEN_MINT       optional: base58 mint whose escrow ATA to create
 USAGE
   exit 1
 }
@@ -388,7 +374,7 @@ deploy_one() {
 # authority becomes their own PDA, and only their owner-only `upgrade`
 # replaces their code, as pa-evm's UUPS contracts authorize their own
 # upgrades.
-SELF_UPGRADING_PROGRAMS=(protocol_adapter spl_token_forwarder)
+SELF_UPGRADING_PROGRAMS=(protocol_adapter)
 
 # Upgrade <name> in place along the path its upgrade authority leaves: through
 # the program when the authority is the program's own PDA, through the
@@ -559,20 +545,6 @@ init_pa() {
   run_ts scripts/init-pa.ts
 }
 
-require_forwarder_init_params() {
-  if [[ -z "${STF_LOGIC_REF:-}" || -z "${STF_EMERGENCY_COMMITTEE:-}" || -z "${STF_OWNER:-}" ]]; then
-    echo "❌ Missing STF_LOGIC_REF, STF_EMERGENCY_COMMITTEE and/or STF_OWNER." >&2
-    echo "   The forwarder config pins the logic ref it serves, the committee" >&2
-    echo "   that can act in an emergency and the owner; there is no safe default." >&2
-    exit 1
-  fi
-}
-
-init_forwarder() {
-  echo "Initializing SPL token forwarder (idempotent)..."
-  run_ts scripts/forwarder.ts init
-}
-
 # ---------- commands ----------
 
 cmd_deploy() {
@@ -584,9 +556,6 @@ cmd_deploy() {
 
   if [[ " $targets " == *" pa "* ]]; then
     require_init_params
-  fi
-  if [[ " $targets " == *" stf "* ]]; then
-    require_forwarder_init_params
   fi
 
   require_program_keypairs "$targets"
@@ -606,18 +575,11 @@ cmd_deploy() {
     if [[ " $targets " == *" pa "* ]]; then
       init_pa
     fi
-    if [[ " $targets " == *" stf "* ]]; then
-      init_forwarder
-    fi
   else
     cmd_idl_publish
     if [[ " $targets " == *" pa "* ]]; then
       echo "Next, by hand: give the adapter's canonical metadata accounts to its owner, then run init" \
         "(docs/OPERATIONS.md, Deploy and initialize)."
-    fi
-    if [[ " $targets " == *" stf "* ]]; then
-      echo "Next, by hand: give the forwarder's canonical metadata accounts to its owner, then run" \
-        "forwarder init (docs/OPERATIONS.md, The SPL token forwarder)."
     fi
   fi
 
@@ -680,15 +642,6 @@ cmd_set_kind_table() {
 cmd_deny_logic_ref() {
   require_pa_deployed
   run_ts scripts/deny-logic-ref.ts
-}
-
-cmd_forwarder() {
-  require_cmd npx
-
-  local pid
-  pid="$(get_program_id "spl_token_forwarder")"
-  require_deployed "$pid" "SPL token forwarder" "deploy stf"
-  run_ts scripts/forwarder.ts "$TARGET"
 }
 
 cmd_lookup_table() {
@@ -928,9 +881,8 @@ cmd_test() {
 
   # The suite's files that build on whatever state they find, or the ones
   # given, each in its own mocha process against the deployment, without the
-  # tests tagged @localnet: those need the owner or the forwarder's
-  # committee, change a deployment setting, or call a program deployed only
-  # on a local validator.
+  # tests tagged @localnet: those need the owner, change a deployment
+  # setting, or call a program deployed only on a local validator.
   local specs=()
   if [[ ${#SPEC_FILES[@]} -gt 0 ]]; then
     specs=("${SPEC_FILES[@]}")
@@ -1077,7 +1029,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|lookup-table|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

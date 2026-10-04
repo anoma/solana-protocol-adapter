@@ -1,21 +1,18 @@
 /**
  * The only builders in this repository for instructions that change an
- * authority or close protocol accounts for good: both programs'
- * `transfer_ownership` and `renounce_ownership`, the forwarder's
- * `set_emergency_caller`, `close_escrow`, `close_config` and
- * `close_nonce_bitmaps_batch` (wrap replay protection), and the adapter's
- * dev-build `close_markers_batch` (settlement replay protection), the
- * loader's `SetAuthority` and the Program Metadata program's `SetAuthority`
- * on a canonical IDL account. They exist
+ * authority or close protocol accounts for good: the adapter's
+ * `transfer_ownership`, `renounce_ownership` and dev-build
+ * `close_markers_batch` (settlement replay protection), the loader's
+ * `SetAuthority` and the Program Metadata program's `SetAuthority` on a
+ * canonical IDL account. They exist
  * for the tests and refuse any RPC endpoint that is not this machine's, so no
  * repository code can do any of this on devnet or mainnet; there, it is done
  * by hand (docs/OPERATIONS.md).
  */
 import { Program } from "@anchor-lang/core";
 import { address } from "@solana/kit";
-import { Connection, Keypair, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { Connection, PublicKey, TransactionInstruction } from "@solana/web3.js";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
-import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { BPF_LOADER_UPGRADEABLE, deriveProgramDataPda, derivePaStatePda } from "../../client/pda";
 import { canonicalIdlAccount, programMetadataClient } from "../../client/programMetadata";
 
@@ -104,99 +101,6 @@ export function localRenounceAdapterOwnership(program: Program<ProtocolAdapter>,
   return program.methods
     .renounceOwnership()
     .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
-}
-
-/** The forwarder's `transfer_ownership` by its owner `authority`, to `newOwner`. */
-export function localTransferForwarderOwnership(
-  forwarder: Program<SplTokenForwarder>,
-  authority: PublicKey,
-  newOwner: PublicKey,
-) {
-  assertLocalValidator(forwarder.provider.connection);
-  return forwarder.methods.transferOwnership(newOwner).accountsPartial({ authority });
-}
-
-/** The forwarder's `renounce_ownership` by its owner `authority`: neither `upgrade` nor `reinitialize` can run again. */
-export function localRenounceForwarderOwnership(forwarder: Program<SplTokenForwarder>, authority: PublicKey) {
-  assertLocalValidator(forwarder.provider.connection);
-  return forwarder.methods.renounceOwnership().accountsPartial({ authority });
-}
-
-/** `set_emergency_caller` by the committee; only while the adapter at `paState` is paused. */
-export function localSetEmergencyCaller(
-  forwarder: Program<SplTokenForwarder>,
-  committee: PublicKey,
-  paState: PublicKey,
-  caller: PublicKey,
-) {
-  assertLocalValidator(forwarder.provider.connection);
-  return forwarder.methods.setEmergencyCaller(caller).accountsPartial({ committee, paState });
-}
-
-/**
- * `close_escrow` by `authority`, draining the escrow to `recipientAta`;
- * requires the adapter at `paState` to be paused. Callers add signers and send.
- */
-export function localCloseEscrow(
-  forwarder: Program<SplTokenForwarder>,
-  authority: PublicKey,
-  paState: PublicKey,
-  accounts: { mint: PublicKey; escrowAta: PublicKey; recipientAta: PublicKey },
-) {
-  assertLocalValidator(forwarder.provider.connection);
-  return forwarder.methods.closeEscrow().accounts({
-    authority,
-    escrowAta: accounts.escrowAta,
-    recipientAta: accounts.recipientAta,
-    tokenMint: accounts.mint,
-    paState,
-  });
-}
-
-/** `close_config` by the committee `authority`; requires the adapter at `paState` to be paused. */
-export function localCloseConfig(forwarder: Program<SplTokenForwarder>, authority: PublicKey, paState: PublicKey) {
-  assertLocalValidator(forwarder.provider.connection);
-  return forwarder.methods.closeConfig().accounts({ authority, paState });
-}
-
-/** `close_nonce_bitmaps_batch` by the committee `authority` over `bitmaps`; requires the adapter at `paState` to be paused. */
-export function localCloseNonceBitmapsBatch(
-  forwarder: Program<SplTokenForwarder>,
-  authority: PublicKey,
-  paState: PublicKey,
-  bitmaps: PublicKey[],
-) {
-  assertLocalValidator(forwarder.provider.connection);
-  return forwarder.methods
-    .closeNonceBitmapsBatch()
-    .accounts({ authority, paState })
-    .remainingAccounts(bitmaps.map((pubkey) => ({ pubkey, isWritable: true, isSigner: false })));
-}
-
-/**
- * Close every nonce bitmap the forwarder owns, in batches, as the committee
- * `authority` (signing with `signers`, or the provider wallet when empty);
- * requires the adapter at `paState` to be paused. Returns how many were closed.
- */
-export async function localCloseAllNonceBitmaps(
-  forwarder: Program<SplTokenForwarder>,
-  authority: PublicKey,
-  paState: PublicKey,
-  signers: Keypair[],
-): Promise<number> {
-  assertLocalValidator(forwarder.provider.connection);
-  const bitmaps = await forwarder.account.nonceBitmap.all();
-  for (const batch of chunks(bitmaps, BATCH_SIZE)) {
-    await localCloseNonceBitmapsBatch(
-      forwarder,
-      authority,
-      paState,
-      batch.map(({ publicKey }) => publicKey),
-    )
-      .signers(signers)
-      .rpc();
-  }
-  return bitmaps.length;
 }
 
 /**

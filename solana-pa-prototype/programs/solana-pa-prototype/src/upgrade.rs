@@ -1,8 +1,9 @@
 //! A program that owns its own upgrades, as a UUPS implementation does: the
 //! loader's upgrade authority is a PDA of the program, so the loader accepts
 //! an upgrade (or an authority change) only when the program signs for it,
-//! which it does only for its owner. Shared by the adapter and the SPL token
-//! forwarder, whose owner-only `upgrade` instructions wrap `upgrade_program`.
+//! which it does only for its owner. Shared by the adapter and the forwarders
+//! built against its crate (anoma/anomapay-spl-token-forwarder), whose
+//! owner-only `upgrade` instructions wrap `upgrade_program`.
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::bpf_loader_upgradeable::{

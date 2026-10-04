@@ -19,8 +19,7 @@ import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
 import { PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
-import { upgradeAdapter, upgradeForwarder } from "../client/instructions";
+import { upgradeAdapter } from "../client/instructions";
 import { deriveUpgradeAuthorityPda } from "../client/pda";
 import { bufferExecutableHash, deployedExecutableHash, upgradeAuthority } from "../client/upgrade";
 import { cpiEventsOfSignature } from "../client/events";
@@ -40,12 +39,8 @@ function selfUpgradingProgram(name: string): SelfUpgrading {
       const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
       return { program, upgrade: (o, b, s) => upgradeAdapter(program, o, b, s), event: "upgradedEvent" };
     }
-    case "spl_token_forwarder": {
-      const program = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
-      return { program, upgrade: (o, b, s) => upgradeForwarder(program, o, b, s), event: "upgraded" };
-    }
     default:
-      fail(`${name} does not upgrade itself; known: protocol_adapter, spl_token_forwarder`);
+      fail(`${name} does not upgrade itself; known: protocol_adapter`);
   }
 }
 

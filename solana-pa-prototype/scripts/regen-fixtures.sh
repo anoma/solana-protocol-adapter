@@ -26,10 +26,9 @@
 # settled (rejected, its error variants, and the deliberate-failure
 # forwarder fixtures). fixture-gen derives every resource nonce from the
 # output file's name, so fixtures with different names never share a
-# nullifier. A spend through a Merkle path (the historical-root consumer, the
-# unwraps) is proven over the tree the fresh phase (tests/fresh/) builds in
-# its fixed order: --settled-before lists the fixtures it settles before the
-# spent resource's, in that order.
+# nullifier. A spend through a Merkle path (the historical-root consumer) is
+# proven over the tree the fresh phase (tests/fresh/) builds in its fixed
+# order.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -119,8 +118,7 @@ fi
 
 # The fresh phase's settlements, in their order: the committer (leaf 0) and
 # its successor, then the consumer spending the committer's resource through
-# its retained root (tests/fresh/3-historical-root.ts); then the wrap and the
-# unwraps spending its resource (tests/fresh/4-spl-token-wrap-unwrap.ts).
+# its retained root (tests/fresh/3-historical-root.ts).
 COMMITTER="$OUT_DIR/batch_groth16_historical_root_committer.json"
 SUCCESSOR="$OUT_DIR/batch_groth16_historical_root_successor.json"
 CONSUMER="$OUT_DIR/batch_groth16_historical_root.json"
@@ -142,32 +140,6 @@ fi
 if wanted batch_groth16_mismatch.json; then gen output-mismatch "$OUT_DIR/batch_groth16_mismatch.json"; fi
 if wanted batch_forwarder_fail.json; then gen forwarder-fail "$OUT_DIR/batch_forwarder_fail.json"; fi
 if wanted batch_forwarder_silent.json; then gen forwarder-silent "$OUT_DIR/batch_forwarder_silent.json"; fi
-if wanted batch_forwarder_relay.json; then gen forwarder-relay "$OUT_DIR/batch_forwarder_relay.json"; fi
-
-# The AnomaPay fixtures are proven with the real transfer logic: the wrap,
-# the same wrap under a fresh nullifier (a replay of its forwarder nonce),
-# and the unwraps of the wrap's resource, to the recipient and to the
-# forwarder's own escrow authority, over the fresh phase's tree.
-if wanted spl_token_wrap.json; then gen spl-token-wrap "$OUT_DIR/spl_token_wrap.json"; fi
-if wanted spl_token_wrap_replay.json; then gen spl-token-wrap "$OUT_DIR/spl_token_wrap_replay.json"; fi
-BEFORE_WRAP=(--settled-before "$COMMITTER" --settled-before "$SUCCESSOR" --settled-before "$CONSUMER")
-if wanted spl_token_unwrap.json; then
-  gen spl-token-unwrap --wrap "$OUT_DIR/spl_token_wrap.json" "${BEFORE_WRAP[@]}" "$OUT_DIR/spl_token_unwrap.json"
-fi
-if wanted spl_token_unwrap_to_escrow.json; then
-  gen spl-token-unwrap --to-escrow --wrap "$OUT_DIR/spl_token_wrap.json" "${BEFORE_WRAP[@]}" \
-    "$OUT_DIR/spl_token_unwrap_to_escrow.json"
-fi
-
-# A second wrap (the next forwarder nonce) proven against the solana-devnet
-# kind table from anoma/risc0-kind-tables (data/generated/staging), whatever
-# table the run proves against, settled after set_kind_table_commitment
-# installs that table.
-if wanted spl_token_wrap_devnet_kind_table.json; then
-  gen_with spl-token-wrap --wrap-nonce 2 \
-    --kind-table tools/fixture-gen/kind_table_solana_devnet.json \
-    "$OUT_DIR/spl_token_wrap_devnet_kind_table.json"
-fi
 
 if [[ -n "$ONLY" ]]; then
   if [[ "$PROVEN" -ne 1 ]]; then

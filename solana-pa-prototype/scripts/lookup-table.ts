@@ -12,17 +12,15 @@
  * Environment:
  *   PA_LOOKUP_TABLE  base58 address of the deployment's table, to extend it
  *                    with the keys it lacks. Omit to create a new table.
- *   STF_TOKEN_MINTS  comma-separated base58 mints (optional)
  */
 import * as anchor from "@anchor-lang/core";
 import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
 import { BlockTimeForwarder } from "../target/types/block_time_forwarder";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import { ensureSettlementLookupTable, settlementLookupKeys } from "../client/lookupTable";
 import { derivePaStatePda } from "../client/pda";
-import { pubkeyList, requirePubkey } from "./cli-utils";
+import { requirePubkey } from "./cli-utils";
 import { getVerifierEntryPda, verifierOfEntry } from "../client/verifier";
 
 async function main() {
@@ -30,7 +28,6 @@ async function main() {
   anchor.setProvider(provider);
   const wallet = provider.wallet as anchor.Wallet;
   const adapter = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
-  const forwarder = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
   const blockTimeForwarder = anchor.workspace.BlockTimeForwarder as Program<BlockTimeForwarder>;
 
   const [paState] = derivePaStatePda(adapter.programId);
@@ -43,7 +40,6 @@ async function main() {
   if (!entry) throw new Error(`verifier entry ${verifierEntry.toBase58()} does not exist on this cluster`);
   const verifierProgram = verifierOfEntry(entry.data);
 
-  const mints = pubkeyList("STF_TOKEN_MINTS");
   const existing = process.env.PA_LOOKUP_TABLE
     ? requirePubkey("PA_LOOKUP_TABLE", "the deployment's settlement lookup table, as a base58 pubkey")
     : undefined;
@@ -54,8 +50,6 @@ async function main() {
     proofSelector,
     verifierProgram,
     blockTimeForwarder: blockTimeForwarder.programId,
-    splTokenForwarder: forwarder.programId,
-    mints,
   });
   const { table, added, signature } = await ensureSettlementLookupTable(
     provider.connection,

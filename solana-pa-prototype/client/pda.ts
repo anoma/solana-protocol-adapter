@@ -1,9 +1,5 @@
 import { AccountMeta, PublicKey } from "@solana/web3.js";
 import {
-  CONFIG_SEED,
-  ESCROW_SEED,
-  NONCE_BITMAP_SEED,
-  NONCES_PER_WORD,
   NULLIFIER_SEED,
   PA_STATE_SEED,
   ROOT_SEED,
@@ -56,33 +52,6 @@ export function deriveNullifierAccounts(
     const [pubkey] = deriveNullifierPda(programId, paState, nf);
     return { pubkey, isWritable: true, isSigner: false };
   });
-}
-
-// SPL token forwarder PDAs
-
-export function deriveConfigPda(forwarderProgramId: PublicKey): [PublicKey, number] {
-  return PublicKey.findProgramAddressSync([CONFIG_SEED], forwarderProgramId);
-}
-
-/** The escrow authority: the one PDA that owns every mint's escrow token account. */
-export function deriveEscrowAuthority(forwarderProgramId: PublicKey): PublicKey {
-  return PublicKey.findProgramAddressSync([ESCROW_SEED], forwarderProgramId)[0];
-}
-
-/** The 256-nonce word a nonce belongs to. */
-export function nonceWordIndex(nonce: bigint): bigint {
-  return nonce / NONCES_PER_WORD;
-}
-
-/** One bitmap account per (user, 256-nonce word), as the forwarder derives it. */
-export function deriveNonceBitmapPda(
-  forwarderProgramId: PublicKey,
-  user: PublicKey,
-  wordIndex: bigint,
-): [PublicKey, number] {
-  const word = Buffer.alloc(8);
-  word.writeBigUInt64LE(wordIndex);
-  return PublicKey.findProgramAddressSync([NONCE_BITMAP_SEED, user.toBuffer(), word], forwarderProgramId);
 }
 
 /** A program's event authority PDA, the signer of its `#[event_cpi]` self-invocations. Seed: `["__event_authority"]`. */

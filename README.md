@@ -8,7 +8,7 @@ Port of the [EVM Protocol Adapter V2](https://github.com/anoma/pa-evm/tree/next)
 solana-protocol-adapter/
 ├── crates/integration-test/ # the integration-test harness other repositories test against
 └── solana-pa-prototype/     # Solana PA implementation
-    ├── programs/            # the adapter, the SPL token forwarder, and test programs
+    ├── programs/            # the adapter, its example and test forwarders, and the mock verifier
     ├── client/              # instruction builders shared by the operator scripts and the tests
     ├── scripts/             # dev.sh, ops.sh and the operator scripts
     ├── tests/               # the integration suite (one validator)
@@ -38,7 +38,7 @@ cd solana-protocol-adapter/solana-pa-prototype
 
 The script:
 1. Builds the programs at the addresses in `env/localnet.env`.
-2. Starts one validator with the programs, the devnet verifier stack and Program Metadata program (the committed copy in `devnet-programs/`) and the suite's settlement lookup table loaded at genesis, warped to slot 1, and runs every spec file under `tests/` against it, so the deployment builds up as much history as the suite makes: first `tests/fresh/` (initialization, which only works on a fresh deployment), then every other file, each building on whatever state it finds, then `tests/terminal/` in numbered order (denials, marker and forwarder teardown, renounced ownerships: changes no later test could run after).
+2. Starts one validator with the programs, the devnet verifier stack and Program Metadata program (the committed copy in `devnet-programs/`) and the suite's settlement lookup table loaded at genesis, warped to slot 1, and runs every spec file under `tests/` against it, so the deployment builds up as much history as the suite makes: first `tests/fresh/` (initialization, which only works on a fresh deployment), then every other file, each building on whatever state it finds, then `tests/terminal/` in numbered order (denials, marker teardown, the renounced ownership: changes no later test could run after).
 
 ### Proof Modes
 
@@ -83,7 +83,7 @@ entry point for one fixture.
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
 | `./scripts/dev.sh shell` / `run <cmd>` | Interactive Nix shell / one command in it |
-| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-ref`, `forwarder`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
+| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-ref`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
 
 ### Rebuilding From Scratch
 
@@ -441,7 +441,7 @@ omit it. Anything else fails with `RootPdaMismatch`.
 
 ## Fixtures
 
-Fixtures contain pre-generated RM transactions with valid proofs, committed because real proving takes hours of CPU for the full set. The suite runs on one deployment, so each fixture has one role: settled by exactly one test, settled by whichever test first needs a settled fixture to resubmit (`batch_groth16_resubmitted.json`), or never settled (`batch_groth16_rejected.json` and its error variants, the deliberate-failure forwarder fixtures). A spend through a Merkle path (the historical-root consumer, the unwraps) depends on the tree the deployment holds when the spent resource settles, so it is a fresh-phase test: `regen-fixtures.sh` proves it over the tree `tests/fresh/` builds in its fixed order (`fixture-gen ... --settled-before FIXTURE`, once per earlier settlement), and the test checks that its fixture's root is the one the deployment will hold before settling anything.
+Fixtures contain pre-generated RM transactions with valid proofs, committed because real proving takes hours of CPU for the full set. The suite runs on one deployment, so each fixture has one role: settled by exactly one test, settled by whichever test first needs a settled fixture to resubmit (`batch_groth16_resubmitted.json`), or never settled (`batch_groth16_rejected.json` and its error variants, the deliberate-failure forwarder fixtures). A spend through a Merkle path (the historical-root consumer) depends on the tree the deployment holds when the spent resource settles, so it is a fresh-phase test: `regen-fixtures.sh` proves it over the tree `tests/fresh/` builds in its fixed order (`fixture-gen ... --settled-before FIXTURE`, once per earlier settlement), and the test checks that its fixture's root is the one the deployment will hold before settling anything.
 
 ### Fixture Format
 
@@ -460,17 +460,17 @@ Fixtures contain pre-generated RM transactions with valid proofs, committed beca
 }
 ```
 
-`name` is what the fixture's resource nonces derive from: its file stem, followed by `/<salt>` when generated with `--salt`. `historical_roots_b64` is present only for fixtures anchored to a historical root; SPL token fixtures add their forwarder metadata.
+`name` is what the fixture's resource nonces derive from: its file stem, followed by `/<salt>` when generated with `--salt`. `historical_roots_b64` is present only for fixtures anchored to a historical root.
 
 ### Generating Fixtures
 
-`./scripts/dev.sh regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH]` regenerates the whole set (a salt sets every nonce and forwarder nonce apart from earlier runs, so the set settles on a deployment that already holds another run's); `./scripts/dev.sh gen-fixtures <shape> [options] OUT` generates one (`gen-fixtures --help` lists the shapes). Proving runs locally by default; its Groth16 step needs a container runtime (the Nix shell provides podman behind a `docker` wrapper). Setting `QUEUE_BASE_URL` and `QUEUE_AUTH_TOKEN`, or passing `--prover queue`, sends the proving jobs to the AnomaPay workers queue instead.
+`./scripts/dev.sh regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH]` regenerates the whole set (a salt sets every nonce apart from earlier runs, so the set settles on a deployment that already holds another run's); `./scripts/dev.sh gen-fixtures <shape> [options] OUT` generates one (`gen-fixtures --help` lists the shapes). Proving runs locally by default; its Groth16 step needs a container runtime (the Nix shell provides podman behind a `docker` wrapper). Setting `QUEUE_BASE_URL` and `QUEUE_AUTH_TOKEN`, or passing `--prover queue`, sends the proving jobs to the AnomaPay workers queue instead.
 
 The fixtures' external calls ride on pa-testkit's pass-through logic (`anoma_pa_testkit::fixtures::passthrough`), whose guest pa-testkit ships prebuilt.
 
 ### Fixture Staleness
 
-Fixtures embed program IDs (the block-time forwarder's, the SPL token forwarder's) and depend on the guest image IDs. If either changes, the fixtures must be regenerated; `anchor-test` checks that the primary fixture names the current block-time forwarder.
+Fixtures embed program IDs (the block-time and test forwarders') and depend on the guest image IDs. If either changes, the fixtures must be regenerated; `anchor-test` checks that the primary fixture names the current block-time forwarder.
 
 ---
 

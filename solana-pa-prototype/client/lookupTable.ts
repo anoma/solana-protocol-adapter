@@ -6,15 +6,12 @@ import {
   PublicKey,
   SystemProgram,
   SYSVAR_CLOCK_PUBKEY,
-  SYSVAR_INSTRUCTIONS_PUBKEY,
   Transaction,
   TransactionInstruction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { getRouterPda, getVerifierEntryPda } from "./verifier";
-import { escrowAccounts } from "./instructions";
-import { deriveConfigPda, deriveEscrowAuthority, deriveEventAuthorityPda, derivePaStatePda } from "./pda";
+import { deriveEventAuthorityPda, derivePaStatePda } from "./pda";
 
 /** What fixes a deployment's settlement key set. */
 export interface SettlementKeySources {
@@ -23,14 +20,14 @@ export interface SettlementKeySources {
   proofSelector: Buffer | Uint8Array;
   verifierProgram: PublicKey;
   blockTimeForwarder: PublicKey;
-  splTokenForwarder: PublicKey;
-  mints: PublicKey[];
 }
 
 /**
  * The accounts every settlement of a deployment carries that are neither a
- * signer nor an invoked program: the ones a lookup table can hold. Invoked
- * programs (the adapter, compute budget, ed25519) are left out because the
+ * signer nor an invoked program: the ones a lookup table can hold. The
+ * adapter's, and the accounts of a call to its example block-time forwarder;
+ * another forwarder's operator extends the table with that forwarder's.
+ * Invoked programs (the adapter, compute budget) are left out because the
  * message compilers keep them static regardless.
  */
 export function settlementLookupKeys(s: SettlementKeySources): PublicKey[] {
@@ -38,8 +35,6 @@ export function settlementLookupKeys(s: SettlementKeySources): PublicKey[] {
   const [eventAuthority] = deriveEventAuthorityPda(s.paProgram);
   const [router] = getRouterPda(s.verifierRouter);
   const [verifierEntry] = getVerifierEntryPda(s.proofSelector, s.verifierRouter);
-  const [forwarderConfig] = deriveConfigPda(s.splTokenForwarder);
-  const [forwarderEventAuthority] = deriveEventAuthorityPda(s.splTokenForwarder);
   return [
     paState,
     SystemProgram.programId,
@@ -48,15 +43,8 @@ export function settlementLookupKeys(s: SettlementKeySources): PublicKey[] {
     verifierEntry,
     s.verifierProgram,
     eventAuthority,
-    SYSVAR_INSTRUCTIONS_PUBKEY,
     SYSVAR_CLOCK_PUBKEY,
     s.blockTimeForwarder,
-    s.splTokenForwarder,
-    forwarderConfig,
-    forwarderEventAuthority,
-    deriveEscrowAuthority(s.splTokenForwarder),
-    TOKEN_PROGRAM_ID,
-    ...s.mints.map((mint) => escrowAccounts(s.splTokenForwarder, mint).escrowAta),
   ];
 }
 

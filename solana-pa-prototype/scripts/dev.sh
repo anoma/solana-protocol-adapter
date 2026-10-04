@@ -94,7 +94,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -302,8 +302,6 @@ PYEOF
     echo "  set-kind-table         Replace the PA's kind-table commitment (PA_KIND_TABLE_COMMITMENT)"
     echo "  deny-logic-ref         Deny a logic ref for good (PA_DENIED_LOGIC_REF)"
     echo "  lookup-table           Create/extend the deployment's settlement lookup table"
-    echo "  forwarder <cmd>        SPL token forwarder operations (init, reinitialize,"
-    echo "                         emergency-withdraw; STF_* env)"
     echo "  idl-publish            Publish the production IDL on chain"
     echo "  verify-build           Deterministic solana-verify build of the PA; with"
     echo "                         --cluster, compares against the deployed program"
