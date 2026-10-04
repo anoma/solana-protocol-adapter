@@ -21,7 +21,7 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
 use surfpool_sdk::cheatcodes::builders::{CheatcodeBuilder, DeployProgram, SetAccount};
-use surfpool_sdk::{BlockProductionMode, Pubkey, Surfnet, SurfnetBuilder};
+use surfpool_sdk::{BlockProductionMode, Pubkey, Surfnet, SurfnetBuilder, SurfnetError};
 
 /// The SOL the default signer starts with. surfpool refuses an airdrop of a
 /// million SOL; this covers every upload and settlement of a test run.
@@ -35,6 +35,33 @@ pub(in crate::envs) fn builder(payer: &Keypair) -> SurfnetBuilder {
         .slot_time_ms(400)
         .airdrop_sol(PAYER_LAMPORTS)
         .payer(payer.insecure_clone())
+}
+
+/// Held while a runtime starts. surfpool picks each of a runtime's ports by
+/// binding port 0 and releasing it, then binds the port again when its
+/// servers start, so a runtime starting at the same time can be handed the
+/// same port: one of them then fails to bind it, or, when its start-up check
+/// finds the port taken, never reports ready.
+static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Starts the runtime `builder` describes, once no other runtime of this
+/// process is starting. The two picks of one start can also return the same
+/// port, the second server then failing to bind it; such a start binds
+/// nothing, so the runtime starts again on newly picked ports.
+pub(in crate::envs) async fn start(
+    builder: impl Fn() -> SurfnetBuilder,
+) -> anyhow::Result<Surfnet> {
+    let _starting = STARTING.lock().await;
+    let mut attempt = 1;
+    loop {
+        match builder().start().await {
+            Err(SurfnetError::Aborted(error)) if error.contains("AddrInUse") => {
+                eprintln!("surfpool start {attempt} picked a port twice, starting again: {error}");
+                attempt += 1;
+            }
+            started => return Ok(started?),
+        }
+    }
 }
 
 /// A client of the runtime at `confirmed` commitment: the runtime produces
@@ -297,4 +324,58 @@ pub(in crate::envs) async fn extend_lookup_table(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::time::Instant;
+
+    use super::*;
+
+    /// Many runtimes starting at once in one process all come up: each
+    /// start picks its ports while the others pick theirs. A start runs on a
+    /// thread of its own, since surfpool blocks a thread of a multi-thread runtime until the
+    /// runtime is ready, and one that never returns would hang the test.
+    #[test]
+    fn runtimes_starting_at_once_all_come_up() {
+        const STARTS: usize = 48;
+        let (done, results) = mpsc::channel();
+        for i in 0..STARTS {
+            let done = done.clone();
+            std::thread::spawn(move || {
+                let began = Instant::now();
+                let started = tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("a tokio runtime")
+                    .block_on(start(|| builder(&Keypair::new()).offline(true)))
+                    .map(|surfnet| surfnet.rpc_url().to_string());
+                done.send((i, began.elapsed(), started))
+                    .expect("the test is waiting");
+            });
+        }
+        drop(done);
+        let mut failures = Vec::new();
+        let mut slowest = Duration::ZERO;
+        for _ in 0..STARTS {
+            // A start takes about a second (2.2 s at most observed); one that
+            // has not returned in two minutes never will.
+            match results.recv_timeout(Duration::from_secs(120)) {
+                Ok((i, took, Ok(url))) => {
+                    slowest = slowest.max(took);
+                    println!("start {i} came up at {url} in {took:?}");
+                }
+                Ok((i, took, Err(error))) => {
+                    failures.push(format!("start {i} failed after {took:?}: {error:#}"))
+                }
+                Err(_) => {
+                    failures.push("a start never returned".to_string());
+                    break;
+                }
+            }
+        }
+        println!("slowest start: {slowest:?}");
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
 }

@@ -82,9 +82,7 @@ impl Environment {
         F: AsyncFnOnce(&mut StateBuilder) -> anyhow::Result<()>,
     {
         let payer = Arc::new(Keypair::new());
-        let surfnet = runtime::builder(&payer)
-            .offline(true)
-            .start()
+        let surfnet = runtime::start(|| runtime::builder(&payer).offline(true))
             .await
             .context("failed to start the surfpool runtime")?;
         let rpc = runtime::client(&surfnet);

@@ -50,7 +50,7 @@ solana-signer = "3"
 solana-transaction = "4"
 solana-transaction-status-client-types = "4"
 surfpool-sdk = "=1.6.0"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = ["sync", "time"] }
 
 [dev-dependencies]
 regex = "1"

@@ -10,6 +10,7 @@ use anyhow::Context;
 use solana_keypair::Keypair;
 
 use super::super::common::addresses::{DEVNET, program_id};
+use super::super::common::runtime;
 use super::Environment;
 use super::config::E2eConfig;
 use crate::state::cluster::Cluster;
@@ -29,12 +30,13 @@ impl Environment {
         // so its address comes from the deployment record rather than a fresh
         // deployment; forking keeps devnet's state from being mutated.
         let payer = Arc::new(Keypair::new());
-        let surfnet = super::super::common::runtime::builder(&payer)
-            .offline(false)
-            .remote_rpc_url(config.devnet_rpc_url.clone())
-            .start()
-            .await
-            .context("failed to start the surfpool runtime forking devnet")?;
+        let surfnet = runtime::start(|| {
+            runtime::builder(&payer)
+                .offline(false)
+                .remote_rpc_url(config.devnet_rpc_url.clone())
+        })
+        .await
+        .context("failed to start the surfpool runtime forking devnet")?;
         let pa = program_id(DEVNET, "PROTOCOL_ADAPTER")?;
         let prover = QueueProver::new(&config.queue_base_url, &config.queue_auth_token)
             .context("failed to build queue prover")?;
