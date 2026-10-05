@@ -143,11 +143,13 @@ case "${1:-}" in
 
   harness-test)
     # The integration-test harness's tests on its local runtime; with --e2e,
-    # its e2e cases on a fork of devnet (DEVNET_RPC_URL, QUEUE_BASE_URL,
-    # QUEUE_AUTH_TOKEN, read by the harness), one at a time like pa-evm's.
+    # its e2e cases on a fork of devnet (DEVNET_RPC_URL; E2E_PROVER, and
+    # QUEUE_BASE_URL and QUEUE_AUTH_TOKEN for the queue: read by the harness),
+    # one at a time like pa-evm's, in release mode, since risc0 proves far
+    # faster optimized.
     case "${2:-}" in
       "") run_in_project "cargo test --manifest-path ../crates/integration-test/Cargo.toml" ;;
-      --e2e) run_in_project "RUST_TEST_THREADS=1 cargo test --manifest-path ../crates/integration-test/Cargo.toml --features e2e e2e_test" ;;
+      --e2e) run_in_project "RUST_TEST_THREADS=1 cargo test --release --manifest-path ../crates/integration-test/Cargo.toml --features e2e e2e_test" ;;
       *)
         echo "❌ harness-test takes no argument, or --e2e" >&2
         exit 1
@@ -278,7 +280,8 @@ PYEOF
     echo "               deterministic builds); --check fails when they are not"
     echo "  harness-test [--e2e]"
     echo "               The integration-test harness's tests; with --e2e, its e2e cases"
-    echo "               on a fork of devnet (DEVNET_RPC_URL, QUEUE_BASE_URL, QUEUE_AUTH_TOKEN)"
+    echo "               on a fork of devnet (DEVNET_RPC_URL), proven by the queue"
+    echo "               (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN) or locally (E2E_PROVER=local)"
     echo "  validator    Start a local Solana validator (devnet programs only)"
     echo "  validator-deploy Build, start a validator with every program loaded"
     echo "               at genesis, and keep it running"

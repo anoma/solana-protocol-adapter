@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use anoma_pa_testkit::environment::StateBuilder;
-use anoma_pa_testkit::prover::QueueProver;
+use anoma_pa_testkit::prover::{QueueProver, Risc0Prover};
 use anyhow::Context;
 use solana_keypair::Keypair;
 
 use super::super::common::addresses::{DEVNET, program_id};
 use super::super::common::runtime;
-use super::Environment;
 use super::config::E2eConfig;
+use super::{Environment, Prover};
 use crate::state::cluster::Cluster;
 
 impl Environment {
@@ -32,8 +32,13 @@ impl Environment {
         .await
         .context("failed to start the surfpool runtime forking devnet")?;
         let pa = program_id(DEVNET, "PROTOCOL_ADAPTER")?;
-        let prover = QueueProver::new(&config.queue_base_url, &config.queue_auth_token)
-            .context("failed to build queue prover")?;
+        let prover = match &config.queue {
+            Some(queue) => Prover::Queue(
+                QueueProver::new(&queue.base_url, &queue.auth_token)
+                    .context("failed to build queue prover")?,
+            ),
+            None => Prover::Risc0(Risc0Prover),
+        };
 
         let env = Self::assemble(
             surfnet,

@@ -15,13 +15,13 @@ publish = false
 [features]
 default = ["local"]
 local = ["anoma-pa-testkit/local"]
-e2e = ["anoma-pa-testkit/e2e", "dep:dotenvy"]
+e2e = ["anoma-pa-testkit/e2e", "anoma-pa-testkit/prove", "dep:dotenvy"]
 
 [dependencies]
 anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "bb04ed226ffb314b9ff19b0b6fa6c495fa4b29ac", features = [
   "arm",
 ] }
-anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "bcf09547598bfcbf1ab30aecdad3279d7ba85acb", default-features = false, features = [
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "cb744ec94589d7a89886203233ba28f94538471f", default-features = false, features = [
   "fixtures",
 ] }
 anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", rev = "919c7787259eca02b8cedb079a639ad31e04ae51", features = [
