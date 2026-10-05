@@ -896,16 +896,23 @@ cmd_test() {
   echo "✅ Cluster tests passed (${CLUSTER})"
 }
 
-# The feature-gated code of a program with dev features compiles only with
-# them, so each such program is linted a second time with them enabled.
+# The workspace pass unifies features, so a program another one depends on
+# (with `no-entrypoint`) is linted there only without its entrypoint. Each
+# program is therefore also linted on its own: as built (its entrypoint), with
+# its dev features when it has them (their gated code compiles only with
+# them), and with `cpi`, the feature another program depends on it with to
+# call it.
 cmd_clippy() {
   load_workspace_programs
   cargo clippy --workspace --all-targets -- -D warnings
-  local name
+  local name package
   for name in "${PROGRAM_NAMES[@]}"; do
+    package="${PROGRAM_PACKAGE[$name]}"
+    cargo clippy -p "$package" --all-targets -- -D warnings
     if [[ "${PROGRAM_DEV_FEATURES[$name]}" != "-" ]]; then
-      cargo clippy -p "${PROGRAM_PACKAGE[$name]}" --features "${PROGRAM_DEV_FEATURES[$name]}" --all-targets -- -D warnings
+      cargo clippy -p "$package" --features "${PROGRAM_DEV_FEATURES[$name]}" --all-targets -- -D warnings
     fi
+    cargo clippy -p "$package" --features cpi --all-targets -- -D warnings
   done
 }
 
