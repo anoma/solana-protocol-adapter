@@ -141,20 +141,9 @@ case "${1:-}" in
     run_in_project "RISC0_DEV_MODE=1 RISC0_SKIP_BUILD=1 cargo test --manifest-path tools/fixture-gen/Cargo.toml"
     ;;
 
-  harness-test)
-    # The integration-test harness's tests on its local runtime; with --e2e,
-    # its e2e cases on a fork of devnet (DEVNET_RPC_URL; E2E_PROVER, and
-    # QUEUE_BASE_URL and QUEUE_AUTH_TOKEN for the queue: read by the harness),
-    # one at a time like pa-evm's, in release mode, since risc0 proves far
-    # faster optimized.
-    case "${2:-}" in
-      "") run_in_project "cargo test --manifest-path ../crates/integration-test/Cargo.toml" ;;
-      --e2e) run_in_project "RUST_TEST_THREADS=1 cargo test --release --manifest-path ../crates/integration-test/Cargo.toml --features e2e e2e_test" ;;
-      *)
-        echo "❌ harness-test takes no argument, or --e2e" >&2
-        exit 1
-        ;;
-    esac
+  harness-lint|harness-test)
+    # The integration-test harness's checks — see ./scripts/ops.sh.
+    run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
 
   update-deps)
@@ -166,11 +155,11 @@ case "${1:-}" in
     ;;
 
   fmt)
-    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check && cargo fmt --manifest-path ../crates/integration-test/Cargo.toml -- --check"
+    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
     ;;
 
   clippy)
-    run_in_project "./scripts/ops.sh clippy && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings && cargo clippy --manifest-path ../crates/integration-test/Cargo.toml --all-targets --features e2e -- -D warnings"
+    run_in_project "./scripts/ops.sh clippy && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings && ./scripts/ops.sh harness-lint"
     ;;
 
   coverage)
@@ -258,8 +247,8 @@ PYEOF
     echo "Commands:"
     echo "  shell        Enter the Nix development shell"
     echo "  test         Run Rust tests"
-    echo "  fmt          Check Rust formatting"
-    echo "  clippy       Run clippy lints"
+    echo "  fmt          Check Rust formatting (the programs and fixture-gen)"
+    echo "  clippy       Run clippy lints, and harness-lint"
     echo "  anchor-build Build Anchor programs (development build, dev-teardown enabled)"
     echo "  release-build Build the production binaries (no dev features; verifies each"
     echo "               IDL is the development IDL minus the declared dev-only instructions)"
@@ -278,6 +267,7 @@ PYEOF
     echo "  harness-programs [--check]"
     echo "               Write the integration-test harness's program binaries (the"
     echo "               deterministic builds); --check fails when they are not"
+    echo "  harness-lint The integration-test harness's format check and clippy"
     echo "  harness-test [--e2e]"
     echo "               The integration-test harness's tests; with --e2e, its e2e cases"
     echo "               on a fork of devnet (DEVNET_RPC_URL), proven by the queue"

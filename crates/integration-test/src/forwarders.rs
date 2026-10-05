@@ -38,7 +38,7 @@ pub trait Forwarder: Send + Sync {
 }
 
 /// The forwarders registered with a protocol adapter, by program.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct Forwarders(HashMap<Pubkey, Arc<dyn Forwarder>>);
 
 impl Forwarders {
@@ -72,10 +72,15 @@ impl Forwarders {
                 accounts.segment.len(),
                 call.num_accounts
             );
+            let first = accounts.segment.first().with_context(|| {
+                format!(
+                    "the segment of external call {i} is empty, not led by the forwarder {program}"
+                )
+            })?;
             anyhow::ensure!(
-                accounts.segment[0].pubkey == program,
+                first.pubkey == program,
                 "the segment of external call {i} starts with {}, not the forwarder {program}",
-                accounts.segment[0].pubkey
+                first.pubkey
             );
             preceding.extend(accounts.preceding);
             segments.push(accounts.segment);
@@ -112,6 +117,24 @@ mod tests {
                         &call.instruction_data[..1],
                         vec![],
                     )],
+                })
+            })
+        }
+    }
+
+    /// A forwarder whose calls take no accounts at all.
+    struct Empty;
+
+    impl Forwarder for Empty {
+        fn call_accounts<'a>(
+            &'a self,
+            _rpc: &'a RpcClient,
+            _call: &'a SolanaExternalCall,
+        ) -> BoxFuture<'a, anyhow::Result<CallAccounts>> {
+            Box::pin(async {
+                Ok(CallAccounts {
+                    segment: vec![],
+                    preceding: vec![],
                 })
             })
         }
@@ -171,6 +194,24 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             format!("the forwarder {a} gives external call 0 2 accounts; the proof commits 3")
+        );
+    }
+
+    /// A call whose proof commits no accounts, given an empty segment, is
+    /// refused: a segment starts with the forwarder program.
+    #[tokio::test]
+    async fn an_empty_segment_is_refused() {
+        let rpc = RpcClient::new("http://127.0.0.1:1".to_string());
+        let program = Pubkey::new_unique();
+        let mut forwarders = Forwarders::default();
+        forwarders.register(program, Arc::new(Empty));
+        assert_eq!(
+            forwarders
+                .accounts(&rpc, &[call(program, 7, 0)])
+                .await
+                .unwrap_err()
+                .to_string(),
+            format!("the segment of external call 0 is empty, not led by the forwarder {program}")
         );
     }
 }

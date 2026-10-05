@@ -373,24 +373,13 @@ enum ShapeCommand {
         generate: GenerateArgs,
     },
     /// Spend the committer's resource through its Merkle path to the root
-    /// the committer's settlement produced.
+    /// the committer's settlement produced on a fresh adapter.
     HistoricalRootConsumer {
-        /// The committer fixture, settled after `--preceding-leaves` or
-        /// `--settled-before`: its
-        /// created commitment ends the tree the consumer proves membership in.
+        /// The committer fixture, the first settlement of a fresh adapter:
+        /// its created commitments are the tree the consumer proves
+        /// membership in.
         #[arg(long, value_name = "FIXTURE")]
         committer: PathBuf,
-        /// The commitments the adapter's tree held before the committer
-        /// settled, in leaf order: a JSON array of hex strings, as an indexer
-        /// serves them. Without it (or --settled-before) the committer
-        /// settled on a fresh adapter.
-        #[arg(long, value_name = "FILE", conflicts_with = "settled_before")]
-        preceding_leaves: Option<PathBuf>,
-        /// A fixture settled before the committer on a fresh adapter, in
-        /// settlement order (repeat it): its created commitments precede the
-        /// committer's in the tree.
-        #[arg(long, value_name = "FIXTURE")]
-        settled_before: Vec<PathBuf>,
         #[command(flatten)]
         generate: GenerateArgs,
     },
@@ -1197,48 +1186,6 @@ fn created_commitments_b64(tx: &Transaction) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Commitment-tree leaves from a JSON array of 32-byte hex strings, each
-/// with or without a `0x` prefix.
-fn parse_leaves(json: &str) -> Result<Vec<Digest>> {
-    let hexes: Vec<String> =
-        serde_json::from_str(json).context("leaves: a JSON array of hex strings")?;
-    hexes
-        .iter()
-        .enumerate()
-        .map(|(i, h)| {
-            let bytes: [u8; 32] = hex::decode(h.trim_start_matches("0x"))
-                .with_context(|| format!("leaf {i} is not hex: {h}"))?
-                .try_into()
-                .map_err(|b: Vec<u8>| anyhow!("leaf {i} is {} bytes, not 32: {h}", b.len()))?;
-            Ok(Digest::from_bytes(bytes))
-        })
-        .collect()
-}
-
-/// The tree once `last` settled: the leaves it held before (those an indexer
-/// lists in `preceding_leaves`, or the commitments the `settled_before`
-/// fixtures created in their settlement order on a fresh adapter), then the
-/// commitments `last` created.
-fn tree_leaves(
-    preceding_leaves: Option<&Path>,
-    settled_before: &[PathBuf],
-    last: &Path,
-) -> Result<Vec<Digest>> {
-    let mut leaves = match preceding_leaves {
-        Some(path) => parse_leaves(
-            &fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
-        )?,
-        None => settled_before
-            .iter()
-            .try_fold(Vec::new(), |mut leaves, path| {
-                leaves.extend(created_commitments(&load_fixture_tx(path)?)?);
-                Ok::<_, anyhow::Error>(leaves)
-            })?,
-    };
-    leaves.extend(created_commitments(&load_fixture_tx(last)?)?);
-    Ok(leaves)
-}
-
 fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
     let roots: BTreeSet<[u8; 32]> = consumed_publics(tx)?
         .filter(|c| c.commitment_tree_root != INITIAL_ROOT)
@@ -1692,16 +1639,11 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             let (witness, _, _) = build_historical_root_committer_witness(name)?;
             prove_single_action_transaction(&prover, witness, AppData::default()).await?
         }
-        ShapeCommand::HistoricalRootConsumer {
-            committer,
-            preceding_leaves,
-            settled_before,
-            ..
-        } => {
+        ShapeCommand::HistoricalRootConsumer { committer, .. } => {
             generate_historical_root_consumer_transaction(
                 &prover,
                 &read_fixture_name(committer)?,
-                &tree_leaves(preceding_leaves.as_deref(), settled_before, committer)?,
+                &created_commitments(&load_fixture_tx(committer)?)?,
             )
             .await?
         }
@@ -1863,30 +1805,6 @@ mod tests {
             fixture_nullifier(&fixture_name(path, Some("run1")).unwrap(), 0),
             fixture_nullifier(&fixture_name(path, Some("run2")).unwrap(), 0),
             "two salted runs must not share a nullifier"
-        );
-    }
-
-    /// `--preceding-leaves` reads an indexer's hex commitments, with or
-    /// without `0x`, in order, and refuses anything that is not 32 bytes.
-    #[test]
-    fn parse_leaves_reads_hex_commitments_in_order() {
-        let a = "01".repeat(32);
-        let b = "ab".repeat(32);
-        let leaves = parse_leaves(&format!(r#"["0x{a}", "{b}"]"#)).expect("two leaves");
-        assert_eq!(
-            leaves,
-            vec![
-                Digest::from_bytes([0x01; 32]),
-                Digest::from_bytes([0xab; 32])
-            ]
-        );
-        assert!(
-            parse_leaves(r#"["0x0102"]"#).is_err(),
-            "a 2-byte leaf must be refused"
-        );
-        assert!(
-            parse_leaves(r#"["zz"]"#).is_err(),
-            "non-hex must be refused"
         );
     }
 

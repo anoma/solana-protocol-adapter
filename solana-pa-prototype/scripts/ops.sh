@@ -71,11 +71,20 @@ Commands:
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
   harness-programs [--check]
-                         Deterministic builds of the PA and the mock verifier
-                         at the local addresses, written to the
-                         integration-test harness's programs/; with --check,
-                         fails when a committed binary is not the fresh build
-  validator            Start the local test validator (RISC0 verifier stack
+                         Deterministic builds of the four programs the
+                         integration-test harness loads (the PA, the mock
+                         verifier, the test forwarder and the block-time
+                         forwarder) at the local addresses, written to its
+                         programs/; with --check, fails when a committed
+                         binary is not the fresh build
+  harness-lint           The integration-test harness's format check, and
+                         clippy with its e2e feature, warnings denied
+  harness-test [--e2e]   The integration-test harness's tests on its local
+                         runtime; with --e2e, its e2e cases on a fork of
+                         devnet (DEVNET_RPC_URL), proven by the queue
+                         (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN) or locally
+                         (E2E_PROVER=local)
+  validator              Start the local test validator (RISC0 verifier stack
                          and Program Metadata program copied from devnet,
                          marker fixtures preloaded)
   refresh-devnet-programs --url <rpc>
@@ -86,9 +95,10 @@ Commands:
 
 Flags:
   --cluster <c>    Target cluster (required except test/unit-test/build-dev/build-release/
-                   clippy/validator/validator-deploy/harness-programs; optional for
-                   verify-build). Program addresses come from env/localnet.env
-                   and, for another cluster, env/<cluster>.env on top; a
+                   clippy/validator/validator-deploy/harness-programs/harness-lint/
+                   harness-test; optional for verify-build). Program addresses
+                   come from env/localnet.env and, for another cluster,
+                   env/<cluster>.env on top; a
                    first deploy reads each program's keypair path from the
                    uncommitted env/<cluster>.keys.env
                    (<NAME>_PROGRAM_KEYPAIR=<path>).
@@ -134,6 +144,7 @@ NO_IDL=false
 DEV_TEARDOWN=false
 PREBUILT=false
 CHECK=false
+E2E=false
 TEST_MODE="${PA_TEST_MODE:-real}"
 SPEC_FILES=()
 
@@ -168,6 +179,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --check)
       CHECK=true
+      shift
+      ;;
+    --e2e)
+      E2E=true
       shift
       ;;
     --mode)
@@ -366,19 +381,16 @@ deploy_one() {
   print_explorer_link "$program_id"
 }
 
-# The programs that own their upgrades once initialized: their upgrade
-# authority becomes their own PDA, and only their owner-only `upgrade`
-# replaces their code, as pa-evm's UUPS contracts authorize their own
-# upgrades.
-SELF_UPGRADING_PROGRAMS=(protocol_adapter)
-
-# Upgrade <name> in place along the path its upgrade authority leaves: through
-# the program when the authority is the program's own PDA, through the
-# loader while the wallet still holds it (before `initialize` hands it
-# over), and through the loader for a program that never owns its upgrades.
+# Upgrade <name> in place along the path its upgrade authority leaves. The
+# protocol adapter owns its upgrades once initialized: its upgrade authority
+# becomes its own PDA, and only its owner-only `upgrade` replaces its code,
+# as pa-evm's UUPS contract authorizes its own upgrades. It upgrades through
+# itself when the authority is that PDA, and through the loader while the
+# wallet still holds it (before `initialize` hands it over); every other
+# program never owns its upgrades and upgrades through the loader.
 upgrade_one() {
   local name="$1" path
-  if [[ " ${SELF_UPGRADING_PROGRAMS[*]} " != *" ${name} "* ]]; then
+  if [[ "$name" != protocol_adapter ]]; then
     deploy_one "$name" "$(get_program_id "$name")"
     return
   fi
@@ -736,7 +748,8 @@ deterministic_build() {
 # deterministic builds at the local addresses (env/localnet.env), so a
 # consumer pinning the harness by tag runs exactly the program of that tag.
 HARNESS_PROGRAMS=(protocol_adapter mock_verifier test_forwarder block_time_forwarder)
-HARNESS_PROGRAMS_DIR="${PROJECT_DIR}/../crates/integration-test/programs"
+HARNESS_DIR="${PROJECT_DIR}/../crates/integration-test"
+HARNESS_PROGRAMS_DIR="${HARNESS_DIR}/programs"
 
 # Build the harness programs deterministically and write them to
 # HARNESS_PROGRAMS_DIR; with --check, fail instead when a committed binary is
@@ -978,6 +991,22 @@ case "$COMMAND" in
       exit 1
     fi
     cmd_harness_programs
+    ;;
+  harness-lint)
+    require_cmd cargo
+    cargo fmt --manifest-path "${HARNESS_DIR}/Cargo.toml" -- --check
+    cargo clippy --manifest-path "${HARNESS_DIR}/Cargo.toml" --all-targets --features e2e -- -D warnings
+    ;;
+  harness-test)
+    require_cmd cargo
+    if [[ "$E2E" == "true" ]]; then
+      # The e2e cases (the harness reads DEVNET_RPC_URL, E2E_PROVER, and
+      # QUEUE_BASE_URL and QUEUE_AUTH_TOKEN for the queue) one at a time, like
+      # pa-evm's, in release mode, since risc0 proves far faster optimized.
+      RUST_TEST_THREADS=1 cargo test --release --manifest-path "${HARNESS_DIR}/Cargo.toml" --features e2e e2e_test
+    else
+      cargo test --manifest-path "${HARNESS_DIR}/Cargo.toml"
+    fi
     ;;
   refresh-devnet-programs)
     if [[ -z "$RPC_OVERRIDE" ]]; then

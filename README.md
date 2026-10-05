@@ -76,6 +76,7 @@ entry point for one fixture.
 | `./scripts/dev.sh validator` | Start a local validator with the devnet programs (verifier stack, Program Metadata), without the workspace programs |
 | `./scripts/dev.sh validator-deploy` | Build, start a validator with every program loaded at genesis, and keep it running for external clients |
 | `./scripts/dev.sh gen-fixtures` / `regen-fixtures` / `fixture-test` | Fixture generation and fixture-gen's tests |
+| `./scripts/dev.sh harness-lint` | The integration-test harness's format check and clippy, as CI's Harness job runs them (`dev.sh clippy` runs it too) |
 | `./scripts/dev.sh harness-test [--e2e]` | The integration-test harness's tests on surfpool; with `--e2e`, its e2e cases on a fork of devnet (`DEVNET_RPC_URL`), in release mode, proven by the queue (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`) or with `E2E_PROVER=local` on this machine |
 | `./scripts/dev.sh harness-programs [--check]` | Write the harness's program binaries (the deterministic builds); `--check` fails when the committed ones are not |
 | `./scripts/dev.sh lock-check` / `lock-sync <pkg>` | Check / re-align the Cargo.lock files' shared dependencies |
@@ -339,7 +340,7 @@ anoma_pa_testkit::execute_tx(&mut env, tx).await?;
 
 `ProtocolAdapter::execute` settles the way every submitter does (the client crate's `settlement_input` and `plan_settlement`: upload, settle as a v0 transaction through a settlement lookup table, close), and the commitment tree pa-testkit builds from the adapter's frontier must give the root the adapter stores after each settlement. A transaction whose proof calls a forwarder settles once the forwarder is registered: the proof commits each call but not its accounts, so `env.protocol_adapter.forwarders.register(program, forwarder)` names, for that program, a `forwarders::Forwarder` that gives each call its CPI segment and any instructions that must precede the settlement (a wrap's ed25519 signature check). A call to an unregistered program fails before anything is sent. `extend_lookup_table` adds a forwarder's fixed accounts to the settlement lookup table, as a deployment's table holds them. A consumer deploys its own program with `env.deploy_program` and sends its setup (a mint, a token account, an approval) with `env.send`, which the default signer pays for. `env.protocol_adapter.settle` settles as `execute` does and returns the settlement's signature, and `executed::Executed::read` reads a confirmed transaction back: its log and the events each program emitted by self-invocation. The local environment's `deploy_test_forwarder` deploys the adapter's test forwarder, whose log mode fills a transaction's log budget, and `deploy_block_time_forwarder` its example block-time forwarder, which the local environment calls as a `suite::BlockTimeForwarder`. `env.write_buffer` places a program in a loader buffer, the code an upgrade instruction installs.
 
-The test state holds, as pa-evm's harness keeps them, the cluster and the runtime's RPC endpoint (`state::cluster`), the funded default signer (`state::actors`) and the adapter's address (`state::pa`); `suite_tests!` emits pa-testkit's chain-agnostic tests for an environment, including an external call to the block-time forwarder settled and refused.
+A test reads the environment through its public fields (the runtime's RPC client, the funded default signer and the adapter's address are `env.protocol_adapter.rpc`, `.payer` and `.program`); pa-testkit's test state starts empty. `suite_tests!` emits pa-testkit's chain-agnostic tests for an environment, including an external call to the block-time forwarder settled and refused.
 
 ## Building a Client
 
@@ -441,7 +442,7 @@ omit it. Anything else fails with `RootPdaMismatch`.
 
 ## Fixtures
 
-Fixtures contain pre-generated RM transactions with valid proofs, committed because real proving takes hours of CPU for the full set. The suite runs on one deployment, so each fixture has one role: settled by exactly one test, settled by whichever test first needs a settled fixture to resubmit (`batch_groth16_resubmitted.json`), or never settled (`batch_groth16_rejected.json` and its error variants, the deliberate-failure forwarder fixtures). A spend through a Merkle path (the historical-root consumer) depends on the tree the deployment holds when the spent resource settles, so it is a fresh-phase test: `regen-fixtures.sh` proves it over the tree `tests/fresh/` builds in its fixed order (`fixture-gen ... --settled-before FIXTURE`, once per earlier settlement), and the test checks that its fixture's root is the one the deployment will hold before settling anything.
+Fixtures contain pre-generated RM transactions with valid proofs, committed because real proving takes hours of CPU for the full set. The suite runs on one deployment, so each fixture has one role: settled by exactly one test, settled by whichever test first needs a settled fixture to resubmit (`batch_groth16_resubmitted.json`), or never settled (`batch_groth16_rejected.json` and its error variants, the deliberate-failure forwarder fixtures). A spend through a Merkle path (the historical-root consumer) depends on the tree the deployment holds when the spent resource settles, so it is a fresh-phase test: `regen-fixtures.sh` proves it over the committer's own leaf, the first commitment `tests/fresh/` settles, and the test checks that its fixture's root is the one the deployment will hold before settling anything.
 
 ### Fixture Format
 
@@ -493,7 +494,7 @@ The local validator and the tests never touch the network. `devnet-programs/` ho
 cd solana-pa-prototype
 ./scripts/dev.sh validator-deploy                       # every program loaded at genesis, kept running
 # or, on a running local validator:
-./scripts/dev.sh deploy all --cluster localnet           # deploys and initializes (see OPERATIONS.md for the PA_* / STF_* variables)
+./scripts/dev.sh deploy all --cluster localnet           # deploys and initializes (see OPERATIONS.md for the PA_* variables)
 ```
 
 ### Deploy to a Real Cluster

@@ -542,7 +542,6 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
 
   return {
     funder,
-    settlementTable,
     uploadTxData,
     initTxData,
     closeTxData,

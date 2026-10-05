@@ -7,16 +7,15 @@ use anoma_pa_solana_client::{
     adapter_settlement_lookup_keys, decode_verifier_entry, derive_verifier_entry_pda, initialize_ix,
 };
 use anyhow::Context;
-use base64::Engine;
-use serde::Deserialize;
 use solana_address_lookup_table_interface::instruction::create_lookup_table;
 use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_commitment_config::CommitmentConfig;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
-use solana_message::{AddressLookupTableAccount, VersionedMessage, v0};
+use solana_message::{AddressLookupTableAccount, Hash, VersionedMessage, v0};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use solana_rpc_client_types::response::RpcKeyedAccount;
 use solana_signature::Signature;
 use solana_signer::Signer;
 use solana_transaction::versioned::VersionedTransaction;
@@ -118,18 +117,9 @@ pub(in crate::envs) fn client(surfnet: &Surfnet) -> Arc<RpcClient> {
 }
 
 /// Sends `instructions` as one v0 transaction compiled against `tables`,
-/// signed by `payer`, and waits for it to be confirmed; returns its
-/// signature. A refused transaction fails with the runtime's simulation logs.
-pub(in crate::envs) async fn send(
-    rpc: &RpcClient,
-    payer: &Keypair,
-    instructions: &[Instruction],
-    tables: &[AddressLookupTableAccount],
-) -> anyhow::Result<Signature> {
-    send_signed(rpc, payer, &[], instructions, tables).await
-}
-
-/// `send`, with `signers` signing besides `payer`.
+/// signed by `payer` and `signers`, and waits for it to be confirmed; returns
+/// its signature. A refused transaction fails with the runtime's simulation
+/// logs.
 pub(in crate::envs) async fn send_signed(
     rpc: &RpcClient,
     payer: &Keypair,
@@ -137,10 +127,26 @@ pub(in crate::envs) async fn send_signed(
     instructions: &[Instruction],
     tables: &[AddressLookupTableAccount],
 ) -> anyhow::Result<Signature> {
-    let blockhash = rpc
-        .get_latest_blockhash()
+    let blockhash = latest_blockhash(rpc).await?;
+    send_with_blockhash(rpc, payer, signers, instructions, tables, blockhash).await
+}
+
+/// The runtime's latest blockhash.
+pub(in crate::envs) async fn latest_blockhash(rpc: &RpcClient) -> anyhow::Result<Hash> {
+    rpc.get_latest_blockhash()
         .await
-        .context("failed to fetch a blockhash")?;
+        .context("failed to fetch a blockhash")
+}
+
+/// `send_signed`, with the transaction built on `blockhash`.
+pub(in crate::envs) async fn send_with_blockhash(
+    rpc: &RpcClient,
+    payer: &Keypair,
+    signers: &[&Keypair],
+    instructions: &[Instruction],
+    tables: &[AddressLookupTableAccount],
+    blockhash: Hash,
+) -> anyhow::Result<Signature> {
     let message = v0::Message::try_compile(&payer.pubkey(), instructions, tables, blockhash)
         .context("failed to compile the transaction")?;
     // A signer that is also the payer signs once.
@@ -225,36 +231,17 @@ pub(in crate::envs) fn deploy(
     Ok(())
 }
 
-/// An account dump in `solana account --output json` form, as the adapter
-/// repository commits its devnet copies and genesis fixtures.
-#[derive(Deserialize)]
-struct AccountDump {
-    pubkey: String,
-    account: DumpedAccount,
-}
-
-#[derive(Deserialize)]
-struct DumpedAccount {
-    lamports: u64,
-    /// The data and its encoding, which is base64.
-    data: (String, String),
-    owner: String,
-    executable: bool,
-}
-
-/// Writes the account `dump` describes, and returns its address.
+/// Writes the account `dump` describes, and returns its address: a dump in
+/// `solana account --output json` form, as the adapter repository commits
+/// its devnet copies and genesis fixtures.
 pub(in crate::envs) fn set_account_dump(surfnet: &Surfnet, dump: &str) -> anyhow::Result<Pubkey> {
-    let AccountDump { pubkey, account } =
+    let RpcKeyedAccount { pubkey, account } =
         serde_json::from_str(dump).context("the account dump is not one")?;
     let address: Pubkey = pubkey.parse().context("the dump's pubkey is not base58")?;
-    anyhow::ensure!(
-        account.data.1 == "base64",
-        "the dump of {address} encodes its data as {}, not base64",
-        account.data.1
-    );
-    let data = base64::engine::general_purpose::STANDARD
-        .decode(&account.data.0)
-        .context("the dump's data is not base64")?;
+    let data = account
+        .data
+        .decode()
+        .with_context(|| format!("the dump of {address} holds no binary data"))?;
     surfnet
         .cheatcodes()
         .execute(
@@ -282,9 +269,10 @@ pub(in crate::envs) async fn initialize(
     router: Pubkey,
     selector: [u8; 4],
 ) -> anyhow::Result<()> {
-    send(
+    send_signed(
         rpc,
         payer,
+        &[],
         &[initialize_ix(
             &pa,
             &payer.pubkey(),
@@ -327,7 +315,7 @@ pub(in crate::envs) async fn create_settlement_lookup_table(
 ) -> anyhow::Result<AddressLookupTableAccount> {
     let recent_slot = rpc.get_slot().await.context("failed to fetch the slot")?;
     let (create, table) = create_lookup_table(payer.pubkey(), payer.pubkey(), recent_slot);
-    send(rpc, payer, &[create], &[])
+    send_signed(rpc, payer, &[], &[create], &[])
         .await
         .context("failed to create the settlement lookup table")?;
     let keys = adapter_settlement_lookup_keys(&pa, &router, selector, &verifier);
@@ -353,7 +341,7 @@ pub(in crate::envs) async fn extend_lookup_table(
         Some(payer.pubkey()),
         keys.to_vec(),
     );
-    send(rpc, payer, &[extend], &[])
+    send_signed(rpc, payer, &[], &[extend], &[])
         .await
         .with_context(|| format!("failed to extend the lookup table {table}"))?;
     let extended_in = AddressLookupTable::deserialize(

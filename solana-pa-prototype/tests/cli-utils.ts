@@ -61,8 +61,7 @@ describe("operator script arguments (scripts/cli-utils.ts)", () => {
 
   it("parsePubkey reads one argument and names it when it is not a pubkey", () => {
     const key = Keypair.generate().publicKey;
-    assert.ok(parsePubkey("LIST", key.toBase58()).equals(key));
-    assert.throws(() => parsePubkey("LIST", "not-a-key"), `LIST is not a valid pubkey: "not-a-key"`);
+    assert.ok(parsePubkey("ARG", key.toBase58()).equals(key));
+    assert.throws(() => parsePubkey("ARG", "not-a-key"), `ARG is not a valid pubkey: "not-a-key"`);
   });
-
 });

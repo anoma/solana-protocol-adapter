@@ -1,13 +1,9 @@
-pub mod config;
+mod config;
 mod setup;
 
 use anoma_pa_testkit::prover::{QueueProver, Risc0Prover};
+use anoma_pa_testkit::transaction::Transaction;
 use anoma_pa_testkit::witness::ActionWitnesses;
-
-pub use super::common::protocol_adapter::ProtocolAdapter;
-pub use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree as CommitmentTree;
-pub use anoma_pa_testkit::transaction::Transaction;
-pub use config::E2eConfig;
 
 /// End-to-end environment: a surfpool runtime forking devnet, settling on the
 /// adapter devnet runs with the state devnet holds, with real proofs.

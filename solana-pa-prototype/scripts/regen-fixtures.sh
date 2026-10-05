@@ -70,19 +70,14 @@ while [[ $# -gt 0 ]]; do
   shift 2
 done
 
-# One fixture: the shape, the run's mode and salt, then the shape's own
-# arguments. `gen` proves against the run's kind table.
-gen_with() {
+# One fixture: the shape, the run's mode, salt and kind table, then the
+# shape's own arguments.
+gen() {
   local shape="$1"
   shift
   echo "==> fixture-gen ${shape} $*"
   cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- \
-    "$shape" "${MODE_FLAG[@]}" "${SALT_FLAG[@]}" "$@"
-}
-gen() {
-  local shape="$1"
-  shift
-  gen_with "$shape" "${KIND_TABLE_FLAG[@]}" "$@"
+    "$shape" "${MODE_FLAG[@]}" "${SALT_FLAG[@]}" "${KIND_TABLE_FLAG[@]}" "$@"
 }
 
 # Whether this run proves the recipe that writes the files named: every

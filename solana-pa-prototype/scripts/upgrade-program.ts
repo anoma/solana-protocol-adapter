@@ -1,11 +1,11 @@
 /**
- * Upgrade a program that owns its upgrades: the owner calls the program's
+ * Upgrade the protocol adapter, which owns its upgrades: the owner calls its
  * `upgrade` with a loader buffer it wrote, as pa-evm's owner calls
  * `upgradeToAndCall`. Run through ops.sh (`upgrade`), which writes the
  * buffer and sets the cluster and wallet; the wallet must be the owner.
  *
- *   npx ts-node -P tsconfig.json scripts/upgrade-program.ts path <program>
- *   npx ts-node -P tsconfig.json scripts/upgrade-program.ts upgrade <program> <buffer>
+ *   npx ts-node -P tsconfig.json scripts/upgrade-program.ts path protocol_adapter
+ *   npx ts-node -P tsconfig.json scripts/upgrade-program.ts upgrade protocol_adapter <buffer>
  *
  * `path` prints which upgrade path the program's upgrade authority leaves:
  * `program` when the authority is the program's own PDA (upgrade through
@@ -17,7 +17,6 @@
 import * as anchor from "@anchor-lang/core";
 import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
-import { PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { upgradeAdapter } from "../client/instructions";
 import { deriveUpgradeAuthorityPda } from "../client/pda";
@@ -25,30 +24,12 @@ import { bufferExecutableHash, deployedExecutableHash, upgradeAuthority } from "
 import { cpiEventsOfSignature } from "../client/events";
 import { fail, parsePubkey } from "./cli-utils";
 
-/** A program that upgrades itself: its client, its `upgrade` by an owner, and the name of the event that announces it. */
-type SelfUpgrading = {
-  program: Program<any>;
-  upgrade: (owner: PublicKey, buffer: PublicKey, spill: PublicKey) => { rpc(opts?: object): Promise<string> };
-  event: string;
-};
-
-/** The workspace program `name` names, among the programs that upgrade themselves. */
-function selfUpgradingProgram(name: string): SelfUpgrading {
-  switch (name) {
-    case "protocol_adapter": {
-      const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
-      return { program, upgrade: (o, b, s) => upgradeAdapter(program, o, b, s), event: "upgradedEvent" };
-    }
-    default:
-      fail(`${name} does not upgrade itself; known: protocol_adapter`);
-  }
-}
-
 async function main() {
   const [command, name, bufferArg] = process.argv.slice(2);
+  if (name !== "protocol_adapter") fail(`${name} does not upgrade itself; only protocol_adapter does`);
   const provider = confirmedProvider();
   anchor.setProvider(provider);
-  const { program, upgrade, event } = selfUpgradingProgram(name);
+  const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
   const wallet = provider.wallet.publicKey;
 
   if (command === "path") {
@@ -69,11 +50,11 @@ async function main() {
   const expected = bufferExecutableHash(bufferAccount.data);
 
   console.log(`Upgrading ${name} (${program.programId.toBase58()}) from buffer ${buffer.toBase58()}`);
-  const signature = await upgrade(wallet, buffer, wallet).rpc({ commitment: "confirmed" });
+  const signature = await upgradeAdapter(program, wallet, buffer, wallet).rpc({ commitment: "confirmed" });
 
   const events = await cpiEventsOfSignature(provider.connection, program, signature);
-  const upgraded = events.find((e) => e.name === event);
-  if (!upgraded) throw new Error(`transaction ${signature} landed without ${event}`);
+  const upgraded = events.find((e) => e.name === "upgradedEvent");
+  if (!upgraded) throw new Error(`transaction ${signature} landed without upgradedEvent`);
   const announced = Buffer.from(upgraded.data.executableHash as number[]);
   const deployed = await deployedExecutableHash(provider.connection, program.programId);
   if (!announced.equals(expected) || !deployed.equals(expected)) {

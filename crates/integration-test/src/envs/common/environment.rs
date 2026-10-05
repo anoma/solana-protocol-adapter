@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use anoma_pa_testkit::environment::{Environment as CoreEnvironment, Prover, State, StateBuilder};
 use anoma_pa_testkit::transaction::Transaction;
-use anyhow::Context;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_signature::Signature;
@@ -10,19 +9,14 @@ use surfpool_sdk::{Pubkey, Surfnet};
 
 use super::protocol_adapter::ProtocolAdapter;
 use super::runtime;
-use crate::state::actors::insert_default_signer;
-use crate::state::cluster::{Cluster, insert_cluster};
-use crate::state::pa::insert_pa_program;
 
 /// Integration test execution environment: a surfpool runtime with the
 /// adapter set up, and a prover. The `local` and `e2e` environments are this
-/// with pa-testkit's local and queue provers.
+/// with pa-testkit's local prover, and with its queue or risc0 prover.
 ///
-/// Setup contract:
-/// - All fields on this environment and its nested structures are public on purpose.
-/// - Setup code should mutate/inspect the concrete environment directly.
-/// - Test execution code should accept `impl anoma_pa_testkit::environment::Environment`
-///   and use typed state helpers instead of concrete fields.
+/// Its fields are public: a test reads and drives the concrete environment
+/// directly, while code meant for any of pa-testkit's environments takes
+/// `impl anoma_pa_testkit::environment::Environment`.
 pub struct Environment<P> {
     pub surfnet: Surfnet,
     pub state: State,
@@ -88,33 +82,17 @@ impl<P> Environment<P> {
     }
 
     /// The environment on `surfnet`, whose adapter `pa` is initialized: the
-    /// protocol adapter read from it, and the test state.
-    pub(in crate::envs) async fn assemble<F>(
+    /// protocol adapter read from it, and an empty test state.
+    pub(in crate::envs) async fn assemble(
         surfnet: Surfnet,
-        cluster: Cluster,
         payer: Arc<Keypair>,
         pa: Pubkey,
         prover: P,
-        insert_additional: F,
-    ) -> anyhow::Result<Self>
-    where
-        F: AsyncFnOnce(&mut StateBuilder) -> anyhow::Result<()>,
-    {
-        let protocol_adapter =
-            ProtocolAdapter::new(runtime::client(&surfnet), payer.clone(), pa).await?;
-        let state = {
-            let mut builder = StateBuilder::new();
-            insert_cluster(&mut builder, cluster, surfnet.rpc_url().to_string());
-            insert_default_signer(&mut builder, payer);
-            insert_pa_program(&mut builder, pa);
-            insert_additional(&mut builder)
-                .await
-                .context("failed to insert additional data into state")?;
-            builder.finalize()
-        };
+    ) -> anyhow::Result<Self> {
+        let protocol_adapter = ProtocolAdapter::new(runtime::client(&surfnet), payer, pa).await?;
         Ok(Self {
             surfnet,
-            state,
+            state: StateBuilder::new().finalize(),
             prover,
             protocol_adapter,
         })

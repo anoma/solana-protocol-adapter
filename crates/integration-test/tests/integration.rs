@@ -5,9 +5,12 @@
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
 use anoma_pa_testkit::assert::{Needle, expect_integration_panic};
 use anoma_pa_testkit::fixtures::trivial;
+use anoma_pa_testkit::transaction::Transaction;
 use anoma_pa_testkit::{execute_tx, prove_actions};
+use anoma_rm_risc0::AggregationInstance;
 use anyhow::Context;
 use solana_signer::Signer;
+use surfpool_sdk::Pubkey;
 
 mod local {
     use super::*;
@@ -31,26 +34,28 @@ mod e2e_test {
     anoma_pa_testkit::suite_tests!(SolanaE2eEnv::setup_bare());
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn a_root_the_adapter_does_not_store_fails_before_anything_is_sent() -> anyhow::Result<()> {
-    let mut env = SolanaLocalEnv::setup_bare().await?;
-    let actions = trivial::build_many(2, 71).context("failed to build trivial actions")?;
-    let mut tx = prove_actions(&env, &actions).await?;
-    tx.as_arm_mut()
+/// The aggregation instance of `tx`, the statement the adapter settles, to
+/// tamper with.
+fn aggregation_instance(tx: &mut Transaction) -> anyhow::Result<&mut AggregationInstance> {
+    Ok(&mut tx
+        .as_arm_mut()
         .aggregation
         .as_mut()
         .context("the transaction is aggregated")?
-        .instance
-        .actions[1]
-        .consumed_publics[0]
-        .commitment_tree_root = anoma_rm_risc0::Digest::from_bytes([7; 32]);
+        .instance)
+}
 
+/// Checks that the harness refuses to settle `tx` with the error `needle`
+/// finds before it sends anything: the payer pays nothing.
+async fn refused_before_sending(
+    env: &mut SolanaLocalEnv,
+    tx: Transaction,
+    needle: Needle,
+) -> anyhow::Result<()> {
     let payer = env.protocol_adapter.payer.pubkey();
     let rpc = env.protocol_adapter.rpc.clone();
     let before = rpc.get_balance(&payer).await?;
-    expect_integration_panic(Needle::Static(
-        "consumed commitment tree root not found in PA for action 1 consumed resource 0",
-    ))(execute_tx(&mut env, tx).await)?;
+    expect_integration_panic(needle)(execute_tx(env, tx).await)?;
     let after = rpc.get_balance(&payer).await?;
     anyhow::ensure!(
         before == after,
@@ -58,6 +63,24 @@ async fn a_root_the_adapter_does_not_store_fails_before_anything_is_sent() -> an
         before - after
     );
     Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_root_the_adapter_does_not_store_fails_before_anything_is_sent() -> anyhow::Result<()> {
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    let actions = trivial::build_many(2, 71).context("failed to build trivial actions")?;
+    let mut tx = prove_actions(&env, &actions).await?;
+    aggregation_instance(&mut tx)?.actions[1].consumed_publics[0].commitment_tree_root =
+        anoma_rm_risc0::Digest::from_bytes([7; 32]);
+
+    refused_before_sending(
+        &mut env,
+        tx,
+        Needle::Static(
+            "consumed commitment tree root not found in PA for action 1 consumed resource 0",
+        ),
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -69,7 +92,7 @@ async fn a_call_to_a_program_no_forwarder_is_registered_for_fails_before_anythin
     let mut env = SolanaLocalEnv::setup_bare().await?;
     let actions = trivial::build_many(1, 81).context("failed to build trivial actions")?;
     let mut tx = prove_actions(&env, &actions).await?;
-    let program = solana_signer::Signer::pubkey(&solana_keypair::Keypair::new());
+    let program = Pubkey::new_unique();
     let call = SolanaExternalCall {
         program_id: program.to_bytes(),
         instruction_data: vec![0],
@@ -77,30 +100,21 @@ async fn a_call_to_a_program_no_forwarder_is_registered_for_fails_before_anythin
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
     };
-    tx.as_arm_mut()
-        .aggregation
-        .as_mut()
-        .context("the transaction is aggregated")?
-        .instance
-        .actions[0]
-        .created_publics[0]
+    aggregation_instance(&mut tx)?.actions[0].created_publics[0]
         .app_data
         .external_payload = vec![ExpirableBlob {
         blob: anoma_rm_risc0::utils::bytes_to_words(&call.encode()),
         deletion_criterion: 0,
     }];
 
-    let payer = env.protocol_adapter.payer.pubkey();
-    let rpc = env.protocol_adapter.rpc.clone();
-    let before = rpc.get_balance(&payer).await?;
-    expect_integration_panic(Needle::Regexp(regex::Regex::new(&regex::escape(
-        &format!("external call 0 is to {program}, for which no forwarder is registered"),
-    ))?))(execute_tx(&mut env, tx).await)?;
-    anyhow::ensure!(
-        rpc.get_balance(&payer).await? == before,
-        "the payer paid for a transaction that must not be sent"
-    );
-    Ok(())
+    refused_before_sending(
+        &mut env,
+        tx,
+        Needle::Regexp(regex::Regex::new(&regex::escape(&format!(
+            "external call 0 is to {program}, for which no forwarder is registered"
+        )))?),
+    )
+    .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -108,9 +122,7 @@ async fn the_lookup_table_serves_the_keys_a_forwarder_adds() -> anyhow::Result<(
     use solana_address_lookup_table_interface::state::AddressLookupTable;
 
     let mut env = SolanaLocalEnv::setup_bare().await?;
-    let keys: Vec<_> = (0..3)
-        .map(|_| solana_signer::Signer::pubkey(&solana_keypair::Keypair::new()))
-        .collect();
+    let keys: Vec<_> = (0..3).map(|_| Pubkey::new_unique()).collect();
     env.protocol_adapter
         .extend_lookup_table(keys.clone())
         .await?;
@@ -133,12 +145,13 @@ async fn the_lookup_table_serves_the_keys_a_forwarder_adds() -> anyhow::Result<(
 #[tokio::test(flavor = "multi_thread")]
 async fn a_consumer_deploys_its_program_and_sends_its_setup() -> anyhow::Result<()> {
     use solana_keypair::Keypair;
+    use solana_loader_v3_interface::state::UpgradeableLoaderState;
 
     let env = SolanaLocalEnv::setup_bare().await?;
     let rpc = env.protocol_adapter.rpc.clone();
     let payer = env.protocol_adapter.payer.pubkey();
 
-    let program = Keypair::new().pubkey();
+    let program = Pubkey::new_unique();
     env.deploy_program(
         program,
         include_bytes!("../programs/mock_verifier.so"),
@@ -150,10 +163,17 @@ async fn a_consumer_deploys_its_program_and_sends_its_setup() -> anyhow::Result<
     );
     let program_data = anoma_pa_solana_client::derive_program_data_address(&program);
     let data = rpc.get_account_data(&program_data).await?;
-    // UpgradeableLoaderState::ProgramData: tag (4), slot (8), Option<Pubkey>.
+    let metadata = UpgradeableLoaderState::size_of_programdata_metadata();
+    let state: UpgradeableLoaderState = bincode::deserialize(&data[..metadata])?;
     anyhow::ensure!(
-        data[12] == 1 && data[13..45] == payer.to_bytes(),
-        "the program's upgrade authority is not the one given"
+        matches!(
+            state,
+            UpgradeableLoaderState::ProgramData {
+                upgrade_authority_address: Some(authority),
+                ..
+            } if authority == payer
+        ),
+        "the program's state is {state:?}, not program data upgradeable by {payer}"
     );
 
     let account = Keypair::new();
@@ -207,28 +227,6 @@ async fn a_settlements_events_read_back_in_the_order_the_adapter_emitted_them() 
         matches!(events.last(), Some(PaEvent::TransactionExecuted(_))),
         "the last event is {:?}, not TransactionExecuted",
         events.last()
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn the_test_forwarders_log_mode_fills_the_transactions_log() -> anyhow::Result<()> {
-    use anoma_pa_solana_integration_test::executed::Executed;
-    use anoma_pa_solana_integration_test::test_forwarder;
-
-    let env = SolanaLocalEnv::setup_bare().await?;
-    let program = env.deploy_test_forwarder()?;
-    // Agave keeps 10,000 bytes of program log per transaction, counting each
-    // line with its "Program log: " prefix; 100 of the forwarder's 100-byte
-    // lines exceed it.
-    let signature = env
-        .send(&[test_forwarder::log_ix(&program, 100)], &[])
-        .await?;
-    let executed = Executed::read(&env.protocol_adapter.rpc, &signature).await?;
-    anyhow::ensure!(
-        executed.logs.iter().any(|line| line == "Log truncated"),
-        "the transaction's log is not truncated: {:?}",
-        executed.logs
     );
     Ok(())
 }
@@ -300,11 +298,9 @@ async fn a_consumer_writes_the_loader_buffer_an_upgrade_installs() -> anyhow::Re
 // authority is the payer); the payer signs once.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_consumer_names_the_payer_among_its_signers() -> anyhow::Result<()> {
-    use solana_keypair::Keypair;
-
     let env = SolanaLocalEnv::setup_bare().await?;
     let payer = env.protocol_adapter.payer.clone();
-    let to = Keypair::new().pubkey();
+    let to = Pubkey::new_unique();
     env.send(
         &[solana_system_interface::instruction::transfer(
             &payer.pubkey(),

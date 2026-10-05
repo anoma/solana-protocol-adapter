@@ -1,11 +1,5 @@
 import { AccountMeta, PublicKey } from "@solana/web3.js";
-import {
-  NULLIFIER_SEED,
-  PA_STATE_SEED,
-  ROOT_SEED,
-  TX_DATA_SEED,
-  UPGRADE_AUTHORITY_SEED,
-} from "./constants";
+import { NULLIFIER_SEED, PA_STATE_SEED, ROOT_SEED, TX_DATA_SEED, UPGRADE_AUTHORITY_SEED } from "./constants";
 
 export const BPF_LOADER_UPGRADEABLE = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 

@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anoma_pa_testkit::environment::StateBuilder;
 use anoma_pa_testkit::prover::{QueueProver, Risc0Prover};
 use anyhow::Context;
 use solana_keypair::Keypair;
@@ -9,17 +8,9 @@ use super::super::common::addresses::{DEVNET, program_id};
 use super::super::common::runtime;
 use super::config::E2eConfig;
 use super::{Environment, Prover};
-use crate::state::cluster::Cluster;
 
 impl Environment {
     pub async fn setup_bare() -> anyhow::Result<Self> {
-        Self::setup(async |_| anyhow::Ok(())).await
-    }
-
-    pub async fn setup<F>(insert_additional: F) -> anyhow::Result<Self>
-    where
-        F: AsyncFnOnce(&mut StateBuilder) -> anyhow::Result<()>,
-    {
         let config = E2eConfig::from_env().context("failed to parse e2e test config")?;
 
         // Fork devnet. The adapter is already deployed and initialized there,
@@ -40,15 +31,7 @@ impl Environment {
             None => Prover::Risc0(Risc0Prover),
         };
 
-        let env = Self::assemble(
-            surfnet,
-            Cluster::Devnet,
-            payer,
-            pa,
-            prover,
-            insert_additional,
-        )
-        .await?;
+        let env = Self::assemble(surfnet, payer, pa, prover).await?;
         // The tests prove against devnet's kind table, which the adapter must
         // store.
         let loaded = crate::kind_table::load_devnet()?;
