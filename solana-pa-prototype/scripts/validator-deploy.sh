@@ -235,6 +235,7 @@ ensure_wallet() {
 SBPF_ARCH="v3"
 
 anchor_build() {
+  require_cmd anchor
   checked_sbf_build anchor build --arch "$SBPF_ARCH" "$@"
 }
 
@@ -344,7 +345,6 @@ wait_for_validator() {
 # ── Main functions ─────────────────────────────────────────────────────
 
 require_commands() {
-  require_cmd anchor
   require_cmd solana
   require_cmd solana-test-validator
   require_cmd cargo
@@ -477,6 +477,7 @@ build_programs_dev() {
 build_dev_idls() {
   local name
   load_workspace_programs
+  require_cmd anchor
   echo "    Generating the development IDLs and types..."
   mkdir -p target/idl target/types
   for name in "${PROGRAM_NAMES[@]}"; do
@@ -519,6 +520,7 @@ build_programs_release() {
 assert_release_idl_lacks_dev_only() {
   local name="$1"
   local dev_idl
+  require_cmd anchor
   dev_idl="$(mktemp --suffix .json)"
   dev_cargo_args "$name"
   anchor idl build -p "$name" -o "$dev_idl" "${DEV_CARGO_ARGS[@]}"
