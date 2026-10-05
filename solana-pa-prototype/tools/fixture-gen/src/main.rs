@@ -1,6 +1,7 @@
 use anchor_lang::prelude::{borsh, AnchorDeserialize as BorshDeserialize, Pubkey};
 use anoma_pa_solana_client::merkle::merkle_path;
-use anoma_pa_solana_client::settlement_input::{settlement_transaction, MOCK_SELECTOR};
+use anoma_pa_solana_client::settlement_input::settlement_transaction;
+use anoma_pa_solana_client::MOCK_SELECTOR;
 use anyhow::{anyhow, bail, Context, Result};
 use arm::action::Action;
 use arm::action_tree::ActionTree;

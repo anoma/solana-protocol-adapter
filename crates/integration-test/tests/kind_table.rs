@@ -7,7 +7,6 @@ use anoma_pa_solana_integration_test::kind_table;
 use anoma_pa_testkit::assert::{Needle, expect_integration_panic};
 use anoma_pa_testkit::fixtures::passthrough;
 use anoma_pa_testkit::transaction::Transaction;
-use anoma_pa_testkit::witness::AppData;
 use anoma_pa_testkit::{execute_tx, prove_actions};
 use solana_signer::Signer;
 
@@ -24,7 +23,7 @@ async fn settles_a_transaction_proven_against_the_kind_table_the_authority_insta
         "the adapter already holds solana-devnet's kind table"
     );
 
-    let action = passthrough::build(1, AppData::default(), passthrough::Overrides::default())?;
+    let action = passthrough::build(1, Vec::new(), passthrough::Overrides::default())?;
     let tx = prove_actions(&env, &[action.witnesses]).await?;
     expect_integration_panic(Needle::Static("Error Code: KindTableCommitmentMismatch."))(
         execute_tx(&mut env, Transaction::from_arm(tx.as_arm().clone())).await,

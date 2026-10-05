@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
+use anoma_pa_solana_client::MOCK_SELECTOR;
 use anoma_pa_solana_client::derive_verifier_router_pdas;
-use anoma_pa_solana_client::settlement_input::MOCK_SELECTOR;
 use anoma_pa_testkit::prover::LocalProver;
 use anyhow::Context;
 use solana_keypair::Keypair;
