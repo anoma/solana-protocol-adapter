@@ -1,5 +1,6 @@
 use anchor_lang::prelude::{borsh, AnchorDeserialize as BorshDeserialize, Pubkey};
 use anoma_pa_solana_client::merkle::merkle_path;
+use anoma_pa_solana_client::settlement_input::{settlement_transaction, MOCK_SELECTOR};
 use anyhow::{anyhow, bail, Context, Result};
 use arm::action::Action;
 use arm::action_tree::ActionTree;
@@ -7,15 +8,15 @@ use arm::aggregation_instance::ConsumedResourceAggregated;
 use arm::compliance::{ComplianceWitness, INITIAL_ROOT};
 use arm::compliance_unit::ComplianceUnit;
 use arm::constants::{
-    init_kind_table_from_file, kind_table, kind_table_hash, BATCH_AGGREGATION_PK,
-    BATCH_AGGREGATION_VK, COMPLIANCE_PK, COMPLIANCE_VK,
+    init_kind_table_from_file, kind_table, kind_table_hash, BATCH_AGGREGATION_PK, COMPLIANCE_PK,
+    COMPLIANCE_VK,
 };
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
 use arm::logic_proof::LogicVerifier;
 use arm::merkle_path::MerklePath;
 use arm::nullifier_key::NullifierKey;
-use arm::proving_system::{encode_seal, JournalEncoding, ProofType as LocalProofType};
+use arm::proving_system::{JournalEncoding, ProofType as LocalProofType};
 use arm::resource::{ConsumedResourceWitness, Resource};
 use arm::transaction::{Aggregation, Delta, Transaction};
 use arm::Digest;
@@ -33,7 +34,7 @@ use k256::{AffinePoint, Scalar};
 use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
 use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
 use serde::{Deserialize, Serialize};
-use solana_pa::verifier_router::types::{Proof, Seal};
+use solana_pa::verifier_router::types::Seal;
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
@@ -41,7 +42,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use passthrough_logic_methods::{PASSTHROUGH_LOGIC_GUEST_ELF, PASSTHROUGH_LOGIC_GUEST_ID};
+use anoma_pa_testkit::fixtures::passthrough::{PASSTHROUGH_LOGIC_PK, PASSTHROUGH_LOGIC_VK};
 
 /// The kind table a fixture commits to unless `--kind-table` names another:
 /// the committed empty table. The compliance circuit hashes the witness's
@@ -562,64 +563,11 @@ fn require_aggregation_mut(tx: &mut Transaction) -> Result<&mut Aggregation> {
         .ok_or_else(|| anyhow!("transaction has no aggregation"))
 }
 
-/// Extract the Groth16 selector from a transaction's seal-encoded
-/// aggregation proof.
-fn extract_selector(tx: &Transaction) -> Result<String> {
+/// The verifier selector of a transaction's seal-encoded aggregation proof.
+fn seal_selector(tx: &Transaction) -> Result<[u8; 4]> {
     let seal: Seal = Seal::try_from_slice(&require_aggregation(tx)?.proof)
         .context("decode Seal from aggregation proof bytes")?;
-    Ok(format!("0x{}", hex::encode(seal.selector)))
-}
-
-/// Selector the localnet mock verifier is registered under in the synthetic
-/// VerifierEntry preloaded at test-validator genesis (risc0 fake-receipt
-/// convention; the real Groth16 selector is 0x73c457ba).
-const MOCK_SELECTOR: [u8; 4] = [0xff; 4];
-
-/// Claim digest a mock seal must carry, derived from the transaction alone:
-/// the digest of the batch-aggregation receipt claim over the aggregation
-/// instance's journal, which the on-chain PA independently recomputes at
-/// settle time.
-fn mock_claim_digest(tx: &Transaction) -> Result<risc0_zkvm::sha::Digest> {
-    let journal = require_aggregation(tx)?.instance.to_journal();
-    Ok(compute_expected_claim_digest(
-        &journal,
-        &BATCH_AGGREGATION_VK,
-    ))
-}
-
-/// Build the 260-byte router `Seal` the mock verifier accepts: selector
-/// 0xffffffff, claim digest in pi_c[..32], zeros elsewhere. The digest rides
-/// in pi_c because the PA negates pi_a before the router CPI.
-fn mock_seal_bytes(claim: risc0_zkvm::sha::Digest) -> Result<Vec<u8>> {
-    let mut pi_c = [0u8; 64];
-    pi_c[..32].copy_from_slice(claim.as_bytes());
-    let seal = Seal {
-        selector: MOCK_SELECTOR,
-        proof: Proof {
-            pi_a: [0u8; 64],
-            pi_b: [0u8; 128],
-            pi_c,
-        },
-    };
-    borsh::to_vec(&seal).context("serialize mock Seal")
-}
-
-/// Encode a dev-mode (Fake) aggregation receipt as a mock router seal,
-/// cross-checking the receipt's claim digest against the one derived from
-/// the transaction alone so any journal-derivation drift fails loudly.
-fn encode_mock_seal(
-    fake: &risc0_zkvm::FakeReceipt<ReceiptClaim>,
-    tx: &Transaction,
-) -> Result<Vec<u8>> {
-    let receipt_claim = fake.claim.digest();
-    let derived_claim = mock_claim_digest(tx)?;
-    if receipt_claim != derived_claim {
-        bail!(
-            "dev-mode receipt claim digest ({receipt_claim}) != transaction-derived claim \
-             digest ({derived_claim}) — the aggregation journal derivation drifted"
-        );
-    }
-    mock_seal_bytes(derived_claim)
+    Ok(seal.selector)
 }
 
 /// Flip one bit of a tag of the aggregation instance's first action: its
@@ -1119,7 +1067,7 @@ fn deterministic_ephemeral_resource(
 ) -> Result<(Resource, NullifierKey, Digest, Resource)> {
     let nf_key = NullifierKey::default();
     let consumed_resource = Resource {
-        logic_ref: Digest::new(PASSTHROUGH_LOGIC_GUEST_ID),
+        logic_ref: PASSTHROUGH_LOGIC_VK,
         quantity: 1,
         is_ephemeral: true,
         nonce: fixture_nonce(fixture_name, index),
@@ -1169,7 +1117,7 @@ async fn prove_action(
     consumed_app_data: AppData,
     created_app_data: AppData,
 ) -> Result<Action> {
-    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
+    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
 
     let consumed = &compliance_witness.consumed_data[0];
     let consumed_nf = consumed
@@ -1196,7 +1144,7 @@ async fn prove_action(
     prove_compliance_and_logic(
         prover,
         compliance_witness,
-        PASSTHROUGH_LOGIC_GUEST_ELF,
+        PASSTHROUGH_LOGIC_PK,
         &passthrough_vk,
         consumed_instance,
         created_instance,
@@ -1474,7 +1422,7 @@ async fn generate_consume_only_transaction(
     let root = ActionTree::new(vec![consumed_nf])
         .root()
         .map_err(|e| anyhow!("compute action tree root: {e:?}"))?;
-    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
+    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
     let consumed_instance = LogicInstance {
         tag: consumed_nf,
         is_consumed: true,
@@ -1492,7 +1440,7 @@ async fn generate_consume_only_transaction(
         async {
             prove_logic(
                 prover,
-                PASSTHROUGH_LOGIC_GUEST_ELF,
+                PASSTHROUGH_LOGIC_PK,
                 &passthrough_vk,
                 consumed_instance,
             )
@@ -1714,7 +1662,10 @@ fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
     mutate_tag_keep_structure(&mut tx_tampered)?;
     let tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
 
-    let selector = extract_selector(tx).context("extract selector from proof")?;
+    let selector = format!(
+        "0x{}",
+        hex::encode(seal_selector(tx).context("extract selector from proof")?)
+    );
     eprintln!("  selector: {selector}");
 
     Ok(DerivedFixtureFields {
@@ -1739,23 +1690,17 @@ fn finalize_and_write_fixture(
     name: String,
     spl_forwarder: Option<SplForwarderMetadata>,
 ) -> Result<Fixture> {
-    // The receipt type decides the seal encoding: dev-mode (Fake) receipts
+    // The client crate's settlement transaction: dev-mode (Fake) receipts
     // become mock seals for the localnet mock verifier, real Groth16
-    // receipts go through arm's canonical seal encoding. The fixture is
-    // labeled accordingly (aggregation_proof_type, selector).
+    // receipts arm's seal. The fixture is labeled by the seal's selector
+    // (aggregation_proof_type, selector).
     let proof_type = timed_phase("encode_seal", || {
-        let receipt_bytes = require_aggregation(tx)?.proof.clone();
-        let inner: InnerReceipt =
-            bincode::deserialize(&receipt_bytes).context("decode aggregation receipt")?;
-        let (seal, proof_type) = if let InnerReceipt::Fake(fake) = inner {
-            eprintln!("  dev-mode receipt -> mock seal (selector 0xffffffff)");
-            (encode_mock_seal(&fake, tx)?, "mock")
+        *tx = settlement_transaction(tx.clone()).context("encode the aggregation seal")?;
+        Ok(if seal_selector(tx)? == MOCK_SELECTOR {
+            "mock"
         } else {
-            let seal = encode_seal(&receipt_bytes).map_err(|e| anyhow!("encode seal: {e:?}"))?;
-            (seal, "groth16")
-        };
-        require_aggregation_mut(tx)?.proof = seal;
-        Ok(proof_type)
+            "groth16"
+        })
     })?;
 
     let fields = timed_phase("derive_fixture_fields", || derive_fixture_fields(tx))?;
@@ -1822,7 +1767,7 @@ fn build_historical_root_consumer_witness(
     committer_nf_key: NullifierKey,
     merkle_path: MerklePath,
 ) -> Result<ComplianceWitness> {
-    let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
+    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
 
     let consumed_nf = committed_resource
         .nullifier(&committer_nf_key)
@@ -2615,7 +2560,7 @@ mod tests {
         init_test_kind_table();
         let (consumed, nf_key, consumed_nf, created) =
             deterministic_ephemeral_resource(fixture_name, 0).unwrap();
-        let passthrough_vk = Digest::new(PASSTHROUGH_LOGIC_GUEST_ID);
+        let passthrough_vk = PASSTHROUGH_LOGIC_VK;
         let created_cm = created.commitment();
 
         let witness = single_action_compliance_witness(
@@ -2644,13 +2589,13 @@ mod tests {
         };
 
         let (cp, cj) = arm::proving_system::prove(
-            PASSTHROUGH_LOGIC_GUEST_ELF,
+            PASSTHROUGH_LOGIC_PK,
             &consumed_instance,
             LocalProofType::Succinct,
         )
         .unwrap();
         let (crp, crj) = arm::proving_system::prove(
-            PASSTHROUGH_LOGIC_GUEST_ELF,
+            PASSTHROUGH_LOGIC_PK,
             &created_instance,
             LocalProofType::Succinct,
         )

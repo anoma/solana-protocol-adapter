@@ -89,6 +89,67 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: ./scripts/ops.sh unit-test
 
+  # The integration-test harness (crates/integration-test, its own
+  # workspace): its local tests on surfpool. Its e2e cases need devnet and the
+  # proving queue (dev.sh harness-test --e2e).
+  harness:
+    name: Harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/integration-test
+
+      - name: Check formatting
+        working-directory: ./crates/integration-test
+        run: cargo fmt -- --check
+
+      - name: Run clippy
+        working-directory: ./crates/integration-test
+        run: cargo clippy --all-targets --features e2e -- -D warnings
+
+      - name: Run tests
+        working-directory: ./crates/integration-test
+        run: cargo test
+
+  # The integration-test harness ships the programs it loads; each must be
+  # the deterministic build of this commit.
+  harness-programs:
+    name: Harness Programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      # Caches ~/.cargo/bin, so solana-verify is built once per version.
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install solana-verify
+        run: cargo install solana-verify --version 0.5.2 --locked
+
+      - name: Check the committed binaries are the deterministic builds
+        working-directory: ./solana-pa-prototype
+        run: ./scripts/ops.sh harness-programs --check
+
   # Build the programs once; the per-mode test jobs below reuse the
   # artifacts instead of repeating the SBF build.
   anchor-build:

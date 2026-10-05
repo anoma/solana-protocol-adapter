@@ -420,6 +420,21 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.4.0"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=4b1758b5b3037533ebbfccbec3e376d028323f3b#4b1758b5b3037533ebbfccbec3e376d028323f3b"
+dependencies = [
+ "anoma-rm-risc0",
+ "base64 0.22.1",
+ "bincode",
+ "hkdf",
+ "hmac",
+ "risc0-zkvm",
+ "serde",
+ "sha2 0.10.9",
+]
+
+[[package]]
+name = "anoma-pa-solana-client"
+version = "0.4.0"
 source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287#6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287"
 dependencies = [
  "base64 0.22.1",
@@ -428,6 +443,21 @@ dependencies = [
  "hmac",
  "serde",
  "sha2 0.10.9",
+]
+
+[[package]]
+name = "anoma-pa-testkit"
+version = "1.0.0-rc.1"
+source = "git+https://github.com/anoma/pa-testkit?rev=bcf09547598bfcbf1ab30aecdad3279d7ba85acb#bcf09547598bfcbf1ab30aecdad3279d7ba85acb"
+dependencies = [
+ "anoma-rm-risc0",
+ "anoma-rm-risc0-gadgets",
+ "anyhow",
+ "bincode",
+ "hex",
+ "k256",
+ "regex",
+ "risc0-zkvm",
 ]
 
 [[package]]
@@ -2494,7 +2524,8 @@ name = "fixture-gen"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
- "anoma-pa-solana-client",
+ "anoma-pa-solana-client 0.4.0 (git+https://github.com/anoma/anoma-pa-solana-client?rev=4b1758b5b3037533ebbfccbec3e376d028323f3b)",
+ "anoma-pa-testkit",
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
  "anyhow",
@@ -2507,7 +2538,6 @@ dependencies = [
  "heliax-ap-orchestrator-sdk",
  "hex",
  "k256",
- "passthrough-logic-methods",
  "protocol-adapter",
  "rand_chacha 0.3.1",
  "risc0-zkvm",
@@ -4068,14 +4098,6 @@ dependencies = [
  "redox_syscall",
  "smallvec",
  "windows-link",
-]
-
-[[package]]
-name = "passthrough-logic-methods"
-version = "0.1.0"
-dependencies = [
- "risc0-binfmt",
- "risc0-zkos-v1compat",
 ]
 
 [[package]]
@@ -7554,7 +7576,7 @@ name = "transfer_library"
 version = "2.0.0-rc.2"
 source = "git+https://github.com/anoma/anomapay-solana-resource?rev=8969825eef8b676822207a420716fdad9b5eda24#8969825eef8b676822207a420716fdad9b5eda24"
 dependencies = [
- "anoma-pa-solana-client",
+ "anoma-pa-solana-client 0.4.0 (git+https://github.com/anoma/anoma-pa-solana-client?rev=6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287)",
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
  "hex-literal 0.4.1",
@@ -7568,7 +7590,7 @@ name = "transfer_witness"
 version = "2.0.0-rc.2"
 source = "git+https://github.com/anoma/anomapay-solana-resource?rev=8969825eef8b676822207a420716fdad9b5eda24#8969825eef8b676822207a420716fdad9b5eda24"
 dependencies = [
- "anoma-pa-solana-client",
+ "anoma-pa-solana-client 0.4.0 (git+https://github.com/anoma/anoma-pa-solana-client?rev=6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287)",
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
  "bincode",

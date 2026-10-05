@@ -369,8 +369,7 @@ ensure_node_modules() {
 # Packages whose locked version must match across every Cargo.lock that
 # contains them: the version for a crates.io package, the commit for a git
 # one. Skew silently produces proofs that don't verify on chain (arm-risc0) or
-# compile errors that look like unrelated bugs (anoma-pa-solana-client, which
-# the guest lockfile does not contain).
+# compile errors that look like unrelated bugs (anoma-pa-solana-client).
 LOCK_SYNC_PACKAGES=(anoma-rm-core anoma-pa-solana-client)
 
 # Every Cargo.lock that participates in the build. New independent workspaces
@@ -379,7 +378,6 @@ LOCK_SYNC_PACKAGES=(anoma-rm-core anoma-pa-solana-client)
 LOCK_FILES=(
   Cargo.lock
   tools/fixture-gen/Cargo.lock
-  tools/fixture-gen/passthrough-logic/methods/guest/Cargo.lock
 )
 
 # Print the locked pin of <pkg> in <lockfile>: "<version>" for a crates.io
@@ -391,8 +389,7 @@ lock_pin_for() {
     return 0
   fi
   # A lockfile without $pkg is a legitimate case: different lockfiles have
-  # different dep sets (the guest lockfile lacks workspace-only deps like
-  # anoma-pa-solana-client).
+  # different dep sets.
   local block
   if ! block="$(grep -A2 "^name = \"${pkg}\"$" "$lockfile")"; then
     return 0

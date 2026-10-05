@@ -6,6 +6,7 @@ Port of the [EVM Protocol Adapter V2](https://github.com/anoma/pa-evm/tree/next)
 
 ```
 solana-protocol-adapter/
+├── crates/integration-test/ # the integration-test harness other repositories test against
 └── solana-pa-prototype/     # Solana PA implementation
     ├── programs/            # the adapter, the SPL token forwarder, and test programs
     ├── client/              # instruction builders shared by the operator scripts and the tests
@@ -75,6 +76,8 @@ entry point for one fixture.
 | `./scripts/dev.sh validator` | Start a local validator with the devnet programs (verifier stack, Program Metadata), without the workspace programs |
 | `./scripts/dev.sh validator-deploy` | Build, start a validator with every program loaded at genesis, and keep it running for external clients |
 | `./scripts/dev.sh gen-fixtures` / `regen-fixtures` / `fixture-test` | Fixture generation and fixture-gen's tests |
+| `./scripts/dev.sh harness-test [--e2e]` | The integration-test harness's tests on surfpool; with `--e2e`, its e2e cases on a fork of devnet (`DEVNET_RPC_URL`), proven by the queue (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`) |
+| `./scripts/dev.sh harness-programs [--check]` | Write the harness's program binaries (the deterministic builds); `--check` fails when the committed ones are not |
 | `./scripts/dev.sh lock-check` / `lock-sync <pkg>` | Check / re-align the Cargo.lock files' shared dependencies |
 | `./scripts/dev.sh update-deps` | Regenerate `yarn.lock` |
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
@@ -315,6 +318,29 @@ After the nullifier markers, each external call takes the next `num_accounts` ac
 
 ---
 
+## Testing Against the Adapter From Another Repository
+
+`crates/integration-test` (`anoma-pa-solana-integration-test`) implements [pa-testkit](https://github.com/anoma/pa-testkit)'s `Environment` for this adapter, as pa-evm's `anoma-pa-evm-integration-test` does for EVM. A test proves actions with pa-testkit and settles them on a real adapter:
+
+```toml
+anoma-pa-solana-integration-test = { git = "https://github.com/anoma/solana-protocol-adapter", tag = "<tag>" }
+```
+
+```rust
+use anoma_pa_solana_integration_test::envs::local::Environment;
+
+let mut env = Environment::setup_bare().await?;
+let tx = anoma_pa_testkit::prove_actions(&env, &actions).await?;
+anoma_pa_testkit::execute_tx(&mut env, tx).await?;
+```
+
+- **`local`** (default feature): an offline [surfpool](https://github.com/txtx/surfpool) runtime with the verifier router and Program Metadata program copies, the mock verifier, and the adapter build the crate ships (`crates/integration-test/programs/`, the deterministic build of the tag, which CI checks), initialized with the mock selector; pa-testkit's local prover.
+- **`e2e`**: a runtime forking devnet (`DEVNET_RPC_URL`), on the adapter devnet runs with the state it holds, the kind table recorded for devnet checked against the one it stores; pa-testkit's queue prover (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`).
+
+`ProtocolAdapter::execute` settles the way every submitter does (the client crate's `settlement_input` and `plan_settlement`: upload, settle as a v0 transaction through a settlement lookup table, close), and the commitment tree pa-testkit builds from the adapter's frontier must give the root the adapter stores after each settlement. A transaction whose proof calls a forwarder settles once the forwarder is registered: the proof commits each call but not its accounts, so `env.protocol_adapter.forwarders.register(program, forwarder)` names, for that program, a `forwarders::Forwarder` that gives each call its CPI segment and any instructions that must precede the settlement (a wrap's ed25519 signature check). A call to an unregistered program fails before anything is sent. `extend_lookup_table` adds a forwarder's fixed accounts to the settlement lookup table, as a deployment's table holds them. A consumer deploys its own program with `env.deploy_program` and sends its setup (a mint, a token account, an approval) with `env.send`, which the default signer pays for. `env.protocol_adapter.settle` settles as `execute` does and returns the settlement's signature, and `executed::Executed::read` reads a confirmed transaction back: its log and the events each program emitted by self-invocation. The local environment's `deploy_test_forwarder` deploys the adapter's test forwarder, whose log mode fills a transaction's log budget, and `deploy_block_time_forwarder` its example block-time forwarder, which the local environment calls as a `suite::BlockTimeForwarder`. `env.write_buffer` places a program in a loader buffer, the code an upgrade instruction installs.
+
+The test state holds, as pa-evm's harness keeps them, the cluster and the runtime's RPC endpoint (`state::cluster`), the funded default signer (`state::actors`) and the adapter's address (`state::pa`); `suite_tests!` emits pa-testkit's chain-agnostic tests for an environment, including an external call to the block-time forwarder settled and refused.
+
 ## Building a Client
 
 Clients submit RM transactions to the adapter for settlement. `docs/INTEGRATION.md` is the full contract; `client/` holds the builders the operator scripts and tests use.
@@ -440,7 +466,7 @@ Fixtures contain pre-generated RM transactions with valid proofs, committed beca
 
 `./scripts/dev.sh regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH]` regenerates the whole set (a salt sets every nonce and forwarder nonce apart from earlier runs, so the set settles on a deployment that already holds another run's); `./scripts/dev.sh gen-fixtures <shape> [options] OUT` generates one (`gen-fixtures --help` lists the shapes). Proving runs locally by default; its Groth16 step needs a container runtime (the Nix shell provides podman behind a `docker` wrapper). Setting `QUEUE_BASE_URL` and `QUEUE_AUTH_TOKEN`, or passing `--prover queue`, sends the proving jobs to the AnomaPay workers queue instead.
 
-`fixture-gen` builds `passthrough-logic-guest` in a container during its build, with the RISC0 guest toolchain the `risczero/risc0-guest-builder` image provides.
+The fixtures' external calls ride on pa-testkit's pass-through logic (`anoma_pa_testkit::fixtures::passthrough`), whose guest pa-testkit ships prebuilt.
 
 ### Fixture Staleness
 
@@ -513,7 +539,7 @@ A program runs at another address than the one compiled into it: its binary in `
 
 ### Fixture Generation Fails
 
-`fixture-gen` needs a container runtime for guest compilation (`passthrough-logic-guest`) and for local Groth16 proving. Check it is available and that `fixture-gen` builds and starts:
+`fixture-gen` needs a container runtime for local Groth16 proving. Check it is available and that `fixture-gen` builds and starts:
 ```bash
 ./scripts/dev.sh run docker --version
 ./scripts/dev.sh run cargo build --locked --manifest-path tools/fixture-gen/Cargo.toml

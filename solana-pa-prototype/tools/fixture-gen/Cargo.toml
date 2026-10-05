@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 # Merkle paths over the adapter's tree, as integrators derive them.
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287", default-features = false }
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "4b1758b5b3037533ebbfccbec3e376d028323f3b", default-features = false, features = ["arm"] }
 arm = { package = "anoma-rm-risc0", version = "=2.0.0-rc.6", default-features = false, features = ["aggregation", "prove"] }
 arm-gadgets = { package = "anoma-rm-risc0-gadgets", version = "=2.0.0-rc.6" }
 # The AnomaPay transfer resource: its logic proves the SPL forwarder fixtures.
@@ -24,7 +24,10 @@ k256 = "0.13"
 # Seeded randomness for the created resources' encryption (k256's rand_core 0.6).
 rand_chacha = "0.3"
 risc0-zkvm = "3.0.6"
-passthrough-logic-methods = { path = "passthrough-logic/methods" }
+# The pass-through logic the fixtures' external calls ride on.
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "bcf09547598bfcbf1ab30aecdad3279d7ba85acb", default-features = false, features = [
+  "fixtures",
+] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 block-time-forwarder = { path = "../../programs/block-time-forwarder", default-features = false, features = ["no-entrypoint"] }
@@ -38,4 +41,3 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 futures = "0.3"
 
 [workspace]
-members = ["passthrough-logic/methods"]
