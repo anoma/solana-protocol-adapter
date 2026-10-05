@@ -17,7 +17,6 @@ use anoma_pa_solana_integration_test::test_forwarder::{
 use anoma_pa_testkit::assert::{Needle, expect_integration_panic};
 use anoma_pa_testkit::fixtures::passthrough::{self, PASSTHROUGH_LOGIC_VK};
 use anoma_pa_testkit::transaction::Transaction;
-use anoma_pa_testkit::witness::{AppData, ExpirableBlob};
 use anoma_pa_testkit::{execute_tx, prove_actions};
 use anoma_rm_risc0::utils::bytes_to_words;
 use futures::future::BoxFuture;
@@ -109,14 +108,11 @@ impl Setup {
             self.forwarder,
             Arc::new(Fixed(CallAccounts { segment, preceding })),
         );
-        let app_data = AppData {
-            external_payload: vec![ExpirableBlob {
-                blob: bytes_to_words(&call.encode()),
-                deletion_criterion: 0,
-            }],
-            ..AppData::default()
-        };
-        let action = passthrough::build(seed, app_data, passthrough::Overrides::default())?;
+        let action = passthrough::build(
+            seed,
+            vec![bytes_to_words(&call.encode())],
+            passthrough::Overrides::default(),
+        )?;
         prove_actions(&self.env, &[action.witnesses]).await
     }
 
