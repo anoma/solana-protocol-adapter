@@ -47,7 +47,7 @@ function lookupTableData(authority: PublicKey, addresses: PublicKey[]): Buffer {
 const rentExempt = (size: number) => (128 + size) * 3480 * 2;
 
 const authority = provider.wallet.publicKey;
-const addresses = suiteSettlementKeys([]);
+const addresses = suiteSettlementKeys();
 const data = lookupTableData(authority, addresses);
 
 // The encoding must be what web3.js's lookup-table decoder reads back.

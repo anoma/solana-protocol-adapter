@@ -59,8 +59,8 @@ VALIDATOR_PID=""
 #   target        ops.sh deploy target; "-" marks a localnet-only program
 #                 (integration-suite support, never deployed to a cluster)
 #   sol           SOL a cluster deploy of it needs: rent for its binary
-#                 (production builds measured at PA 532K ~3.7, BTF 73K ~0.5,
-#                 STF 339K ~2.4) plus fee headroom; "-" for localnet-only
+#                 (production builds measured at PA 532K ~3.7, BTF 73K ~0.5)
+#                 plus fee headroom; "-" for localnet-only
 #                 programs
 #   dev_features  Cargo features of the development build ("-": none)
 #   dev_only_ix   the instructions those features add, which the production
@@ -68,7 +68,6 @@ VALIDATOR_PID=""
 PROGRAM_TABLE="
 protocol_adapter      pa   5  dev-teardown  close_markers_batch,dev_set_schema_version
 block_time_forwarder  btf  2  -             -
-spl_token_forwarder   stf  3  dev-config-version  dev_set_config_version
 test_forwarder        -    -  -             -
 mock_verifier         -    -  -             -
 "
@@ -95,7 +94,7 @@ parse_program_table() {
   done <<<"$PROGRAM_TABLE"
 }
 parse_program_table
-# The deploy targets as a usage alternation, e.g. "pa|btf|stf".
+# The deploy targets as a usage alternation, e.g. "pa|btf".
 DEPLOY_TARGETS="$(IFS='|'; echo "${PROGRAM_TARGETS[*]}")"
 
 # Per program name, from cargo metadata: its Cargo package name and the path
@@ -378,6 +377,7 @@ LOCK_SYNC_PACKAGES=(anoma-rm-core anoma-pa-solana-client)
 LOCK_FILES=(
   Cargo.lock
   tools/fixture-gen/Cargo.lock
+  ../crates/integration-test/Cargo.lock
 )
 
 # Print the locked pin of <pkg> in <lockfile>: "<version>" for a crates.io

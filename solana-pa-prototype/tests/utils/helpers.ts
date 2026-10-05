@@ -1,6 +1,6 @@
 /**
  * Test-suite helpers: funding and draining keypairs, error assertions,
- * TxData uploads, fixture actors, and v0 transaction sending.
+ * TxData uploads, and v0 transaction sending.
  */
 import { keccak_256 } from "@noble/hashes/sha3";
 import * as anchor from "@anchor-lang/core";
@@ -19,12 +19,9 @@ import {
   TransactionMessage,
   VersionedTransaction,
 } from "@solana/web3.js";
-import { approve, createMint, getOrCreateAssociatedTokenAccount, mintTo } from "@solana/spl-token";
 import { assert } from "chai";
 import { execFileSync } from "child_process";
-import { createHash } from "crypto";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
-import { escrowAccounts } from "../../client/instructions";
 import { deriveTxDataPda } from "../../client/pda";
 
 /**
@@ -102,31 +99,6 @@ export function makeFunder(provider: anchor.AnchorProvider) {
       return drained;
     },
   };
-}
-
-/**
- * A fresh party's token account of `mint`, holding `amount` minted by
- * `mintAuthority` and approving `delegate` for all of it: an account a
- * submitter could name in a transfer although its owner signed nothing.
- */
-export async function approvedTokenAccount(
-  connection: Connection,
-  funder: ReturnType<typeof makeFunder>,
-  mint: PublicKey,
-  mintAuthority: Keypair,
-  delegate: PublicKey,
-  amount: number | bigint,
-): Promise<PublicKey> {
-  const owner = await funder.fresh(1);
-  const ata = (await getOrCreateAssociatedTokenAccount(connection, owner, mint, owner.publicKey)).address;
-  await mintTo(connection, mintAuthority, mint, ata, mintAuthority, amount);
-  await approve(connection, owner, ata, delegate, owner, amount);
-  return ata;
-}
-
-/** A keypair every test file can rebuild from the same label. */
-export function seededKeypair(label: string): Keypair {
-  return Keypair.fromSeed(createHash("sha256").update(label).digest());
 }
 
 /**
@@ -295,23 +267,6 @@ export async function uploadTxData(
       .rpc();
   }
   return upload;
-}
-
-/**
- * A fresh 6-decimal mint with `payer` as its authority, its escrow ATA
- * created and holding `amount` raw units.
- */
-export async function createFundedEscrow(
-  provider: anchor.AnchorProvider,
-  forwarderProgramId: PublicKey,
-  payer: Keypair,
-  amount: bigint,
-): Promise<{ mint: PublicKey; escrowAuthority: PublicKey; escrowAta: PublicKey }> {
-  const mint = await createMint(provider.connection, payer, payer.publicKey, null, 6);
-  const { escrowAuthority, escrowAta } = escrowAccounts(forwarderProgramId, mint);
-  await getOrCreateAssociatedTokenAccount(provider.connection, payer, mint, escrowAuthority, true);
-  await mintTo(provider.connection, payer, mint, escrowAta, payer, Number(amount));
-  return { mint, escrowAuthority, escrowAta };
 }
 
 /** Any 32 bytes that are not a real logic ref. */

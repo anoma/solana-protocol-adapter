@@ -9,7 +9,7 @@ import { setKindTableCommitment, upgradeAdapter } from "../../client/instruction
 import { localRenounceAdapterOwnership } from "../utils/localOnly";
 import { assertFails } from "../utils/helpers";
 import { ownerRoles, refuseOwnerWallet } from "../../scripts/cluster-test-guard";
-import { cpiEventsOf, provider, program, paState, forwarderProgram, useAdapterSuite } from "../utils/adapterSuite";
+import { cpiEventsOf, provider, program, paState, useAdapterSuite } from "../utils/adapterSuite";
 
 describe("renounced adapter ownership", () => {
   useAdapterSuite();
@@ -37,12 +37,8 @@ describe("renounced adapter ownership", () => {
       error: "OwnableUnauthorizedAccount",
       account: "authority",
     });
-    // With the ownership renounced (and the forwarder's config closed by
-    // 5-forwarder-teardown), the wallet holds no owner's role, so the
+    // With the ownership renounced, the wallet holds no owner's role, so the
     // cluster test guard accepts it.
-    refuseOwnerWallet(
-      wallet,
-      await ownerRoles(provider.connection, [program.programId, forwarderProgram.programId], program, forwarderProgram),
-    );
+    refuseOwnerWallet(wallet, await ownerRoles(provider.connection, [program.programId], program));
   });
 });

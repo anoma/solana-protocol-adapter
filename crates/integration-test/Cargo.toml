@@ -15,26 +15,24 @@ publish = false
 [features]
 default = ["local"]
 local = ["anoma-pa-testkit/local"]
-e2e = ["anoma-pa-testkit/e2e", "dep:anoma-risc0-kind-tables", "dep:dotenvy"]
+e2e = ["anoma-pa-testkit/e2e", "anoma-pa-testkit/prove", "dep:dotenvy"]
 
 [dependencies]
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "4b1758b5b3037533ebbfccbec3e376d028323f3b", features = [
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "bb04ed226ffb314b9ff19b0b6fa6c495fa4b29ac", features = [
   "arm",
 ] }
-anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "bcf09547598bfcbf1ab30aecdad3279d7ba85acb", default-features = false, features = [
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "cb744ec94589d7a89886203233ba28f94538471f", default-features = false, features = [
   "fixtures",
 ] }
-anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", rev = "919c7787259eca02b8cedb079a639ad31e04ae51", optional = true, features = [
+anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", rev = "919c7787259eca02b8cedb079a639ad31e04ae51", features = [
   "arm",
 ] }
 anoma-rm-risc0 = { version = "=2.0.0-rc.6", default-features = false, features = ["transaction"] }
 anyhow = "1.0"
-base64 = "0.22"
 bincode = "1.3"
 bs58 = "0.5"
 dotenvy = { version = "0.15", optional = true }
 futures = "0.3"
-serde = { version = "1", features = ["derive"] }
 serde_json = "1.0"
 solana-address-lookup-table-interface = { version = "3.1", features = ["bincode"] }
 solana-commitment-config = "3.1"
@@ -50,9 +48,10 @@ solana-signer = "3"
 solana-transaction = "4"
 solana-transaction-status-client-types = "4"
 surfpool-sdk = "=1.6.0"
-tokio = { version = "1", features = ["sync", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 
 [dev-dependencies]
 regex = "1"
+solana-packet = "4"
 solana-system-interface = { version = "3.2", features = ["bincode"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

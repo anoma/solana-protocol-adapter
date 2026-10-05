@@ -1,6 +1,5 @@
 import blockTimeForwarderIdl from "../target/idl/block_time_forwarder.json";
 import paIdl from "../target/idl/protocol_adapter.json";
-import forwarderIdl from "../target/idl/spl_token_forwarder.json";
 
 type IdlWithConstants = { metadata: { name: string }; constants: { name: string; value: string }[] };
 
@@ -37,14 +36,6 @@ export const UPGRADE_AUTHORITY_SEED = idlBytes(paIdl, "UPGRADE_AUTHORITY_SEED");
 export const EMPTY_KIND_TABLE_COMMITMENT = idlBytes(paIdl, "EMPTY_KIND_TABLE_COMMITMENT");
 export const MIN_ALLOWED_EXPIRY = idlNumber(paIdl, "MIN_ALLOWED_EXPIRY");
 export const SEVEN_DAYS_SLOTS = idlNumber(paIdl, "SEVEN_DAYS_SLOTS");
-
-// SPL token forwarder
-export const CONFIG_SEED = idlBytes(forwarderIdl, "CONFIG_SEED");
-export const ESCROW_SEED = idlBytes(forwarderIdl, "ESCROW_SEED");
-export const NONCE_BITMAP_SEED = idlBytes(forwarderIdl, "NONCE_BITMAP_SEED");
-export const NONCES_PER_WORD = BigInt(idlNumber(forwarderIdl, "NONCES_PER_WORD"));
-export const OP_UNWRAP = idlNumber(forwarderIdl, "OP_UNWRAP");
-export const CONFIG_VERSION = idlNumber(forwarderIdl, "CONFIG_VERSION");
 
 // Block-time forwarder
 export const RESULT_LT = idlNumber(blockTimeForwarderIdl, "RESULT_LT");

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use anoma_pa_solana_client::settlement_input::{
@@ -10,7 +11,6 @@ use anoma_pa_solana_client::{
 use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree;
 use anoma_pa_testkit::environment::CommitmentTree as _;
 use anoma_pa_testkit::environment::ProtocolAdapter as CoreProtocolAdapter;
-use anoma_pa_testkit::environment::Transaction as CoreTransaction;
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_rm_risc0::Digest;
 use anoma_rm_risc0::transaction::Transaction as ArmTxn;
@@ -22,7 +22,10 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
-use super::runtime::{create_settlement_lookup_table, extend_lookup_table, send, verifier_program};
+use super::runtime::{
+    create_settlement_lookup_table, extend_lookup_table, latest_blockhash, send_with_blockhash,
+    verifier_program,
+};
 use crate::forwarders::Forwarders;
 
 /// The Solana protocol adapter, settling through transaction-data uploads.
@@ -102,61 +105,78 @@ impl ProtocolAdapter {
         Ok(())
     }
 
-    /// Checks that the adapter accepts every consumed resource's root: its
-    /// current root, the padding leaf, or a root whose marker it holds.
+    /// Checks that the adapter accepts every consumed resource's root (the
+    /// transaction `tx` consumes `consumed_roots`): its current root, the
+    /// padding leaf, or a root whose marker it holds, the markers read in one
+    /// request.
     async fn assert_root_consistency(
         &self,
         tx: &ArmTxn,
+        consumed_roots: &[[u8; 32]],
         state: &PAStateAccount,
     ) -> anyhow::Result<()> {
+        let mut seen = HashSet::new();
+        let roots: Vec<[u8; 32]> = consumed_roots
+            .iter()
+            .copied()
+            .filter(|root| *root != state.root && *root != PADDING_LEAF && seen.insert(*root))
+            .collect();
         let (pa_state, _) = derive_pa_state_pda(&self.program);
-        let aggregation = tx
+        let markers: Vec<Pubkey> = roots
+            .iter()
+            .map(|root| derive_root_marker_pda(&self.program, &pa_state, root).0)
+            .collect();
+        let accounts = self
+            .rpc
+            .get_multiple_accounts(&markers)
+            .await
+            .context("failed to query the consumed roots' markers")?;
+        let Some(missing) = roots.iter().zip(&accounts).find_map(|(root, account)| {
+            (!account.as_ref().is_some_and(|a| a.owner == self.program)).then_some(*root)
+        }) else {
+            return Ok(());
+        };
+        let (action_idx, resource_idx) = tx
             .aggregation
             .as_ref()
-            .context("the transaction must be aggregated")?;
-        for (action_idx, action) in aggregation.instance.actions.iter().enumerate() {
-            for (resource_idx, consumed) in action.consumed_publics.iter().enumerate() {
-                let root: [u8; 32] = consumed.commitment_tree_root.into();
-                if root == state.root || root == PADDING_LEAF {
-                    continue;
-                }
-                let (marker, _) = derive_root_marker_pda(&self.program, &pa_state, &root);
-                let held = self
-                    .rpc
-                    .get_account_with_commitment(&marker, self.rpc.commitment())
-                    .await
-                    .with_context(|| {
-                        format!(
-                            "failed to query the root marker for action {action_idx} consumed \
-                             resource {resource_idx}"
-                        )
-                    })?
-                    .value
-                    .is_some_and(|account| account.owner == self.program);
-                anyhow::ensure!(
-                    held,
-                    "consumed commitment tree root not found in PA for action {action_idx} \
-                     consumed resource {resource_idx}: root={}, pa_latest={}",
-                    consumed.commitment_tree_root,
-                    Digest::from_bytes(state.root)
-                );
-            }
-        }
-        Ok(())
+            .context("the transaction must be aggregated")?
+            .instance
+            .actions
+            .iter()
+            .enumerate()
+            .find_map(|(i, action)| {
+                action
+                    .consumed_publics
+                    .iter()
+                    .position(|c| <[u8; 32]>::from(c.commitment_tree_root) == missing)
+                    .map(|j| (i, j))
+            })
+            .context("no consumed resource names the root the adapter does not hold")?;
+        anyhow::bail!(
+            "consumed commitment tree root not found in PA for action {action_idx} consumed \
+             resource {resource_idx}: root={}, pa_latest={}",
+            Digest::from_bytes(missing),
+            Digest::from_bytes(state.root)
+        )
     }
 
     /// Settles `transaction` the way every submitter does (its data uploaded,
     /// the settlement, the upload closed), and returns the settlement's
     /// signature, which a test reads the settlement's log and events with.
     pub async fn settle(&mut self, transaction: Transaction) -> anyhow::Result<Signature> {
-        let created_commitments: Vec<Digest> = transaction.created_commitments()?.collect();
         let tx = transaction.into_arm();
-
-        let state = self.state().await?;
-        self.ensure_latest_root(&state)?;
-        self.assert_root_consistency(&tx, &state).await?;
-
         let resources = settled_resources(&tx)?;
+
+        let (state, slot) = futures::try_join!(self.state(), async {
+            self.rpc
+                .get_slot()
+                .await
+                .context("failed to fetch the slot")
+        })?;
+        self.ensure_latest_root(&state)?;
+        self.assert_root_consistency(&tx, &resources.consumed_roots, &state)
+            .await?;
+
         let (preceding, call_segments) = self
             .forwarders
             .accounts(&self.rpc, &external_calls(&tx)?)
@@ -164,17 +184,11 @@ impl ProtocolAdapter {
         let input = settlement_input(tx)?;
         let upload_id = self.next_upload_id;
         self.next_upload_id += 1;
-        let expires_slot = self
-            .rpc
-            .get_slot()
-            .await
-            .context("failed to fetch the slot")?
-            + TXDATA_EXPIRY_SLOTS_DEFAULT;
         let plan = plan_settlement(SettlementRequest {
             pa_program: self.program,
             payer: self.payer.pubkey(),
             upload_id,
-            expires_slot,
+            expires_slot: slot + TXDATA_EXPIRY_SLOTS_DEFAULT,
             input: &input,
             state: &state,
             verifier_program: self.verifier_program,
@@ -186,25 +200,29 @@ impl ProtocolAdapter {
         let mut settle = preceding;
         settle.extend(plan.settle);
 
+        // One blockhash serves every transaction of the settlement.
         let (rpc, payer) = (&*self.rpc, &*self.payer);
-        send(rpc, payer, &[plan.init], &[])
+        let blockhash = latest_blockhash(rpc).await?;
+        send_with_blockhash(rpc, payer, &[], &[plan.init], &[], blockhash)
             .await
             .context("failed to create the transaction-data upload")?;
         let settled = async {
             // Each write names its offset, so the chunks land in any order.
             futures::future::try_join_all(plan.writes.into_iter().enumerate().map(
                 |(i, write)| async move {
-                    send(rpc, payer, &[write], &[])
+                    send_with_blockhash(rpc, payer, &[], &[write], &[], blockhash)
                         .await
                         .with_context(|| format!("failed to write chunk {i} of the upload"))
                 },
             ))
             .await?;
-            send(
+            send_with_blockhash(
                 rpc,
                 payer,
+                &[],
                 &settle,
                 std::slice::from_ref(&self.lookup_table),
+                blockhash,
             )
             .await
             .context("protocol adapter settlement failed")
@@ -212,12 +230,13 @@ impl ProtocolAdapter {
         .await;
         // The upload is closed whatever the settlement's outcome, so a refused
         // settlement does not strand its rent.
-        send(rpc, payer, &[plan.close], &[])
+        send_with_blockhash(rpc, payer, &[], &[plan.close], &[], blockhash)
             .await
             .context("failed to close the transaction-data upload")?;
         let signature = settled?;
 
-        self.commitment_tree.add(created_commitments);
+        self.commitment_tree
+            .add(resources.created.into_iter().map(Digest::from_bytes));
         self.ensure_latest_root(&self.state().await?)?;
         Ok(signature)
     }

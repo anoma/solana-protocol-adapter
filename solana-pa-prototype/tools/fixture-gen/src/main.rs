@@ -20,8 +20,6 @@ use arm::proving_system::{JournalEncoding, ProofType as LocalProofType};
 use arm::resource::{ConsumedResourceWitness, Resource};
 use arm::transaction::{Aggregation, Delta, Transaction};
 use arm::Digest;
-use arm_gadgets::authority::{AuthoritySigningKey, AuthorityVerifyingKey};
-use arm_gadgets::encryption::{generate_public_key, SecretKey};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use clap::{Args, Parser, Subcommand, ValueEnum};
@@ -30,7 +28,7 @@ use heliax_ap_orchestrator_sdk::{
     AggregateProofResult, BaseProofResult, GpuAggregationProofPayload, GpuComplianceProofPayload,
     GpuLogicProofPayload, ProofPayload, ProofType as QueueProofType, QueueClient,
 };
-use k256::{AffinePoint, Scalar};
+use k256::Scalar;
 use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
 use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
 use serde::{Deserialize, Serialize};
@@ -283,56 +281,10 @@ async fn aggregate_tx(prover: &Prover, tx: Transaction) -> Result<Transaction> {
 }
 
 use block_time_forwarder::{RESULT_GT, RESULT_LT};
-use ed25519_dalek::{Signer, SigningKey};
-use rand_chacha::rand_core::SeedableRng;
-use rand_chacha::ChaCha20Rng;
 use solana_pa::external_calls::encode_external_call;
 use solana_pa::state::PAStateAccount;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
-use test_forwarder::{MODE_FAIL, MODE_RELAY, MODE_SILENT, RELAY_OK};
-use transfer_library::action::{self, ComplianceParams, Owner, TransferAction, Wrap, WrapAuth};
-use transfer_library::{TOKEN_TRANSFER_ELF, TOKEN_TRANSFER_ID};
-use transfer_witness::{LabelInfo, ValueInfo, WrapAuthInfo, AUTH_SIGNATURE_DOMAIN};
-
-/// Everything the SPL forwarder wrap test needs to replay the fixture's
-/// external call: the seeded user and mint keypairs, the wrap terms, and the
-/// signature the fixture's proof is bound to.
-/// The actors are keypairs seeded with sha256 of a label, so the fixture
-/// carries the labels and the test rebuilds the keypairs: no key material
-/// is stored, only the public recipe.
-#[derive(Clone, Debug, Serialize)]
-struct SplTokenWrapMetadata {
-    user_seed_label: &'static str,
-    mint_seed_label: &'static str,
-    amount: u64,
-    nonce: u64,
-    /// The 44 bytes the user signed: base64 of the wrap message hash.
-    signed_message_b64: String,
-    signature_b64: String,
-    logic_ref_b64: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct SplTokenUnwrapMetadata {
-    mint_seed_label: &'static str,
-    amount: u64,
-    /// The seeded recipient, or none when the unwrap releases to the
-    /// forwarder's escrow authority.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    recipient_seed_label: Option<&'static str>,
-    logic_ref_b64: String,
-}
-
-/// The SPL forwarder replay data an AnomaPay fixture carries beside its
-/// transaction, serialized under the `spl_token_wrap` or `spl_token_unwrap`
-/// key.
-#[derive(Serialize)]
-enum SplForwarderMetadata {
-    #[serde(rename = "spl_token_wrap")]
-    Wrap(SplTokenWrapMetadata),
-    #[serde(rename = "spl_token_unwrap")]
-    Unwrap(SplTokenUnwrapMetadata),
-}
+use test_forwarder::{MODE_FAIL, MODE_SILENT};
 
 #[derive(Serialize)]
 struct Fixture {
@@ -344,8 +296,6 @@ struct Fixture {
     /// Groth16 verifier selector extracted from the proof's verifier_parameters.
     /// Format: "0x" + 4-byte hex (e.g., "0x73c457ba").
     selector: String,
-    #[serde(flatten)]
-    spl_forwarder: Option<SplForwarderMetadata>,
     tx_b64: String,
     tx_tampered_b64: String,
     consumed_nullifiers_b64: Vec<String>,
@@ -403,12 +353,6 @@ enum ShapeCommand {
         #[command(flatten)]
         generate: GenerateArgs,
     },
-    /// The test forwarder relaying an unwrap to the SPL forwarder, which must
-    /// reject a caller other than the adapter.
-    ForwarderRelay {
-        #[command(flatten)]
-        generate: GenerateArgs,
-    },
     /// One action that consumes a zero-quantity ephemeral resource and
     /// creates nothing: a settlement that appends no commitment.
     ConsumeOnly {
@@ -421,42 +365,6 @@ enum ShapeCommand {
         #[command(flatten)]
         generate: GenerateArgs,
     },
-    /// An AnomaPay wrap proven with the transfer logic: the user's
-    /// ed25519-authorized escrow deposit creates the owner's resource.
-    SplTokenWrap {
-        /// The forwarder nonce the user signs.
-        #[arg(long, value_name = "N", default_value_t = ANOMAPAY_WRAP_NONCE)]
-        wrap_nonce: u64,
-        #[command(flatten)]
-        generate: GenerateArgs,
-    },
-    /// An AnomaPay unwrap: the owner spends the wrapped resource, releasing
-    /// the escrow to the recipient.
-    SplTokenUnwrap {
-        /// The wrap fixture, settled after `--preceding-leaves` or
-        /// `--settled-before`: its created
-        /// commitments end the tree the unwrap proves membership in.
-        #[arg(long, value_name = "FIXTURE")]
-        wrap: PathBuf,
-        /// The commitments the adapter's tree held before the wrap settled,
-        /// in leaf order: a JSON array of hex strings, as an indexer serves
-        /// them. Without it (or --settled-before) the wrap settled alone on
-        /// a fresh adapter.
-        #[arg(long, value_name = "FILE", conflicts_with = "settled_before")]
-        preceding_leaves: Option<PathBuf>,
-        /// A fixture settled before the wrap on a fresh adapter, in
-        /// settlement order (repeat it): its created commitments precede the
-        /// wrap's in the tree.
-        #[arg(long, value_name = "FIXTURE")]
-        settled_before: Vec<PathBuf>,
-        /// Release the tokens to the forwarder's own escrow authority: the
-        /// unwrap the forwarder refuses, as the EVM forwarder reverts an
-        /// unwrap to itself.
-        #[arg(long)]
-        to_escrow: bool,
-        #[command(flatten)]
-        generate: GenerateArgs,
-    },
     /// One action that consumes an ephemeral resource and creates a
     /// non-ephemeral one, which a later transaction can only spend through
     /// a real Merkle path to a retained historical root.
@@ -465,24 +373,13 @@ enum ShapeCommand {
         generate: GenerateArgs,
     },
     /// Spend the committer's resource through its Merkle path to the root
-    /// the committer's settlement produced.
+    /// the committer's settlement produced on a fresh adapter.
     HistoricalRootConsumer {
-        /// The committer fixture, settled after `--preceding-leaves` or
-        /// `--settled-before`: its
-        /// created commitment ends the tree the consumer proves membership in.
+        /// The committer fixture, the first settlement of a fresh adapter:
+        /// its created commitments are the tree the consumer proves
+        /// membership in.
         #[arg(long, value_name = "FIXTURE")]
         committer: PathBuf,
-        /// The commitments the adapter's tree held before the committer
-        /// settled, in leaf order: a JSON array of hex strings, as an indexer
-        /// serves them. Without it (or --settled-before) the committer
-        /// settled on a fresh adapter.
-        #[arg(long, value_name = "FILE", conflicts_with = "settled_before")]
-        preceding_leaves: Option<PathBuf>,
-        /// A fixture settled before the committer on a fresh adapter, in
-        /// settlement order (repeat it): its created commitments precede the
-        /// committer's in the tree.
-        #[arg(long, value_name = "FIXTURE")]
-        settled_before: Vec<PathBuf>,
         #[command(flatten)]
         generate: GenerateArgs,
     },
@@ -496,8 +393,8 @@ struct GenerateArgs {
     /// nullifier.
     out_path: PathBuf,
     /// Set this run's fixtures apart from every other run's on the same
-    /// deployment: resource nonces and a wrap's forwarder nonce derive from
-    /// it too, so nothing the run settles was spent before.
+    /// deployment: resource nonces derive from it too, so nothing the run
+    /// settles was spent before.
     #[arg(long, value_name = "SALT")]
     salt: Option<String>,
     #[command(flatten)]
@@ -547,7 +444,6 @@ enum ForwarderMode {
     },
     TestForwarderFail,
     TestForwarderSilent,
-    TestForwarderRelay,
 }
 
 /// The aggregation carried by a transaction, or a clear error if it has none.
@@ -654,225 +550,6 @@ fn test_forwarder_silent_payload_blob() -> ExpirableBlob {
     })
 }
 
-/// Amount the relay fixture's unwrap names; it is settled once the escrow holds tokens.
-const RELAY_UNWRAP_AMOUNT: u64 = 1;
-
-/// A test-forwarder call relaying an unwrap to the SPL token forwarder under
-/// the transfer logic ref its config authorizes: the seeded mint, to the
-/// seeded recipient. Segment: the test-forwarder, then the SPL forwarder's
-/// unwrap segment (program, config, instructions sysvar, escrow ATA,
-/// recipient ATA, escrow authority, token program).
-fn test_forwarder_relay_payload_blob() -> ExpirableBlob {
-    let seeded_pubkey =
-        |label| Pubkey::new_from_array(seeded_keypair(label).verifying_key().to_bytes());
-    let unwrap = spl_token_forwarder::UnwrapInput {
-        token_mint: seeded_pubkey(MINT_SEED_LABEL),
-        amount: RELAY_UNWRAP_AMOUNT,
-        recipient: seeded_pubkey(RECIPIENT_SEED_LABEL),
-    };
-    let mut instruction_data = vec![MODE_RELAY];
-    instruction_data.extend_from_slice(TOKEN_TRANSFER_ID.as_bytes());
-    instruction_data.push(spl_token_forwarder::OP_UNWRAP);
-    instruction_data.extend_from_slice(&unwrap.to_bytes());
-    encode_external_call(&SolanaExternalCall {
-        program_id: test_forwarder::ID.to_bytes(),
-        instruction_data,
-        expected_output: vec![RELAY_OK],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: anoma_pa_solana_client::FORWARDER_UNWRAP_NUM_ACCOUNTS + 1,
-    })
-}
-
-const USER_SEED_LABEL: &str = "spl_token_forwarder_test_user";
-const MINT_SEED_LABEL: &str = "spl_token_forwarder_test_mint";
-const RECIPIENT_SEED_LABEL: &str = "spl_token_forwarder_test_recipient";
-/// The shielded owner of the wrapped resource. Like the Solana actors, the
-/// keys are seeded from labels so the fixture carries no key material.
-const OWNER_AUTH_SEED_LABEL: &str = "spl_token_forwarder_test_owner_auth";
-const OWNER_ENCRYPTION_SEED_LABEL: &str = "spl_token_forwarder_test_owner_encryption";
-const OWNER_NF_KEY_SEED_LABEL: &str = "spl_token_forwarder_test_owner_nf_key";
-const DISCOVERY_SEED_LABEL: &str = "spl_token_forwarder_test_discovery";
-const WRAPPED_RAND_SEED_LABEL: &str = "spl_token_forwarder_test_wrapped_rand_seed";
-
-/// 100 tokens at 6 decimals: the wrap deposits it, the unwrap releases it.
-const ANOMAPAY_AMOUNT: u64 = 100_000_000;
-const ANOMAPAY_WRAP_NONCE: u64 = 1;
-/// Year 2100: the deadline never expires under test.
-const ANOMAPAY_WRAP_DEADLINE: i64 = 4_102_444_800;
-/// The suite puts the ed25519 instruction first in the settlement.
-const ANOMAPAY_ED25519_IX_INDEX: u8 = 0;
-
-/// A keypair seeded with sha256 of a label, as the TypeScript test's
-/// `seededKeypair(label)` rebuilds it.
-fn seeded_keypair(label: &str) -> SigningKey {
-    SigningKey::from_bytes(&label_hash(label))
-}
-
-fn label_hash(label: &str) -> [u8; 32] {
-    arm::utils::hash_bytes(label.as_bytes()).into()
-}
-
-/// The randomness a fixture's created resources encrypt with: a ChaCha20
-/// stream seeded from the fixture's name, so the fixture regenerates
-/// byte-identical.
-fn fixture_rng(fixture_name: &str) -> ChaCha20Rng {
-    ChaCha20Rng::from_seed(label_hash(&format!(
-        "solana-pa/fixture-gen/encryption-rng/{fixture_name}"
-    )))
-}
-
-/// A secp256k1 scalar from a label: its hash, which is a valid scalar.
-fn scalar_from_label(label: &str) -> Scalar {
-    *k256::SecretKey::from_slice(&label_hash(label))
-        .expect("a sha256 output is a valid secp256k1 scalar")
-        .to_nonzero_scalar()
-}
-
-/// The wrapped resource's owner: the keys the resource commits to, and the
-/// authorization signing key behind them.
-struct SeededOwner {
-    auth_sk: AuthoritySigningKey,
-    keys: Owner,
-}
-
-impl SeededOwner {
-    fn seeded() -> Self {
-        let auth_sk = AuthoritySigningKey::from_bytes(&label_hash(OWNER_AUTH_SEED_LABEL))
-            .expect("a sha256 output is a valid secp256k1 scalar");
-        let encryption_sk = SecretKey::new(scalar_from_label(OWNER_ENCRYPTION_SEED_LABEL));
-        SeededOwner {
-            keys: Owner {
-                value: ValueInfo {
-                    auth_pk: AuthorityVerifyingKey::from_signing_key(&auth_sk),
-                    encryption_pk: generate_public_key(encryption_sk.inner()),
-                },
-                nf_key: NullifierKey::from_bytes(label_hash(OWNER_NF_KEY_SEED_LABEL)),
-            },
-            auth_sk,
-        }
-    }
-}
-
-fn discovery_pk() -> AffinePoint {
-    generate_public_key(SecretKey::new(scalar_from_label(DISCOVERY_SEED_LABEL)).inner())
-}
-
-/// The Solana parties of the AnomaPay fixtures and the resource label they
-/// share: the forwarder and the mint.
-struct AnomaPayActors {
-    user: SigningKey,
-    recipient: [u8; 32],
-    label: LabelInfo,
-}
-
-impl AnomaPayActors {
-    fn seeded() -> Self {
-        AnomaPayActors {
-            user: seeded_keypair(USER_SEED_LABEL),
-            recipient: seeded_keypair(RECIPIENT_SEED_LABEL)
-                .verifying_key()
-                .to_bytes(),
-            label: LabelInfo {
-                forwarder_program_id: spl_token_forwarder::ID.to_bytes(),
-                spl_token_mint: seeded_keypair(MINT_SEED_LABEL).verifying_key().to_bytes(),
-            },
-        }
-    }
-}
-
-fn token_transfer_logic_ref_b64() -> String {
-    BASE64.encode(TOKEN_TRANSFER_ID.as_bytes())
-}
-
-/// The compliance facts of every AnomaPay fixture: a fixed `rcv`, so the
-/// fixtures are deterministic, and the committed kind table the PA pins.
-fn anomapay_compliance_params() -> ComplianceParams {
-    ComplianceParams {
-        rcv: Scalar::ONE.to_bytes().to_vec(),
-        kind_table: kind_table().to_vec(),
-    }
-}
-
-/// The seeded wrap of 100 tokens that the fixture `fixture_name` settles:
-/// its consumed resource carries the fixture's first nonce. Returns the wrap
-/// and the parties behind it.
-fn seeded_wrap(fixture_name: &str) -> Result<(AnomaPayActors, SeededOwner, Wrap)> {
-    let actors = AnomaPayActors::seeded();
-    let owner = SeededOwner::seeded();
-    let wrap = action::wrap(
-        actors.label.clone(),
-        ANOMAPAY_AMOUNT,
-        fixture_nonce(fixture_name, 0),
-        owner.keys.clone(),
-        label_hash(WRAPPED_RAND_SEED_LABEL),
-    )
-    .map_err(|e| anyhow!("build the wrap's resources: {e:?}"))?;
-    Ok((actors, owner, wrap))
-}
-
-/// Prove one AnomaPay action through the selected prover and wrap it in a
-/// balanced transaction.
-async fn prove_anomapay_action(prover: &Prover, action: TransferAction) -> Result<Transaction> {
-    let proven = prove_compliance_and_logic(
-        prover,
-        &action.compliance_witness,
-        TOKEN_TRANSFER_ELF,
-        &TOKEN_TRANSFER_ID,
-        action.consumed_logic.witness,
-        action.created_logic.witness,
-    )
-    .await
-    .context("prove the AnomaPay action")?;
-    assemble_transaction(vec![proven], &[action.compliance_witness.rcv])
-}
-
-/// The AnomaPay wrap the fixture settles: the seeded user wraps 100 tokens
-/// of the seeded mint, consuming an ephemeral resource whose transfer logic
-/// commits the forwarder call, and creating the owner's shielded resource
-/// whose logic emits the encrypted payloads. The user signs the message the
-/// resource derives from the proof-bound input, which the forwarder
-/// recomputes at settlement. `wrap_nonce` is the forwarder nonce the user
-/// signs, independent of the resource nonce the fixture name derives.
-async fn generate_anomapay_wrap_transaction(
-    prover: &Prover,
-    fixture_name: &str,
-    wrap_nonce: u64,
-) -> Result<(Transaction, SplForwarderMetadata)> {
-    let (actors, _, wrap) = seeded_wrap(fixture_name)?;
-    let auth = WrapAuth {
-        user: actors.user.verifying_key().to_bytes(),
-        info: WrapAuthInfo {
-            nonce: wrap_nonce,
-            deadline: ANOMAPAY_WRAP_DEADLINE,
-            ed25519_ix_index: ANOMAPAY_ED25519_IX_INDEX,
-        },
-    };
-    let signed_message = wrap
-        .signed_message(&auth)
-        .map_err(|e| anyhow!("derive the wrap's signed message: {e:?}"))?;
-    let signature = actors.user.sign(signed_message.as_bytes()).to_bytes();
-    let action = wrap
-        .action(
-            auth,
-            &discovery_pk(),
-            anomapay_compliance_params(),
-            &mut fixture_rng(fixture_name),
-        )
-        .map_err(|e| anyhow!("build the wrap's witnesses: {e:?}"))?;
-    let tx = prove_anomapay_action(prover, action).await?;
-
-    let metadata = SplForwarderMetadata::Wrap(SplTokenWrapMetadata {
-        user_seed_label: USER_SEED_LABEL,
-        mint_seed_label: MINT_SEED_LABEL,
-        amount: ANOMAPAY_AMOUNT,
-        nonce: wrap_nonce,
-        signed_message_b64: BASE64.encode(signed_message),
-        signature_b64: BASE64.encode(signature),
-        logic_ref_b64: token_transfer_logic_ref_b64(),
-    });
-    Ok((tx, metadata))
-}
-
 /// The adapter's commitment tree after appending `leaves` in order, replayed
 /// through the program's own `append_to_tree` on a fresh state, so the root
 /// carries the on-chain growth rule rather than a second implementation.
@@ -912,69 +589,6 @@ fn checked_pa_merkle_path(leaves: &[Digest], index: usize) -> Result<(MerklePath
         );
     }
     Ok((path, expected_root))
-}
-
-/// The AnomaPay unwrap the fixture settles: the owner spends the resource
-/// the wrap fixture `wrap_fixture_name` created, the last of `leaves` (the
-/// tree settled before the unwrap), into an ephemeral resource whose
-/// transfer logic commits the unwrap call releasing the 100 tokens to the
-/// seeded recipient.
-async fn generate_anomapay_unwrap_transaction(
-    prover: &Prover,
-    wrap_fixture_name: &str,
-    leaves: &[Digest],
-    to_escrow: bool,
-) -> Result<(Transaction, SplForwarderMetadata)> {
-    let (actors, owner, wrap) = seeded_wrap(wrap_fixture_name)?;
-    let consumed_cm = wrap.created.commitment();
-    let index = leaves
-        .len()
-        .checked_sub(1)
-        .ok_or_else(|| anyhow!("the unwrap needs the leaves settled before it, the wrap last"))?;
-    if leaves[index] != consumed_cm {
-        bail!(
-            "the last leaf must be the wrap's created commitment {}, found {}",
-            hex::encode(consumed_cm.as_bytes()),
-            hex::encode(leaves[index].as_bytes())
-        );
-    }
-    let (path, root) = checked_pa_merkle_path(leaves, index)?;
-    eprintln!(
-        "verified: the wrapped resource is leaf {index} of {}; root {}",
-        leaves.len(),
-        hex::encode(root.as_bytes())
-    );
-
-    let recipient = if to_escrow {
-        spl_token_forwarder::ESCROW_AUTHORITY.to_bytes()
-    } else {
-        actors.recipient
-    };
-    let unwrap = action::unwrap(
-        actors.label.clone(),
-        wrap.created,
-        owner.keys.clone(),
-        recipient,
-    )
-    .map_err(|e| anyhow!("build the unwrap's resources: {e:?}"))?;
-    let action_tree_root = unwrap
-        .action_tree_root()
-        .map_err(|e| anyhow!("compute the unwrap's action tree root: {e:?}"))?;
-    let auth_sig = owner
-        .auth_sk
-        .sign(AUTH_SIGNATURE_DOMAIN, action_tree_root.as_bytes());
-    let action = unwrap
-        .action(auth_sig, path, anomapay_compliance_params())
-        .map_err(|e| anyhow!("build the unwrap's witnesses: {e:?}"))?;
-    let tx = prove_anomapay_action(prover, action).await?;
-
-    let metadata = SplForwarderMetadata::Unwrap(SplTokenUnwrapMetadata {
-        mint_seed_label: MINT_SEED_LABEL,
-        amount: ANOMAPAY_AMOUNT,
-        recipient_seed_label: (!to_escrow).then_some(RECIPIENT_SEED_LABEL),
-        logic_ref_b64: token_transfer_logic_ref_b64(),
-    });
-    Ok((tx, metadata))
 }
 
 /// The action tree root of a one-consumed, one-created action: nullifier
@@ -1031,23 +645,6 @@ fn read_fixture_name(path: &Path) -> Result<String> {
     )
     .with_context(|| format!("{} carries no fixture name", path.display()))?;
     Ok(named.name)
-}
-
-/// The forwarder nonce a wrap signs: `wrap_nonce` itself, or, in a salted
-/// run, `wrap_nonce` past a word-aligned base the salt derives, so the run's
-/// wraps land in nonce words no earlier run used.
-fn forwarder_nonce(salt: Option<&str>, wrap_nonce: u64) -> u64 {
-    let Some(salt) = salt else {
-        return wrap_nonce;
-    };
-    let word = u64::from_le_bytes(
-        label_hash(&format!("solana-pa/fixture-gen/forwarder-nonce/{salt}"))[..8]
-            .try_into()
-            .expect("8 bytes"),
-    );
-    // Leave room for wrap_nonce above the base without overflowing.
-    let per_word = spl_token_forwarder::NONCES_PER_WORD;
-    (word % (u64::MAX / per_word - 1)) * per_word + wrap_nonce
 }
 
 /// The nonce of an action's first created resource: the compliance circuit
@@ -1379,7 +976,6 @@ async fn generate_test_transaction_with_external_payload(
         } => block_time_forwarder_external_payload_blob(*output_mismatch),
         ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob(),
         ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob(),
-        ForwarderMode::TestForwarderRelay => test_forwarder_relay_payload_blob(),
     };
     consumed_app_data.external_payload.push(external_blob);
     if let ForwarderMode::BlockTimeForwarder {
@@ -1481,7 +1077,6 @@ fn generate_error_variant_fixtures(
             aggregation_strategy: "batch",
             aggregation_proof_type: proof_type,
             selector: selector.to_owned(),
-            spl_forwarder: None,
             tx_b64: BASE64.encode(tx_bytes),
             tx_tampered_b64: String::new(),
             consumed_nullifiers_b64: nullifiers_b64.to_vec(),
@@ -1591,48 +1186,6 @@ fn created_commitments_b64(tx: &Transaction) -> Result<Vec<String>> {
         .collect())
 }
 
-/// Commitment-tree leaves from a JSON array of 32-byte hex strings, each
-/// with or without a `0x` prefix.
-fn parse_leaves(json: &str) -> Result<Vec<Digest>> {
-    let hexes: Vec<String> =
-        serde_json::from_str(json).context("leaves: a JSON array of hex strings")?;
-    hexes
-        .iter()
-        .enumerate()
-        .map(|(i, h)| {
-            let bytes: [u8; 32] = hex::decode(h.trim_start_matches("0x"))
-                .with_context(|| format!("leaf {i} is not hex: {h}"))?
-                .try_into()
-                .map_err(|b: Vec<u8>| anyhow!("leaf {i} is {} bytes, not 32: {h}", b.len()))?;
-            Ok(Digest::from_bytes(bytes))
-        })
-        .collect()
-}
-
-/// The tree once `last` settled: the leaves it held before (those an indexer
-/// lists in `preceding_leaves`, or the commitments the `settled_before`
-/// fixtures created in their settlement order on a fresh adapter), then the
-/// commitments `last` created.
-fn tree_leaves(
-    preceding_leaves: Option<&Path>,
-    settled_before: &[PathBuf],
-    last: &Path,
-) -> Result<Vec<Digest>> {
-    let mut leaves = match preceding_leaves {
-        Some(path) => parse_leaves(
-            &fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?,
-        )?,
-        None => settled_before
-            .iter()
-            .try_fold(Vec::new(), |mut leaves, path| {
-                leaves.extend(created_commitments(&load_fixture_tx(path)?)?);
-                Ok::<_, anyhow::Error>(leaves)
-            })?,
-    };
-    leaves.extend(created_commitments(&load_fixture_tx(last)?)?);
-    Ok(leaves)
-}
-
 fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
     let roots: BTreeSet<[u8; 32]> = consumed_publics(tx)?
         .filter(|c| c.commitment_tree_root != INITIAL_ROOT)
@@ -1688,7 +1241,6 @@ fn finalize_and_write_fixture(
     tx: &mut Transaction,
     out_path: &Path,
     name: String,
-    spl_forwarder: Option<SplForwarderMetadata>,
 ) -> Result<Fixture> {
     // The client crate's settlement transaction: dev-mode (Fake) receipts
     // become mock seals for the localnet mock verifier, real Groth16
@@ -1710,7 +1262,6 @@ fn finalize_and_write_fixture(
         aggregation_strategy: "batch",
         aggregation_proof_type: proof_type,
         selector: fields.selector,
-        spl_forwarder,
         tx_b64: fields.tx_b64,
         tx_tampered_b64: fields.tx_tampered_b64,
         consumed_nullifiers_b64: fields.consumed_nullifiers_b64,
@@ -2001,11 +1552,8 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
     | ShapeCommand::OutputMismatch { generate }
     | ShapeCommand::ForwarderFail { generate }
     | ShapeCommand::ForwarderSilent { generate }
-    | ShapeCommand::ForwarderRelay { generate }
     | ShapeCommand::ConsumeOnly { generate }
     | ShapeCommand::TransferShape { generate }
-    | ShapeCommand::SplTokenWrap { generate, .. }
-    | ShapeCommand::SplTokenUnwrap { generate, .. }
     | ShapeCommand::HistoricalRootCommitter { generate }
     | ShapeCommand::HistoricalRootConsumer { generate, .. }) = &shape;
     let GenerateArgs {
@@ -2037,15 +1585,6 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         ShapeCommand::TransferShape { .. } => eprintln!(
             "mode: transfer-shape ({TRANSFER_SHAPE_ACTIONS} actions, event-emitted payloads, no external calls)"
         ),
-        ShapeCommand::SplTokenWrap { wrap_nonce, .. } => eprintln!(
-            "mode: AnomaPay wrap (transfer logic {}, forwarder nonce {wrap_nonce})",
-            TOKEN_TRANSFER_ID
-        ),
-        ShapeCommand::SplTokenUnwrap { wrap, .. } => eprintln!(
-            "mode: AnomaPay unwrap (transfer logic {}, wrap fixture {})",
-            TOKEN_TRANSFER_ID,
-            wrap.display()
-        ),
         ShapeCommand::HistoricalRootCommitter { .. } => {
             eprintln!("mode: historical-root committer (creates a non-ephemeral resource)")
         }
@@ -2055,8 +1594,7 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         ),
         ShapeCommand::Batch { .. }
         | ShapeCommand::ForwarderFail { .. }
-        | ShapeCommand::ForwarderSilent { .. }
-        | ShapeCommand::ForwarderRelay { .. } => {}
+        | ShapeCommand::ForwarderSilent { .. } => {}
     }
     if let Some(dir) = &error_variants {
         eprintln!("error variants output dir: {}", dir.display());
@@ -2067,87 +1605,48 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
     let name = fixture_name(out_path, salt.as_deref())?;
     let name = name.as_str();
     let single_action = |mode| generate_test_transaction_with_external_payload(&prover, mode, name);
-    let (mut tx, spl_forwarder) = match &shape {
+    let mut tx = match &shape {
         ShapeCommand::Batch {
             multi_external_call,
             ..
-        } => (
+        } => {
             single_action(ForwarderMode::BlockTimeForwarder {
                 output_mismatch: false,
                 multi_external_call: *multi_external_call,
             })
-            .await?,
-            None,
-        ),
-        ShapeCommand::OutputMismatch { .. } => (
+            .await?
+        }
+        ShapeCommand::OutputMismatch { .. } => {
             single_action(ForwarderMode::BlockTimeForwarder {
                 output_mismatch: true,
                 multi_external_call: false,
             })
-            .await?,
-            None,
-        ),
+            .await?
+        }
         ShapeCommand::ForwarderFail { .. } => {
-            (single_action(ForwarderMode::TestForwarderFail).await?, None)
+            single_action(ForwarderMode::TestForwarderFail).await?
         }
-        ShapeCommand::ForwarderSilent { .. } => (
-            single_action(ForwarderMode::TestForwarderSilent).await?,
-            None,
-        ),
-        ShapeCommand::ForwarderRelay { .. } => (
-            single_action(ForwarderMode::TestForwarderRelay).await?,
-            None,
-        ),
-        ShapeCommand::ConsumeOnly { .. } => (
-            generate_consume_only_transaction(&prover, name).await?,
-            None,
-        ),
-        ShapeCommand::TransferShape { .. } => (
-            generate_transfer_shape_transaction(&prover, name).await?,
-            None,
-        ),
-        ShapeCommand::SplTokenWrap { wrap_nonce, .. } => {
-            let nonce = forwarder_nonce(salt.as_deref(), *wrap_nonce);
-            let (tx, metadata) = generate_anomapay_wrap_transaction(&prover, name, nonce).await?;
-            (tx, Some(metadata))
+        ShapeCommand::ForwarderSilent { .. } => {
+            single_action(ForwarderMode::TestForwarderSilent).await?
         }
-        ShapeCommand::SplTokenUnwrap {
-            wrap,
-            preceding_leaves,
-            settled_before,
-            to_escrow,
-            ..
-        } => {
-            let (tx, metadata) = generate_anomapay_unwrap_transaction(
-                &prover,
-                &read_fixture_name(wrap)?,
-                &tree_leaves(preceding_leaves.as_deref(), settled_before, wrap)?,
-                *to_escrow,
-            )
-            .await?;
-            (tx, Some(metadata))
+        ShapeCommand::ConsumeOnly { .. } => {
+            generate_consume_only_transaction(&prover, name).await?
+        }
+        ShapeCommand::TransferShape { .. } => {
+            generate_transfer_shape_transaction(&prover, name).await?
         }
         ShapeCommand::HistoricalRootCommitter { .. } => {
             let (witness, _, _) = build_historical_root_committer_witness(name)?;
-            (
-                prove_single_action_transaction(&prover, witness, AppData::default()).await?,
-                None,
-            )
+            prove_single_action_transaction(&prover, witness, AppData::default()).await?
         }
-        ShapeCommand::HistoricalRootConsumer {
-            committer,
-            preceding_leaves,
-            settled_before,
-            ..
-        } => (
+        ShapeCommand::HistoricalRootConsumer { committer, .. } => {
             generate_historical_root_consumer_transaction(
                 &prover,
                 &read_fixture_name(committer)?,
-                &tree_leaves(preceding_leaves.as_deref(), settled_before, committer)?,
+                &created_commitments(&load_fixture_tx(committer)?)?,
             )
-            .await?,
-            None,
-        ),
+            .await?
+        }
     };
     eprintln!(
         "phase done: generate_test_transaction ({})",
@@ -2176,7 +1675,7 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             .map_err(|e| anyhow!("verify aggregated proof: {e:?}"))
     })?;
 
-    let fixture = finalize_and_write_fixture(&mut tx, out_path, name.to_string(), spl_forwarder)?;
+    let fixture = finalize_and_write_fixture(&mut tx, out_path, name.to_string())?;
 
     if matches!(shape, ShapeCommand::TransferShape { .. }) {
         check_transfer_shape_wire_size(&fixture.tx_b64)?;
@@ -2309,93 +1808,6 @@ mod tests {
         );
     }
 
-    /// Unsalted wraps sign the nonce asked for; a salted run's wraps land
-    /// together in a word the salt picks, so the run's first wrap finds no
-    /// bitmap and its later wraps reuse the first's.
-    #[test]
-    fn salt_moves_the_forwarder_nonce_to_its_own_word() {
-        let per_word = spl_token_forwarder::NONCES_PER_WORD;
-        assert_eq!(forwarder_nonce(None, 2), 2);
-        let (one, two) = (
-            forwarder_nonce(Some("run1"), 1),
-            forwarder_nonce(Some("run1"), 2),
-        );
-        assert_eq!(two, one + 1, "the run's nonces keep their offsets");
-        assert_eq!(
-            one / per_word,
-            two / per_word,
-            "a run's wraps share one word"
-        );
-        assert_eq!(one % per_word, 1, "the base is word-aligned");
-        assert_ne!(
-            forwarder_nonce(Some("run1"), 1) / per_word,
-            forwarder_nonce(Some("run2"), 1) / per_word,
-            "two runs use different words"
-        );
-    }
-
-    /// `--preceding-leaves` reads an indexer's hex commitments, with or
-    /// without `0x`, in order, and refuses anything that is not 32 bytes.
-    #[test]
-    fn parse_leaves_reads_hex_commitments_in_order() {
-        let a = "01".repeat(32);
-        let b = "ab".repeat(32);
-        let leaves = parse_leaves(&format!(r#"["0x{a}", "{b}"]"#)).expect("two leaves");
-        assert_eq!(
-            leaves,
-            vec![
-                Digest::from_bytes([0x01; 32]),
-                Digest::from_bytes([0xab; 32])
-            ]
-        );
-        assert!(
-            parse_leaves(r#"["0x0102"]"#).is_err(),
-            "a 2-byte leaf must be refused"
-        );
-        assert!(
-            parse_leaves(r#"["zz"]"#).is_err(),
-            "non-hex must be refused"
-        );
-    }
-
-    /// The wrap creates the owner's resource, and an unwrap over a synthetic
-    /// tree with that resource at the last leaf consumes it; both proven
-    /// under the transfer logic in dev mode through the real guest.
-    #[tokio::test(flavor = "multi_thread")]
-    async fn anomapay_unwrap_consumes_the_resource_the_wrap_creates() {
-        init_test_kind_table();
-        let wrap_name = "spl_token_wrap";
-        let (_, owner, wrap) = seeded_wrap(wrap_name).unwrap();
-        let wrapped = wrap.created;
-
-        let (tx, _) =
-            generate_anomapay_wrap_transaction(&Prover::Local, wrap_name, ANOMAPAY_WRAP_NONCE)
-                .await
-                .unwrap();
-        let action = &tx.actions.as_ref().unwrap()[0];
-        assert_eq!(action.logic_verifier_inputs[1].tag, wrapped.commitment());
-        for input in &action.logic_verifier_inputs {
-            assert_eq!(input.verifying_key, TOKEN_TRANSFER_ID);
-        }
-
-        let mut leaves = synthetic_leaves(9);
-        leaves.push(wrapped.commitment());
-        let (tx, _) =
-            generate_anomapay_unwrap_transaction(&Prover::Local, wrap_name, &leaves, false)
-                .await
-                .unwrap();
-        let action = &tx.actions.as_ref().unwrap()[0];
-        assert_eq!(
-            action.logic_verifier_inputs[0].tag,
-            wrapped.nullifier(&owner.keys.nf_key).unwrap(),
-            "the unwrap consumes the wrapped resource"
-        );
-        assert_eq!(
-            action.logic_verifier_inputs[0].verifying_key,
-            TOKEN_TRANSFER_ID
-        );
-    }
-
     /// Tracks how many mock proving jobs are in flight, and the most ever.
     #[derive(Default)]
     struct InFlight {
@@ -2478,24 +1890,32 @@ mod tests {
             Cli::try_parse_from(std::iter::once("fixture-gen").chain(args.iter().copied()))
         };
         assert!(parse(&["batch", "--multi-external-call", "out.json"]).is_ok());
-        assert!(parse(&["spl-token-wrap", "--wrap-nonce", "2", "out.json"]).is_ok());
-        assert!(parse(&["spl-token-unwrap", "--wrap", "a.json", "out.json"]).is_ok());
+        assert!(parse(&[
+            "historical-root-consumer",
+            "--committer",
+            "a.json",
+            "out.json"
+        ])
+        .is_ok());
         for rejected in [
-            &["spl-token-unwrap", "out.json"][..],
+            &["historical-root-consumer", "out.json"][..],
             &["forwarder-fail", "--multi-external-call", "out.json"],
             &["transfer-shape", "--multi-external-call", "out.json"],
-            &["batch", "--wrap-nonce", "2", "out.json"],
-            &["batch", "--wrap", "a.json", "out.json"],
+            &["batch", "--committer", "a.json", "out.json"],
             &["output-mismatch", "--multi-external-call", "out.json"],
             &[
-                "spl-token-unwrap",
-                "--wrap",
+                "historical-root-consumer",
+                "--committer",
                 "a.json",
-                "--wrap",
+                "--committer",
                 "b.json",
                 "out.json",
             ],
-            &["spl-token-wrap", "--multi-external-call", "out.json"],
+            &[
+                "historical-root-committer",
+                "--multi-external-call",
+                "out.json",
+            ],
             &["batch", "--mock", "--prover", "queue", "out.json"],
             &["batch", "--error-variants", "", "out.json"],
             &[
@@ -2528,8 +1948,8 @@ mod tests {
             "the same fixture name must derive the same nullifier"
         );
         assert_ne!(
-            fixture_nullifier("spl_token_wrap", 0),
-            fixture_nullifier("spl_token_wrap_replay", 0),
+            fixture_nullifier("batch_a", 0),
+            fixture_nullifier("batch_b", 0),
             "differently named fixtures must not share a nullifier"
         );
         assert_ne!(

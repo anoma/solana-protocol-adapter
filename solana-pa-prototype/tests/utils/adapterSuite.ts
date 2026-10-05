@@ -21,22 +21,15 @@ import {
 import { assert } from "chai";
 import { BlockTimeForwarder } from "../../target/types/block_time_forwarder";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
-import { SplTokenForwarder } from "../../target/types/spl_token_forwarder";
 import { TestForwarder } from "../../target/types/test_forwarder";
 import { MockVerifier } from "../../target/types/mock_verifier";
-import {
-  MAX_COMPUTE_UNIT_LIMIT,
-  initializeAdapter,
-  initializeForwarder,
-  pauseAdapter,
-} from "../../client/instructions";
+import { MAX_COMPUTE_UNIT_LIMIT, initializeAdapter, pauseAdapter } from "../../client/instructions";
 import { parseCpiEvents } from "../../client/events";
 import { confirmedProvider } from "../../client/provider";
 import { deployedExecutableHash, executableHash } from "../../client/upgrade";
 import { readFileSync } from "fs";
 import { ensureSettlementLookupTable, fetchLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
-  deriveConfigPda,
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
   derivePaStatePda,
   deriveRootMarkerPda,
@@ -55,7 +48,6 @@ import {
   ExpectedFailure,
   initTxData as initTxDataOf,
   makeFunder,
-  seededKeypair,
   sendV0,
   TxDataUpload,
   uploadTxData as uploadTxDataTo,
@@ -68,7 +60,6 @@ export const provider = confirmedProvider();
 anchor.setProvider(provider);
 
 export const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
-export const forwarderProgram = anchor.workspace.SplTokenForwarder as Program<SplTokenForwarder>;
 export const [paState] = derivePaStatePda(program.programId);
 
 /**
@@ -181,35 +172,6 @@ export async function setExpiryBounds(minSlots: number, maxSlots: number): Promi
     .updateExpiryConfig(new anchor.BN(minSlots), new anchor.BN(maxSlots))
     .accountsPartial({ paState, authority: provider.wallet.publicKey })
     .rpc();
-}
-
-/**
- * The SPL token forwarder's config the suite's deployment runs: it serves the
- * AnomaPay transfer logic the wrap fixtures carry, and its emergency
- * committee is a keypair seeded from a label, apart from the owner.
- */
-export const forwarderLogicRef = () =>
-  Array.from(Buffer.from(requireFixture("spl_token_wrap.json").spl_token_wrap!.logic_ref_b64, "base64"));
-export const forwarderCommittee = seededKeypair("spl_token_forwarder_test_committee");
-
-/**
- * Initialize the forwarder config with the suite's values unless it exists:
- * the suite's first files initialize it, and every later file, or a cluster
- * run, finds it and uses it as is. Returns the stored config.
- */
-export async function ensureForwarderConfig() {
-  const [configPda] = deriveConfigPda(forwarderProgram.programId);
-  if (!(await provider.connection.getAccountInfo(configPda))) {
-    await initializeForwarder(
-      forwarderProgram,
-      program.programId,
-      forwarderLogicRef(),
-      forwarderCommittee.publicKey,
-      provider.wallet.publicKey,
-      provider.wallet.publicKey,
-    ).rpc();
-  }
-  return forwarderProgram.account.config.fetch(configPda);
 }
 
 /**
@@ -350,16 +312,14 @@ export function settleBuilder(
     .preInstructions(settleBudget(heapFrame));
 }
 
-/** The suite deployment's settlement keys, with `mints`' escrow token accounts. */
-export function suiteSettlementKeys(mints: PublicKey[]): PublicKey[] {
+/** The suite deployment's settlement keys. */
+export function suiteSettlementKeys(): PublicKey[] {
   return settlementLookupKeys({
     paProgram: program.programId,
     verifierRouter: VERIFIER_ROUTER_ID,
     proofSelector: PROOF_SELECTOR,
     verifierProgram: VERIFIER.program,
     blockTimeForwarder: blockTimeForwarderId,
-    splTokenForwarder: forwarderProgram.programId,
-    mints,
   });
 }
 
@@ -392,17 +352,11 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
   async function settlementTable(): Promise<AddressLookupTableAccount> {
     if (table) return table;
     const genesis = process.env.PA_SETTLEMENT_TABLE;
-    if (!genesis) return extendSettlementTable([]);
-    return (table = await fetchLookupTable(provider.connection, new PublicKey(genesis)));
-  }
-
-  /** Add `mints`' escrow token accounts to the settlement table: they are fixed for the deployment once the mint is supported. */
-  async function extendSettlementTable(mints: PublicKey[]): Promise<AddressLookupTableAccount> {
+    if (genesis) return (table = await fetchLookupTable(provider.connection, new PublicKey(genesis)));
     ({ table } = await ensureSettlementLookupTable(
       provider.connection,
       (provider.wallet as anchor.Wallet).payer,
-      suiteSettlementKeys(mints),
-      table?.key,
+      suiteSettlementKeys(),
     ));
     return table;
   }
@@ -455,15 +409,14 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
   /**
    * Upload `payload` under `authority` and settle it as a v0 transaction
    * against the deployment's lookup table, the shape every submitter sends.
-   * `preInstructions` are prepended to the settlement's own. The produced-root
-   * marker is `newRootMarker`, or predicted from `createdCommitments`.
+   * The produced-root marker is `newRootMarker`, or predicted from
+   * `createdCommitments`.
    */
   async function uploadAndSettleV0(
     authority: Keypair,
     payload: Buffer,
     remainingAccounts: AccountMeta[],
     options?: { newRootMarker?: PublicKey | null; createdCommitments?: Buffer[] },
-    preInstructions: anchor.web3.TransactionInstruction[] = [],
   ): Promise<string> {
     const { uploadId, txData } = await uploadTxData(authority, payload);
     // A settlement expected to succeed must predict its produced-root marker
@@ -484,7 +437,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
       newRootMarker,
       remainingAccounts,
     ).transaction();
-    return sendV0(provider, [...preInstructions, ...settle.instructions], [authority], await settlementTable());
+    return sendV0(provider, settle.instructions, [authority], await settlementTable());
   }
 
   async function settleFixtureViaTxData(
@@ -493,26 +446,6 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
     options?: { newRootMarker?: PublicKey | null; createdCommitments?: Buffer[] },
   ): Promise<string> {
     return uploadAndSettleV0(await funder.fresh(2), payload, remainingAccounts, options);
-  }
-
-  /**
-   * Settle a fixture whose external calls are forwarder segments:
-   * `forwarderAccounts` follow the nullifier markers, and `preInstructions`
-   * are prepended, so an ed25519 instruction lands at index 0, where a wrap
-   * input points.
-   */
-  async function settleForwarderFixture(
-    fx: Fixture,
-    forwarderAccounts: AccountMeta[],
-    preInstructions: anchor.web3.TransactionInstruction[],
-  ): Promise<string> {
-    return uploadAndSettleV0(
-      await funder.fresh(2),
-      Buffer.from(fx.tx_b64, "base64"),
-      [...deriveNullifierAccounts(fx.consumed_nullifiers_b64), ...forwarderAccounts],
-      { createdCommitments: createdCommitmentsOf(fx) },
-      preInstructions,
-    );
   }
 
   /**
@@ -609,15 +542,12 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
 
   return {
     funder,
-    settlementTable,
-    extendSettlementTable,
     uploadTxData,
     initTxData,
     closeTxData,
     keepTxData,
     uploadAndSettleV0,
     settleFixtureViaTxData,
-    settleForwarderFixture,
     settleUnsettledFixture,
     settleFixture,
   };

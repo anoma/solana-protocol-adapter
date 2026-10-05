@@ -420,27 +420,13 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.4.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=4b1758b5b3037533ebbfccbec3e376d028323f3b#4b1758b5b3037533ebbfccbec3e376d028323f3b"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=bb04ed226ffb314b9ff19b0b6fa6c495fa4b29ac#bb04ed226ffb314b9ff19b0b6fa6c495fa4b29ac"
 dependencies = [
  "anoma-rm-risc0",
- "base64 0.22.1",
  "bincode",
  "hkdf",
  "hmac",
  "risc0-zkvm",
- "serde",
- "sha2 0.10.9",
-]
-
-[[package]]
-name = "anoma-pa-solana-client"
-version = "0.4.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287#6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287"
-dependencies = [
- "base64 0.22.1",
- "bincode",
- "hkdf",
- "hmac",
  "serde",
  "sha2 0.10.9",
 ]
@@ -1802,24 +1788,8 @@ dependencies = [
  "cpufeatures 0.2.17",
  "curve25519-dalek-derive",
  "digest 0.10.7",
- "fiat-crypto 0.2.9",
+ "fiat-crypto",
  "rand_core 0.6.4",
- "rustc_version 0.4.1",
- "subtle",
- "zeroize",
-]
-
-[[package]]
-name = "curve25519-dalek"
-version = "5.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b5eed333089e2e1c1ac8c6c0398e5e2497b4c9926ca6d0365ed1e099afa5bc23"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.3.1",
- "curve25519-dalek-derive",
- "digest 0.11.3",
- "fiat-crypto 0.3.0",
  "rustc_version 0.4.1",
  "subtle",
  "zeroize",
@@ -2200,30 +2170,8 @@ dependencies = [
  "elliptic-curve",
  "rfc6979",
  "serdect",
- "signature 2.2.0",
+ "signature",
  "spki",
-]
-
-[[package]]
-name = "ed25519"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
-dependencies = [
- "signature 3.0.0",
-]
-
-[[package]]
-name = "ed25519-dalek"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
-dependencies = [
- "curve25519-dalek 5.0.0",
- "ed25519",
- "sha2 0.11.0",
- "subtle",
- "zeroize",
 ]
 
 [[package]]
@@ -2438,12 +2386,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
 
 [[package]]
-name = "fiat-crypto"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2524,30 +2466,24 @@ name = "fixture-gen"
 version = "0.1.0"
 dependencies = [
  "anchor-lang",
- "anoma-pa-solana-client 0.4.0 (git+https://github.com/anoma/anoma-pa-solana-client?rev=4b1758b5b3037533ebbfccbec3e376d028323f3b)",
+ "anoma-pa-solana-client",
  "anoma-pa-testkit",
  "anoma-rm-risc0",
- "anoma-rm-risc0-gadgets",
  "anyhow",
  "base64 0.23.1",
  "bincode",
  "block-time-forwarder",
  "clap",
- "ed25519-dalek",
  "futures",
  "heliax-ap-orchestrator-sdk",
  "hex",
  "k256",
  "protocol-adapter",
- "rand_chacha 0.3.1",
  "risc0-zkvm",
  "serde",
  "serde_json",
- "spl-token-forwarder",
  "test-forwarder",
  "tokio",
- "transfer_library",
- "transfer_witness",
 ]
 
 [[package]]
@@ -3472,7 +3408,7 @@ dependencies = [
  "once_cell",
  "serdect",
  "sha2 0.10.9",
- "signature 2.2.0",
+ "signature",
 ]
 
 [[package]]
@@ -5177,7 +5113,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "rand_core 0.6.4",
- "signature 2.2.0",
+ "signature",
  "spki",
  "subtle",
  "zeroize",
@@ -5660,12 +5596,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "signature"
-version = "3.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
-
-[[package]]
 name = "simd-adler32"
 version = "0.3.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5754,7 +5684,7 @@ dependencies = [
  "borsh 1.8.1",
  "bytemuck",
  "bytemuck_derive",
- "curve25519-dalek 4.1.3",
+ "curve25519-dalek",
  "five8 1.0.0",
  "five8_const 1.0.0",
  "serde",
@@ -6142,7 +6072,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6d8f113d1312870e2d8698033e9d153d3329c520e1065f05145a55a889e21c91"
 dependencies = [
  "solana-instruction 4.0.0",
- "solana-instruction-error 2.5.0",
+ "solana-instruction-error",
 ]
 
 [[package]]
@@ -6165,15 +6095,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8e7db78c122d02189619490b1fef04a2a042c389662920617c0e6381fdf8fdd"
 dependencies = [
  "num-traits",
- "solana-program-error 3.0.1",
-]
-
-[[package]]
-name = "solana-instruction-error"
-version = "3.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eeeac4481edb1cbb17aa417bc0945687ac959e3ca26f4541f0ee085a1831b5a1"
-dependencies = [
  "solana-program-error 3.0.1",
 ]
 
@@ -6203,28 +6124,11 @@ dependencies = [
  "bitflags 2.13.2",
  "solana-account-info 3.1.1",
  "solana-instruction 3.5.1",
- "solana-instruction-error 2.5.0",
+ "solana-instruction-error",
  "solana-program-error 3.0.1",
  "solana-sanitize 3.0.1",
  "solana-sdk-ids 3.1.0",
  "solana-serialize-utils 3.1.2",
- "solana-sysvar-id 3.1.0",
-]
-
-[[package]]
-name = "solana-instructions-sysvar"
-version = "5.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b74c3b078450525dcb84536c51299d5b0dc052f33699b07276d6870bd1ebed6"
-dependencies = [
- "bitflags 2.13.2",
- "solana-account-info 3.1.1",
- "solana-instruction 4.0.0",
- "solana-instruction-error 3.1.0",
- "solana-program-error 3.0.1",
- "solana-sanitize 3.0.1",
- "solana-sdk-ids 3.1.0",
- "solana-serialize-utils 4.0.0",
  "solana-sysvar-id 3.1.0",
 ]
 
@@ -6597,7 +6501,7 @@ dependencies = [
  "borsh 1.8.1",
  "bytemuck",
  "bytemuck_derive",
- "curve25519-dalek 4.1.3",
+ "curve25519-dalek",
  "five8 0.2.1",
  "five8_const 0.1.4",
  "getrandom 0.2.17",
@@ -6759,18 +6663,7 @@ version = "3.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "761357b0853c9623bf12c1d2314b3d6160a85b087b84c45224fb85766d22616b"
 dependencies = [
- "solana-instruction-error 2.5.0",
- "solana-pubkey 4.4.0",
- "solana-sanitize 3.0.1",
-]
-
-[[package]]
-name = "solana-serialize-utils"
-version = "4.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "46f844dab1b29cc8c1a3413b96bf0ef9fba44f47be53ec498ce01507ab4b5520"
-dependencies = [
- "solana-instruction-error 3.1.0",
+ "solana-instruction-error",
  "solana-pubkey 4.4.0",
  "solana-sanitize 3.0.1",
 ]
@@ -7106,18 +6999,6 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
-]
-
-[[package]]
-name = "spl-token-forwarder"
-version = "2.0.0-rc.4"
-dependencies = [
- "anchor-lang",
- "base64 0.21.7",
- "protocol-adapter",
- "solana-instructions-sysvar 5.0.0",
- "solana-sdk-ids 3.1.0",
- "solana-sha256-hasher 3.1.0",
 ]
 
 [[package]]
@@ -7569,33 +7450,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0e0d2eaa99c3c2e41547cfa109e910a68ea03823cccad4a0525dcbc9b01e8c71"
 dependencies = [
  "tracing-core",
-]
-
-[[package]]
-name = "transfer_library"
-version = "2.0.0-rc.2"
-source = "git+https://github.com/anoma/anomapay-solana-resource?rev=8969825eef8b676822207a420716fdad9b5eda24#8969825eef8b676822207a420716fdad9b5eda24"
-dependencies = [
- "anoma-pa-solana-client 0.4.0 (git+https://github.com/anoma/anoma-pa-solana-client?rev=6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287)",
- "anoma-rm-risc0",
- "anoma-rm-risc0-gadgets",
- "hex-literal 0.4.1",
- "k256",
- "serde",
- "transfer_witness",
-]
-
-[[package]]
-name = "transfer_witness"
-version = "2.0.0-rc.2"
-source = "git+https://github.com/anoma/anomapay-solana-resource?rev=8969825eef8b676822207a420716fdad9b5eda24#8969825eef8b676822207a420716fdad9b5eda24"
-dependencies = [
- "anoma-pa-solana-client 0.4.0 (git+https://github.com/anoma/anoma-pa-solana-client?rev=6fa81a51cf4fde3e65260a2f0c7c1cf4bc4a8287)",
- "anoma-rm-risc0",
- "anoma-rm-risc0-gadgets",
- "bincode",
- "k256",
- "serde",
 ]
 
 [[package]]

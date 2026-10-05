@@ -94,7 +94,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -141,18 +141,9 @@ case "${1:-}" in
     run_in_project "RISC0_DEV_MODE=1 RISC0_SKIP_BUILD=1 cargo test --manifest-path tools/fixture-gen/Cargo.toml"
     ;;
 
-  harness-test)
-    # The integration-test harness's tests on its local runtime; with --e2e,
-    # its e2e cases on a fork of devnet (DEVNET_RPC_URL, QUEUE_BASE_URL,
-    # QUEUE_AUTH_TOKEN, read by the harness), one at a time like pa-evm's.
-    case "${2:-}" in
-      "") run_in_project "cargo test --manifest-path ../crates/integration-test/Cargo.toml" ;;
-      --e2e) run_in_project "RUST_TEST_THREADS=1 cargo test --manifest-path ../crates/integration-test/Cargo.toml --features e2e e2e_test" ;;
-      *)
-        echo "❌ harness-test takes no argument, or --e2e" >&2
-        exit 1
-        ;;
-    esac
+  harness-lint|harness-test)
+    # The integration-test harness's checks — see ./scripts/ops.sh.
+    run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
 
   update-deps)
@@ -164,11 +155,11 @@ case "${1:-}" in
     ;;
 
   fmt)
-    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check && cargo fmt --manifest-path ../crates/integration-test/Cargo.toml -- --check"
+    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
     ;;
 
   clippy)
-    run_in_project "./scripts/ops.sh clippy && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings && cargo clippy --manifest-path ../crates/integration-test/Cargo.toml --all-targets --features e2e -- -D warnings"
+    run_in_project "./scripts/ops.sh clippy && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings && ./scripts/ops.sh harness-lint"
     ;;
 
   coverage)
@@ -256,8 +247,8 @@ PYEOF
     echo "Commands:"
     echo "  shell        Enter the Nix development shell"
     echo "  test         Run Rust tests"
-    echo "  fmt          Check Rust formatting"
-    echo "  clippy       Run clippy lints"
+    echo "  fmt          Check Rust formatting (the programs and fixture-gen)"
+    echo "  clippy       Run clippy lints, and harness-lint"
     echo "  anchor-build Build Anchor programs (development build, dev-teardown enabled)"
     echo "  release-build Build the production binaries (no dev features; verifies each"
     echo "               IDL is the development IDL minus the declared dev-only instructions)"
@@ -276,9 +267,11 @@ PYEOF
     echo "  harness-programs [--check]"
     echo "               Write the integration-test harness's program binaries (the"
     echo "               deterministic builds); --check fails when they are not"
+    echo "  harness-lint The integration-test harness's format check and clippy"
     echo "  harness-test [--e2e]"
     echo "               The integration-test harness's tests; with --e2e, its e2e cases"
-    echo "               on a fork of devnet (DEVNET_RPC_URL, QUEUE_BASE_URL, QUEUE_AUTH_TOKEN)"
+    echo "               on a fork of devnet (DEVNET_RPC_URL), proven by the queue"
+    echo "               (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN) or locally (E2E_PROVER=local)"
     echo "  validator    Start a local Solana validator (devnet programs only)"
     echo "  validator-deploy Build, start a validator with every program loaded"
     echo "               at genesis, and keep it running"
@@ -302,8 +295,6 @@ PYEOF
     echo "  set-kind-table         Replace the PA's kind-table commitment (PA_KIND_TABLE_COMMITMENT)"
     echo "  deny-logic-ref         Deny a logic ref for good (PA_DENIED_LOGIC_REF)"
     echo "  lookup-table           Create/extend the deployment's settlement lookup table"
-    echo "  forwarder <cmd>        SPL token forwarder operations (init, reinitialize,"
-    echo "                         emergency-withdraw; STF_* env)"
     echo "  idl-publish            Publish the production IDL on chain"
     echo "  verify-build           Deterministic solana-verify build of the PA; with"
     echo "                         --cluster, compares against the deployed program"

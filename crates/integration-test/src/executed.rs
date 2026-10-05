@@ -4,6 +4,7 @@
 //! by invoking itself (Anchor's `emit_cpi!`).
 
 use anoma_pa_solana_client::EVENT_IX_TAG;
+use anoma_pa_solana_client::events::{PaEvent, decode_event_instruction};
 use anyhow::Context;
 use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -110,5 +111,13 @@ impl Executed {
             .iter()
             .filter(move |(invoked, data)| invoked == program && data.starts_with(&EVENT_IX_TAG))
             .map(|(_, data)| data.as_slice())
+    }
+
+    /// The events the adapter `program` emitted, decoded, in order.
+    pub fn adapter_events(&self, program: &Pubkey) -> anyhow::Result<Vec<PaEvent>> {
+        Ok(self
+            .cpi_events(program)
+            .map(decode_event_instruction)
+            .collect::<Result<_, _>>()?)
     }
 }

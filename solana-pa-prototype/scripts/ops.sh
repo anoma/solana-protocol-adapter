@@ -22,10 +22,9 @@ Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]
 Commands:
   deploy [${DEPLOY_TARGETS}|all]
                          First-time deploy (default target: all). Deploys the
-                         production build; on localnet the PA and the SPL
-                         token forwarder are initialized at once, while on
-                         devnet/mainnet each program's IDL is published and
-                         init / forwarder init are left for after the
+                         production build; on localnet the PA is initialized
+                         at once, while on devnet/mainnet each program's IDL
+                         is published and init is left for after the
                          metadata accounts are given to the owner.
   upgrade [${DEPLOY_TARGETS}|all]
                          Rebuild + upgrade existing programs in place: through
@@ -37,13 +36,9 @@ Commands:
   deny-logic-ref         Deny PA_DENIED_LOGIC_REF: no settlement consumes or
                          creates a resource carrying it again. Cannot be
                          undone (owner wallet).
-  forwarder <cmd>        SPL token forwarder operations: init, reinitialize,
-                         emergency-withdraw. Parameters are STF_*
-                         environment variables; see scripts/forwarder.ts.
   lookup-table           Create the deployment's settlement lookup table, or
                          extend the one in PA_LOOKUP_TABLE with any missing
-                         key; STF_TOKEN_MINTS adds mints' escrow accounts.
-                         See scripts/lookup-table.ts.
+                         key. See scripts/lookup-table.ts.
   pause                  Pause settlement (owner-only; pa-evm's pause())
   unpause                Resume settlement (owner-only; pa-evm's unpause())
   status                 Show deployment status + wallet balance
@@ -76,11 +71,20 @@ Commands:
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
   harness-programs [--check]
-                         Deterministic builds of the PA and the mock verifier
-                         at the local addresses, written to the
-                         integration-test harness's programs/; with --check,
-                         fails when a committed binary is not the fresh build
-  validator            Start the local test validator (RISC0 verifier stack
+                         Deterministic builds of the four programs the
+                         integration-test harness loads (the PA, the mock
+                         verifier, the test forwarder and the block-time
+                         forwarder) at the local addresses, written to its
+                         programs/; with --check, fails when a committed
+                         binary is not the fresh build
+  harness-lint           The integration-test harness's format check, and
+                         clippy with its e2e feature, warnings denied
+  harness-test [--e2e]   The integration-test harness's tests on its local
+                         runtime; with --e2e, its e2e cases on a fork of
+                         devnet (DEVNET_RPC_URL), proven by the queue
+                         (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN) or locally
+                         (E2E_PROVER=local)
+  validator              Start the local test validator (RISC0 verifier stack
                          and Program Metadata program copied from devnet,
                          marker fixtures preloaded)
   refresh-devnet-programs --url <rpc>
@@ -91,9 +95,10 @@ Commands:
 
 Flags:
   --cluster <c>    Target cluster (required except test/unit-test/build-dev/build-release/
-                   clippy/validator/validator-deploy/harness-programs; optional for
-                   verify-build). Program addresses come from env/localnet.env
-                   and, for another cluster, env/<cluster>.env on top; a
+                   clippy/validator/validator-deploy/harness-programs/harness-lint/
+                   harness-test; optional for verify-build). Program addresses
+                   come from env/localnet.env and, for another cluster,
+                   env/<cluster>.env on top; a
                    first deploy reads each program's keypair path from the
                    uncommitted env/<cluster>.keys.env
                    (<NAME>_PROGRAM_KEYPAIR=<path>).
@@ -124,15 +129,6 @@ Initialization parameters (required by deploy/init when the PA is a target):
                        Devnet: ${GROTH16_SELECTOR}
 
 The PA starts on the empty kind table; set-kind-table installs another.
-
-Forwarder initialization parameters (required by deploy/forwarder init when
-the SPL token forwarder is a target):
-  STF_LOGIC_REF        32-byte hex logic ref the forwarder serves
-  STF_EMERGENCY_COMMITTEE
-                       base58 pubkey of the emergency committee
-  STF_OWNER            base58 pubkey of the forwarder's initial owner, who
-                       alone upgrades it and rotates its logic ref
-  STF_TOKEN_MINT       optional: base58 mint whose escrow ATA to create
 USAGE
   exit 1
 }
@@ -148,6 +144,7 @@ NO_IDL=false
 DEV_TEARDOWN=false
 PREBUILT=false
 CHECK=false
+E2E=false
 TEST_MODE="${PA_TEST_MODE:-real}"
 SPEC_FILES=()
 
@@ -182,6 +179,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --check)
       CHECK=true
+      shift
+      ;;
+    --e2e)
+      E2E=true
       shift
       ;;
     --mode)
@@ -380,19 +381,16 @@ deploy_one() {
   print_explorer_link "$program_id"
 }
 
-# The programs that own their upgrades once initialized: their upgrade
-# authority becomes their own PDA, and only their owner-only `upgrade`
-# replaces their code, as pa-evm's UUPS contracts authorize their own
-# upgrades.
-SELF_UPGRADING_PROGRAMS=(protocol_adapter spl_token_forwarder)
-
-# Upgrade <name> in place along the path its upgrade authority leaves: through
-# the program when the authority is the program's own PDA, through the
-# loader while the wallet still holds it (before `initialize` hands it
-# over), and through the loader for a program that never owns its upgrades.
+# Upgrade <name> in place along the path its upgrade authority leaves. The
+# protocol adapter owns its upgrades once initialized: its upgrade authority
+# becomes its own PDA, and only its owner-only `upgrade` replaces its code,
+# as pa-evm's UUPS contract authorizes its own upgrades. It upgrades through
+# itself when the authority is that PDA, and through the loader while the
+# wallet still holds it (before `initialize` hands it over); every other
+# program never owns its upgrades and upgrades through the loader.
 upgrade_one() {
   local name="$1" path
-  if [[ " ${SELF_UPGRADING_PROGRAMS[*]} " != *" ${name} "* ]]; then
+  if [[ "$name" != protocol_adapter ]]; then
     deploy_one "$name" "$(get_program_id "$name")"
     return
   fi
@@ -561,20 +559,6 @@ init_pa() {
   run_ts scripts/init-pa.ts
 }
 
-require_forwarder_init_params() {
-  if [[ -z "${STF_LOGIC_REF:-}" || -z "${STF_EMERGENCY_COMMITTEE:-}" || -z "${STF_OWNER:-}" ]]; then
-    echo "❌ Missing STF_LOGIC_REF, STF_EMERGENCY_COMMITTEE and/or STF_OWNER." >&2
-    echo "   The forwarder config pins the logic ref it serves, the committee" >&2
-    echo "   that can act in an emergency and the owner; there is no safe default." >&2
-    exit 1
-  fi
-}
-
-init_forwarder() {
-  echo "Initializing SPL token forwarder (idempotent)..."
-  run_ts scripts/forwarder.ts init
-}
-
 # ---------- commands ----------
 
 cmd_deploy() {
@@ -586,9 +570,6 @@ cmd_deploy() {
 
   if [[ " $targets " == *" pa "* ]]; then
     require_init_params
-  fi
-  if [[ " $targets " == *" stf "* ]]; then
-    require_forwarder_init_params
   fi
 
   program_id_args "$targets"
@@ -610,18 +591,11 @@ cmd_deploy() {
     if [[ " $targets " == *" pa "* ]]; then
       init_pa
     fi
-    if [[ " $targets " == *" stf "* ]]; then
-      init_forwarder
-    fi
   else
     cmd_idl_publish
     if [[ " $targets " == *" pa "* ]]; then
       echo "Next, by hand: give the adapter's canonical metadata accounts to its owner, then run init" \
         "(docs/OPERATIONS.md, Deploy and initialize)."
-    fi
-    if [[ " $targets " == *" stf "* ]]; then
-      echo "Next, by hand: give the forwarder's canonical metadata accounts to its owner, then run" \
-        "forwarder init (docs/OPERATIONS.md, The SPL token forwarder)."
     fi
   fi
 
@@ -683,15 +657,6 @@ cmd_set_kind_table() {
 cmd_deny_logic_ref() {
   require_pa_deployed
   run_ts scripts/deny-logic-ref.ts
-}
-
-cmd_forwarder() {
-  require_cmd npx
-
-  local pid
-  pid="$(get_program_id "spl_token_forwarder")"
-  require_deployed "$pid" "SPL token forwarder" "deploy stf"
-  run_ts scripts/forwarder.ts "$TARGET"
 }
 
 cmd_lookup_table() {
@@ -783,7 +748,8 @@ deterministic_build() {
 # deterministic builds at the local addresses (env/localnet.env), so a
 # consumer pinning the harness by tag runs exactly the program of that tag.
 HARNESS_PROGRAMS=(protocol_adapter mock_verifier test_forwarder block_time_forwarder)
-HARNESS_PROGRAMS_DIR="${PROJECT_DIR}/../crates/integration-test/programs"
+HARNESS_DIR="${PROJECT_DIR}/../crates/integration-test"
+HARNESS_PROGRAMS_DIR="${HARNESS_DIR}/programs"
 
 # Build the harness programs deterministically and write them to
 # HARNESS_PROGRAMS_DIR; with --check, fail instead when a committed binary is
@@ -931,9 +897,8 @@ cmd_test() {
 
   # The suite's files that build on whatever state they find, or the ones
   # given, each in its own mocha process against the deployment, without the
-  # tests tagged @localnet: those need the owner or the forwarder's
-  # committee, change a deployment setting, or call a program deployed only
-  # on a local validator.
+  # tests tagged @localnet: those need the owner, change a deployment
+  # setting, or call a program deployed only on a local validator.
   local specs=()
   if [[ ${#SPEC_FILES[@]} -gt 0 ]]; then
     specs=("${SPEC_FILES[@]}")
@@ -1027,6 +992,22 @@ case "$COMMAND" in
     fi
     cmd_harness_programs
     ;;
+  harness-lint)
+    require_cmd cargo
+    cargo fmt --manifest-path "${HARNESS_DIR}/Cargo.toml" -- --check
+    cargo clippy --manifest-path "${HARNESS_DIR}/Cargo.toml" --all-targets --features e2e -- -D warnings
+    ;;
+  harness-test)
+    require_cmd cargo
+    if [[ "$E2E" == "true" ]]; then
+      # The e2e cases (the harness reads DEVNET_RPC_URL, E2E_PROVER, and
+      # QUEUE_BASE_URL and QUEUE_AUTH_TOKEN for the queue) one at a time, like
+      # pa-evm's, in release mode, since risc0 proves far faster optimized.
+      RUST_TEST_THREADS=1 cargo test --release --manifest-path "${HARNESS_DIR}/Cargo.toml" --features e2e e2e_test
+    else
+      cargo test --manifest-path "${HARNESS_DIR}/Cargo.toml"
+    fi
+    ;;
   refresh-devnet-programs)
     if [[ -z "$RPC_OVERRIDE" ]]; then
       echo "❌ refresh-devnet-programs reads devnet through --url <rpc>; there is no default endpoint." >&2
@@ -1085,7 +1066,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|forwarder|lookup-table|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-table|deny-logic-ref|lookup-table|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

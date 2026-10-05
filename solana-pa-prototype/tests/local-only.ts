@@ -6,23 +6,15 @@ import { AnchorProvider, Program } from "@anchor-lang/core";
 import { Connection, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { SplTokenForwarder } from "../target/types/spl_token_forwarder";
 import {
   localCloseAllMarkers,
-  localCloseAllNonceBitmaps,
-  localCloseConfig,
-  localCloseEscrow,
   localCloseMarkersBatch,
-  localCloseNonceBitmapsBatch,
   localRenounceAdapterOwnership,
-  localRenounceForwarderOwnership,
-  localSetEmergencyCaller,
   localSetIdlAuthority,
   localSetUpgradeAuthorityIx,
   localTransferAdapterOwnership,
-  localTransferForwarderOwnership,
 } from "./utils/localOnly";
-import { forwarderProgram, paState, program, provider, useAdapterSuite } from "./utils/adapterSuite";
+import { program, provider, useAdapterSuite } from "./utils/adapterSuite";
 
 const LIVE_ENDPOINTS = [
   "https://api.devnet.solana.com",
@@ -35,18 +27,11 @@ const LIVE_ENDPOINTS = [
 describe("authority and closing instructions are local-only", () => {
   useAdapterSuite();
   const someone = () => Keypair.generate().publicKey;
-  const escrowAccounts = () => ({ mint: someone(), escrowAta: someone(), recipientAta: someone() });
 
-  /** Every builder, bound to the programs it would send through. */
-  const builders = (adapter: Program<ProtocolAdapter>, forwarder: Program<SplTokenForwarder>) => ({
+  /** Every builder, bound to the adapter it would send through. */
+  const builders = (adapter: Program<ProtocolAdapter>) => ({
     "transfer the adapter's ownership": () => localTransferAdapterOwnership(adapter, someone(), someone()),
     "renounce the adapter's ownership": () => localRenounceAdapterOwnership(adapter, someone()),
-    "transfer the forwarder's ownership": () => localTransferForwarderOwnership(forwarder, someone(), someone()),
-    "renounce the forwarder's ownership": () => localRenounceForwarderOwnership(forwarder, someone()),
-    "set the emergency caller": () => localSetEmergencyCaller(forwarder, someone(), paState, someone()),
-    "close an escrow": () => localCloseEscrow(forwarder, someone(), paState, escrowAccounts()),
-    "close the forwarder config": () => localCloseConfig(forwarder, someone(), paState),
-    "close nonce bitmaps": () => localCloseNonceBitmapsBatch(forwarder, someone(), paState, [someone()]),
     "close markers": () => localCloseMarkersBatch(adapter, someone(), [someone()]),
     "move a program's upgrade authority": () =>
       localSetUpgradeAuthorityIx(adapter.provider.connection, someone(), someone(), someone()),
@@ -55,14 +40,12 @@ describe("authority and closing instructions are local-only", () => {
   for (const endpoint of LIVE_ENDPOINTS) {
     const live = new AnchorProvider(new Connection(endpoint), provider.wallet, {});
     const liveAdapter = () => new Program<ProtocolAdapter>(program.idl, live);
-    const liveForwarder = () => new Program<SplTokenForwarder>(forwarderProgram.idl, live);
 
     it(`refuses every builder against ${endpoint}`, async () => {
-      for (const [name, build] of Object.entries(builders(liveAdapter(), liveForwarder()))) {
+      for (const [name, build] of Object.entries(builders(liveAdapter()))) {
         assert.throws(build, /local validator/, `${name} was built against ${endpoint}`);
       }
       for (const [name, run] of Object.entries({
-        "close all nonce bitmaps": () => localCloseAllNonceBitmaps(liveForwarder(), someone(), paState, []),
         "close all markers": () => localCloseAllMarkers(liveAdapter(), someone()),
         "set an IDL account's authority": () =>
           localSetIdlAuthority(endpoint, process.env.ANCHOR_WALLET!, someone(), someone()),
@@ -79,7 +62,7 @@ describe("authority and closing instructions are local-only", () => {
   }
 
   it("builds every one against the local validator @localnet", () => {
-    for (const [name, build] of Object.entries(builders(program, forwarderProgram))) {
+    for (const [name, build] of Object.entries(builders(program))) {
       assert.isOk(build(), name);
     }
   });
@@ -89,11 +72,11 @@ describe("no code outside tests/utils/localOnly.ts changes an authority or close
   const ROOT = join(__dirname, "..");
   const LOCAL_ONLY = "tests/utils/localOnly.ts";
   /**
-   * The forwarder and adapter instructions localOnly.ts alone may build, any
-   * instruction to the loader, and the Program Metadata program's SetAuthority.
+   * The adapter instructions localOnly.ts alone may build, any instruction
+   * to the loader, and the Program Metadata program's SetAuthority.
    */
   const TS_AUTHORITY_CALL =
-    /\.(transferOwnership|renounceOwnership|setEmergencyCaller|closeEscrow|closeConfig|closeNonceBitmapsBatch|closeMarkersBatch|setAuthority)\s*\(|programId:\s*BPF_LOADER_UPGRADEABLE|getSetAuthority(?=Instruction\b)/;
+    /\.(transferOwnership|renounceOwnership|closeMarkersBatch|setAuthority)\s*\(|programId:\s*BPF_LOADER_UPGRADEABLE|getSetAuthority(?=Instruction\b)/;
   /** The Solana CLI commands that move or renounce an authority. */
   const SHELL_AUTHORITY_CALL = /\bset-upgrade-authority\b|\bset-buffer-authority\b|\bset-authority\b|--final\b/;
 

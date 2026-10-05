@@ -4,7 +4,7 @@ This document is the operator's procedure set for a Protocol Adapter (PA) deploy
 
 Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically; cluster operations take `--cluster <localnet|devnet|mainnet>` (see `scripts/ops.sh` for all flags). devnet and mainnet operations go through the operator's RPC provider: pass `--url <rpc>` or set `DEVNET_RPC_URL` / `MAINNET_RPC_URL`; there is no public-endpoint default. Commands shown as `solana`, `npx` or `solana-verify` run directly.
 
-`dev.sh anchor-test --cluster <devnet|mainnet>` runs the local suite's tests against the live deployment, building on whatever history it holds: every spec file outside `tests/fresh/` and `tests/terminal/`, without the tests tagged `@localnet` (those need the owner or the forwarder's committee, change a deployment setting, or call a program deployed only on a local validator). The run first proves its own fixture set for the deployment, under a salt no earlier run used and against the kind table it stores, so name that table's JSON (as fixture-gen reads it) in `PA_KIND_TABLE`; proving runs locally unless `QUEUE_BASE_URL` sends it to the workers queue. Its wallet must own nothing under test: the run refuses a wallet that holds an owner's role: the adapter's or the forwarder's stored owner, or a program's upgrade authority while that is not the program's own PDA. Use a separate funded test wallet (`--wallet`), and name the deployment's settlement lookup table in `PA_SETTLEMENT_TABLE` (without it the suite would create and leave a table of its own).
+`dev.sh anchor-test --cluster <devnet|mainnet>` runs the local suite's tests against the live deployment, building on whatever history it holds: every spec file outside `tests/fresh/` and `tests/terminal/`, without the tests tagged `@localnet` (those need the owner, change a deployment setting, or call a program deployed only on a local validator). The run first proves its own fixture set for the deployment, under a salt no earlier run used and against the kind table it stores, so name that table's JSON (as fixture-gen reads it) in `PA_KIND_TABLE`; proving runs locally unless `QUEUE_BASE_URL` sends it to the workers queue. Its wallet must own nothing under test: the run refuses a wallet that holds an owner's role: the adapter's stored owner, or a program's upgrade authority while that is not the program's own PDA. Use a separate funded test wallet (`--wallet`), and name the deployment's settlement lookup table in `PA_SETTLEMENT_TABLE` (without it the suite would create and leave a table of its own).
 
 ## The owner
 
@@ -12,7 +12,6 @@ The adapter has one owner, as pa-evm's (OpenZeppelin's OwnableUpgradeable): set 
 
 `transfer_ownership(new_owner)` moves the ownership at once (the zero key is refused, `OwnableInvalidOwner`); `renounce_ownership` gives it up for good: the owner becomes the zero key, and no owner-only instruction, `upgrade` included, can run again. Both emit `OwnershipTransferredEvent`. They are made by hand: no repository command or script changes an authority or closes protocol accounts on a live cluster, and the only builders of those instructions in the repository (`tests/utils/localOnly.ts`) refuse any endpoint but a local validator. The owner constructs and signs the instruction from the IDL.
 
-The SPL token forwarder has an owner of its own, set by its `initialize` (`STF_OWNER`) and stored in its config, the same way: its upgrade authority is its own PDA, its `upgrade`, `reinitialize`, `transfer_ownership` and `renounce_ownership` are owner-only, and it emits `OwnershipTransferred` and `Upgraded`, as the EVM V2 forwarder's OwnableUpgradeable and UUPS do.
 
 The owner can replace the program binary, which means it could deploy code that undoes a stop: a stop is only as permanent as the ownership's custody. Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
 
@@ -54,7 +53,7 @@ On localnet, `deploy pa` publishes no IDL and initializes at once.
 
 `deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which carries `close_markers_batch`; it is refused on every cluster but localnet, so a live deployment never has an instruction that deletes replay protection.
 
-`idl-publish` stores each program's production IDL (`idl-publish pa`, `stf` or `btf`; all of them by default) in the program's canonical Program Metadata IDL account on chain, so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), writes it through the `@solana-program/program-metadata` library (`client/programMetadata.ts`), then verifies the cluster serves exactly the published file. The Program Metadata program lets two signers write a canonical account: the program's upgrade authority, and the account's explicit authority (`set-authority`, above). Its CLI, which `anchor idl upgrade` runs, admits only the first, so once `initialize` has given a program's upgrade authority to the program, only the library can update the IDL, signed by the owner as the account's authority. Rerun `idl-publish` after every `upgrade` that changes the interface.
+`idl-publish` stores each program's production IDL (`idl-publish pa` or `btf`; both by default) in the program's canonical Program Metadata IDL account on chain, so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), writes it through the `@solana-program/program-metadata` library (`client/programMetadata.ts`), then verifies the cluster serves exactly the published file. The Program Metadata program lets two signers write a canonical account: the program's upgrade authority, and the account's explicit authority (`set-authority`, above). Its CLI, which `anchor idl upgrade` runs, admits only the first, so once `initialize` has given a program's upgrade authority to the program, only the library can update the IDL, signed by the owner as the account's authority. Rerun `idl-publish` after every `upgrade` that changes the interface.
 
 The program's display metadata — name, icon, description, project links, and the security contact (`security@anoma.foundation`, same as the EVM PA's `@custom:security-contact`) — lives in `docs/program-metadata.json` and is published to the program-metadata PDA that Solana Explorer reads:
 
@@ -92,9 +91,9 @@ The deployed PA should be the deterministic `solana-verify` Docker build, so the
 ./scripts/dev.sh upgrade pa --cluster devnet --prebuilt   # ship that exact artifact
 ```
 
-`verify-build` needs solana-verify 0.5.2 (`cargo install solana-verify --version 0.5.2 --locked`). It builds with the pinned image (`[workspace.metadata.cli]` in `Cargo.toml` selects it — keep it in lockstep with `flake.nix`) for SBPF v3, the architecture every build of these programs targets, and fails loudly if the deployed program doesn't match. **A normal build overwrites the artifact with non-matching bytes** — after any `anchor-build`, `release-build`, `anchor-test`, `idl-publish`, or `deploy`/`upgrade` without `--prebuilt`, rerun `verify-build` before an upgrade you intend to keep verified. `verify-build` builds only the PA. To validate the artifact behaviorally before shipping, with every program's production binary in `target/deploy` (`release-build`, then `verify-build`) and the `PA_*` and `STF_*` initialization variables exported: `dev.sh validator` (backgrounded), `dev.sh deploy --cluster localnet --prebuilt`, `dev.sh anchor-test --cluster localnet --prebuilt`.
+`verify-build` needs solana-verify 0.5.2 (`cargo install solana-verify --version 0.5.2 --locked`). It builds with the pinned image (`[workspace.metadata.cli]` in `Cargo.toml` selects it — keep it in lockstep with `flake.nix`) for SBPF v3, the architecture every build of these programs targets, and fails loudly if the deployed program doesn't match. **A normal build overwrites the artifact with non-matching bytes** — after any `anchor-build`, `release-build`, `anchor-test`, `idl-publish`, or `deploy`/`upgrade` without `--prebuilt`, rerun `verify-build` before an upgrade you intend to keep verified. `verify-build` builds only the PA. To validate the artifact behaviorally before shipping, with every program's production binary in `target/deploy` (`release-build`, then `verify-build`) and the `PA_*` initialization variables exported: `dev.sh validator` (backgrounded), `dev.sh deploy --cluster localnet --prebuilt`, `dev.sh anchor-test --cluster localnet --prebuilt`.
 
-The integration-test harness ships the same deterministic builds of the PA and the mock verifier at the local addresses (`crates/integration-test/programs/`), so a repository pinning the harness runs exactly the program of the tag it pins. A change to either program's source changes its build: rewrite the copies in the same change with `./scripts/dev.sh harness-programs`, which CI's Harness Programs job checks (`harness-programs --check`). Like `verify-build`, it overwrites `target/deploy`.
+The integration-test harness ships the deterministic builds of the four programs it loads, the PA, the mock verifier, the test forwarder and the block-time forwarder (`HARNESS_PROGRAMS` in `scripts/ops.sh`), at the local addresses (`crates/integration-test/programs/`), so a repository pinning the harness runs exactly the programs of the tag it pins. A change to any of these programs' source changes its build: rewrite the copies in the same change with `./scripts/dev.sh harness-programs`, which CI's Harness Programs job checks (`harness-programs --check`). Like `verify-build`, it overwrites `target/deploy`.
 
 The deployment is then reproduced and checked with:
 
@@ -108,15 +107,14 @@ solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
 
 ## The settlement lookup table
 
-Every settlement carries accounts that never change for a deployment: fifteen fixed ones (PAState, the system program, the verifier router, its router PDA and verifier entry, the verifier program, the event authority, the instructions and clock sysvars, the two forwarders, the SPL forwarder's config, event authority and escrow authority, and the SPL token program) plus each supported mint's escrow ATA. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps the first-wrap settlement (ed25519 authorization, inline bitmap init, settle) well inside the 1,232-byte packet.
+Every settlement carries accounts that never change for a deployment: the adapter's (PAState, the system program, the verifier router, its router PDA and verifier entry, the verifier program, the event authority), the clock sysvar and the block-time forwarder its example call reads, and the fixed accounts of each forwarder the deployment's settlements call. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps a settlement with forwarder calls inside the 1,232-byte packet.
 
 ```sh
 ./scripts/dev.sh lookup-table --cluster devnet                      # create
-PA_LOOKUP_TABLE=<address> STF_TOKEN_MINTS=<mint>,<mint> \
-  ./scripts/dev.sh lookup-table --cluster devnet                    # extend
+PA_LOOKUP_TABLE=<address> ./scripts/dev.sh lookup-table --cluster devnet  # extend
 ```
 
-The command derives the key set from the deployed programs and the PAState's pinned router and selector, so it runs after `deploy pa`. The signing wallet is the table's authority and stays so (the table is not frozen) because supporting a new mint means extending it. A table entry need not exist on chain: the forwarder's keys go in before the forwarder is deployed, and a mint's escrow ATA before `forwarder init` creates it. Extending is idempotent; a rerun adds only what is missing.
+The command derives the adapter's key set from the deployed programs and the PAState's pinned router and selector, so it runs after `deploy pa`. The signing wallet is the table's authority and stays so (the table is not frozen): each forwarder's operator extends it with that forwarder's fixed accounts (the SPL token forwarder's `lookup-table` command, in anoma/anomapay-spl-token-forwarder, adds its own and each supported mint's escrow account). A table entry need not exist on chain when it is added. Extending is idempotent; a rerun adds only what is missing.
 
 Record the address in the cluster's deployment record and ship it as `SETTLE_LOOKUP_TABLE` in anoma-pa-solana-client. A program-id rotation is a new deployment and gets a new table.
 
@@ -170,71 +168,6 @@ A pause is recovered in place: fix the code if needed (`upgrade`, then any migra
 When the deployment itself cannot be trusted any more, recovery is migration to a new deployment: deploy a fresh PA under a new program ID (new keypair), initialize it, and have applications re-establish their state against the new deployment's empty commitment tree. The old deployment's tree, markers, and history remain on chain and readable, so nothing about the old state is lost as evidence — but resources committed to the old tree cannot be settled in the new one, and value they represent must be recovered at the application layer (each application proves what it owned in the old tree and re-issues it in the new one, under whatever policy its owners decide).
 
 The PAState account can never be re-initialized. This is deliberate: the account address derives from a fixed seed, so re-initializing would resurrect old nullifier-marker addresses and let previously spent notes spend again.
-
-## The SPL token forwarder
-
-The SPL token forwarder (`programs/spl-token-forwarder`) holds AnomaPay's wrapped SPL tokens in escrow and executes the wrap and unwrap calls the adapter forwards to it. It has two authorities, both recorded in its config PDA at initialization: the **owner** (see The owner above), which upgrades the program and rotates the logic ref, and the **emergency committee**, which names the emergency caller and closes accounts. All commands below go through `./scripts/dev.sh forwarder <command> --cluster <c>`; their parameters are `STF_*` environment variables (`scripts/forwarder.ts` lists them).
-
-### Deploy and initialize
-
-```sh
-export STF_LOGIC_REF=<32-byte hex verifying key of the AnomaPay resource logic>
-export STF_EMERGENCY_COMMITTEE=<base58 pubkey>
-export STF_OWNER=<the owner's pubkey>
-export STF_TOKEN_MINT=<base58 mint>          # optional: also creates the mint's escrow ATA
-./scripts/dev.sh deploy stf --cluster devnet  # publishes the IDL, stops before init
-# by hand: give the forwarder's canonical IDL account to the owner (Deploy and initialize, above)
-./scripts/dev.sh forwarder init --cluster devnet
-```
-
-On devnet and mainnet, `deploy stf` publishes the forwarder's IDL and stops before `initialize`, for the reason the adapter's deploy does: `initialize` gives the upgrade authority, which alone creates the program's canonical metadata accounts, to the program. On localnet it initializes at once.
-
-The program's upgrade authority, the deployer, initializes the config, as the EVM proxy runs its initializer at deployment; no other signer can. It hands the upgrade authority to the program's PDA. The config pins the adapter program id, the logic ref, the committee and the owner (`STF_OWNER`). A wrap is only executed when the adapter forwards it for a resource carrying that logic ref. One escrow authority, a PDA of the forwarder, owns every mint's escrow: the associated token account of the authority and the mint, as the EVM forwarder holds every token at its own address. `forwarder init` with `STF_TOKEN_MINT` creates a mint's escrow account, and the same command adds further mints later. Add each new mint's escrow account to the settlement lookup table as well (`lookup-table` with `STF_TOKEN_MINTS`).
-
-### Nonce bitmaps
-
-A wrap's replay protection is a per-user, per-256-nonce-word bitmap account. The adapter forwards no signer to the forwarder, so the forwarder cannot create that account during a wrap; the submitter creates it with the permissionless `init_nonce_bitmap` instruction (any payer) when the word's bitmap does not exist, and the wrap fails with `NonceBitmapMissing` when it is absent. The init fits in the settlement transaction itself, after the ed25519 instruction the wrap input points at; the integration suite settles the first wrap that way.
-
-### Rotating the logic ref
-
-The logic ref changes whenever the resource circuit is rebuilt. It is rotated as the EVM forwarder's is: the owner upgrades the proxy to an implementation whose `reinitializer(n)` writes the new ref. The forwarder's config records the version it was last initialized at; `reinitialize` writes the new ref only while that version is below the build's `CONFIG_VERSION`, and then records it, so each build rotates once. To rotate, raise `CONFIG_VERSION` by one in a new build, upgrade the program in place, and reinitialize, both with the owner's wallet:
-
-```sh
-./scripts/dev.sh upgrade stf --cluster <c>                                                             # owner wallet
-STF_LOGIC_REF=<new 32-byte hex verifying key> ./scripts/dev.sh forwarder reinitialize --cluster <c>   # owner wallet
-```
-
-Escrow, nonce bitmaps and the committee are untouched. The instruction emits `Initialized` with the new version, as OpenZeppelin's reinitializer does; read the new ref from the config account. Resources wrapped under the previous ref leave through the new one once the adapter's kind table lists the previous version as an alias of the new one (anoma/risc0-kind-tables ADR-0008, rule R2): a transaction converts each into a resource under the new ref, which then unwraps. Until that table's commitment is installed (`set-kind-table`), they stay in escrow and can neither unwrap nor convert. The emergency path below is for a stopped adapter only.
-
-### Checking a devnet deployment with a wrap and an unwrap
-
-The integration suite's wraps run only on a fresh local deployment, so a devnet deployment, upgrade or logic-ref rotation is exercised end to end by hand, with fixture-gen's seeded test user and mint (their keys derive from public labels, so this is for devnet only) and anoma-pa-solana-client's `settle-fixture` tool:
-
-1. Prove a wrap against the kind table the adapter stores, under a forwarder nonce the seeded user has not used on this deployment: `./scripts/dev.sh gen-fixtures spl-token-wrap --kind-table <table.json> --wrap-nonce <n> <wrap.json>`.
-2. As the seeded user, mint the amount and approve the forwarder's escrow authority, then settle the wrap with `settle-fixture`.
-3. Read the deployment's commitments in tree order from an indexer (the Envio project's created tags ordered by block, transaction index, action log index and tag index) into a JSON array of hex strings, and check that their root equals the adapter's on-chain root.
-4. Prove the unwrap of the wrap's resource over that tree, `./scripts/dev.sh gen-fixtures spl-token-unwrap --kind-table <table.json> --wrap <wrap.json> --preceding-leaves <leaves.json> <unwrap.json>`, against the same kind table, where the leaves are the commitments before the wrap's, and settle it with `settle-fixture`.
-
-### Upgrading the forwarder
-
-The forwarder is upgraded in place, as the EVM forwarder's proxy is upgraded through `upgradeToAndCall`: the program id, the config, the escrow and the nonce bitmaps stay. The owner upgrades it as the adapter's (`dev.sh upgrade stf`). A release that changes an account layout ships owner-only migration instructions, the counterpart of the call the EVM owner passes to `upgradeToAndCall`, which run once, right after the upgrade, and a test that runs the upgrade path from the previous build.
-
-### Emergency committee
-
-The committee and its emergency caller carry over the EVM V1 forwarder's emergency mechanism; the EVM V2 forwarder has none (it relies on its owner's upgrades), and anoma/dos-pm#86 tracks whether this forwarder keeps, replaces or drops it. As built:
-
-Once the adapter is paused (`pause`), the committee names an emergency caller, once, and that caller withdraws from escrow directly without going through the adapter:
-
-```sh
-STF_TOKEN_MINT=<mint> STF_RECIPIENT=<owner> STF_AMOUNT=<raw units> \
-  ./scripts/dev.sh forwarder emergency-withdraw --cluster <c>                                # caller wallet
-```
-
-Naming the emergency caller grants a key the right to withdraw escrowed funds, so, like every authority change on a live cluster, it is done by hand: no repository command or script builds it. The committee constructs and signs the forwarder's `set_emergency_caller(caller)` itself from the IDL (accounts: the committee as signer, the config, the paused adapter's PAState). The program refuses it while the adapter is not paused and refuses a second one. The forwarder's other committee instructions, `close_escrow` (drain an escrow to a recipient and close it), `close_nonce_bitmaps_batch` and `close_config`, refuse while the adapter is not paused, and are likewise made by hand.
-
-### Retiring the forwarder
-
-Retirement closes accounts for good, so on a live cluster it is done by hand (see The owner). Once the adapter is paused, the committee signs, in order: `close_nonce_bitmaps_batch` over every nonce bitmap the forwarder owns (closing them ends wrap replay protection; the forwarder cannot be initialized again, its upgrade authority being its own PDA), `close_escrow` for each mint's escrow (drains it to the committee's token account and closes it), then `close_config`, which also ends the forwarder's ownership: with no config, neither `upgrade` nor `reinitialize` can run. The program stays on chain, its upgrade authority its own PDA.
 
 ## Sunsetting
 
