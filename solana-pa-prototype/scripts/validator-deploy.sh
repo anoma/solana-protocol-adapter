@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Shared program-address, build, and validator lifecycle functions.
 # Source this file from other scripts; do not execute directly.
-# Consumers: anchor-test.sh (local integration flow) and ops.sh (cluster ops).
+# Consumers: anchor-test.sh (local integration flow), ops.sh (cluster ops) and
+# dev.sh (which loads the program addresses).
 #
 # Required variables (set by caller before sourcing):
 #   PROJECT_DIR     - path to solana-pa-prototype
@@ -11,6 +12,9 @@
 #   VALIDATOR_LEDGER     - ledger directory (default: $PROJECT_DIR/.validator-ledger)
 #   VALIDATOR_LOG        - log file (default: $PROJECT_DIR/.validator.log)
 #   ANCHOR_WALLET_PATH   - wallet path (default: ~/.config/solana/id.json)
+#
+# Exported after load_program_ids:
+#   <NAME>_PROGRAM_ID for every program (program_id_var)
 #
 # Exported after workspace_program_args:
 #   WORKSPACE_PROGRAM_ARGS
@@ -147,16 +151,17 @@ require_cmd() {
 
 # Program addresses are configuration (env/<cluster>.env) and program
 # keypairs are secrets (env/<cluster>.keys.env, never committed): fail if any
-# keypair file is tracked or any program declares its address as a literal.
+# tracked file is a keypair (a JSON array of 64 numbers, whatever its name) or
+# any program declares its address as a literal.
 # Requires load_workspace_programs.
 check_program_ids_not_in_tree() {
-  local tracked name literal failed=0
-  tracked="$(git ls-files -- '*-keypair.json' 'keypairs/*.json')"
-  if [[ -n "$tracked" ]]; then
-    echo "❌ Program keypairs are tracked; they belong outside the repository, named in env/<cluster>.keys.env:" >&2
-    echo "$tracked" >&2
-    failed=1
-  fi
+  local file name literal failed=0
+  while IFS= read -r -d '' file; do
+    if jq -e 'type == "array" and length == 64 and all(.[]; type == "number")' "$file" >/dev/null; then
+      echo "❌ ${file} is a keypair; keypairs belong outside the repository, named in env/<cluster>.keys.env." >&2
+      failed=1
+    fi
+  done < <(git ls-files -z -- '*.json')
   for name in "${PROGRAM_NAMES[@]}"; do
     if literal="$(grep -n 'declare_id!("' "${PROGRAM_SRC[$name]}")"; then
       echo "❌ ${PROGRAM_SRC[$name]} declares its address as a literal; it comes from env/<cluster>.env:" >&2
@@ -173,27 +178,22 @@ program_id_var() {
   echo "${1^^}_PROGRAM_ID"
 }
 
+# The variable env/<cluster>.keys.env names <name>'s keypair path in:
+# protocol_adapter → PROTOCOL_ADAPTER_PROGRAM_KEYPAIR.
+program_keypair_var() {
+  echo "${1^^}_PROGRAM_KEYPAIR"
+}
+
 # Export every program's address variable for <cluster>. env/localnet.env
 # names every program. For another cluster, env/<cluster>.env then names
 # every program deployed there; the localnet-only programs keep their
 # env/localnet.env addresses, since a cluster run still builds every
 # program's IDL.
 load_program_ids() {
-  local cluster="$1" file name var
-  file="${PROJECT_DIR}/env/localnet.env"
-  if [[ ! -f "$file" ]]; then
-    echo "❌ ${file} is missing; it names every program's local address." >&2
-    exit 1
-  fi
-  set -a
-  source "$file"
-  set +a
+  local cluster="$1" file target name var
+  local files=("${PROJECT_DIR}/env/localnet.env")
   if [[ "$cluster" != "localnet" ]]; then
     file="${PROJECT_DIR}/env/${cluster}.env"
-    if [[ ! -f "$file" ]]; then
-      echo "❌ ${file} is missing; it names the address of every program deployed to ${cluster}." >&2
-      exit 1
-    fi
     for target in "${PROGRAM_TARGETS[@]}"; do
       var="$(program_id_var "${PROGRAM_BY_TARGET[$target]}")"
       if ! grep -q "^${var}=" "$file"; then
@@ -201,10 +201,13 @@ load_program_ids() {
         exit 1
       fi
     done
+    files+=("$file")
+  fi
+  for file in "${files[@]}"; do
     set -a
     source "$file"
     set +a
-  fi
+  done
   for name in "${PROGRAM_NAMES[@]}"; do
     var="$(program_id_var "$name")"
     if [[ -z "${!var:-}" ]]; then
@@ -618,23 +621,11 @@ workspace_program_args() {
 }
 
 # The synthetic VerifierEntry accounts preloaded at genesis embed the mock
-# verifier's address; fail if any embeds another address than
-# env/localnet.env's. Requires load_program_ids.
-check_mock_verifier_entries() {
-  local mock_verifier file
-  mock_verifier="$(get_program_id mock_verifier)"
-  for file in tests/fixtures/verifier-entries/verifier-entry-*.json; do
-    if ! node -e '
-      const bs58 = require("bs58").default || require("bs58");
-      const entry = JSON.parse(require("fs").readFileSync(process.argv[1], "utf-8"));
-      const data = Buffer.from(entry.account.data[0], "base64");
-      process.exit(data.includes(Buffer.from(bs58.decode(process.argv[2]))) ? 0 : 1);
-    ' "$file" "$mock_verifier"; then
-      echo "❌ ${file} does not embed the mock verifier address ${mock_verifier} (env/localnet.env)." >&2
-      echo "   Regenerate the entries: npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts ${mock_verifier}" >&2
-      exit 1
-    fi
-  done
+# verifier's address, so they are written from env/localnet.env's before the
+# validator starts (deterministically: a current entry is rewritten as is).
+# Requires load_program_ids.
+regen_mock_verifier_entries() {
+  npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts "$(get_program_id mock_verifier)"
 }
 
 # Start a validator on a fresh ledger with the devnet programs (the
@@ -688,7 +679,7 @@ start_validator() {
       account_args+=(--account "$addr" "$file")
     done
   }
-  check_mock_verifier_entries
+  regen_mock_verifier_entries
   add_genesis_accounts tests/fixtures/verifier-entries verifier-entry-
 
   solana-test-validator \

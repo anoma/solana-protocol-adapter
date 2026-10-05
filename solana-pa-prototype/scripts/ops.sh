@@ -345,16 +345,12 @@ extend_program_data_if_needed() {
   solana program extend "$program_id" "$shortfall" --keypair "$WALLET" --url "$RPC_URL"
 }
 
+# Deploy <name>'s binary with --program-id <program-id-arg>: its address for a
+# program already there, its keypair to create it (program_id_args).
 deploy_one() {
-  local name="$1"
-  local program_id program_id_arg
+  local name="$1" program_id_arg="$2"
+  local program_id
   program_id="$(get_program_id "$name")"
-  # Creating a program at its address takes the address's keypair; a program
-  # already there is redeployed by address.
-  program_id_arg="$program_id"
-  if ! is_deployed "$program_id"; then
-    program_id_arg="$(program_keypair "$name")"
-  fi
 
   extend_program_data_if_needed "$name" "$program_id"
   echo "Deploying ${name} (${program_id})..."
@@ -387,12 +383,12 @@ SELF_UPGRADING_PROGRAMS=(protocol_adapter spl_token_forwarder)
 upgrade_one() {
   local name="$1" path
   if [[ " ${SELF_UPGRADING_PROGRAMS[*]} " != *" ${name} "* ]]; then
-    deploy_one "$name"
+    deploy_one "$name" "$(get_program_id "$name")"
     return
   fi
   path="$(run_ts scripts/upgrade-program.ts path "$name")"
   case "$path" in
-    loader) deploy_one "$name" ;;
+    loader) deploy_one "$name" "$(get_program_id "$name")" ;;
     program) upgrade_through_program "$name" ;;
     *)
       echo "❌ upgrade-program.ts printed '${path}' as ${name}'s upgrade path" >&2
@@ -467,9 +463,9 @@ build_for_deploy() {
 program_keypair() {
   local name="$1" keys var path address actual
   keys="${PROJECT_DIR}/env/${CLUSTER}.keys.env"
-  var="${name^^}_PROGRAM_KEYPAIR"
+  var="$(program_keypair_var "$name")"
   if [[ -f "$keys" ]]; then
-    path="$(set -a; source "$keys"; echo "${!var:-}")"
+    path="$(source "$keys"; echo "${!var:-}")"
   fi
   address="$(get_program_id "$name")"
   if [[ -z "${path:-}" ]]; then
@@ -489,13 +485,19 @@ program_keypair() {
   echo "$path"
 }
 
-# Check, before building, that every target not yet deployed has its keypair.
-require_program_keypairs() {
-  local t name
+# The --program-id each of <targets> deploys with, resolved before building:
+# its address when it is already deployed (a redeploy), else its keypair,
+# since creating a program at an address takes the address's keypair.
+declare -A PROGRAM_ID_ARG
+program_id_args() {
+  local t name address
   for t in $1; do
     name="${PROGRAM_BY_TARGET[$t]}"
-    if ! is_deployed "$(get_program_id "$name")"; then
-      program_keypair "$name" >/dev/null
+    address="$(get_program_id "$name")"
+    if is_deployed "$address"; then
+      PROGRAM_ID_ARG[$name]="$address"
+    else
+      PROGRAM_ID_ARG[$name]="$(program_keypair "$name")"
     fi
   done
 }
@@ -579,12 +581,14 @@ cmd_deploy() {
     require_forwarder_init_params
   fi
 
-  require_program_keypairs "$targets"
+  program_id_args "$targets"
   ensure_balance "$(estimate_balance_needed "$targets")"
   build_for_deploy
 
+  local name
   for t in $targets; do
-    deploy_one "${PROGRAM_BY_TARGET[$t]}"
+    name="${PROGRAM_BY_TARGET[$t]}"
+    deploy_one "$name" "${PROGRAM_ID_ARG[$name]}"
   done
 
   # `initialize` hands each self-upgrading program's upgrade authority to the
@@ -623,7 +627,6 @@ cmd_upgrade() {
   targets="$(resolve_targets "$TARGET")"
 
   require_cmd anchor
-
 
   # Verify target programs are already deployed
   for t in $targets; do
