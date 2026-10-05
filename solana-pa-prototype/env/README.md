@@ -25,6 +25,7 @@ A deploy refuses a keypair whose address is not the one `<cluster>.env` gives
 the program.
 
 Changing an address in `localnet.env` invalidates the committed fixtures
-(`./scripts/dev.sh regen-fixtures`) and, for the mock verifier, the VerifierEntry
-genesis accounts (`scripts/regen-mock-verifier-entry.ts`), which the validator
-checks before it starts.
+(`./scripts/dev.sh regen-fixtures`). For the mock verifier it also changes the
+VerifierEntry genesis accounts, which the validator rewrites from
+`localnet.env` before it starts (`scripts/regen-mock-verifier-entry.ts`);
+commit them with the address.

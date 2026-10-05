@@ -14,8 +14,7 @@ transfer_library = { git = "https://github.com/anoma/anomapay-solana-resource", 
 transfer_witness = { git = "https://github.com/anoma/anomapay-solana-resource", rev = "8969825eef8b676822207a420716fdad9b5eda24" }
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
-# The programs' Anchor commit (solana-pa-prototype/Cargo.toml); the published
-# 1.2.1 replaces it in anoma/solana-protocol-adapter#124.
+# The commit solana-pa-prototype/Cargo.toml pins (see there).
 anchor-lang = { git = "https://github.com/otter-sec/anchor", rev = "2c9747a2d31bd5e94745cee6c083577f3e6675c0" }
 # Must match anoma-rm-risc0 2.0.0-rc.6, which encodes Transaction with bincode 1.3.
 bincode = "1.3.3"

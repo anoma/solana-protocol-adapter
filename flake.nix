@@ -29,9 +29,7 @@
 
           # nixos-26.05 ships anchor 1.0.2, not the Anchor the programs build
           # with, so the CLI is built here with the pinned toolchain, from the
-          # same commit as anchor-lang in solana-pa-prototype/Cargo.toml: the
-          # v1.2.1 release PR (solana-foundation/anchor#5134), until the
-          # published 1.2.1 replaces it (anoma/solana-protocol-adapter#124).
+          # commit solana-pa-prototype/Cargo.toml pins (see there).
           anchorCli = (pkgs.makeRustPlatform {
             cargo = rustToolchain;
             rustc = rustToolchain;
