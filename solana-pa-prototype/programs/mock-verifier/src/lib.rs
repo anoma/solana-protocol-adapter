@@ -19,7 +19,8 @@ use risc0_binfmt::{tagged_struct, Digestible, ExitCode, SystemState};
 use risc0_zkp::core::digest::Digest;
 use risc0_zkp::core::hash::sha::cpu::Impl as Sha256;
 
-declare_id!("H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKvgDhrvVVHvHf");
+// The address comes from env/<cluster>.env, which the build scripts export.
+declare_id!(Pubkey::from_str_const(env!("MOCK_VERIFIER_PROGRAM_ID")));
 
 // The `Proof` the router passes to a verifier's `verify`, from the router's
 // IDL (see the adapter's `declare_program!(verifier_router)`).

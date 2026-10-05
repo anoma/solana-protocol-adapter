@@ -19,7 +19,8 @@ use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::{invoke, set_return_data};
 use anchor_lang::InstructionData;
 
-declare_id!("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD");
+// The address comes from env/<cluster>.env, which the build scripts export.
+declare_id!(Pubkey::from_str_const(env!("TEST_FORWARDER_PROGRAM_ID")));
 
 /// Mode bytes encoded in `instruction_data[0]` by fixture-gen.
 pub const MODE_FAIL: u8 = 0x00;

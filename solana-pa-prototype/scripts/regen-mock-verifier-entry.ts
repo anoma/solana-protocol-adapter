@@ -10,12 +10,10 @@
  * is compile-time-baked into the immutable devnet binary), but the verify
  * path only reads the entry account — so the test validator preloads a
  * synthetic entry for the mock selector 0xffffffff at genesis. The entry
- * embeds the mock-verifier program ID, so rotating that ID strands the
- * committed fixture; this script regenerates it.
- *
- * Called by sync_program_ids (validator-deploy.sh), with the ID of the
- * committed mock-verifier keypair, whenever that ID changes — before the
- * build, so no IDL carries the new ID yet. Standalone:
+ * embeds the mock-verifier program ID, so the validator runs this script
+ * with env/localnet.env's before it starts (regen_mock_verifier_entries in
+ * validator-deploy.sh); the output is deterministic, so a current fixture is
+ * rewritten as is:
  * npx ts-node -P tsconfig.json scripts/regen-mock-verifier-entry.ts <mock-verifier ID>
  */
 import { PublicKey } from "@solana/web3.js";

@@ -8,8 +8,8 @@
 #   anchor-test.sh [all|build|test] [spec file...]
 #
 # Phase selection, so CI can build once and fan the test phase out per mode:
-#   all   (default) sync IDs, build, then the spec files
-#   build           sync IDs and build the programs, nothing else
+#   all   (default) build, then the spec files
+#   build           build the programs, nothing else
 #   test            the spec files against existing artifacts
 # Spec files default to every tests/**/*.ts outside tests/utils/ (the
 # support modules the specs import) in that order; given ones run in the
@@ -57,12 +57,12 @@ echo "==> Test mode: ${PA_TEST_MODE} (phase: ${PHASE})"
 require_commands
 ensure_wallet
 
+ensure_node_modules
+load_program_ids localnet
 if [[ "$PHASE" == "test" ]]; then
-  echo "==> (1/3) Syncing program IDs (using prebuilt artifacts)"
-  sync_program_ids
+  echo "==> (1/3) Using prebuilt artifacts"
 else
-  echo "==> (1/3) Syncing program IDs and building"
-  sync_program_ids
+  echo "==> (1/3) Building"
   build_programs_dev
 fi
 

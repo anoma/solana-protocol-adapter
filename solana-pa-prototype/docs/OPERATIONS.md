@@ -30,7 +30,7 @@ Prerequisites:
    ```
 
    Running `deploy pa` without them set prints the current devnet values, which are defined once in `scripts/validator-deploy.sh` and recorded in the cluster's deployment record.
-3. Program keypairs present under `target/deploy/` (they are committed to git and restored automatically). Cluster deploys refuse to invent fresh program IDs; if you intend a new ID, generate keypairs with `./scripts/dev.sh anchor-build` and commit the ones you deploy.
+3. Each program's address in `env/<cluster>.env`, and, for a program not yet deployed to the cluster, its keypair's path in the uncommitted `env/<cluster>.keys.env` (`env/README.md`). A deploy refuses a keypair whose address is not the one `env/<cluster>.env` gives the program; a new address is a new line in `env/<cluster>.env`, committed with the deployment record.
 
 Procedure:
 
