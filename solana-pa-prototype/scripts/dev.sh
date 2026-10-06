@@ -40,8 +40,13 @@ source "${SCRIPT_DIR}/validator-deploy.sh"
 # operations (dispatched to ops.sh) load their cluster's on top.
 load_program_ids localnet
 
-# Run `cargo update -p <pkg>` against every present lockfile so all three stay
-# pinned to the same commit. Use after bumping a git-dep branch HEAD.
+# Re-lock every present lockfile that holds <pkg> to its manifest's pin, so all
+# of them pin the same commit once the manifests do. Every shared dependency is
+# pinned to an exact rev or version, so the re-lock cargo makes when a pin no
+# longer matches its lockfile is enough. `cargo update -p` re-resolves other
+# packages too, and can move one onto a version the rest of the graph does not
+# build with (five8 accepts both five8_core 0.1 and 1.0; solana-keypair needs
+# 1.0).
 sync_lockfiles_for_package() {
   local pkg="$1"
   if [[ -z "$pkg" ]]; then
@@ -61,7 +66,7 @@ sync_lockfiles_for_package() {
       continue
     fi
     echo "==> ${lockfile}"
-    run_in_project "cargo update --manifest-path '${manifest_rel}' -p '${pkg}'"
+    run_in_project "cargo metadata --format-version 1 --manifest-path '${manifest_rel}' > /dev/null"
   done
 }
 
@@ -288,7 +293,7 @@ PYEOF
     echo "  coverage     Run unit tests with kcov and report line coverage"
     echo "  clean        Remove local validator/test artifacts"
     echo "  lock-check   Verify Cargo.lock files agree on shared git deps"
-    echo "  lock-sync <pkg>  Update <pkg> in every Cargo.lock so they re-align"
+    echo "  lock-sync <pkg>  Re-lock <pkg> in every Cargo.lock to its manifests' pin"
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
     echo ""
     echo "Cluster operations (take --cluster <localnet|devnet|mainnet>, optional for"

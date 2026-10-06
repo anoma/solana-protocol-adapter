@@ -67,7 +67,7 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
       settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, allRemainingAccounts)
         .signers([authority])
         .rpc(),
-      { program, error: "DuplicateNullifier" },
+      { program, error: "PreExistingNullifier" },
     );
   });
 });

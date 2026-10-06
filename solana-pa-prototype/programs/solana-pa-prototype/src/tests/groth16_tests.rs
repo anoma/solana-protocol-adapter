@@ -40,8 +40,8 @@ fn test_prepare_proof_rejects_wrong_selector() {
     let wrong_selector = [0x00, 0x00, 0x00, 0x00];
     let result = prepare_proof_for_verification(&fake_aggregation(), wrong_selector);
     match result {
-        Err(crate::error::PAError::InvalidProofSelector) => {}
-        Err(other) => panic!("Expected InvalidProofSelector, got {:?}", other),
+        Err(crate::error::PAError::RiscZeroVerifierSelectorMismatch) => {}
+        Err(other) => panic!("Expected RiscZeroVerifierSelectorMismatch, got {:?}", other),
         Ok(_) => panic!("Expected error, got Ok"),
     }
 }

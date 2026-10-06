@@ -8,7 +8,7 @@ fn test_error_external_call_output_mismatch() {
     let actual = vec![4, 5, 6];
 
     let result = verify_output(&expected, &actual);
-    assert!(matches!(result, Err(PAError::ExternalCallOutputMismatch)));
+    assert!(matches!(result, Err(PAError::ForwarderCallOutputMismatch)));
 }
 
 #[test]

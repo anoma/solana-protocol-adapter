@@ -8,7 +8,7 @@ use arm_solana::SolanaArmError;
 pub enum PAError {
     // Nullifier errors
     #[msg("Duplicate nullifier detected")]
-    DuplicateNullifier,
+    PreExistingNullifier,
     #[msg("Nullifier PDA pubkey mismatch")]
     NullifierPdaMismatch,
 
@@ -46,7 +46,7 @@ pub enum PAError {
     #[msg("Aggregation required: non-aggregated proofs not enabled")]
     AggregationRequired,
     #[msg("Proof selector does not match expected selector")]
-    InvalidProofSelector,
+    RiscZeroVerifierSelectorMismatch,
 
     // External call errors
     #[msg("Invalid external call blob encoding")]
@@ -54,7 +54,7 @@ pub enum PAError {
     #[msg("Forwarder account does not match the program the external call names")]
     UnregisteredForwarder,
     #[msg("External call output verification failed")]
-    ExternalCallOutputMismatch,
+    ForwarderCallOutputMismatch,
     #[msg("External call CPI failed")]
     ExternalCallCpiFailed,
 
@@ -66,7 +66,7 @@ pub enum PAError {
     #[msg("Invalid delta proof format")]
     InvalidDeltaProof,
     #[msg("Delta point not on secp256k1 curve")]
-    DeltaPointNotOnCurve,
+    PointNotOnCurve,
     #[msg("Expected delta proof, got witness")]
     ExpectedDeltaProof,
 
@@ -76,9 +76,7 @@ pub enum PAError {
     #[msg("Aggregation instance kind-table commitment does not match the configured table")]
     KindTableCommitmentMismatch,
     #[msg("Zero kind-table commitment not allowed")]
-    ZeroKindTableCommitment,
-    #[msg("Duplicate nullifier within the aggregation instance")]
-    NullifierDuplication,
+    ZeroKindTableCommitmentNotAllowed,
 
     // Protocol state errors
     #[msg("Unauthorized: the signer does not hold the authority this instruction requires")]
@@ -132,9 +130,9 @@ pub enum PAError {
 
     // Initialization, as pa-evm's zero-value rejections
     #[msg("Zero verifier router not allowed")]
-    ZeroVerifierRouterNotAllowed,
+    ZeroRiscZeroVerifierRouterNotAllowed,
     #[msg("Zero proof selector not allowed")]
-    ZeroProofSelectorNotAllowed,
+    ZeroRiscZeroVerifierSelectorNotAllowed,
 
     // Ownership, as OpenZeppelin's Ownable
     /// `OwnableUnauthorizedAccount`: the signer is not the owner.
@@ -156,7 +154,7 @@ impl From<SolanaArmError> for PAError {
             SolanaArmError::AmbiguousTransaction => PAError::InvalidTransactionData,
             SolanaArmError::ExpectedDeltaProof => PAError::ExpectedDeltaProof,
             SolanaArmError::InvalidDeltaProof => PAError::InvalidDeltaProof,
-            SolanaArmError::DeltaPointNotOnCurve => PAError::DeltaPointNotOnCurve,
+            SolanaArmError::DeltaPointNotOnCurve => PAError::PointNotOnCurve,
             SolanaArmError::DeltaProofVerificationFailed => PAError::DeltaProofVerificationFailed,
             SolanaArmError::DeltaMismatch => PAError::DeltaMismatch,
         }

@@ -279,3 +279,26 @@ async fn a_taken_adapter_obeys_its_new_owner() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+// A transaction repeating a nullifier is refused as an already spent one,
+// pa-evm's single PreExistingNullifier: its second marker is the first's.
+// arm's aggregation guest does not refuse it (arm's host-side verification
+// does), so the adapter is what stands in its way.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transaction_repeating_a_nullifier_is_refused_as_spent() -> anyhow::Result<()> {
+    use anoma_pa_testkit::environment::Refusal;
+
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    let action = || {
+        trivial::build(57, trivial::Overrides::default())
+            .map(|built| built.witnesses)
+            .context("failed to build trivial action 57")
+    };
+    let tx = prove_actions(&env, &[action()?, action()?]).await?;
+    let refusal = env.protocol_adapter.submit(tx).await?.err();
+    anyhow::ensure!(
+        refusal == Some(Refusal::NullifierSpent),
+        "the adapter returned {refusal:?}, not a refusal for a spent nullifier"
+    );
+    Ok(())
+}

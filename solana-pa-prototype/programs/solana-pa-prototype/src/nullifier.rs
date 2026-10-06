@@ -36,7 +36,9 @@ pub fn derive_nullifier_pda(
 ///
 /// # Errors
 /// * `PAError::NullifierPdaMismatch` - Provided marker doesn't match expected PDA
-/// * `PAError::DuplicateNullifier` - Marker already exists (nullifier spent)
+/// * `PAError::PreExistingNullifier` - Marker already exists: the nullifier
+///   was spent by an earlier settlement, or earlier in this one (a transaction
+///   repeating it), as pa-evm's `PreExistingNullifier` covers both
 /// * `PAError::MarkerUnexpectedOwner` - Placeholder at the PDA is owned by
 ///   something other than the system program
 /// * `PAError::MarkerUnexpectedData` - Placeholder at the PDA holds data
@@ -54,9 +56,10 @@ pub fn check_and_create_nullifier_marker<'info>(
     // Verify the provided account matches expected PDA
     require_keys_eq!(expected_key, *marker.key, PAError::NullifierPdaMismatch);
 
-    // Already ours: this nullifier was consumed by an earlier settlement.
+    // Already ours: this nullifier was consumed by an earlier settlement, or
+    // earlier in this one.
     if marker.owner == program_id {
-        return err!(PAError::DuplicateNullifier);
+        return err!(PAError::PreExistingNullifier);
     }
 
     let signer_seeds: &[&[u8]] = &[

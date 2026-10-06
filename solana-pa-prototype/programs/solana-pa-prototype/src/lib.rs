@@ -133,11 +133,11 @@ pub mod protocol_adapter {
         );
         require!(
             verifier_router != Pubkey::default(),
-            PAError::ZeroVerifierRouterNotAllowed
+            PAError::ZeroRiscZeroVerifierRouterNotAllowed
         );
         require!(
             proof_selector != [0u8; 4],
-            PAError::ZeroProofSelectorNotAllowed
+            PAError::ZeroRiscZeroVerifierSelectorNotAllowed
         );
         // pa-evm's initializer's sanity check: the verifier is not paused already.
         require!(
@@ -456,7 +456,7 @@ pub mod protocol_adapter {
     ) -> Result<()> {
         require!(
             new_kind_table_commitment != [0u8; 32],
-            PAError::ZeroKindTableCommitment
+            PAError::ZeroKindTableCommitmentNotAllowed
         );
         ctx.accounts.pa_state.kind_table_commitment = new_kind_table_commitment;
         emit_cpi!(KindTableCommitmentUpdatedEvent {
@@ -777,10 +777,6 @@ fn execute_settlement(
             );
         }
     }
-    instance
-        .nf_duplication_check()
-        .map_err(|_| error!(PAError::NullifierDuplication))?;
-
     validate_consumed_roots(instance, state, pa_state_key, accounts.remaining)?;
 
     let nullifier_count = settle::nullifier_count(instance);
@@ -1389,7 +1385,7 @@ pub struct TransactionExecutedEvent {
 /// Matches EVM PA's ForwarderCallExecuted event.
 #[event]
 pub struct ForwarderCallExecutedEvent {
-    pub forwarder: Pubkey,
+    pub untrusted_forwarder: Pubkey,
     pub input: Vec<u8>,
     pub output: Vec<u8>,
 }
