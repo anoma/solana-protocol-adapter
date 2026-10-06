@@ -9,7 +9,7 @@ use anyhow::Context;
 /// Makes solana-devnet's kind table, as anoma/risc0-kind-tables records it,
 /// the prover's, and returns its commitment. Fails when the process's prover
 /// already holds another table.
-pub fn load_devnet() -> anyhow::Result<[u8; 32]> {
+pub(super) fn load_devnet() -> anyhow::Result<[u8; 32]> {
     let entries: Vec<KindTableEntry> = table::staging::table(SolanaCluster::Devnet)
         .context("no kind table is recorded for solana-devnet")?
         .entries

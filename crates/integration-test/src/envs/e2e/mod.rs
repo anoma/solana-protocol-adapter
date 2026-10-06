@@ -1,4 +1,5 @@
 mod config;
+mod kind_table;
 mod setup;
 
 use anoma_pa_testkit::prover::{QueueProver, Risc0Prover};

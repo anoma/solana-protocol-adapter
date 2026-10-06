@@ -16,7 +16,6 @@ use anoma_pa_testkit::environment::{
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_rm_risc0::Digest;
 use anyhow::Context;
-use solana_account::Account;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_message::AddressLookupTableAccount;
@@ -368,21 +367,11 @@ pub(in crate::envs) async fn read_state(
     rpc: &RpcClient,
     program: &Pubkey,
 ) -> anyhow::Result<PAStateAccount> {
-    Ok(read_state_account(rpc, program).await?.1)
-}
-
-/// The state account of the adapter `program`, as it is now, and the state
-/// it holds.
-pub(in crate::envs) async fn read_state_account(
-    rpc: &RpcClient,
-    program: &Pubkey,
-) -> anyhow::Result<(Account, PAStateAccount)> {
     let (pa_state, _) = derive_pa_state_pda(program);
-    let account = rpc.get_account(&pa_state).await.with_context(|| {
+    let data = rpc.get_account_data(&pa_state).await.with_context(|| {
         format!("the protocol adapter {program} has no state account {pa_state}")
     })?;
-    let state = decode_pa_state(&account.data).context("failed to decode the adapter state")?;
-    Ok((account, state))
+    decode_pa_state(&data).context("failed to decode the adapter state")
 }
 
 #[cfg(test)]

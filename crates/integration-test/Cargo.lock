@@ -1237,7 +1237,6 @@ dependencies = [
  "dotenvy",
  "futures 0.3.34",
  "serde_json",
- "solana-account 4.3.2",
  "solana-address-lookup-table-interface 3.1.0",
  "solana-commitment-config",
  "solana-instruction 3.4.1",

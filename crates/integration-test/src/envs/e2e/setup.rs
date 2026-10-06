@@ -40,7 +40,7 @@ impl Environment {
         env.take_ownership(owner).await?;
         // The tests prove against devnet's kind table, which the adapter must
         // store.
-        let loaded = crate::kind_table::load_devnet()?;
+        let loaded = super::kind_table::load_devnet()?;
         let stored = env.protocol_adapter.state().await?.kind_table_commitment;
         anyhow::ensure!(
             stored == loaded,

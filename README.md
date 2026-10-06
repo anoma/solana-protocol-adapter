@@ -79,7 +79,7 @@ entry point for one fixture.
 | `./scripts/dev.sh harness-lint` | The integration-test harness's format check and clippy, as CI's Harness job runs them (`dev.sh clippy` runs it too) |
 | `./scripts/dev.sh harness-test [--e2e]` | The integration-test harness's tests on surfpool; with `--e2e`, its e2e cases on a fork of devnet (`DEVNET_RPC_URL`), in release mode, proven by the queue (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`) or with `E2E_PROVER=local` on this machine |
 | `./scripts/dev.sh harness-programs [--check]` | Write the harness's program binaries (the deterministic builds); `--check` fails when the committed ones are not |
-| `./scripts/dev.sh lock-check` / `lock-sync <pkg>` | Check / re-align the Cargo.lock files' shared dependencies |
+| `./scripts/dev.sh lock-check` / `lock-sync` | Check / re-align the Cargo.lock files' shared dependencies |
 | `./scripts/dev.sh update-deps` | Regenerate `yarn.lock` |
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
@@ -194,7 +194,7 @@ cd solana-pa-prototype
 ./scripts/dev.sh anchor-test tests/settle.ts
 ```
 
-The test **"accepts a valid Groth16 batch aggregation tx and creates root marker"** settles `batch_groth16.json`, whose one created resource carries a block-time-forwarder call. The forwarder logs nothing itself; the adapter emits `ForwarderCallExecutedEvent { forwarder, input, output }` for the call, with `output = [0]`, and fails the settlement with `ForwarderCallOutputMismatch` if the returned byte differs from the proof's (the test "reverts on unexpected forwarder call output" settles `batch_groth16_mismatch.json` to show it).
+The test **"accepts a valid Groth16 batch aggregation tx and creates root marker"** settles `batch_groth16.json`, whose one created resource carries a block-time-forwarder call. The forwarder logs nothing itself; the adapter emits `ForwarderCallExecutedEvent { untrusted_forwarder, input, output }` for the call, with `output = [0]`, and fails the settlement with `ForwarderCallOutputMismatch` if the returned byte differs from the proof's (the test "reverts on unexpected forwarder call output" settles `batch_groth16_mismatch.json` to show it).
 
 ### Step 2: See Verification Fail
 

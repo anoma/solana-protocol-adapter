@@ -40,33 +40,21 @@ source "${SCRIPT_DIR}/validator-deploy.sh"
 # operations (dispatched to ops.sh) load their cluster's on top.
 load_program_ids localnet
 
-# Re-lock every present lockfile that holds <pkg> to its manifest's pin, so all
-# of them pin the same commit once the manifests do. Every shared dependency is
-# pinned to an exact rev or version, so the re-lock cargo makes when a pin no
-# longer matches its lockfile is enough. `cargo update -p` re-resolves other
+# Re-lock every present lockfile to its manifests' pins, so all of them pin the
+# same commit once the manifests do. `cargo update --workspace` re-locks only
+# the entries whose pin no longer matches; `cargo update -p` re-resolves other
 # packages too, and can move one onto a version the rest of the graph does not
 # build with (five8 accepts both five8_core 0.1 and 1.0; solana-keypair needs
 # 1.0).
-sync_lockfiles_for_package() {
-  local pkg="$1"
-  if [[ -z "$pkg" ]]; then
-    echo "Usage: $0 lock-sync <package>" >&2
-    exit 1
-  fi
+sync_lockfiles() {
   local lockfile manifest_rel
   for lockfile in "${LOCK_FILES[@]}"; do
     manifest_rel="${lockfile%Cargo.lock}Cargo.toml"
     if [[ ! -f "${PROJECT_DIR}/${manifest_rel}" ]]; then
       continue
     fi
-    # A workspace that does not depend on <pkg> has nothing to update, as
-    # ensure_lockfile_sync skips it.
-    if [[ -z "$(lock_pin_for "${PROJECT_DIR}/${lockfile}" "$pkg")" ]]; then
-      echo "==> ${lockfile}: no ${pkg}"
-      continue
-    fi
     echo "==> ${lockfile}"
-    run_in_project "cargo metadata --format-version 1 --manifest-path '${manifest_rel}' > /dev/null"
+    run_in_project "cargo update --workspace --manifest-path '${manifest_rel}'"
   done
 }
 
@@ -137,8 +125,7 @@ case "${1:-}" in
     ;;
 
   lock-sync)
-    shift
-    sync_lockfiles_for_package "${1:-}"
+    sync_lockfiles
     ;;
 
   lock-check)
@@ -293,7 +280,7 @@ PYEOF
     echo "  coverage     Run unit tests with kcov and report line coverage"
     echo "  clean        Remove local validator/test artifacts"
     echo "  lock-check   Verify Cargo.lock files agree on shared git deps"
-    echo "  lock-sync <pkg>  Re-lock <pkg> in every Cargo.lock to its manifests' pin"
+    echo "  lock-sync    Re-lock every Cargo.lock to its manifests' pins"
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
     echo ""
     echo "Cluster operations (take --cluster <localnet|devnet|mainnet>, optional for"

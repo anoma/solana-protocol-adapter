@@ -8,5 +8,4 @@ pub mod commitment_tree;
 pub mod envs;
 pub mod executed;
 pub mod forwarders;
-pub mod kind_table;
 pub mod test_forwarder;

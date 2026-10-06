@@ -436,7 +436,7 @@ ensure_lockfile_sync() {
   done
   if [[ $mismatch -ne 0 ]]; then
     echo "" >&2
-    echo "Fix: ./scripts/dev.sh lock-sync <package>" >&2
+    echo "Fix: ./scripts/dev.sh lock-sync" >&2
     return 1
   fi
 }
