@@ -5,7 +5,7 @@ use anoma_pa_solana_client::settlement_input::{
     external_calls, settled_resources, settlement_input,
 };
 use anoma_pa_solana_client::{
-    PAStateAccount, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
+    PAStateAccount, PaError, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
     deny_logic_ref_ix, derive_pa_state_pda, pause_ix, plan_settlement,
     set_kind_table_commitment_ix, unpause_ix,
 };
@@ -283,58 +283,89 @@ impl CoreProtocolAdapter for ProtocolAdapter {
 
 /// Why the adapter `program` refused a settlement, from the runtime's log of
 /// it: the deepest failure, which the runtime logs first as the program that
-/// failed and the custom error it returned. Any custom error of the
+/// failed and the custom error it returned (a line no program can write: a
+/// program's own lines start `Program log: `). Any custom error of the
 /// `verifier` refuses the aggregation proof; an error of the adapter's own is
-/// named by the last Anchor log line before the failure carrying its number,
-/// the line Anchor writes as the program returns the error. `None` for any
-/// other failure.
+/// the refusal its `PaError` is. `None` for any other failure.
 fn refusal_in_logs(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Option<Refusal> {
-    let (at, (failed, error)) = logs.iter().enumerate().find_map(|(at, line)| {
-        Some((at, line.strip_prefix("Program ")?.split_once(" failed: ")?))
+    let (failed, error) = logs.iter().find_map(|line| {
+        let (failed, error) = line.strip_prefix("Program ")?.split_once(" failed: ")?;
+        Some((failed.parse::<Pubkey>().ok()?, error))
     })?;
-    let failed: Pubkey = failed.parse().ok()?;
-    let number = u32::from_str_radix(error.strip_prefix("custom program error: 0x")?, 16).ok()?;
+    let code = u32::from_str_radix(error.strip_prefix("custom program error: 0x")?, 16).ok()?;
     if failed == *verifier {
         return Some(Refusal::InvalidAggregationProof);
     }
     if failed != *program {
         return None;
     }
-    let code = logs[..at].iter().rev().find_map(|line| {
-        let (_, logged) = line.split_once("Error Code: ")?;
-        let (code, logged) = logged.split_once(". Error Number: ")?;
-        let (logged_number, _) = logged.split_once('.')?;
-        (logged_number.parse() == Ok(number)).then_some(code)
-    })?;
-    match code {
-        "EnforcedPause" => Some(Refusal::Paused),
-        "DeniedLogicRef" => Some(Refusal::DeniedLogicRef),
-        "NonExistingRoot" => Some(Refusal::UnknownRoot),
-        "PreExistingNullifier" => Some(Refusal::NullifierSpent),
-        "KindTableCommitmentMismatch" | "ComplianceKeyMismatch" | "InvalidProof" => {
-            Some(Refusal::InvalidAggregationProof)
-        }
-        "ForwarderCallOutputMismatch" => Some(Refusal::ExternalCallOutputMismatch),
-        _ => None,
+    refusal_for(PaError::from_code(code)?)
+}
+
+/// The refusal the adapter's `error` is, if it is one of the protocol's. The
+/// match lists every error, so an error the adapter adds is mapped here
+/// before the harness builds.
+fn refusal_for(error: PaError) -> Option<Refusal> {
+    match error {
+        PaError::EnforcedPause => Some(Refusal::Paused),
+        PaError::DeniedLogicRef => Some(Refusal::DeniedLogicRef),
+        PaError::NonExistingRoot => Some(Refusal::UnknownRoot),
+        PaError::PreExistingNullifier => Some(Refusal::NullifierSpent),
+        PaError::ForwarderCallOutputMismatch => Some(Refusal::ExternalCallOutputMismatch),
+        PaError::KindTableCommitmentMismatch
+        | PaError::ComplianceKeyMismatch
+        | PaError::InvalidProof => Some(Refusal::InvalidAggregationProof),
+        PaError::NullifierPdaMismatch
+        | PaError::RootPdaMismatch
+        | PaError::TxDataExpired
+        | PaError::TxDataBoundsExceeded
+        | PaError::TxDataExpiryTooSoon
+        | PaError::TxDataExpiryTooLate
+        | PaError::TxDataExtendMustIncrease
+        | PaError::TxDataNotExpired
+        | PaError::InvalidExpiryConfig
+        | PaError::InvalidTransactionData
+        | PaError::VerifierRouterFailed
+        | PaError::AggregationRequired
+        | PaError::RiscZeroVerifierSelectorMismatch
+        | PaError::InvalidExternalCallBlob
+        | PaError::UnregisteredForwarder
+        | PaError::ExternalCallCpiFailed
+        | PaError::DeltaProofVerificationFailed
+        | PaError::DeltaMismatch
+        | PaError::InvalidDeltaProof
+        | PaError::PointNotOnCurve
+        | PaError::ExpectedDeltaProof
+        | PaError::ZeroKindTableCommitmentNotAllowed
+        | PaError::Unauthorized
+        | PaError::ExpectedPause
+        | PaError::RiscZeroVerifierPaused
+        | PaError::InvalidVerifierEntry
+        | PaError::TreeMaxDepthReached
+        | PaError::InvalidMarker
+        | PaError::EmptyExpectedOutput
+        | PaError::MarkerUnexpectedOwner
+        | PaError::MarkerUnexpectedData
+        | PaError::RootMarkerAlreadyExists
+        | PaError::UnsupportedStateSchema
+        | PaError::ZeroLogicRefNotAllowed
+        | PaError::LogicRefAlreadyDenied
+        | PaError::ZeroRiscZeroVerifierRouterNotAllowed
+        | PaError::ZeroRiscZeroVerifierSelectorNotAllowed
+        | PaError::OwnableUnauthorizedAccount
+        | PaError::OwnableInvalidOwner
+        | PaError::InvalidUpgradeBuffer => None,
     }
 }
 
 /// A settlement's event as pa-testkit's: the adapter's settlement events,
 /// which mirror pa-evm's. An owner's event is no settlement's.
 fn settlement_event(event: PaEvent) -> anyhow::Result<Event> {
-    // The index is a u256 (32 little-endian bytes); a payload's position
-    // fits pa-testkit's u32.
     let payload = |kind, p: anoma_pa_solana_client::events::PayloadEvent| {
-        let (low, high) = p.index.split_at(4);
-        anyhow::ensure!(
-            high.iter().all(|byte| *byte == 0),
-            "a payload event's index {:02x?} exceeds u32",
-            p.index
-        );
         Ok::<_, anyhow::Error>(Event::Payload {
             kind,
             tag: Digest::from_bytes(p.tag),
-            index: u32::from_le_bytes(low.try_into()?),
+            index: u32::try_from(p.index)?,
             blob: p.blob,
         })
     };
@@ -394,18 +425,31 @@ mod tests {
     }
 
     #[test]
-    fn the_adapters_error_is_named_by_the_log_line_carrying_its_number() {
+    fn the_adapters_error_is_its_code() {
         let logs = logs(&[
             "Program ADAPTER invoke [1]",
             "Program FORWARDER invoke [2]",
             // A forwarder can log anything, Anchor's error format included.
-            "Program log: AnchorError occurred. Error Code: EnforcedPause. Error Number: 6020. \
+            "Program log: AnchorError occurred. Error Code: EnforcedPause. Error Number: 6029. \
              Error Message: forged.",
             "Program FORWARDER success",
-            "Program log: AnchorError thrown in programs/x/src/lib.rs:1. Error Code: \
-             ForwarderCallOutputMismatch. Error Number: 6020. Error Message: External call output \
-             verification failed.",
-            "Program ADAPTER failed: custom program error: 0x1784",
+            "Program ADAPTER failed: custom program error: 0x1782",
+        ]);
+        assert_eq!(
+            refusal_in_logs(&logs, &ADAPTER, &VERIFIER),
+            Some(Refusal::ExternalCallOutputMismatch)
+        );
+    }
+
+    #[test]
+    fn a_programs_log_line_reading_like_a_failure_is_not_the_failure() {
+        let logs = logs(&[
+            "Program ADAPTER invoke [1]",
+            "Program FORWARDER invoke [2]",
+            // A program's own log lines start "Program log: ", whatever follows.
+            "Program log: Program ADAPTER failed: custom program error: 0x1772",
+            "Program FORWARDER success",
+            "Program ADAPTER failed: custom program error: 0x1782",
         ]);
         assert_eq!(
             refusal_in_logs(&logs, &ADAPTER, &VERIFIER),
@@ -427,6 +471,16 @@ mod tests {
             refusal_in_logs(&logs, &ADAPTER, &VERIFIER),
             Some(Refusal::InvalidAggregationProof)
         );
+    }
+
+    #[test]
+    fn an_anchor_framework_error_of_the_adapter_is_no_refusal() {
+        // 3012: Anchor's AccountNotInitialized, below the adapter's own codes.
+        let logs = logs(&[
+            "Program ADAPTER invoke [1]",
+            "Program ADAPTER failed: custom program error: 0xbc4",
+        ]);
+        assert_eq!(refusal_in_logs(&logs, &ADAPTER, &VERIFIER), None);
     }
 
     #[test]
