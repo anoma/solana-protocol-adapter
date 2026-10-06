@@ -54,6 +54,12 @@ sync_lockfiles_for_package() {
     if [[ ! -f "${PROJECT_DIR}/${manifest_rel}" ]]; then
       continue
     fi
+    # A workspace that does not depend on <pkg> has nothing to update, as
+    # ensure_lockfile_sync skips it.
+    if [[ -z "$(lock_pin_for "${PROJECT_DIR}/${lockfile}" "$pkg")" ]]; then
+      echo "==> ${lockfile}: no ${pkg}"
+      continue
+    fi
     echo "==> ${lockfile}"
     run_in_project "cargo update --manifest-path '${manifest_rel}' -p '${pkg}'"
   done
