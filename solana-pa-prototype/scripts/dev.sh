@@ -153,7 +153,7 @@ case "${1:-}" in
     ;;
 
   fmt)
-    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
+    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check && yarn run lint"
     ;;
 
   clippy)
@@ -245,7 +245,7 @@ PYEOF
     echo "Commands:"
     echo "  shell        Enter the Nix development shell"
     echo "  test         Run Rust tests"
-    echo "  fmt          Check Rust formatting (the programs and fixture-gen)"
+    echo "  fmt          Check formatting: Rust (the programs, fixture-gen) and TypeScript (prettier)"
     echo "  clippy       Run clippy lints, and harness-lint"
     echo "  anchor-build Build Anchor programs (development build, dev-teardown enabled)"
     echo "  release-build Build the production binaries (no dev features; verifies each"
