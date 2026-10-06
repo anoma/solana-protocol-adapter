@@ -30,7 +30,7 @@ fn event_instruction_data_is_tag_then_anchor_event_data_for_a_blob_event() {
     use anchor_lang::Event;
     let event = crate::ResourcePayloadEvent {
         tag: [9u8; 32],
-        index: 2,
+        index: crate::U256::from(2usize),
         blob: (0..=200u8).collect(),
     };
     let data = event_instruction_data(&event).unwrap();
@@ -39,5 +39,5 @@ fn event_instruction_data_is_tag_then_anchor_event_data_for_a_blob_event() {
         data,
         [anchor_lang::event::EVENT_IX_TAG_LE, &event.data()].concat()
     );
-    assert_eq!(data.len(), 8 + 8 + 32 + 4 + 4 + 201);
+    assert_eq!(data.len(), 8 + 8 + 32 + 32 + 4 + 201);
 }

@@ -97,6 +97,7 @@ pub mod state;
 #[cfg(test)]
 mod tests;
 pub mod types;
+mod u256;
 pub mod upgrade;
 
 use arm_core::aggregation_instance::AggregationInstance;
@@ -105,6 +106,7 @@ pub use error::PAError;
 use groth16::prepare_proof_for_verification;
 use merkle::{append_to_tree, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, MAX_TREE_DEPTH};
 use state::*;
+pub use u256::U256;
 
 #[program]
 pub mod protocol_adapter {
@@ -1284,28 +1286,28 @@ pub struct DevSetSchemaVersion<'info> {
 #[event]
 pub struct ResourcePayloadEvent {
     pub tag: [u8; 32],
-    pub index: u32,
+    pub index: U256,
     pub blob: Vec<u8>,
 }
 
 #[event]
 pub struct DiscoveryPayloadEvent {
     pub tag: [u8; 32],
-    pub index: u32,
+    pub index: U256,
     pub blob: Vec<u8>,
 }
 
 #[event]
 pub struct ExternalPayloadEvent {
     pub tag: [u8; 32],
-    pub index: u32,
+    pub index: U256,
     pub blob: Vec<u8>,
 }
 
 #[event]
 pub struct ApplicationPayloadEvent {
     pub tag: [u8; 32],
-    pub index: u32,
+    pub index: U256,
     pub blob: Vec<u8>,
 }
 
@@ -1417,7 +1419,7 @@ fn emit_app_data_events(
                 if payload.deletion_criterion == DELETION_CRITERION_NEVER {
                     events.emit(&$Event {
                         tag: tag_bytes,
-                        index: i as u32,
+                        index: U256::from(i),
                         blob: arm_core::utils::words_to_bytes(&payload.blob).to_vec(),
                     })?;
                 }

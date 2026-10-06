@@ -106,7 +106,7 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
       [discoveryEvents, 768],
     ] as const) {
       for (const ev of evs) {
-        assert.equal(ev.data.index, 0);
+        assert.equal(ev.data.index.toNumber(), 0);
         assert.equal(Buffer.from(ev.data.blob).length, byteLen);
         assert.ok(
           createdTags.some((t: number[]) => Buffer.from(t).equals(Buffer.from(ev.data.tag))),
