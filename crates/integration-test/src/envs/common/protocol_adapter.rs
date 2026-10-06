@@ -311,7 +311,7 @@ fn refusal_in_logs(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Opti
         "EnforcedPause" => Some(Refusal::Paused),
         "DeniedLogicRef" => Some(Refusal::DeniedLogicRef),
         "NonExistingRoot" => Some(Refusal::UnknownRoot),
-        "PreExistingNullifier" | "NullifierDuplication" => Some(Refusal::NullifierSpent),
+        "PreExistingNullifier" => Some(Refusal::NullifierSpent),
         "KindTableCommitmentMismatch" | "ComplianceKeyMismatch" | "InvalidProof" => {
             Some(Refusal::InvalidAggregationProof)
         }

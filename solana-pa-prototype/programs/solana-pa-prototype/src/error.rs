@@ -77,8 +77,6 @@ pub enum PAError {
     KindTableCommitmentMismatch,
     #[msg("Zero kind-table commitment not allowed")]
     ZeroKindTableCommitmentNotAllowed,
-    #[msg("Duplicate nullifier within the aggregation instance")]
-    NullifierDuplication,
 
     // Protocol state errors
     #[msg("Unauthorized: the signer does not hold the authority this instruction requires")]

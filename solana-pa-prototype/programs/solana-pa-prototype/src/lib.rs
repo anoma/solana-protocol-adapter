@@ -777,10 +777,6 @@ fn execute_settlement(
             );
         }
     }
-    instance
-        .nf_duplication_check()
-        .map_err(|_| error!(PAError::NullifierDuplication))?;
-
     validate_consumed_roots(instance, state, pa_state_key, accounts.remaining)?;
 
     let nullifier_count = settle::nullifier_count(instance);
