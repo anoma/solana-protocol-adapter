@@ -32,7 +32,7 @@ pub fn prepare_proof_for_verification(
     // EVM PA validates selector before verification; wrong-selector proofs would fail
     // at the verifier anyway, but this gives an explicit error message.
     if seal.selector != expected_selector {
-        return Err(PAError::InvalidProofSelector);
+        return Err(PAError::RiscZeroVerifierSelectorMismatch);
     }
 
     // The RISC Zero Groth16 verifier expects pi_a to be negated (on BN254 G1).

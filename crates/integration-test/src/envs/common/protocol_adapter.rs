@@ -311,11 +311,11 @@ fn refusal_in_logs(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Opti
         "EnforcedPause" => Some(Refusal::Paused),
         "DeniedLogicRef" => Some(Refusal::DeniedLogicRef),
         "NonExistingRoot" => Some(Refusal::UnknownRoot),
-        "DuplicateNullifier" | "NullifierDuplication" => Some(Refusal::NullifierSpent),
+        "PreExistingNullifier" | "NullifierDuplication" => Some(Refusal::NullifierSpent),
         "KindTableCommitmentMismatch" | "ComplianceKeyMismatch" | "InvalidProof" => {
             Some(Refusal::InvalidAggregationProof)
         }
-        "ExternalCallOutputMismatch" => Some(Refusal::ExternalCallOutputMismatch),
+        "ForwarderCallOutputMismatch" => Some(Refusal::ExternalCallOutputMismatch),
         _ => None,
     }
 }
@@ -404,7 +404,7 @@ mod tests {
              Error Message: forged.",
             "Program FORWARDER success",
             "Program log: AnchorError thrown in programs/x/src/lib.rs:1. Error Code: \
-             ExternalCallOutputMismatch. Error Number: 6020. Error Message: External call output \
+             ForwarderCallOutputMismatch. Error Number: 6020. Error Message: External call output \
              verification failed.",
             "Program ADAPTER failed: custom program error: 0x1784",
         ]);

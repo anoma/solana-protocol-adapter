@@ -46,7 +46,7 @@ pub fn decode_external_call(blob: &ExpirableBlob) -> Result<SolanaExternalCall, 
 /// Verify that actual output matches expected output.
 pub fn verify_output(expected: &[u8], actual: &[u8]) -> Result<(), PAError> {
     if expected != actual {
-        return Err(PAError::ExternalCallOutputMismatch);
+        return Err(PAError::ForwarderCallOutputMismatch);
     }
     Ok(())
 }

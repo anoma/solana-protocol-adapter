@@ -194,7 +194,7 @@ cd solana-pa-prototype
 ./scripts/dev.sh anchor-test tests/settle.ts
 ```
 
-The test **"accepts a valid Groth16 batch aggregation tx and creates root marker"** settles `batch_groth16.json`, whose one created resource carries a block-time-forwarder call. The forwarder logs nothing itself; the adapter emits `ForwarderCallExecutedEvent { forwarder, input, output }` for the call, with `output = [0]`, and fails the settlement with `ExternalCallOutputMismatch` if the returned byte differs from the proof's (the test "reverts on unexpected forwarder call output" settles `batch_groth16_mismatch.json` to show it).
+The test **"accepts a valid Groth16 batch aggregation tx and creates root marker"** settles `batch_groth16.json`, whose one created resource carries a block-time-forwarder call. The forwarder logs nothing itself; the adapter emits `ForwarderCallExecutedEvent { forwarder, input, output }` for the call, with `output = [0]`, and fails the settlement with `ForwarderCallOutputMismatch` if the returned byte differs from the proof's (the test "reverts on unexpected forwarder call output" settles `batch_groth16_mismatch.json` to show it).
 
 ### Step 2: See Verification Fail
 

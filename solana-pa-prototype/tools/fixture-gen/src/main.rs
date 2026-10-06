@@ -339,7 +339,7 @@ enum ShapeCommand {
         generate: GenerateArgs,
     },
     /// The block-time-forwarder call with a wrong expected output, for the
-    /// ExternalCallOutputMismatch test.
+    /// ForwarderCallOutputMismatch test.
     OutputMismatch {
         #[command(flatten)]
         generate: GenerateArgs,
@@ -503,7 +503,7 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Expirabl
     let input = (-1_i64).to_le_bytes().to_vec();
 
     // If output_mismatch is true, set expected_output to RESULT_GT which is WRONG.
-    // The forwarder will return RESULT_LT, but we expect RESULT_GT, causing ExternalCallOutputMismatch.
+    // The forwarder will return RESULT_LT, but we expect RESULT_GT, causing ForwarderCallOutputMismatch.
     let expected_output = if output_mismatch {
         vec![RESULT_GT]
     } else {
@@ -1578,7 +1578,7 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             ..
         } => eprintln!("mode: multi-external-call (two external payload blobs)"),
         ShapeCommand::OutputMismatch { .. } => eprintln!(
-            "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
+            "mode: output-mismatch (intentionally wrong expected_output for ForwarderCallOutputMismatch test)"
         ),
         ShapeCommand::ConsumeOnly { .. } => {
             eprintln!("mode: consume-only (one zero-quantity consumed resource, nothing created)")

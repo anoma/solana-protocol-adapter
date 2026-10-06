@@ -155,11 +155,11 @@ describe("settlement", () => {
       );
     });
 
-    it("reverts on unexpected forwarder call output (ExternalCallOutputMismatch)", async () => {
+    it("reverts on unexpected forwarder call output (ForwarderCallOutputMismatch)", async () => {
       // This test uses a fixture where:
       // - timestamp = -1 (past time, forwarder will return RESULT_LT = 0x00)
       // - expected_output = 0x02 (RESULT_GT - intentionally WRONG)
-      // The PA should revert with ExternalCallOutputMismatch when actual != expected.
+      // The PA should revert with ForwarderCallOutputMismatch when actual != expected.
       const mismatchFixture = await loadFixture("batch_groth16_mismatch.json");
       const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
 
@@ -170,7 +170,7 @@ describe("settlement", () => {
           nullifierAccounts: mismatchNullifierAccounts,
           newRootMarker: DUMMY_ROOT_MARKER,
         }),
-        { program, error: "ExternalCallOutputMismatch" },
+        { program, error: "ForwarderCallOutputMismatch" },
       );
     });
   });

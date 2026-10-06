@@ -73,7 +73,7 @@ describe("protocol-adapter (kind table commitment) @localnet", () => {
   it("rejects a zero commitment", () =>
     assertFails(setKindTableCommitment(program, provider.wallet.publicKey, Array(32).fill(0)).rpc(), {
       program: program,
-      error: "ZeroKindTableCommitment",
+      error: "ZeroKindTableCommitmentNotAllowed",
     }));
 
   it("stores a new commitment, emits KindTableCommitmentUpdated, and rejects transactions proven against the previous table until it is restored", async () => {
@@ -96,6 +96,6 @@ describe("protocol-adapter (kind table commitment) @localnet", () => {
 
     await setKindTableCommitment(program, provider.wallet.publicKey, found).rpc();
     assert.deepEqual(await stored(), found, "the commitment the deployment held is restored");
-    await assertFails(resettleFixture(), { program, error: "DuplicateNullifier" });
+    await assertFails(resettleFixture(), { program, error: "PreExistingNullifier" });
   });
 });

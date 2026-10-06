@@ -7,7 +7,7 @@
 //! | Mode byte | Behavior                                          | What it tests               |
 //! |-----------|---------------------------------------------------|-----------------------------|
 //! | 0x00      | Returns `Err(IntentionalFailure)`                 | ExternalCallCpiFailed       |
-//! | 0x01      | Returns `Ok` without calling `set_return_data`    | ExternalCallOutputMismatch  |
+//! | 0x01      | Returns `Ok` without calling `set_return_data`    | ForwarderCallOutputMismatch  |
 //! | 0x02      | Relays `forward_call` to `remaining_accounts[0]`  | a multi-program segment, the relayed program called at depth 3 |
 //! | 0x03      | Logs `input[1]` lines of 100 bytes, returns `Ok`  | events survive log truncation |
 //! | 0x04      | Writes `input[1..]` to `remaining_accounts[0]` and returns it | writable segment accounts, output of a state change |

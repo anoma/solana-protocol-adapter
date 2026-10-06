@@ -71,10 +71,10 @@ describe("protocol-adapter (initialize)", () => {
 
   // Mirrors pa-evm's constructor: ZeroRiscZeroVerifier{Router,Selector}NotAllowed.
   it("rejects a zero verifier router", () =>
-    assertFails(init({ router: PublicKey.default }).rpc(), { program, error: "ZeroVerifierRouterNotAllowed" }));
+    assertFails(init({ router: PublicKey.default }).rpc(), { program, error: "ZeroRiscZeroVerifierRouterNotAllowed" }));
 
   it("rejects a zero proof selector", () =>
-    assertFails(init({ selector: [0, 0, 0, 0] }).rpc(), { program, error: "ZeroProofSelectorNotAllowed" }));
+    assertFails(init({ selector: [0, 0, 0, 0] }).rpc(), { program, error: "ZeroRiscZeroVerifierSelectorNotAllowed" }));
 
   // Mirrors pa-evm's initializer's sanity check: RiscZeroVerifierPaused. The
   // localnet router registers PAUSED_MOCK_SELECTOR with its estop set.

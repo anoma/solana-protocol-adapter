@@ -93,7 +93,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
 
     const fwdEvents = events.filter((e) => e.name === "forwarderCallExecutedEvent");
     assert.isAtLeast(fwdEvents.length, 1, "Should emit forwarderCallExecutedEvent");
-    assert.ok(fwdEvents[0].data.forwarder.equals(blockTimeForwarderId), `forwarder should be ${blockTimeForwarderId}`);
+    assert.ok(fwdEvents[0].data.untrustedForwarder.equals(blockTimeForwarderId), `forwarder should be ${blockTimeForwarderId}`);
     const outputBytes = Buffer.from(fwdEvents[0].data.output);
     assert.deepEqual(outputBytes, Buffer.from([RESULT_LT]), "output should be RESULT_LT");
   });

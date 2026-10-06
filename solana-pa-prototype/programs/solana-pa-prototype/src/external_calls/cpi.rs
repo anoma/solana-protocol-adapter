@@ -42,9 +42,9 @@ fn read_forwarder_output(
     match output_mode {
         OutputMode::ReturnData => {
             let (returned_program_id, return_data) =
-                get_return_data().ok_or(PAError::ExternalCallOutputMismatch)?;
+                get_return_data().ok_or(PAError::ForwarderCallOutputMismatch)?;
             if returned_program_id != *program_id {
-                return Err(PAError::ExternalCallOutputMismatch);
+                return Err(PAError::ForwarderCallOutputMismatch);
             }
             Ok(return_data)
         }
@@ -66,7 +66,7 @@ fn execute_forwarder_call(
     super::verify_output(&call.expected_output, &actual_output)?;
 
     Ok(crate::ForwarderCallExecutedEvent {
-        forwarder,
+        untrusted_forwarder: forwarder,
         input: call.instruction_data,
         output: actual_output,
     })
