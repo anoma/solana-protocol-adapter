@@ -200,6 +200,28 @@ async fn refuses_a_call_whose_forwarder_changes_state_and_returns_other_than_exp
     Ok(())
 }
 
+// A refused settlement whose log the runtime truncated is not decoded: the
+// truncation may have dropped the deepest failure's line, so the harness
+// reports the failure instead of naming a refusal.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusal_with_a_truncated_log_is_reported_not_named() -> anyhow::Result<()> {
+    let mut s = setup().await?;
+    let lines = 10_000_usize.div_ceil("Program log: ".len() + 100);
+    let flood = log_ix(&s.forwarder, u8::try_from(lines)?);
+    let segment = vec![AccountMeta::new(s.account, false)];
+    let tx = s
+        .prove_call(9, segment, vec![flood], write_input(&WRITTEN), &[9; 4])
+        .await?;
+    let Err(error) = s.env.protocol_adapter.submit(tx).await else {
+        anyhow::bail!("the harness decoded a refusal from a truncated log");
+    };
+    anyhow::ensure!(
+        format!("{error:#}").contains("truncated the settlement's log"),
+        "the failure does not name the truncation: {error:#}"
+    );
+    Ok(())
+}
+
 // A segment can name more than one program: the test forwarder relays the
 // call to the program after it (itself, which writes the account), and that
 // program's call takes the accounts after it.
