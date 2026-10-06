@@ -323,19 +323,29 @@ fn refusal_in_logs(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Opti
 /// A settlement's event as pa-testkit's: the adapter's settlement events,
 /// which mirror pa-evm's. An owner's event is no settlement's.
 fn settlement_event(event: PaEvent) -> anyhow::Result<Event> {
-    let payload = |kind, p: anoma_pa_solana_client::events::PayloadEvent| Event::Payload {
-        kind,
-        tag: Digest::from_bytes(p.tag),
-        index: p.index,
-        blob: p.blob,
+    // The index is a u256 (32 little-endian bytes); a payload's position
+    // fits pa-testkit's u32.
+    let payload = |kind, p: anoma_pa_solana_client::events::PayloadEvent| {
+        let (low, high) = p.index.split_at(4);
+        anyhow::ensure!(
+            high.iter().all(|byte| *byte == 0),
+            "a payload event's index {:02x?} exceeds u32",
+            p.index
+        );
+        Ok::<_, anyhow::Error>(Event::Payload {
+            kind,
+            tag: Digest::from_bytes(p.tag),
+            index: u32::from_le_bytes(low.try_into()?),
+            blob: p.blob,
+        })
     };
     let digests = |values: Vec<[u8; 32]>| values.into_iter().map(Digest::from_bytes).collect();
     Ok(match event {
         PaEvent::ForwarderCallExecuted(_) => Event::ForwarderCallExecuted,
-        PaEvent::ResourcePayload(p) => payload(PayloadKind::Resource, p),
-        PaEvent::DiscoveryPayload(p) => payload(PayloadKind::Discovery, p),
-        PaEvent::ExternalPayload(p) => payload(PayloadKind::External, p),
-        PaEvent::ApplicationPayload(p) => payload(PayloadKind::Application, p),
+        PaEvent::ResourcePayload(p) => payload(PayloadKind::Resource, p)?,
+        PaEvent::DiscoveryPayload(p) => payload(PayloadKind::Discovery, p)?,
+        PaEvent::ExternalPayload(p) => payload(PayloadKind::External, p)?,
+        PaEvent::ApplicationPayload(p) => payload(PayloadKind::Application, p)?,
         PaEvent::ActionExecuted(action) => Event::ActionExecuted {
             action_tree_root: Digest::from_bytes(action.action_tree_root),
             nullifiers: digests(action.nullifiers),
