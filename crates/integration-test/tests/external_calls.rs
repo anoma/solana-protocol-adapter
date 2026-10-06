@@ -14,10 +14,10 @@ use anoma_pa_solana_integration_test::forwarders::{CallAccounts, Forwarder};
 use anoma_pa_solana_integration_test::test_forwarder::{
     RELAY_OK, log_ix, relay_input, write_input,
 };
-use anoma_pa_testkit::assert::{Needle, expect_integration_panic};
+use anoma_pa_testkit::environment::Refusal;
 use anoma_pa_testkit::fixtures::passthrough::{self, PASSTHROUGH_LOGIC_VK};
+use anoma_pa_testkit::prove_actions;
 use anoma_pa_testkit::transaction::Transaction;
-use anoma_pa_testkit::{execute_tx, prove_actions};
 use anoma_rm_risc0::utils::bytes_to_words;
 use futures::future::BoxFuture;
 use solana_instruction::{AccountMeta, Instruction};
@@ -144,12 +144,6 @@ impl Setup {
             .await
     }
 
-    /// Settles `tx` and reads the settlement back.
-    async fn settle(&mut self, tx: Transaction) -> anyhow::Result<Executed> {
-        let signature = self.env.protocol_adapter.settle(tx).await?;
-        Executed::read(&self.env.protocol_adapter.rpc, &signature).await
-    }
-
     /// The first bytes of the written account.
     async fn written(&self) -> anyhow::Result<Vec<u8>> {
         let data = self
@@ -173,7 +167,7 @@ impl Setup {
 async fn a_forwarder_writes_an_account_its_segment_passes_writable() -> anyhow::Result<()> {
     let mut s = setup().await?;
     let tx = s.prove_write(1, vec![]).await?;
-    execute_tx(&mut s.env, tx).await?;
+    s.env.protocol_adapter.settled(tx).await?;
     let written = s.written().await?;
     anyhow::ensure!(
         written == WRITTEN,
@@ -193,9 +187,11 @@ async fn refuses_a_call_whose_forwarder_changes_state_and_returns_other_than_exp
     let tx = s
         .prove_call(2, segment, vec![], write_input(&WRITTEN), &[9; 4])
         .await?;
-    expect_integration_panic(Needle::Static("Error Code: ExternalCallOutputMismatch."))(
-        execute_tx(&mut s.env, tx).await,
-    )?;
+    let refusal = s.env.protocol_adapter.submit(tx).await?.err();
+    anyhow::ensure!(
+        refusal == Some(Refusal::ExternalCallOutputMismatch),
+        "the adapter returned {refusal:?}, not a refusal for the output"
+    );
     let written = s.written().await?;
     anyhow::ensure!(
         written == UNWRITTEN,
@@ -211,7 +207,7 @@ async fn refuses_a_call_whose_forwarder_changes_state_and_returns_other_than_exp
 async fn a_forwarder_calls_a_second_program_its_segment_names() -> anyhow::Result<()> {
     let mut s = setup().await?;
     let tx = s.prove_relayed_write(3, vec![]).await?;
-    let executed = s.settle(tx).await?;
+    let executed = s.env.protocol_adapter.settled(tx).await?;
     // The adapter runs at depth 1, the forwarder at 2, the relayed call at 3.
     let relayed = format!("Program {} invoke [3]", s.forwarder);
     anyhow::ensure!(
@@ -234,7 +230,7 @@ async fn a_settlement_settles_after_other_instructions_in_its_transaction() -> a
     let mut s = setup().await?;
     let preceding = log_ix(&s.forwarder, 1);
     let tx = s.prove_write(4, vec![preceding.clone()]).await?;
-    let executed = s.settle(tx).await?;
+    let executed = s.env.protocol_adapter.settled(tx).await?;
     let message = &executed.transaction.message;
     let first = &message.instructions()[0];
     anyhow::ensure!(
@@ -260,7 +256,7 @@ async fn the_adapters_events_survive_a_truncated_log() -> anyhow::Result<()> {
     let lines = 10_000_usize.div_ceil("Program log: ".len() + 100);
     let flood = log_ix(&s.forwarder, u8::try_from(lines)?);
     let tx = s.prove_write(5, vec![flood]).await?;
-    let executed = s.settle(tx).await?;
+    let executed = s.env.protocol_adapter.settled(tx).await?;
     anyhow::ensure!(
         executed.logs.iter().any(|line| line == "Log truncated"),
         "the settlement's log is not truncated: {:?}",
@@ -290,7 +286,7 @@ async fn the_adapters_events_survive_a_truncated_log() -> anyhow::Result<()> {
 async fn the_action_executed_event_carries_its_resources_logic_refs() -> anyhow::Result<()> {
     let mut s = setup().await?;
     let tx = s.prove_write(6, vec![]).await?;
-    let executed = s.settle(tx).await?;
+    let executed = s.env.protocol_adapter.settled(tx).await?;
     let events = s.events(&executed)?;
     let [action] = events
         .iter()
@@ -334,7 +330,7 @@ async fn the_largest_settlement_fits_one_packet_with_its_fixed_accounts_looked_u
         let tx = s
             .prove_relayed_write(seed, vec![log_ix(&s.forwarder, 1)])
             .await?;
-        let executed = s.settle(tx).await?;
+        let executed = s.env.protocol_adapter.settled(tx).await?;
         let size = bincode::serialize(&executed.transaction)?.len();
         let message = &executed.transaction.message;
         println!(

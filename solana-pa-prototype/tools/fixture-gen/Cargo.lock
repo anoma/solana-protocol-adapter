@@ -420,12 +420,10 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.4.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=4c034a946d34ba09e5ce845fcae1c8880babe0cb#4c034a946d34ba09e5ce845fcae1c8880babe0cb"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=e8df91f226b6729f37921f0bdba40feb7d836b29#e8df91f226b6729f37921f0bdba40feb7d836b29"
 dependencies = [
  "anoma-rm-risc0",
  "bincode",
- "hkdf",
- "hmac",
  "risc0-zkvm",
  "serde",
  "sha2 0.10.9",
@@ -434,7 +432,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-testkit"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/anoma/pa-testkit?rev=06d5e8e3ed275c0e4eace3aa84949d7a5cc929f4#06d5e8e3ed275c0e4eace3aa84949d7a5cc929f4"
+source = "git+https://github.com/anoma/pa-testkit?rev=5202f30943ff487fb7fe20a34a13af0c2310eb02#5202f30943ff487fb7fe20a34a13af0c2310eb02"
 dependencies = [
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
@@ -444,6 +442,7 @@ dependencies = [
  "k256",
  "regex",
  "risc0-zkvm",
+ "sha3 0.10.9",
 ]
 
 [[package]]
@@ -2938,15 +2937,6 @@ name = "hex-literal"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e712f64ec3850b98572bffac52e2c6f282b29fe6c5fa6d42334b30be438d95c1"
-
-[[package]]
-name = "hkdf"
-version = "0.12.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b5f8eb2ad728638ea2c7d47a21db23b7b58a72ed6a38256b8a1849f15fbbdf7"
-dependencies = [
- "hmac",
-]
 
 [[package]]
 name = "hmac"

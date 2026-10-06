@@ -1,31 +1,37 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
+use anoma_pa_solana_client::events::PaEvent;
 use anoma_pa_solana_client::settlement_input::{
     external_calls, settled_resources, settlement_input,
 };
 use anoma_pa_solana_client::{
-    PADDING_LEAF, PAStateAccount, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
-    derive_pa_state_pda, derive_root_marker_pda, plan_settlement,
+    PAStateAccount, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
+    deny_logic_ref_ix, derive_pa_state_pda, pause_ix, plan_settlement,
+    set_kind_table_commitment_ix, unpause_ix,
 };
 use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree;
-use anoma_pa_testkit::environment::CommitmentTree as _;
-use anoma_pa_testkit::environment::ProtocolAdapter as CoreProtocolAdapter;
+use anoma_pa_testkit::environment::{
+    Event, Outcome, PayloadKind, ProtocolAdapter as CoreProtocolAdapter, Refusal,
+};
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_rm_risc0::Digest;
-use anoma_rm_risc0::transaction::Transaction as ArmTxn;
 use anyhow::Context;
+use solana_account::Account;
+use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_message::AddressLookupTableAccount;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
-use solana_signature::Signature;
+use solana_rpc_client_api::client_error::{Error as ClientError, ErrorKind};
+use solana_rpc_client_api::request::{RpcError, RpcResponseErrorData};
+use solana_rpc_client_api::response::RpcSimulateTransactionResult;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
 use super::runtime::{
-    create_settlement_lookup_table, extend_lookup_table, latest_blockhash, send_with_blockhash,
-    verifier_program,
+    create_settlement_lookup_table, extend_lookup_table, latest_blockhash, send_signed,
+    send_with_blockhash, verifier_program,
 };
+use crate::executed::Executed;
 use crate::forwarders::Forwarders;
 
 /// The Solana protocol adapter, settling through transaction-data uploads.
@@ -96,7 +102,7 @@ impl ProtocolAdapter {
 
     /// Checks that the tree gives the root the adapter stores.
     fn ensure_latest_root(&self, state: &PAStateAccount) -> anyhow::Result<()> {
-        let root = self.commitment_tree.root()?;
+        let root = self.commitment_tree.root();
         anyhow::ensure!(
             root.as_bytes() == state.root,
             "the tree gives the root {root}, the adapter stores {}",
@@ -105,82 +111,31 @@ impl ProtocolAdapter {
         Ok(())
     }
 
-    /// Checks that the adapter accepts every consumed resource's root (the
-    /// transaction `tx` consumes `consumed_roots`): its current root, the
-    /// padding leaf, or a root whose marker it holds, the markers read in one
-    /// request.
-    async fn assert_root_consistency(
-        &self,
-        tx: &ArmTxn,
-        consumed_roots: &[[u8; 32]],
-        state: &PAStateAccount,
-    ) -> anyhow::Result<()> {
-        let mut seen = HashSet::new();
-        let roots: Vec<[u8; 32]> = consumed_roots
-            .iter()
-            .copied()
-            .filter(|root| *root != state.root && *root != PADDING_LEAF && seen.insert(*root))
-            .collect();
-        let (pa_state, _) = derive_pa_state_pda(&self.program);
-        let markers: Vec<Pubkey> = roots
-            .iter()
-            .map(|root| derive_root_marker_pda(&self.program, &pa_state, root).0)
-            .collect();
-        let accounts = self
-            .rpc
-            .get_multiple_accounts(&markers)
-            .await
-            .context("failed to query the consumed roots' markers")?;
-        let Some(missing) = roots.iter().zip(&accounts).find_map(|(root, account)| {
-            (!account.as_ref().is_some_and(|a| a.owner == self.program)).then_some(*root)
-        }) else {
-            return Ok(());
-        };
-        let (action_idx, resource_idx) = tx
-            .aggregation
-            .as_ref()
-            .context("the transaction must be aggregated")?
-            .instance
-            .actions
-            .iter()
-            .enumerate()
-            .find_map(|(i, action)| {
-                action
-                    .consumed_publics
-                    .iter()
-                    .position(|c| <[u8; 32]>::from(c.commitment_tree_root) == missing)
-                    .map(|j| (i, j))
-            })
-            .context("no consumed resource names the root the adapter does not hold")?;
-        anyhow::bail!(
-            "consumed commitment tree root not found in PA for action {action_idx} consumed \
-             resource {resource_idx}: root={}, pa_latest={}",
-            Digest::from_bytes(missing),
-            Digest::from_bytes(state.root)
-        )
-    }
-
-    /// Settles `transaction` the way every submitter does (its data uploaded,
-    /// the settlement, the upload closed), and returns the settlement's
-    /// signature, which a test reads the settlement's log and events with.
-    pub async fn settle(&mut self, transaction: Transaction) -> anyhow::Result<Signature> {
+    /// Submits `transaction` the way every submitter does (its data uploaded,
+    /// the settlement, the upload closed), and returns the settlement as the
+    /// runtime recorded it, or why the adapter refused it.
+    pub async fn submit(
+        &mut self,
+        transaction: Transaction,
+    ) -> anyhow::Result<Result<Executed, Refusal>> {
         let tx = transaction.into_arm();
         let resources = settled_resources(&tx)?;
 
-        let (state, slot) = futures::try_join!(self.state(), async {
-            self.rpc
-                .get_slot()
-                .await
-                .context("failed to fetch the slot")
-        })?;
+        let calls = external_calls(&tx)?;
+        // One blockhash serves every transaction of the settlement.
+        let (state, slot, blockhash, (preceding, call_segments)) = futures::try_join!(
+            self.state(),
+            async {
+                self.rpc
+                    .get_slot()
+                    .await
+                    .context("failed to fetch the slot")
+            },
+            latest_blockhash(&self.rpc),
+            self.forwarders.accounts(&self.rpc, &calls),
+        )?;
         self.ensure_latest_root(&state)?;
-        self.assert_root_consistency(&tx, &resources.consumed_roots, &state)
-            .await?;
 
-        let (preceding, call_segments) = self
-            .forwarders
-            .accounts(&self.rpc, &external_calls(&tx)?)
-            .await?;
         let input = settlement_input(tx)?;
         let upload_id = self.next_upload_id;
         self.next_upload_id += 1;
@@ -200,9 +155,7 @@ impl ProtocolAdapter {
         let mut settle = preceding;
         settle.extend(plan.settle);
 
-        // One blockhash serves every transaction of the settlement.
         let (rpc, payer) = (&*self.rpc, &*self.payer);
-        let blockhash = latest_blockhash(rpc).await?;
         send_with_blockhash(rpc, payer, &[], &[plan.init], &[], blockhash)
             .await
             .context("failed to create the transaction-data upload")?;
@@ -225,7 +178,6 @@ impl ProtocolAdapter {
                 blockhash,
             )
             .await
-            .context("protocol adapter settlement failed")
         }
         .await;
         // The upload is closed whatever the settlement's outcome, so a refused
@@ -233,27 +185,172 @@ impl ProtocolAdapter {
         send_with_blockhash(rpc, payer, &[], &[plan.close], &[], blockhash)
             .await
             .context("failed to close the transaction-data upload")?;
-        let signature = settled?;
+        let signature = match settled {
+            Ok(signature) => signature,
+            Err(error) => {
+                return match self.refusal(&error) {
+                    Some(refusal) => Ok(Err(refusal)),
+                    None => Err(error.context("protocol adapter settlement failed")),
+                };
+            }
+        };
 
         self.commitment_tree
             .add(resources.created.into_iter().map(Digest::from_bytes));
-        self.ensure_latest_root(&self.state().await?)?;
-        Ok(signature)
+        let (state, executed) = futures::try_join!(self.state(), Executed::read(rpc, &signature))?;
+        self.ensure_latest_root(&state)?;
+        Ok(Ok(executed))
+    }
+
+    /// Submits `transaction`, which the adapter must settle, and returns the
+    /// settlement as the runtime recorded it.
+    pub async fn settled(&mut self, transaction: Transaction) -> anyhow::Result<Executed> {
+        self.submit(transaction).await?.map_err(|refusal| {
+            anyhow::anyhow!("the protocol adapter refused the transaction: {refusal:?}")
+        })
+    }
+
+    /// Why the adapter refused the settlement that failed with `error`, from
+    /// the runtime's simulation of it (`refusal_in_logs`). `None` when the
+    /// failure is not one of the protocol's refusals.
+    fn refusal(&self, error: &anyhow::Error) -> Option<Refusal> {
+        let ErrorKind::RpcError(RpcError::RpcResponseError {
+            data:
+                RpcResponseErrorData::SendTransactionPreflightFailure(RpcSimulateTransactionResult {
+                    logs: Some(logs),
+                    ..
+                }),
+            ..
+        }) = error.downcast_ref::<ClientError>()?.kind()
+        else {
+            return None;
+        };
+        refusal_in_logs(logs, &self.program, &self.verifier_program)
+    }
+
+    /// Sends `instruction`, which the adapter's owner signs: the payer, which
+    /// owns the adapter.
+    async fn as_owner(&self, instruction: Instruction, what: &str) -> anyhow::Result<()> {
+        send_signed(&self.rpc, &self.payer, &[], &[instruction], &[])
+            .await
+            .with_context(|| format!("failed to {what}"))?;
+        Ok(())
     }
 }
 
 impl CoreProtocolAdapter for ProtocolAdapter {
-    type Transaction = Transaction;
-    type CommitmentTree = FrontierCommitmentTree;
-
-    async fn execute(&mut self, transaction: Self::Transaction) -> anyhow::Result<()> {
-        self.settle(transaction).await?;
-        Ok(())
+    async fn settle(&mut self, transaction: Transaction) -> anyhow::Result<Outcome> {
+        Ok(match self.submit(transaction).await? {
+            Ok(executed) => Outcome::Settled(
+                executed
+                    .adapter_events(&self.program)?
+                    .into_iter()
+                    .map(settlement_event)
+                    .collect::<anyhow::Result<_>>()?,
+            ),
+            Err(refusal) => Outcome::Refused(refusal),
+        })
     }
 
-    fn commitment_tree(&self) -> &Self::CommitmentTree {
-        &self.commitment_tree
+    async fn commitment_tree(&self) -> anyhow::Result<FrontierCommitmentTree> {
+        crate::commitment_tree::from_state(&self.state().await?)
     }
+
+    async fn latest_root(&self) -> anyhow::Result<Digest> {
+        Ok(Digest::from_bytes(self.state().await?.root))
+    }
+
+    async fn set_kind_table_commitment(&mut self, commitment: Digest) -> anyhow::Result<()> {
+        let ix =
+            set_kind_table_commitment_ix(&self.program, &self.payer.pubkey(), commitment.into());
+        self.as_owner(ix, "set the kind-table commitment").await
+    }
+
+    async fn pause(&mut self) -> anyhow::Result<()> {
+        let ix = pause_ix(&self.program, &self.payer.pubkey());
+        self.as_owner(ix, "pause the protocol adapter").await
+    }
+
+    async fn unpause(&mut self) -> anyhow::Result<()> {
+        let ix = unpause_ix(&self.program, &self.payer.pubkey());
+        self.as_owner(ix, "unpause the protocol adapter").await
+    }
+
+    async fn deny_logic_ref(&mut self, logic_ref: Digest) -> anyhow::Result<()> {
+        let ix = deny_logic_ref_ix(&self.program, &self.payer.pubkey(), logic_ref.into());
+        self.as_owner(ix, "deny the logic ref").await
+    }
+}
+
+/// Why the adapter `program` refused a settlement, from the runtime's log of
+/// it: the deepest failure, which the runtime logs first as the program that
+/// failed and the custom error it returned. Any custom error of the
+/// `verifier` refuses the aggregation proof; an error of the adapter's own is
+/// named by the last Anchor log line before the failure carrying its number,
+/// the line Anchor writes as the program returns the error. `None` for any
+/// other failure.
+fn refusal_in_logs(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Option<Refusal> {
+    let (at, (failed, error)) = logs.iter().enumerate().find_map(|(at, line)| {
+        Some((at, line.strip_prefix("Program ")?.split_once(" failed: ")?))
+    })?;
+    let failed: Pubkey = failed.parse().ok()?;
+    let number = u32::from_str_radix(error.strip_prefix("custom program error: 0x")?, 16).ok()?;
+    if failed == *verifier {
+        return Some(Refusal::InvalidAggregationProof);
+    }
+    if failed != *program {
+        return None;
+    }
+    let code = logs[..at].iter().rev().find_map(|line| {
+        let (_, logged) = line.split_once("Error Code: ")?;
+        let (code, logged) = logged.split_once(". Error Number: ")?;
+        let (logged_number, _) = logged.split_once('.')?;
+        (logged_number.parse() == Ok(number)).then_some(code)
+    })?;
+    match code {
+        "EnforcedPause" => Some(Refusal::Paused),
+        "DeniedLogicRef" => Some(Refusal::DeniedLogicRef),
+        "NonExistingRoot" => Some(Refusal::UnknownRoot),
+        "DuplicateNullifier" | "NullifierDuplication" => Some(Refusal::NullifierSpent),
+        "KindTableCommitmentMismatch" | "ComplianceKeyMismatch" | "InvalidProof" => {
+            Some(Refusal::InvalidAggregationProof)
+        }
+        "ExternalCallOutputMismatch" => Some(Refusal::ExternalCallOutputMismatch),
+        _ => None,
+    }
+}
+
+/// A settlement's event as pa-testkit's: the adapter's settlement events,
+/// which mirror pa-evm's. An owner's event is no settlement's.
+fn settlement_event(event: PaEvent) -> anyhow::Result<Event> {
+    let payload = |kind, p: anoma_pa_solana_client::events::PayloadEvent| Event::Payload {
+        kind,
+        tag: Digest::from_bytes(p.tag),
+        index: p.index,
+        blob: p.blob,
+    };
+    let digests = |values: Vec<[u8; 32]>| values.into_iter().map(Digest::from_bytes).collect();
+    Ok(match event {
+        PaEvent::ForwarderCallExecuted(_) => Event::ForwarderCallExecuted,
+        PaEvent::ResourcePayload(p) => payload(PayloadKind::Resource, p),
+        PaEvent::DiscoveryPayload(p) => payload(PayloadKind::Discovery, p),
+        PaEvent::ExternalPayload(p) => payload(PayloadKind::External, p),
+        PaEvent::ApplicationPayload(p) => payload(PayloadKind::Application, p),
+        PaEvent::ActionExecuted(action) => Event::ActionExecuted {
+            action_tree_root: Digest::from_bytes(action.action_tree_root),
+            nullifiers: digests(action.nullifiers),
+            consumed_logic_refs: digests(action.consumed_logic_refs),
+            commitments: digests(action.commitments),
+            created_logic_refs: digests(action.created_logic_refs),
+        },
+        PaEvent::CommitmentTreeRootAdded(added) => Event::CommitmentTreeRootAdded {
+            root: Digest::from_bytes(added.root),
+        },
+        PaEvent::TransactionExecuted(executed) => Event::TransactionExecuted {
+            transaction_id: Digest::from_bytes(executed.transaction_id),
+        },
+        other => anyhow::bail!("a settlement emitted {other:?}, which is no settlement event"),
+    })
 }
 
 /// The state account of the adapter `program`, as it is now.
@@ -261,9 +358,88 @@ pub(in crate::envs) async fn read_state(
     rpc: &RpcClient,
     program: &Pubkey,
 ) -> anyhow::Result<PAStateAccount> {
+    Ok(read_state_account(rpc, program).await?.1)
+}
+
+/// The state account of the adapter `program`, as it is now, and the state
+/// it holds.
+pub(in crate::envs) async fn read_state_account(
+    rpc: &RpcClient,
+    program: &Pubkey,
+) -> anyhow::Result<(Account, PAStateAccount)> {
     let (pa_state, _) = derive_pa_state_pda(program);
-    let data = rpc.get_account_data(&pa_state).await.with_context(|| {
+    let account = rpc.get_account(&pa_state).await.with_context(|| {
         format!("the protocol adapter {program} has no state account {pa_state}")
     })?;
-    decode_pa_state(&data).context("failed to decode the adapter state")
+    let state = decode_pa_state(&account.data).context("failed to decode the adapter state")?;
+    Ok((account, state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ADAPTER: Pubkey = Pubkey::new_from_array([1; 32]);
+    const VERIFIER: Pubkey = Pubkey::new_from_array([2; 32]);
+    const FORWARDER: Pubkey = Pubkey::new_from_array([3; 32]);
+
+    fn logs(lines: &[&str]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.replace("ADAPTER", &ADAPTER.to_string())
+                    .replace("VERIFIER", &VERIFIER.to_string())
+                    .replace("FORWARDER", &FORWARDER.to_string())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_adapters_error_is_named_by_the_log_line_carrying_its_number() {
+        let logs = logs(&[
+            "Program ADAPTER invoke [1]",
+            "Program FORWARDER invoke [2]",
+            // A forwarder can log anything, Anchor's error format included.
+            "Program log: AnchorError occurred. Error Code: EnforcedPause. Error Number: 6020. \
+             Error Message: forged.",
+            "Program FORWARDER success",
+            "Program log: AnchorError thrown in programs/x/src/lib.rs:1. Error Code: \
+             ExternalCallOutputMismatch. Error Number: 6020. Error Message: External call output \
+             verification failed.",
+            "Program ADAPTER failed: custom program error: 0x1784",
+        ]);
+        assert_eq!(
+            refusal_in_logs(&logs, &ADAPTER, &VERIFIER),
+            Some(Refusal::ExternalCallOutputMismatch)
+        );
+    }
+
+    #[test]
+    fn the_verifiers_error_refuses_the_proof() {
+        let logs = logs(&[
+            "Program ADAPTER invoke [1]",
+            "Program VERIFIER invoke [2]",
+            "Program log: AnchorError occurred. Error Code: ClaimDigestMismatch. Error Number: \
+             6600. Error Message: mock seal claim digest mismatch.",
+            "Program VERIFIER failed: custom program error: 0x19c8",
+            "Program ADAPTER failed: custom program error: 0x19c8",
+        ]);
+        assert_eq!(
+            refusal_in_logs(&logs, &ADAPTER, &VERIFIER),
+            Some(Refusal::InvalidAggregationProof)
+        );
+    }
+
+    #[test]
+    fn another_programs_failure_is_no_refusal() {
+        let logs = logs(&[
+            "Program ADAPTER invoke [1]",
+            "Program FORWARDER invoke [2]",
+            "Program log: AnchorError occurred. Error Code: NonExistingRoot. Error Number: 6002. \
+             Error Message: forged.",
+            "Program FORWARDER failed: custom program error: 0x1772",
+            "Program ADAPTER failed: custom program error: 0x1772",
+        ]);
+        assert_eq!(refusal_in_logs(&logs, &ADAPTER, &VERIFIER), None);
+    }
 }

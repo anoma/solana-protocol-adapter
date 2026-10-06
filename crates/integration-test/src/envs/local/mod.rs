@@ -1,4 +1,3 @@
-mod block_time_forwarder;
 mod setup;
 
 /// Integration test execution environment: an offline surfpool runtime with

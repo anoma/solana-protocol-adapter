@@ -9,6 +9,7 @@ use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
 use super::super::common::addresses::{LOCALNET, program_id};
+use super::super::common::environment::JOURNAL_ENCODING;
 use super::super::common::runtime;
 use super::Environment;
 
@@ -17,7 +18,6 @@ use super::Environment;
 const PROTOCOL_ADAPTER_SO: &[u8] = include_bytes!("../../../programs/protocol_adapter.so");
 const MOCK_VERIFIER_SO: &[u8] = include_bytes!("../../../programs/mock_verifier.so");
 const TEST_FORWARDER_SO: &[u8] = include_bytes!("../../../programs/test_forwarder.so");
-const BLOCK_TIME_FORWARDER_SO: &[u8] = include_bytes!("../../../programs/block_time_forwarder.so");
 
 /// The devnet verifier router the adapter repository commits a copy of, with
 /// its router state.
@@ -49,22 +49,6 @@ impl Environment {
     /// call to another program, as its instruction data says.
     pub fn deploy_test_forwarder(&self) -> anyhow::Result<Pubkey> {
         self.deploy_local_program("TEST_FORWARDER", TEST_FORWARDER_SO)
-    }
-
-    /// Deploys the adapter repository's example block-time forwarder
-    /// (`programs/block-time-forwarder`) at its local address, which it
-    /// returns: a program whose `forward_call` returns how the time it is
-    /// given compares with the clock's.
-    pub fn deploy_block_time_forwarder(&self) -> anyhow::Result<Pubkey> {
-        self.deploy_local_program("BLOCK_TIME_FORWARDER", BLOCK_TIME_FORWARDER_SO)
-    }
-
-    /// Deploys `so` at the local address `env/localnet.env` names `name`,
-    /// upgradeable by the payer, and returns the address.
-    fn deploy_local_program(&self, name: &str, so: &[u8]) -> anyhow::Result<Pubkey> {
-        let program = program_id(LOCALNET, name)?;
-        self.deploy_program(program, so, self.protocol_adapter.payer.pubkey())?;
-        Ok(program)
     }
 
     pub async fn setup_bare() -> anyhow::Result<Self> {
@@ -106,6 +90,6 @@ impl Environment {
         );
         runtime::initialize(&rpc, &payer, pa, router, MOCK_SELECTOR).await?;
 
-        Self::assemble(surfnet, payer, pa, LocalProver).await
+        Self::assemble(surfnet, payer, pa, LocalProver::new(JOURNAL_ENCODING)).await
     }
 }

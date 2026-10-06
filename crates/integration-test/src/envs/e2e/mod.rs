@@ -18,8 +18,6 @@ pub enum Prover {
 }
 
 impl anoma_pa_testkit::environment::Prover for Prover {
-    type Transaction = Transaction;
-
     async fn prove(&self, actions: &[ActionWitnesses]) -> anyhow::Result<Transaction> {
         match self {
             Self::Queue(prover) => prover.prove(actions).await,

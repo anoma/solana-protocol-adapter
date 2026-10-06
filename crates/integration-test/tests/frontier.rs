@@ -5,7 +5,6 @@
 
 use anoma_pa_solana_client::{CommitmentTreeState, PAStateAccount};
 use anoma_pa_solana_integration_test::commitment_tree::from_state;
-use anoma_pa_testkit::environment::CommitmentTree;
 use anoma_rm_risc0::Digest;
 
 fn leaf(seed: usize) -> [u8; 32] {
@@ -41,16 +40,12 @@ fn the_tree_from_the_adapters_state_gives_the_adapters_roots() {
         let leaves: Vec<[u8; 32]> = (0..read).map(leaf).collect();
         let mut adapter = CommitmentTreeState::over(&leaves).unwrap();
         let mut tree = from_state(&state_holding(&adapter)).unwrap();
-        assert_eq!(
-            tree.root().unwrap().as_bytes(),
-            adapter.root,
-            "{read} leaves read"
-        );
+        assert_eq!(tree.root().as_bytes(), adapter.root, "{read} leaves read");
         for added in read..read + 9 {
             adapter.append(leaf(added)).unwrap();
             tree.add([Digest::from_bytes(leaf(added))]);
             assert_eq!(
-                tree.root().unwrap().as_bytes(),
+                tree.root().as_bytes(),
                 adapter.root,
                 "{read} leaves read, {} added",
                 added + 1 - read
