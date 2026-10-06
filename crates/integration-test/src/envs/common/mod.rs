@@ -3,6 +3,7 @@
 //! addresses, and the protocol adapter.
 
 pub(in crate::envs) mod addresses;
+mod block_time_forwarder;
 pub mod environment;
 pub mod protocol_adapter;
 pub(in crate::envs) mod runtime;

@@ -14,7 +14,7 @@ use anoma_pa_solana_integration_test::forwarders::{CallAccounts, Forwarder};
 use anoma_pa_solana_integration_test::test_forwarder::{
     RELAY_OK, log_ix, relay_input, write_input,
 };
-use anoma_pa_testkit::assert::{Needle, expect_integration_panic};
+use anoma_pa_testkit::environment::Refusal;
 use anoma_pa_testkit::fixtures::passthrough::{self, PASSTHROUGH_LOGIC_VK};
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_pa_testkit::{execute_tx, prove_actions};
@@ -146,8 +146,7 @@ impl Setup {
 
     /// Settles `tx` and reads the settlement back.
     async fn settle(&mut self, tx: Transaction) -> anyhow::Result<Executed> {
-        let signature = self.env.protocol_adapter.settle(tx).await?;
-        Executed::read(&self.env.protocol_adapter.rpc, &signature).await
+        self.env.protocol_adapter.settled(tx).await
     }
 
     /// The first bytes of the written account.
@@ -193,9 +192,11 @@ async fn refuses_a_call_whose_forwarder_changes_state_and_returns_other_than_exp
     let tx = s
         .prove_call(2, segment, vec![], write_input(&WRITTEN), &[9; 4])
         .await?;
-    expect_integration_panic(Needle::Static("Error Code: ExternalCallOutputMismatch."))(
-        execute_tx(&mut s.env, tx).await,
-    )?;
+    let refusal = s.env.protocol_adapter.submit(tx).await?.err();
+    anyhow::ensure!(
+        refusal == Some(Refusal::ExternalCallOutputMismatch),
+        "the adapter returned {refusal:?}, not a refusal for the output"
+    );
     let written = s.written().await?;
     anyhow::ensure!(
         written == UNWRITTEN,

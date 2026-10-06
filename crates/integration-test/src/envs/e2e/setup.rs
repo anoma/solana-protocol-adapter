@@ -3,8 +3,10 @@ use std::sync::Arc;
 use anoma_pa_testkit::prover::{QueueProver, Risc0Prover};
 use anyhow::Context;
 use solana_keypair::Keypair;
+use solana_signer::Signer;
 
 use super::super::common::addresses::{DEVNET, program_id};
+use super::super::common::environment::JOURNAL_ENCODING;
 use super::super::common::runtime;
 use super::config::E2eConfig;
 use super::{Environment, Prover};
@@ -23,12 +25,15 @@ impl Environment {
         .await
         .context("failed to start the surfpool runtime forking devnet")?;
         let pa = program_id(DEVNET, "PROTOCOL_ADAPTER")?;
+        // The suite makes the owner's calls as the payer, so on the fork the
+        // payer owns the adapter.
+        runtime::take_ownership(&surfnet, &runtime::client(&surfnet), pa, payer.pubkey()).await?;
         let prover = match &config.queue {
             Some(queue) => Prover::Queue(
-                QueueProver::new(&queue.base_url, &queue.auth_token)
+                QueueProver::new(&queue.base_url, &queue.auth_token, JOURNAL_ENCODING)
                     .context("failed to build queue prover")?,
             ),
-            None => Prover::Risc0(Risc0Prover),
+            None => Prover::Risc0(Risc0Prover::new(JOURNAL_ENCODING)),
         };
 
         let env = Self::assemble(surfnet, payer, pa, prover).await?;

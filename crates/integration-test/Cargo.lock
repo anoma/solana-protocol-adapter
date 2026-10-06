@@ -1210,12 +1210,10 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.4.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=4c034a946d34ba09e5ce845fcae1c8880babe0cb#4c034a946d34ba09e5ce845fcae1c8880babe0cb"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=e8df91f226b6729f37921f0bdba40feb7d836b29#e8df91f226b6729f37921f0bdba40feb7d836b29"
 dependencies = [
  "anoma-rm-risc0",
  "bincode",
- "hkdf",
- "hmac 0.12.1",
  "risc0-zkvm",
  "serde",
  "sha2 0.10.9",
@@ -1248,6 +1246,7 @@ dependencies = [
  "solana-message 4.4.1",
  "solana-packet",
  "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-rpc-client-types",
  "solana-sdk-ids 3.1.0",
  "solana-signature",
@@ -1262,7 +1261,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-testkit"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/anoma/pa-testkit?rev=06d5e8e3ed275c0e4eace3aa84949d7a5cc929f4#06d5e8e3ed275c0e4eace3aa84949d7a5cc929f4"
+source = "git+https://github.com/anoma/pa-testkit?rev=5202f30943ff487fb7fe20a34a13af0c2310eb02#5202f30943ff487fb7fe20a34a13af0c2310eb02"
 dependencies = [
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
@@ -1276,6 +1275,7 @@ dependencies = [
  "risc0-zkvm",
  "serde",
  "sha2 0.11.0",
+ "sha3 0.10.9",
  "tokio",
 ]
 

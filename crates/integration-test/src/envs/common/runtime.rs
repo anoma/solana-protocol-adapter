@@ -4,7 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anoma_pa_solana_client::{
-    adapter_settlement_lookup_keys, decode_verifier_entry, derive_verifier_entry_pda, initialize_ix,
+    adapter_settlement_lookup_keys, decode_pa_state, decode_verifier_entry, derive_pa_state_pda,
+    derive_verifier_entry_pda, encode_pa_state, initialize_ix,
 };
 use anyhow::Context;
 use solana_address_lookup_table_interface::instruction::create_lookup_table;
@@ -160,9 +161,11 @@ pub(in crate::envs) async fn send_with_blockhash(
         .collect();
     let transaction = VersionedTransaction::try_new(VersionedMessage::V0(message), &all_signers)
         .context("failed to sign the transaction")?;
+    // The client's error keeps the runtime's simulation, which a refused
+    // settlement is decoded from.
     rpc.send_and_confirm_transaction(&transaction)
         .await
-        .map_err(|e| anyhow::anyhow!("{e}"))
+        .map_err(anyhow::Error::from)
 }
 
 /// Places `so` in a new loader buffer whose authority is `authority`, and
@@ -258,6 +261,43 @@ pub(in crate::envs) fn set_account_dump(surfnet: &Surfnet, dump: &str) -> anyhow
         )
         .with_context(|| format!("failed to set account {address}"))?;
     Ok(address)
+}
+
+/// Makes `owner` the owner of the adapter `pa` on a runtime forking a
+/// deployment: rewrites the adapter's state with it, keeping the rest of the
+/// state and the account's allocation.
+pub(in crate::envs) async fn take_ownership(
+    surfnet: &Surfnet,
+    rpc: &RpcClient,
+    pa: Pubkey,
+    owner: Pubkey,
+) -> anyhow::Result<()> {
+    let (pa_state, _) = derive_pa_state_pda(&pa);
+    let account = rpc
+        .get_account(&pa_state)
+        .await
+        .with_context(|| format!("the protocol adapter {pa} has no state account {pa_state}"))?;
+    let mut state = decode_pa_state(&account.data).context("failed to decode the adapter state")?;
+    state.owner = owner.to_bytes();
+    let encoded = encode_pa_state(&state);
+    let mut data = account.data;
+    anyhow::ensure!(
+        encoded.len() <= data.len(),
+        "the adapter state encodes to {} bytes, more than its account's {}",
+        encoded.len(),
+        data.len()
+    );
+    data[..encoded.len()].copy_from_slice(&encoded);
+    surfnet
+        .cheatcodes()
+        .execute(
+            SetAccount::new(pa_state)
+                .lamports(account.lamports)
+                .data(data)
+                .owner(account.owner),
+        )
+        .with_context(|| format!("failed to write the adapter state {pa_state}"))?;
+    Ok(())
 }
 
 /// Initializes the adapter `pa`, deployed with `payer` as its upgrade

@@ -18,10 +18,10 @@ local = ["anoma-pa-testkit/local"]
 e2e = ["anoma-pa-testkit/e2e", "anoma-pa-testkit/prove", "dep:dotenvy"]
 
 [dependencies]
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "4c034a946d34ba09e5ce845fcae1c8880babe0cb", features = [
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "e8df91f226b6729f37921f0bdba40feb7d836b29", features = [
   "arm",
 ] }
-anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "06d5e8e3ed275c0e4eace3aa84949d7a5cc929f4", default-features = false, features = [
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "5202f30943ff487fb7fe20a34a13af0c2310eb02", default-features = false, features = [
   "fixtures",
 ] }
 anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", rev = "919c7787259eca02b8cedb079a639ad31e04ae51", features = [
@@ -42,6 +42,7 @@ solana-loader-v3-interface = { version = "7", features = ["serde"] }
 solana-sdk-ids = "3"
 solana-message = "4"
 solana-rpc-client = "4"
+solana-rpc-client-api = "4"
 solana-rpc-client-types = "4"
 solana-signature = "3"
 solana-signer = "3"

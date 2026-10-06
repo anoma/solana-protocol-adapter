@@ -1,6 +1,6 @@
 //! pa-testkit's chain-agnostic suite against each environment, and the
 //! checks only the Solana adapter's harness makes. Every settlement also
-//! checks that the tree pa-testkit builds gives the root the adapter stores.
+//! checks that the tree the harness keeps gives the root the adapter stores.
 
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
 use anoma_pa_testkit::assert::{Needle, expect_integration_panic};
@@ -15,16 +15,7 @@ use surfpool_sdk::Pubkey;
 mod local {
     use super::*;
 
-    anoma_pa_testkit::suite_tests!(
-        SolanaLocalEnv::setup_bare(),
-        // The mock verifier refuses a seal that is not the claim's
-        // (programs/mock-verifier).
-        refusal = Needle::Static(
-            "Error Code: ClaimDigestMismatch. Error Number: 6600. Error Message: mock seal claim \
-             digest mismatch."
-        ),
-        output_mismatch = Needle::Static("Error Code: ExternalCallOutputMismatch."),
-    );
+    anoma_pa_testkit::suite_tests!(SolanaLocalEnv::setup_bare());
 }
 
 #[cfg(feature = "e2e")]
@@ -63,24 +54,6 @@ async fn refused_before_sending(
         before - after
     );
     Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn a_root_the_adapter_does_not_store_fails_before_anything_is_sent() -> anyhow::Result<()> {
-    let mut env = SolanaLocalEnv::setup_bare().await?;
-    let actions = trivial::build_many(2, 71).context("failed to build trivial actions")?;
-    let mut tx = prove_actions(&env, &actions).await?;
-    aggregation_instance(&mut tx)?.actions[1].consumed_publics[0].commitment_tree_root =
-        anoma_rm_risc0::Digest::from_bytes([7; 32]);
-
-    refused_before_sending(
-        &mut env,
-        tx,
-        Needle::Static(
-            "consumed commitment tree root not found in PA for action 1 consumed resource 0",
-        ),
-    )
-    .await
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -196,57 +169,13 @@ async fn a_consumer_deploys_its_program_and_sends_its_setup() -> anyhow::Result<
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_settlements_events_read_back_in_the_order_the_adapter_emitted_them() -> anyhow::Result<()>
-{
-    use anoma_pa_solana_client::events::PaEvent;
-    use anoma_pa_solana_client::settlement_input::settled_resources;
-    use anoma_pa_solana_integration_test::executed::Executed;
-
-    let mut env = SolanaLocalEnv::setup_bare().await?;
-    let actions = trivial::build_many(2, 91).context("failed to build trivial actions")?;
-    let tx = prove_actions(&env, &actions).await?;
-    let nullifiers = settled_resources(tx.as_arm())?.nullifiers;
-
-    let signature = env.protocol_adapter.settle(tx).await?;
-    let executed = Executed::read(&env.protocol_adapter.rpc, &signature).await?;
-    let events = executed.adapter_events(&env.protocol_adapter.program)?;
-    let settled: Vec<[u8; 32]> = events
-        .iter()
-        .filter_map(|event| match event {
-            PaEvent::ActionExecuted(action) => Some(action.nullifiers.clone()),
-            _ => None,
-        })
-        .flatten()
-        .collect();
-    anyhow::ensure!(
-        settled == nullifiers,
-        "the ActionExecuted events name the nullifiers {settled:02x?}, the transaction consumes \
-         {nullifiers:02x?}"
-    );
-    anyhow::ensure!(
-        matches!(events.last(), Some(PaEvent::TransactionExecuted(_))),
-        "the last event is {:?}, not TransactionExecuted",
-        events.last()
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn a_settlement_reads_back_with_the_keys_its_lookup_table_loaded() -> anyhow::Result<()> {
-    use anoma_pa_solana_integration_test::executed::Executed;
-
     let mut env = SolanaLocalEnv::setup_bare().await?;
     let actions = trivial::build_many(1, 93).context("failed to build trivial actions")?;
     let tx = prove_actions(&env, &actions).await?;
-    let signature = env.protocol_adapter.settle(tx).await?;
-    let executed = Executed::read(&env.protocol_adapter.rpc, &signature).await?;
+    let executed = env.protocol_adapter.settled(tx).await?;
 
     let (pa_state, _) = anoma_pa_solana_client::derive_pa_state_pda(&env.protocol_adapter.program);
-    anyhow::ensure!(
-        executed.transaction.signatures == [signature],
-        "the transaction read back is signed {:?}, not {signature}",
-        executed.transaction.signatures
-    );
     anyhow::ensure!(
         executed.loaded.contains(&pa_state)
             && !executed
@@ -325,6 +254,44 @@ async fn the_local_environment_runs_the_program_metadata_program() -> anyhow::Re
     anyhow::ensure!(
         account.executable && account.owner == solana_sdk_ids::bpf_loader_upgradeable::id(),
         "{program} is not an upgradeable program: {account:?}"
+    );
+    Ok(())
+}
+
+// On a fork of a deployment, the harness takes the adapter's ownership by
+// rewriting its state: the new owner makes the owner's calls, and the rest of
+// the state stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_taken_adapter_obeys_its_new_owner() -> anyhow::Result<()> {
+    use solana_keypair::Keypair;
+
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let before = env.protocol_adapter.state().await?;
+    let owner = Keypair::new();
+    env.take_ownership(owner.pubkey()).await?;
+    let taken = env.protocol_adapter.state().await?;
+    anyhow::ensure!(
+        taken.owner == owner.pubkey().to_bytes(),
+        "the adapter is owned by {:02x?}, not the new owner",
+        taken.owner
+    );
+    anyhow::ensure!(
+        anoma_pa_solana_client::PAStateAccount {
+            owner: before.owner,
+            ..taken
+        } == before,
+        "taking the ownership changed more of the state than its owner"
+    );
+
+    let pa = env.protocol_adapter.program;
+    env.send(
+        &[anoma_pa_solana_client::pause_ix(&pa, &owner.pubkey())],
+        &[&owner],
+    )
+    .await?;
+    anyhow::ensure!(
+        env.protocol_adapter.state().await?.paused,
+        "the new owner's pause did not take"
     );
     Ok(())
 }
