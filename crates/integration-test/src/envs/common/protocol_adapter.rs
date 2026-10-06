@@ -188,8 +188,11 @@ impl ProtocolAdapter {
             Ok(signature) => signature,
             Err(error) => {
                 return match self.refusal(&error) {
-                    Some(refusal) => Ok(Err(refusal)),
-                    None => Err(error.context("protocol adapter settlement failed")),
+                    Ok(Some(refusal)) => Ok(Err(refusal)),
+                    Ok(None) => Err(error.context("protocol adapter settlement failed")),
+                    Err(undecodable) => Err(error
+                        .context(format!("{undecodable:#}"))
+                        .context("protocol adapter settlement failed")),
                 };
             }
         };
@@ -211,18 +214,19 @@ impl ProtocolAdapter {
 
     /// Why the adapter refused the settlement that failed with `error`, from
     /// the runtime's simulation of it (`refusal_in_logs`). `None` when the
-    /// failure is not one of the protocol's refusals.
-    fn refusal(&self, error: &anyhow::Error) -> Option<Refusal> {
-        let ErrorKind::RpcError(RpcError::RpcResponseError {
+    /// failure is not one of the protocol's refusals; an error when the
+    /// simulation's log cannot say.
+    fn refusal(&self, error: &anyhow::Error) -> anyhow::Result<Option<Refusal>> {
+        let Some(ErrorKind::RpcError(RpcError::RpcResponseError {
             data:
                 RpcResponseErrorData::SendTransactionPreflightFailure(RpcSimulateTransactionResult {
                     logs: Some(logs),
                     ..
                 }),
             ..
-        }) = error.downcast_ref::<ClientError>()?.kind()
+        })) = error.downcast_ref::<ClientError>().map(ClientError::kind)
         else {
-            return None;
+            return Ok(None);
         };
         refusal_in_logs(logs, &self.program, &self.verifier_program)
     }
@@ -286,8 +290,24 @@ impl CoreProtocolAdapter for ProtocolAdapter {
 /// failed and the custom error it returned (a line no program can write: a
 /// program's own lines start `Program log: `). Any custom error of the
 /// `verifier` refuses the aggregation proof; an error of the adapter's own is
-/// the refusal its `PaError` is. `None` for any other failure.
-fn refusal_in_logs(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Option<Refusal> {
+/// the refusal its `PaError` is. `None` for any other failure. A log the
+/// runtime truncated is an error: past its limit the runtime drops lines, the
+/// deepest failure's among them, while a shorter later one can still fit, so
+/// the first failure line left may carry another program's code.
+fn refusal_in_logs(
+    logs: &[String],
+    program: &Pubkey,
+    verifier: &Pubkey,
+) -> anyhow::Result<Option<Refusal>> {
+    anyhow::ensure!(
+        !logs.iter().any(|line| line == "Log truncated"),
+        "the runtime truncated the settlement's log, so the log does not say which program failed"
+    );
+    Ok(first_failure_refusal(logs, program, verifier))
+}
+
+/// The refusal the first failure line of a complete log names.
+fn first_failure_refusal(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Option<Refusal> {
     let (failed, error) = logs.iter().find_map(|line| {
         let (failed, error) = line.strip_prefix("Program ")?.split_once(" failed: ")?;
         Some((failed.parse::<Pubkey>().ok()?, error))
@@ -303,8 +323,8 @@ fn refusal_in_logs(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Opti
 }
 
 /// The refusal the adapter's `error` is, if it is one of the protocol's. The
-/// match lists every error, so an error the adapter adds is mapped here
-/// before the harness builds.
+/// match lists every error, so an error the client's `PaError` gains is
+/// mapped here before the harness builds.
 fn refusal_for(error: PaError) -> Option<Refusal> {
     match error {
         PaError::EnforcedPause => Some(Refusal::Paused),
@@ -362,10 +382,10 @@ fn refusal_for(error: PaError) -> Option<Refusal> {
 /// which mirror pa-evm's. An owner's event is no settlement's.
 fn settlement_event(event: PaEvent) -> anyhow::Result<Event> {
     let payload = |kind, p: anoma_pa_solana_client::events::PayloadEvent| {
-        Ok::<_, anyhow::Error>(Event::Payload {
+        u32::try_from(p.index).map(|index| Event::Payload {
             kind,
             tag: Digest::from_bytes(p.tag),
-            index: u32::try_from(p.index)?,
+            index,
             blob: p.blob,
         })
     };
@@ -413,86 +433,87 @@ mod tests {
     const VERIFIER: Pubkey = Pubkey::new_from_array([2; 32]);
     const FORWARDER: Pubkey = Pubkey::new_from_array([3; 32]);
 
-    fn logs(lines: &[&str]) -> Vec<String> {
-        lines
-            .iter()
-            .map(|line| {
-                line.replace("ADAPTER", &ADAPTER.to_string())
-                    .replace("VERIFIER", &VERIFIER.to_string())
-                    .replace("FORWARDER", &FORWARDER.to_string())
-            })
-            .collect()
+    fn invoke(program: Pubkey, depth: u8) -> String {
+        format!("Program {program} invoke [{depth}]")
+    }
+
+    /// The runtime's line for `program` failing with custom error `code`.
+    fn failure(program: Pubkey, code: u32) -> String {
+        format!("Program {program} failed: custom program error: {code:#x}")
+    }
+
+    fn refusal(logs: &[String]) -> Option<Refusal> {
+        refusal_in_logs(logs, &ADAPTER, &VERIFIER).unwrap()
     }
 
     #[test]
     fn the_adapters_error_is_its_code() {
-        let logs = logs(&[
-            "Program ADAPTER invoke [1]",
-            "Program FORWARDER invoke [2]",
-            // A forwarder can log anything, Anchor's error format included.
-            "Program log: AnchorError occurred. Error Code: EnforcedPause. Error Number: 6029. \
-             Error Message: forged.",
-            "Program FORWARDER success",
-            "Program ADAPTER failed: custom program error: 0x1782",
-        ]);
-        assert_eq!(
-            refusal_in_logs(&logs, &ADAPTER, &VERIFIER),
-            Some(Refusal::ExternalCallOutputMismatch)
-        );
+        let code = PaError::ForwarderCallOutputMismatch.code();
+        let logs = [invoke(ADAPTER, 1), failure(ADAPTER, code)];
+        assert_eq!(refusal(&logs), Some(Refusal::ExternalCallOutputMismatch));
     }
 
     #[test]
     fn a_programs_log_line_reading_like_a_failure_is_not_the_failure() {
-        let logs = logs(&[
-            "Program ADAPTER invoke [1]",
-            "Program FORWARDER invoke [2]",
+        let logs = [
+            invoke(ADAPTER, 1),
+            invoke(FORWARDER, 2),
             // A program's own log lines start "Program log: ", whatever follows.
-            "Program log: Program ADAPTER failed: custom program error: 0x1772",
-            "Program FORWARDER success",
-            "Program ADAPTER failed: custom program error: 0x1782",
-        ]);
-        assert_eq!(
-            refusal_in_logs(&logs, &ADAPTER, &VERIFIER),
-            Some(Refusal::ExternalCallOutputMismatch)
-        );
+            format!(
+                "Program log: {}",
+                failure(ADAPTER, PaError::NonExistingRoot.code())
+            ),
+            format!("Program {FORWARDER} success"),
+            failure(ADAPTER, PaError::ForwarderCallOutputMismatch.code()),
+        ];
+        assert_eq!(refusal(&logs), Some(Refusal::ExternalCallOutputMismatch));
+    }
+
+    #[test]
+    fn a_truncated_log_names_no_failure() {
+        // The runtime drops lines past its log limit, the inner program's
+        // failure line among them, while a shorter later line can still fit:
+        // the line left may carry another program's code.
+        let code = PaError::NonExistingRoot.code();
+        let logs = [
+            invoke(ADAPTER, 1),
+            invoke(FORWARDER, 2),
+            "Log truncated".to_owned(),
+            failure(ADAPTER, code),
+        ];
+        let error = refusal_in_logs(&logs, &ADAPTER, &VERIFIER)
+            .expect_err("a truncated log does not say which program failed");
+        assert!(format!("{error:#}").contains("truncated"), "{error:#}");
     }
 
     #[test]
     fn the_verifiers_error_refuses_the_proof() {
-        let logs = logs(&[
-            "Program ADAPTER invoke [1]",
-            "Program VERIFIER invoke [2]",
-            "Program log: AnchorError occurred. Error Code: ClaimDigestMismatch. Error Number: \
-             6600. Error Message: mock seal claim digest mismatch.",
-            "Program VERIFIER failed: custom program error: 0x19c8",
-            "Program ADAPTER failed: custom program error: 0x19c8",
-        ]);
-        assert_eq!(
-            refusal_in_logs(&logs, &ADAPTER, &VERIFIER),
-            Some(Refusal::InvalidAggregationProof)
-        );
+        // 6600: the mock verifier's ClaimDigestMismatch.
+        let logs = [
+            invoke(ADAPTER, 1),
+            invoke(VERIFIER, 2),
+            failure(VERIFIER, 6600),
+            failure(ADAPTER, 6600),
+        ];
+        assert_eq!(refusal(&logs), Some(Refusal::InvalidAggregationProof));
     }
 
     #[test]
     fn an_anchor_framework_error_of_the_adapter_is_no_refusal() {
         // 3012: Anchor's AccountNotInitialized, below the adapter's own codes.
-        let logs = logs(&[
-            "Program ADAPTER invoke [1]",
-            "Program ADAPTER failed: custom program error: 0xbc4",
-        ]);
-        assert_eq!(refusal_in_logs(&logs, &ADAPTER, &VERIFIER), None);
+        let logs = [invoke(ADAPTER, 1), failure(ADAPTER, 3012)];
+        assert_eq!(refusal(&logs), None);
     }
 
     #[test]
     fn another_programs_failure_is_no_refusal() {
-        let logs = logs(&[
-            "Program ADAPTER invoke [1]",
-            "Program FORWARDER invoke [2]",
-            "Program log: AnchorError occurred. Error Code: NonExistingRoot. Error Number: 6002. \
-             Error Message: forged.",
-            "Program FORWARDER failed: custom program error: 0x1772",
-            "Program ADAPTER failed: custom program error: 0x1772",
-        ]);
-        assert_eq!(refusal_in_logs(&logs, &ADAPTER, &VERIFIER), None);
+        let code = PaError::NonExistingRoot.code();
+        let logs = [
+            invoke(ADAPTER, 1),
+            invoke(FORWARDER, 2),
+            failure(FORWARDER, code),
+            failure(ADAPTER, code),
+        ];
+        assert_eq!(refusal(&logs), None);
     }
 }
