@@ -1,6 +1,5 @@
-//! The kind tables a test proves against. The prover's kind table is
-//! process-wide and set once, so a test that proves against one runs in a
-//! process of its own (a test file of its own).
+//! The kind table the e2e environment proves against: solana-devnet's. The
+//! prover's kind table is process-wide and set once.
 
 use anoma_risc0_kind_tables::{SolanaCluster, table};
 use anoma_rm_risc0::compliance::{KindTableEntry, hash_kind_table_entries};

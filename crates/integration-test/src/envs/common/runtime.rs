@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anoma_pa_solana_client::{
-    adapter_settlement_lookup_keys, decode_pa_state, decode_verifier_entry, derive_pa_state_pda,
+    adapter_settlement_lookup_keys, decode_verifier_entry, derive_pa_state_pda,
     derive_verifier_entry_pda, encode_pa_state, initialize_ix,
 };
 use anyhow::Context;
@@ -24,6 +24,8 @@ use surfpool_sdk::cheatcodes::builders::{CheatcodeBuilder, DeployProgram, SetAcc
 use surfpool_sdk::{
     BlockProductionMode, Pubkey, Surfnet, SurfnetBuilder, SurfnetError, SurfnetResult,
 };
+
+use super::protocol_adapter::read_state_account;
 
 /// The SOL the default signer starts with. surfpool refuses an airdrop of a
 /// million SOL; this covers every upload and settlement of a test run.
@@ -272,12 +274,7 @@ pub(in crate::envs) async fn take_ownership(
     pa: Pubkey,
     owner: Pubkey,
 ) -> anyhow::Result<()> {
-    let (pa_state, _) = derive_pa_state_pda(&pa);
-    let account = rpc
-        .get_account(&pa_state)
-        .await
-        .with_context(|| format!("the protocol adapter {pa} has no state account {pa_state}"))?;
-    let mut state = decode_pa_state(&account.data).context("failed to decode the adapter state")?;
+    let (account, mut state) = read_state_account(rpc, &pa).await?;
     state.owner = owner.to_bytes();
     let encoded = encode_pa_state(&state);
     let mut data = account.data;
@@ -288,6 +285,7 @@ pub(in crate::envs) async fn take_ownership(
         data.len()
     );
     data[..encoded.len()].copy_from_slice(&encoded);
+    let (pa_state, _) = derive_pa_state_pda(&pa);
     surfnet
         .cheatcodes()
         .execute(

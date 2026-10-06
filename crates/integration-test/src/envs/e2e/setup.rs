@@ -25,9 +25,6 @@ impl Environment {
         .await
         .context("failed to start the surfpool runtime forking devnet")?;
         let pa = program_id(DEVNET, "PROTOCOL_ADAPTER")?;
-        // The suite makes the owner's calls as the payer, so on the fork the
-        // payer owns the adapter.
-        runtime::take_ownership(&surfnet, &runtime::client(&surfnet), pa, payer.pubkey()).await?;
         let prover = match &config.queue {
             Some(queue) => Prover::Queue(
                 QueueProver::new(&queue.base_url, &queue.auth_token, JOURNAL_ENCODING)
@@ -36,7 +33,11 @@ impl Environment {
             None => Prover::Risc0(Risc0Prover::new(JOURNAL_ENCODING)),
         };
 
+        let owner = payer.pubkey();
         let env = Self::assemble(surfnet, payer, pa, prover).await?;
+        // The suite makes the owner's calls as the payer, so on the fork the
+        // payer owns the adapter.
+        env.take_ownership(owner).await?;
         // The tests prove against devnet's kind table, which the adapter must
         // store.
         let loaded = crate::kind_table::load_devnet()?;

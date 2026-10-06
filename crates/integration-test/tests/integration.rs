@@ -3,11 +3,8 @@
 //! checks that the tree the harness keeps gives the root the adapter stores.
 
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
-use anoma_pa_testkit::assert::{Needle, expect_integration_panic};
 use anoma_pa_testkit::fixtures::trivial;
-use anoma_pa_testkit::transaction::Transaction;
 use anoma_pa_testkit::{execute_tx, prove_actions};
-use anoma_rm_risc0::AggregationInstance;
 use anyhow::Context;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
@@ -23,37 +20,6 @@ mod e2e_test {
     use anoma_pa_solana_integration_test::envs::e2e::Environment as SolanaE2eEnv;
 
     anoma_pa_testkit::suite_tests!(SolanaE2eEnv::setup_bare());
-}
-
-/// The aggregation instance of `tx`, the statement the adapter settles, to
-/// tamper with.
-fn aggregation_instance(tx: &mut Transaction) -> anyhow::Result<&mut AggregationInstance> {
-    Ok(&mut tx
-        .as_arm_mut()
-        .aggregation
-        .as_mut()
-        .context("the transaction is aggregated")?
-        .instance)
-}
-
-/// Checks that the harness refuses to settle `tx` with the error `needle`
-/// finds before it sends anything: the payer pays nothing.
-async fn refused_before_sending(
-    env: &mut SolanaLocalEnv,
-    tx: Transaction,
-    needle: Needle,
-) -> anyhow::Result<()> {
-    let payer = env.protocol_adapter.payer.pubkey();
-    let rpc = env.protocol_adapter.rpc.clone();
-    let before = rpc.get_balance(&payer).await?;
-    expect_integration_panic(needle)(execute_tx(env, tx).await)?;
-    let after = rpc.get_balance(&payer).await?;
-    anyhow::ensure!(
-        before == after,
-        "the payer paid {} lamports for a transaction that must not be sent",
-        before - after
-    );
-    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -73,21 +39,39 @@ async fn a_call_to_a_program_no_forwarder_is_registered_for_fails_before_anythin
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
     };
-    aggregation_instance(&mut tx)?.actions[0].created_publics[0]
+    tx.as_arm_mut()
+        .aggregation
+        .as_mut()
+        .context("the transaction is aggregated")?
+        .instance
+        .actions[0]
+        .created_publics[0]
         .app_data
         .external_payload = vec![ExpirableBlob {
         blob: anoma_rm_risc0::utils::bytes_to_words(&call.encode()),
         deletion_criterion: 0,
     }];
 
-    refused_before_sending(
-        &mut env,
-        tx,
-        Needle::Regexp(regex::Regex::new(&regex::escape(&format!(
-            "external call 0 is to {program}, for which no forwarder is registered"
-        )))?),
-    )
-    .await
+    // The harness refuses it before it sends anything: the payer pays nothing.
+    let payer = env.protocol_adapter.payer.pubkey();
+    let rpc = env.protocol_adapter.rpc.clone();
+    let before = rpc.get_balance(&payer).await?;
+    let error = execute_tx(&mut env, tx)
+        .await
+        .err()
+        .context("a call to an unregistered program settled")?;
+    let expected = format!("external call 0 is to {program}, for which no forwarder is registered");
+    anyhow::ensure!(
+        format!("{error:?}").contains(&expected),
+        "the settlement failed with {error:?}, not {expected:?}"
+    );
+    let after = rpc.get_balance(&payer).await?;
+    anyhow::ensure!(
+        before == after,
+        "the payer paid {} lamports for a transaction that must not be sent",
+        before - after
+    );
+    Ok(())
 }
 
 #[tokio::test(flavor = "multi_thread")]
