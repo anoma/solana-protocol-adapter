@@ -542,11 +542,8 @@ pub mod protocol_adapter {
             &ctx.accounts.system_program.to_account_info(),
         )?;
         state.try_serialize(&mut &mut info.try_borrow_mut_data()?[..])?;
-        for (consumed, denylist) in [
-            (true, &state.denied_consumed_logic_refs),
-            (false, &state.denied_created_logic_refs),
-        ] {
-            for &logic_ref in denylist {
+        for consumed in [true, false] {
+            for &logic_ref in state.denied_logic_refs(consumed) {
                 emit_cpi!(LogicRefDeniedEvent {
                     logic_ref,
                     consumed

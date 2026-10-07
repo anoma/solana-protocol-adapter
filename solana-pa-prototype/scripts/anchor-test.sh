@@ -118,10 +118,16 @@ run_spec() {
   fi
 }
 
+# Start a validator with the workspace programs (with $1, if given, at its
+# previous build) and the genesis settlement lookup table.
+start_suite_validator() {
+  workspace_program_args "$@"
+  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}" --warp-slot 1 --account "$PA_SETTLEMENT_TABLE" "${settlement_table_file[0]}"
+}
+
 echo "==> (3/3) Running ${#SUITE_SPECS[@]} spec file(s) on one validator, then ${#UPGRADE_SPECS[@]} upgrade-path file(s) on validators of their own"
 if [[ ${#SUITE_SPECS[@]} -gt 0 ]]; then
-  workspace_program_args
-  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}" --warp-slot 1 --account "$PA_SETTLEMENT_TABLE" "${settlement_table_file[0]}"
+  start_suite_validator
   for i in "${!SUITE_SPECS[@]}"; do
     echo "==> [$((i + 1))/${#SUITE_SPECS[@]}] ${SUITE_SPECS[$i]}"
     run_spec "${SUITE_SPECS[$i]}"
@@ -130,8 +136,7 @@ if [[ ${#SUITE_SPECS[@]} -gt 0 ]]; then
 fi
 for spec in "${UPGRADE_SPECS[@]}"; do
   echo "==> [upgrade path] ${spec}, starting on $(basename "$spec" .ts)'s previous build"
-  workspace_program_args "$(basename "$spec" .ts)"
-  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}" --warp-slot 1 --account "$PA_SETTLEMENT_TABLE" "${settlement_table_file[0]}"
+  start_suite_validator "$(basename "$spec" .ts)"
   run_spec "$spec"
   stop_validator
 done

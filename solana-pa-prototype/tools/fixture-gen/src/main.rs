@@ -454,9 +454,8 @@ enum ForwarderMode {
         output_mismatch: bool,
         multi_external_call: bool,
     },
-    TestForwarderFail,
-    TestForwarderSilent,
-    TestForwarderEmptyOutput,
+    /// The test forwarder in the given mode, expecting an empty output.
+    TestForwarder(u8),
 }
 
 /// The aggregation carried by a transaction, or a clear error if it has none.
@@ -966,9 +965,7 @@ async fn generate_test_transaction_with_external_payload(
         ForwarderMode::BlockTimeForwarder {
             output_mismatch, ..
         } => block_time_forwarder_external_payload_blob(*output_mismatch),
-        ForwarderMode::TestForwarderFail => test_forwarder_payload_blob(MODE_FAIL),
-        ForwarderMode::TestForwarderSilent => test_forwarder_payload_blob(MODE_SILENT),
-        ForwarderMode::TestForwarderEmptyOutput => test_forwarder_payload_blob(MODE_RETURN),
+        ForwarderMode::TestForwarder(mode) => test_forwarder_payload_blob(*mode),
     };
     consumed_app_data.external_payload.push(external_blob);
     if let ForwarderMode::BlockTimeForwarder {
@@ -1211,6 +1208,16 @@ struct DerivedFixtureFields {
     selector: String,
 }
 
+/// A settlement transaction's `aggregation_proof_type`: `mock` for the
+/// localnet mock verifier's seal, `groth16` otherwise.
+fn proof_type(tx: &Transaction) -> Result<&'static str> {
+    Ok(if seal_selector(tx)? == MOCK_SELECTOR {
+        "mock"
+    } else {
+        "groth16"
+    })
+}
+
 fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
     let tx_bytes = bincode::serialize(tx).context("serialize tx")?;
     eprintln!("  {} bytes", tx_bytes.len());
@@ -1252,11 +1259,7 @@ fn finalize_and_write_fixture(
     // (aggregation_proof_type, selector).
     let proof_type = timed_phase("encode_seal", || {
         *tx = settlement_transaction(tx.clone()).context("encode the aggregation seal")?;
-        Ok(if seal_selector(tx)? == MOCK_SELECTOR {
-            "mock"
-        } else {
-            "groth16"
-        })
+        proof_type(tx)
     })?;
 
     let fields = timed_phase("derive_fixture_fields", || derive_fixture_fields(tx))?;
@@ -1413,30 +1416,12 @@ where
 /// and nullifiers.
 fn write_error_variants_of(path: &Path, out_dir: &Path) -> Result<()> {
     let tx = load_fixture_tx(path)?;
-    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
-    let fixture: serde_json::Value = serde_json::from_str(&raw).context("parsing fixture JSON")?;
-    let field = |key: &str| {
-        fixture[key]
-            .as_str()
-            .ok_or_else(|| anyhow!("missing {key} in {}", path.display()))
-    };
-    let proof_type = match field("aggregation_proof_type")? {
-        "groth16" => "groth16",
-        "mock" => "mock",
-        other => bail!(
-            "unknown aggregation proof type {other} in {}",
-            path.display()
-        ),
-    };
-    let nullifiers: Vec<String> =
-        serde_json::from_value(fixture["consumed_nullifiers_b64"].clone())
-            .with_context(|| format!("reading consumed_nullifiers_b64 of {}", path.display()))?;
     generate_error_variant_fixtures(
         &tx,
-        field("name")?,
-        field("selector")?,
-        proof_type,
-        &nullifiers,
+        &read_fixture_name(path)?,
+        &format!("0x{}", hex::encode(seal_selector(&tx)?)),
+        proof_type(&tx)?,
+        &consumed_nullifiers_b64(&tx)?,
         out_dir,
     )
 }
@@ -1664,13 +1649,13 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             .await?
         }
         ShapeCommand::ForwarderFail { .. } => {
-            single_action(ForwarderMode::TestForwarderFail).await?
+            single_action(ForwarderMode::TestForwarder(MODE_FAIL)).await?
         }
         ShapeCommand::ForwarderSilent { .. } => {
-            single_action(ForwarderMode::TestForwarderSilent).await?
+            single_action(ForwarderMode::TestForwarder(MODE_SILENT)).await?
         }
         ShapeCommand::ForwarderEmptyOutput { .. } => {
-            single_action(ForwarderMode::TestForwarderEmptyOutput).await?
+            single_action(ForwarderMode::TestForwarder(MODE_RETURN)).await?
         }
         ShapeCommand::ConsumeOnly { .. } => {
             generate_consume_only_transaction(&prover, name).await?

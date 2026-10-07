@@ -16,6 +16,7 @@ import {
   denyLogicRefs,
   initializeAdapter,
   migrateState,
+  pauseAdapter,
   setKindTableCommitment,
   unpauseAdapter,
   upgradeAdapter,
@@ -89,7 +90,7 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
       .updateExpiryConfig(new BN(150), new BN(200_000))
       .accountsPartial({ paState, authority: wallet })
       .rpc();
-    await previous.methods.pause().accountsPartial({ paState, authority: wallet }).rpc();
+    await pauseAdapter(previous as any, wallet).rpc();
     stateBefore = await (previous.account as any).paStateAccount.fetch(paState);
     assert.equal(stateBefore.nextIndex.toNumber(), createdCommitmentsOf(fixture).length, "the settlement appended");
   });
@@ -134,27 +135,14 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
 
     const state: any = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.schemaVersion, SCHEMA_VERSION, "the state is in this build's layout");
-    for (const field of [
-      "bump",
-      "owner",
-      "verifierRouter",
-      "proofSelector",
-      "kindTableCommitment",
-      "paused",
-      "root",
-      "nextIndex",
-      "currentDepth",
-      "frontier",
-      "minExpirySlots",
-      "maxExpirySlots",
-    ]) {
-      assert.equal(JSON.stringify(state[field]), JSON.stringify(stateBefore[field]), `${field} carries over`);
-    }
-    for (const field of ["deniedConsumedLogicRefs", "deniedCreatedLogicRefs"]) {
+    const { schemaVersion: _before, deniedLogicRefs: _denied, ...carried } = stateBefore;
+    const { schemaVersion: _after, deniedConsumedLogicRefs, deniedCreatedLogicRefs, ...kept } = state;
+    assert.equal(JSON.stringify(kept), JSON.stringify(carried), "every other field carries over");
+    for (const denylist of [deniedConsumedLogicRefs, deniedCreatedLogicRefs]) {
       assert.deepEqual(
-        state[field].map((r: number[]) => Array.from(r)),
+        denylist.map((r: number[]) => Array.from(r)),
         [deniedBefore],
-        `${field} holds the previous denylist`,
+        "each denylist holds the previous one",
       );
     }
   });

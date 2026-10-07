@@ -30,11 +30,15 @@ export function requirePubkey(name: string, what: string): PublicKey {
   return parsePubkey(name, requireEnv(name, what));
 }
 
-/** A fixed-width hex byte string (an optional 0x prefix is accepted), as the byte array Anchor takes. */
-export function requireHexBytes(name: string, byteLen: number, what: string): number[] {
-  const hex = requireEnv(name, what).replace(/^0x/, "");
+/** `raw`, a value of variable `name`, as a fixed-width hex byte string (an optional 0x prefix is accepted), as the byte array Anchor takes. */
+export function parseHexBytes(name: string, raw: string, byteLen: number): number[] {
+  const hex = raw.replace(/^0x/, "");
   if (!/^[0-9a-fA-F]+$/.test(hex) || hex.length !== byteLen * 2) {
     throw new Error(`${name} must be ${byteLen * 2} hex chars (${byteLen} bytes), got "${hex}"`);
   }
   return Array.from(Buffer.from(hex, "hex"));
+}
+
+export function requireHexBytes(name: string, byteLen: number, what: string): number[] {
+  return parseHexBytes(name, requireEnv(name, what), byteLen);
 }

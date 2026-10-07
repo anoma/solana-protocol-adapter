@@ -3,7 +3,7 @@ import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { DeniedLogicRef, denyLogicRefs } from "../client/instructions";
-import { requireEnv } from "./cli-utils";
+import { parseHexBytes, requireEnv } from "./cli-utils";
 
 /**
  * PA_DENIED_LOGIC_REFS, comma-separated `<hex logic ref>:<consumed|created>`
@@ -17,9 +17,11 @@ function requireDeniedLogicRefs(): DeniedLogicRef[] {
       "   denylist for consumed or for created resources. An entry cannot be removed.",
   );
   return raw.split(",").map((entry) => {
-    const match = /^(?:0x)?([0-9a-fA-F]{64}):(consumed|created)$/.exec(entry.trim());
-    if (!match) throw new Error(`PA_DENIED_LOGIC_REFS entry must be <64 hex chars>:<consumed|created>, got "${entry}"`);
-    return { logicRef: Array.from(Buffer.from(match[1], "hex")), consumed: match[2] === "consumed" };
+    const [hex, side] = entry.trim().split(":");
+    if (side !== "consumed" && side !== "created") {
+      throw new Error(`PA_DENIED_LOGIC_REFS entry must be <logic ref>:<consumed|created>, got "${entry}"`);
+    }
+    return { logicRef: parseHexBytes("PA_DENIED_LOGIC_REFS", hex, 32), consumed: side === "consumed" };
   });
 }
 

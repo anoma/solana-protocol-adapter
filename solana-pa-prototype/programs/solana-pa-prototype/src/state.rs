@@ -110,15 +110,20 @@ impl PAStateAccount {
     /// for created resources holds `logic_ref`, as pa-evm's
     /// `isLogicRefDenied`.
     pub fn is_logic_ref_denied(&self, logic_ref: &[u8; 32], consumed: bool) -> bool {
-        if consumed {
-            self.denied_consumed_logic_refs.contains(logic_ref)
-        } else {
-            self.denied_created_logic_refs.contains(logic_ref)
-        }
+        self.denied_logic_refs(consumed).contains(logic_ref)
     }
 
     /// The denylist for consumed resources when `consumed`, else the one for
     /// created resources, as pa-evm's `_deniedLogicRefs`.
+    pub fn denied_logic_refs(&self, consumed: bool) -> &Vec<[u8; 32]> {
+        if consumed {
+            &self.denied_consumed_logic_refs
+        } else {
+            &self.denied_created_logic_refs
+        }
+    }
+
+    /// `denied_logic_refs`, to add to.
     pub fn denied_logic_refs_mut(&mut self, consumed: bool) -> &mut Vec<[u8; 32]> {
         if consumed {
             &mut self.denied_consumed_logic_refs

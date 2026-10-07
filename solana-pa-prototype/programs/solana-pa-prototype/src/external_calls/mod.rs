@@ -9,7 +9,7 @@ pub use cpi::ForwarderSegments;
 
 use crate::error::PAError;
 use crate::types::SolanaExternalCall;
-use anchor_lang::prelude::{AccountInfo, AnchorDeserialize, Pubkey};
+use anchor_lang::prelude::{AccountInfo, Pubkey};
 use anchor_lang::solana_program::instruction::AccountMeta;
 use arm_core::logic_instance::{AppData, ExpirableBlob};
 use arm_core::utils::bytes_to_words;
@@ -42,12 +42,17 @@ pub fn decode_forwarder_output(
     return_data: Option<(Pubkey, Vec<u8>)>,
     forwarder: &Pubkey,
 ) -> Result<Vec<u8>, PAError> {
-    match return_data {
-        Some((program_id, data)) if program_id == *forwarder => {
-            Vec::<u8>::try_from_slice(&data).map_err(|_| PAError::ForwarderCallOutputMismatch)
-        }
-        _ => Err(PAError::ForwarderCallOutputMismatch),
+    let (program_id, mut data) = return_data.ok_or(PAError::ForwarderCallOutputMismatch)?;
+    let encodes_one_vec = data
+        .split_first_chunk::<4>()
+        .is_some_and(|(len, output)| u32::from_le_bytes(*len) as usize == output.len());
+    if program_id != *forwarder || !encodes_one_vec {
+        return Err(PAError::ForwarderCallOutputMismatch);
     }
+    // Decoded in place: the settlement's heap never frees, so a decoded copy
+    // would stay allocated.
+    data.drain(..4);
+    Ok(data)
 }
 
 /// Verify that actual output matches expected output.
