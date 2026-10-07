@@ -84,7 +84,7 @@ entry point for one fixture.
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
 | `./scripts/dev.sh shell` / `run <cmd>` | Interactive Nix shell / one command in it |
-| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-ref`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
+| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-refs`, `migrate-state`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
 
 ### Rebuilding From Scratch
 
@@ -128,7 +128,6 @@ Your forwarder must implement a `forward_call` instruction:
 
 ```rust
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::set_return_data;
 
 #[program]
 pub mod my_forwarder {
@@ -138,14 +137,12 @@ pub mod my_forwarder {
         ctx: Context<ForwardCall>,
         logic_ref: [u8; 32],  // The calling resource's logic ref
         input: Vec<u8>,       // Arbitrary input from the RM transaction
-    ) -> Result<()> {
+    ) -> Result<Vec<u8>> {
         // Your logic here...
 
-        // Return output via set_return_data (max 1024 bytes)
+        // The output, possibly empty, which Anchor sets as return data
         let output: Vec<u8> = /* your output */;
-        set_return_data(&output);
-
-        Ok(())
+        Ok(output)
     }
 }
 
@@ -167,7 +164,7 @@ pub struct ForwardCall<'info> {
    [input: N bytes]
    ```
 
-3. **Output via return data**: Use `set_return_data(&output)`. The adapter reads it immediately after the CPI and requires it to equal the call's `expected_output`, which the resource's `app_data.external_payload` carries inside the transaction's proven `AggregationInstance`. Solana caps return data at 1024 bytes: a forwarder that needs to surface more must commit a digest in return data and place the full payload elsewhere (e.g. an event or PDA).
+3. **Output as a returned `Vec<u8>`**, as pa-evm's forwarder call returns `bytes`: Anchor sets it as return data, Borsh-encoded (a 4-byte little-endian length, then the bytes), so an empty output is four bytes of return data and differs from none. The adapter reads it immediately after the CPI, decodes it, and requires it to equal the call's `expected_output`, which the resource's `app_data.external_payload` carries inside the transaction's proven `AggregationInstance`. Return data that is missing, set by another program, or not exactly one encoded `Vec<u8>` is a `ForwarderCallOutputMismatch`. Solana caps return data at 1024 bytes, so an output holds at most 1020: a forwarder that needs to surface more must commit a digest in its output and place the full payload elsewhere (e.g. an event or PDA).
 
 ---
 
@@ -204,7 +201,7 @@ The test **"rejects a tampered tx (proof binding)"** settles the fixture with on
 
 A settlement (`settle`, or `settle_from_txdata` after a TxData upload) runs in pa-evm's order:
 
-1. **Checks** — the transaction carries an aggregation and a delta proof, the compliance key and kind table match, no resource carries a denied logic ref, no nullifier repeats, and every consumed root is a known root.
+1. **Checks** — the transaction carries an aggregation and a delta proof, the compliance key matches, the kind table is the stored or the empty one, no resource's logic ref is on the denylist for its side, no nullifier repeats, and every consumed root is a known root.
 2. **Per action**, first its consumed resources (create each nullifier's marker PDA, which refuses a spent nullifier; run the resource's forwarder calls; emit its payload events), then its created resources (append each commitment to the tree; run its calls; emit its events), then `ActionExecutedEvent`.
 3. **Proof verification** — a CPI to the RISC0 verifier router, which routes the seal to the verifier registered for its selector; then the delta proof.
 4. **Root** — if the transaction created commitments, the new root's marker PDA is recorded and `CommitmentTreeRootAddedEvent` emitted.
@@ -219,7 +216,7 @@ pub fn forward_call(
     ctx: Context<ForwardCall>,
     _logic_ref: [u8; 32],  // The calling resource's logic ref (unused by this forwarder)
     input: Vec<u8>,        // 8 bytes: expected timestamp as i64 LE
-) -> Result<()> {
+) -> Result<Vec<u8>> {
     if input.len() != 8 {
         return Err(ErrorCode::InvalidInput.into());
     }
@@ -232,12 +229,11 @@ pub fn forward_call(
         Ordering::Equal => RESULT_EQ,
     };
 
-    set_return_data(&[result]);
-    Ok(())
+    Ok(vec![result])
 }
 ```
 
-The adapter's CPI passes the resource's `logic_ref` and the call's `input`. After the call, it reads the return data and compares it with the call's `expected_output`.
+The adapter's CPI passes the resource's `logic_ref` and the call's `input`. After the call, it decodes the returned `Vec<u8>` from the return data and compares it with the call's `expected_output`.
 
 ### How External Calls Are Encoded
 
@@ -247,7 +243,7 @@ Each external call is one entry in a resource's `app_data.external_payload`, ins
 pub struct SolanaExternalCall {
     pub program_id: [u8; 32],       // Forwarder program ID
     pub instruction_data: Vec<u8>,  // Passed as `input` to forward_call
-    pub expected_output: Vec<u8>,   // Must match return data; must be non-empty
+    pub expected_output: Vec<u8>,   // Must equal the returned Vec<u8>, empty included
     pub output_mode: OutputMode,    // ReturnData (only variant)
     pub num_accounts: u8,           // Accounts in this call's segment, including the forwarder
 }
@@ -284,7 +280,6 @@ After the nullifier markers, each external call takes the next `num_accounts` ac
 2. **Implement `forward_call`** in `programs/my-forwarder/src/lib.rs`:
    ```rust
    use anchor_lang::prelude::*;
-   use anchor_lang::solana_program::program::set_return_data;
 
    // The address comes from env/<cluster>.env (env/README.md).
    declare_id!(Pubkey::from_str_const(env!("MY_FORWARDER_PROGRAM_ID")));
@@ -297,11 +292,10 @@ After the nullifier markers, each external call takes the next `num_accounts` ac
            ctx: Context<ForwardCall>,
            logic_ref: [u8; 32],
            input: Vec<u8>,
-       ) -> Result<()> {
+       ) -> Result<Vec<u8>> {
            // Your logic here
            let output = vec![/* result bytes */];
-           set_return_data(&output);
-           Ok(())
+           Ok(output)
        }
    }
 

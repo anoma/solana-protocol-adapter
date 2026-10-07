@@ -35,19 +35,9 @@ fn invoke_forwarder(
     Ok(())
 }
 
-fn read_forwarder_output(
-    output_mode: &OutputMode,
-    program_id: &Pubkey,
-) -> Result<Vec<u8>, PAError> {
+fn read_forwarder_output(output_mode: &OutputMode, forwarder: &Pubkey) -> Result<Vec<u8>, PAError> {
     match output_mode {
-        OutputMode::ReturnData => {
-            let (returned_program_id, return_data) =
-                get_return_data().ok_or(PAError::ForwarderCallOutputMismatch)?;
-            if returned_program_id != *program_id {
-                return Err(PAError::ForwarderCallOutputMismatch);
-            }
-            Ok(return_data)
-        }
+        OutputMode::ReturnData => super::decode_forwarder_output(get_return_data(), forwarder),
     }
 }
 

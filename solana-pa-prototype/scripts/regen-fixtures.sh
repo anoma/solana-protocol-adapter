@@ -110,6 +110,9 @@ fi
 if wanted batch_groth16_consume_only.json; then
   gen consume-only "$OUT_DIR/batch_groth16_consume_only.json"
 fi
+if wanted batch_forwarder_empty_output.json; then
+  gen forwarder-empty-output "$OUT_DIR/batch_forwarder_empty_output.json"
+fi
 
 # The fresh phase's settlements, in their order: the committer (leaf 0) and
 # its successor, then the consumer spending the committer's resource through
@@ -129,7 +132,7 @@ if wanted batch_groth16_resubmitted.json; then gen batch "$OUT_DIR/batch_groth16
 # Never settled: rejections that fail after the nullifiers are recorded need
 # them unspent. The error variants are mutations of this transaction.
 if wanted batch_groth16_rejected.json wrong_root.json no_aggregation.json garbage_proof.json corrupt_seal.json \
-  zero_action.json witness_delta.json; then
+  zero_action.json foreign_kind_table.json witness_delta.json; then
   gen batch --error-variants "$OUT_DIR" "$OUT_DIR/batch_groth16_rejected.json"
 fi
 if wanted batch_groth16_mismatch.json; then gen output-mismatch "$OUT_DIR/batch_groth16_mismatch.json"; fi

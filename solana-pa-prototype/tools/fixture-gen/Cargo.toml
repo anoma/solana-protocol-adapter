@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 # Merkle paths over the adapter's tree, as integrators derive them.
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "8ed65a4b5f00164641c10d16661de97d47a8ecab", default-features = false, features = ["arm"] }
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "6b2f41cf613ccaf593bee79bc138c71dd1f7ab4c", default-features = false, features = ["arm"] }
 arm = { package = "anoma-rm-risc0", version = "=2.0.0-rc.6", default-features = false, features = ["aggregation", "prove"] }
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
@@ -19,7 +19,7 @@ hex = "0.4"
 k256 = "0.13"
 risc0-zkvm = "3.0.6"
 # The pass-through logic the fixtures' external calls ride on.
-anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "32c4da76ee17382768f244a6d91f653ec26e2f9f", default-features = false, features = [
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "fee5441725fc03f2437d782df513a9a59eb35b0d", default-features = false, features = [
   "fixtures",
 ] }
 serde = { version = "1.0", features = ["derive"] }

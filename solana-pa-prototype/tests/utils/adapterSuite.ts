@@ -26,7 +26,7 @@ import { MockVerifier } from "../../target/types/mock_verifier";
 import { MAX_COMPUTE_UNIT_LIMIT, initializeAdapter, pauseAdapter } from "../../client/instructions";
 import { parseCpiEvents } from "../../client/events";
 import { confirmedProvider } from "../../client/provider";
-import { deployedExecutableHash, executableHash } from "../../client/upgrade";
+import { deployedExecutableHash, executableHash, programDataCode } from "../../client/upgrade";
 import { readFileSync } from "fs";
 import { ensureSettlementLookupTable, fetchLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
@@ -49,6 +49,7 @@ import {
   initTxData as initTxDataOf,
   makeFunder,
   sendV0,
+  solanaCli,
   TxDataUpload,
   uploadTxData as uploadTxDataTo,
   waitForSlotPast,
@@ -214,9 +215,18 @@ export async function cpiEventsOf(sig: string, emitter: anchor.Program<any> = pr
 }
 
 /**
+ * The least the upgradeable loader extends a ProgramData account by, unless
+ * the extension reaches the maximum size ("ExtendProgram requires a minimum
+ * of 10240 additional bytes").
+ */
+const MIN_PROGRAM_DATA_EXTENSION = 10240;
+
+/**
  * UUPS upgradeToAndCall: `upgrade` (the target's own instruction, by its
  * owner) replaces `target`'s code with the build at `so`, written into a
- * buffer by the wallet. `event` (ERC1967's Upgraded) names the build by its
+ * buffer by the wallet. A build larger than the ProgramData account first
+ * extends it, by the shortfall raised to the loader's minimum, as ops.sh's
+ * upgrade does. `event` (ERC1967's Upgraded) names the build by its
  * executable hash, the program runs it, and the loader closes the buffer
  * into `spill`. Returns once the new code runs, from the slot after.
  */
@@ -226,7 +236,18 @@ export async function upgradeThroughProgram(
   event: string,
   upgrade: (buffer: PublicKey, spill: PublicKey) => { rpc(): Promise<string> },
 ) {
-  const expected = executableHash(readFileSync(so));
+  const code = readFileSync(so);
+  const expected = executableHash(code);
+  const shortfall = code.length - (await programDataCode(provider.connection, target.programId)).length;
+  if (shortfall > 0) {
+    solanaCli(
+      provider,
+      "program",
+      "extend",
+      target.programId.toBase58(),
+      String(Math.max(shortfall, MIN_PROGRAM_DATA_EXTENSION)),
+    );
+  }
   const buffer = writeBuffer(provider, so);
   const spill = Keypair.generate().publicKey;
   const bufferRent = (await provider.connection.getAccountInfo(buffer))!.lamports;
@@ -542,6 +563,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
 
   return {
     funder,
+    settlementTable,
     uploadTxData,
     initTxData,
     closeTxData,

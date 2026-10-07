@@ -4,6 +4,8 @@
 # files that only work on a fresh deployment (tests/fresh/), then every
 # other file, which builds on whatever state it finds, then the files that
 # change the deployment for good (tests/terminal/, in their numbered order).
+# Then each upgrade-path file (tests/upgrade/<program>.ts) on a validator of
+# its own, which starts on that program's previous build.
 #
 #   anchor-test.sh [all|build|test] [spec file...]
 #
@@ -13,7 +15,7 @@
 #   test            the spec files against existing artifacts
 # Spec files default to every tests/**/*.ts outside tests/utils/ (the
 # support modules the specs import) in that order; given ones run in the
-# order given.
+# order given, the upgrade-path ones after the rest.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,12 +40,19 @@ if [[ "$PHASE" == "build" && ${#SPEC_FILES[@]} -gt 0 ]]; then
   exit 1
 fi
 if [[ ${#SPEC_FILES[@]} -eq 0 ]]; then
-  mapfile -t SPEC_FILES < <(suite_spec_files)
+  mapfile -t SPEC_FILES < <(suite_spec_files; upgrade_spec_files)
 fi
+SUITE_SPECS=()
+UPGRADE_SPECS=()
 for spec in "${SPEC_FILES[@]}"; do
   if [[ ! -f "$spec" ]]; then
     echo "❌ spec file not found: ${spec} (paths are relative to ${PROJECT_DIR})" >&2
     exit 1
+  fi
+  if [[ "$spec" == tests/upgrade/* ]]; then
+    UPGRADE_SPECS+=("$spec")
+  else
+    SUITE_SPECS+=("$spec")
   fi
 done
 
@@ -97,12 +106,9 @@ PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE#settlement-table-}"
 
 trap 'stop_validator' EXIT
 
-echo "==> (3/3) Running ${#SPEC_FILES[@]} spec file(s) on one validator"
-workspace_program_args
-start_validator "${WORKSPACE_PROGRAM_ARGS[@]}" --warp-slot 1 --account "$PA_SETTLEMENT_TABLE" "${settlement_table_file[0]}"
-for i in "${!SPEC_FILES[@]}"; do
-  spec="${SPEC_FILES[$i]}"
-  echo "==> [$((i + 1))/${#SPEC_FILES[@]}] ${spec}"
+# Run one spec file against the running validator.
+run_spec() {
+  local spec="$1"
   if ! ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
     ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
     PA_SETTLEMENT_TABLE="$PA_SETTLEMENT_TABLE" \
@@ -110,8 +116,30 @@ for i in "${!SPEC_FILES[@]}"; do
     echo "❌ ${spec} failed (validator log: ${VALIDATOR_LOG})" >&2
     exit 1
   fi
+}
+
+# Start a validator with the workspace programs (with $1, if given, at its
+# previous build) and the genesis settlement lookup table.
+start_suite_validator() {
+  workspace_program_args "$@"
+  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}" --warp-slot 1 --account "$PA_SETTLEMENT_TABLE" "${settlement_table_file[0]}"
+}
+
+echo "==> (3/3) Running ${#SUITE_SPECS[@]} spec file(s) on one validator, then ${#UPGRADE_SPECS[@]} upgrade-path file(s) on validators of their own"
+if [[ ${#SUITE_SPECS[@]} -gt 0 ]]; then
+  start_suite_validator
+  for i in "${!SUITE_SPECS[@]}"; do
+    echo "==> [$((i + 1))/${#SUITE_SPECS[@]}] ${SUITE_SPECS[$i]}"
+    run_spec "${SUITE_SPECS[$i]}"
+  done
+  stop_validator
+fi
+for spec in "${UPGRADE_SPECS[@]}"; do
+  echo "==> [upgrade path] ${spec}, starting on $(basename "$spec" .ts)'s previous build"
+  start_suite_validator "$(basename "$spec" .ts)"
+  run_spec "$spec"
+  stop_validator
 done
-stop_validator
 
 if [[ "$PHASE" != "test" ]]; then
   # Anchor's SBF toolchain can leave incompatible host debug artifacts in

@@ -33,9 +33,14 @@ Commands:
   init                   Initialize PA state (idempotent)
   set-kind-table         Replace the PA's kind-table commitment with
                          PA_KIND_TABLE_COMMITMENT (owner wallet).
-  deny-logic-ref         Deny PA_DENIED_LOGIC_REF: no settlement consumes or
-                         creates a resource carrying it again. Cannot be
+  deny-logic-refs        Add each PA_DENIED_LOGIC_REFS entry
+                         (<hex>:<consumed|created>, comma-separated) to the
+                         denylist for consumed or for created resources;
+                         created alone deprecates, both deny. Cannot be
                          undone (owner wallet).
+  migrate-state          Bring PAState from the previous schema version to
+                         this build's, once, right after the upgrade (owner
+                         wallet).
   lookup-table           Create the deployment's settlement lookup table, or
                          extend the one in PA_LOOKUP_TABLE with any missing
                          key. See scripts/lookup-table.ts.
@@ -654,9 +659,14 @@ cmd_set_kind_table() {
   run_ts scripts/set-kind-table.ts
 }
 
-cmd_deny_logic_ref() {
+cmd_deny_logic_refs() {
   require_pa_deployed
-  run_ts scripts/deny-logic-ref.ts
+  run_ts scripts/deny-logic-refs.ts
+}
+
+cmd_migrate_state() {
+  require_pa_deployed
+  run_ts scripts/migrate-state.ts
 }
 
 cmd_lookup_table() {
@@ -1066,7 +1076,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|init|set-kind-table|deny-logic-ref|lookup-table|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-table|deny-logic-refs|migrate-state|lookup-table|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

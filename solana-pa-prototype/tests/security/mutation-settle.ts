@@ -55,7 +55,7 @@ describe("Security: mutation-based settle tests", () => {
   it("rejects zero-action transaction", async () =>
     assertFails(settleInline(Buffer.from((await loadFixture("zero_action.json")).tx_b64, "base64")), {
       program,
-      error: "InvalidTransactionData",
+      error: "EmptyTransactionNotAllowed",
     }));
 
   // --- Proof mutations ---

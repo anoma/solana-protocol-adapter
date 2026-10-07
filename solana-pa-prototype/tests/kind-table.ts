@@ -23,11 +23,12 @@ describe("protocol-adapter (kind table commitment) @localnet", () => {
   const { funder, uploadTxData, settleFixture } = useAdapterSuite();
   let fixture: Fixture;
 
-  // Mirrors pa-evm ProtocolAdapter.setKindTableCommitment: owner-only, zero
-  // rejected, KindTableCommitmentUpdated emitted. The stored commitment is
-  // what every settled aggregation instance must carry, so a change rejects
-  // transactions proven against the previous table until it is changed back.
-  // The tests change it and restore the one the deployment held.
+  // Mirrors pa-evm's setKindTableCommitment: owner-only, zero rejected,
+  // KindTableCommitmentUpdated emitted. A transaction settles when it is
+  // proven against the stored kind table or against the empty one, as
+  // pa-evm's _isKindTableCommitmentAccepted. The committed fixtures are proven
+  // against the empty table. The tests change the stored commitment and
+  // restore the one the deployment held.
   let found: number[];
   const stored = async () => (await program.account.paStateAccount.fetch(paState)).kindTableCommitment;
 
@@ -43,19 +44,19 @@ describe("protocol-adapter (kind table commitment) @localnet", () => {
     }
   });
 
-  // A fresh upload of the already-settled resubmitted fixture. Under another
-  // commitment it fails at the commitment check, which precedes every other
-  // check on the instance; under the right one it reaches nullifier creation
-  // and fails there, which is what tells the two rejections apart.
-  const resettleFixture = async () => {
+  // A fresh upload of `submitted`, by default the already-settled resubmitted
+  // fixture. The commitment check precedes every other check on the
+  // instance, so a transaction it accepts reaches nullifier creation and
+  // fails there, and one it refuses fails with UnacceptedKindTableCommitment.
+  const resettleFixture = async (submitted: Fixture = fixture) => {
     const authority = await funder.fresh(2);
-    const { uploadId, txData } = await uploadTxData(authority, Buffer.from(fixture.tx_b64, "base64"));
+    const { uploadId, txData } = await uploadTxData(authority, Buffer.from(submitted.tx_b64, "base64"));
     return settleFromTxDataBuilder(
       authority.publicKey,
       uploadId,
       txData,
       DUMMY_ROOT_MARKER,
-      buildSettleRemainingAccounts(deriveNullifierAccounts(fixture.consumed_nullifiers_b64)),
+      buildSettleRemainingAccounts(deriveNullifierAccounts(submitted.consumed_nullifiers_b64)),
     )
       .signers([authority])
       .rpc();
@@ -76,7 +77,7 @@ describe("protocol-adapter (kind table commitment) @localnet", () => {
       error: "ZeroKindTableCommitmentNotAllowed",
     }));
 
-  it("stores a new commitment, emits KindTableCommitmentUpdated, and rejects transactions proven against the previous table until it is restored", async () => {
+  it("stores a new commitment, emits KindTableCommitmentUpdated, and still accepts a transaction proven against the empty table", async () => {
     const rotated = randomRef();
     const sig = await setKindTableCommitment(program, provider.wallet.publicKey, rotated).rpc();
     assert.deepEqual(await stored(), rotated, "the new commitment is stored");
@@ -92,10 +93,20 @@ describe("protocol-adapter (kind table commitment) @localnet", () => {
       { kindTableCommitment: rotated },
       "the event carries exactly pa-evm's field, the new commitment",
     );
-    await assertFails(resettleFixture(), { program, error: "KindTableCommitmentMismatch" });
+    // The fixture, proven against the empty table, passes the commitment
+    // check under the new commitment and reaches nullifier creation.
+    await assertFails(resettleFixture(), { program, error: "PreExistingNullifier" });
 
     await setKindTableCommitment(program, provider.wallet.publicKey, found).rpc();
     assert.deepEqual(await stored(), found, "the commitment the deployment held is restored");
-    await assertFails(resettleFixture(), { program, error: "PreExistingNullifier" });
   });
+
+  // pa-evm's UnacceptedKindTableCommitment: the transaction claims a kind
+  // table that is neither the stored one nor the empty one (fixture-gen's
+  // foreign_kind_table error variant), refused before its proof is verified.
+  it("refuses a transaction proven against a kind table neither stored nor empty", async () =>
+    assertFails(resettleFixture(await loadFixture("foreign_kind_table.json")), {
+      program,
+      error: "UnacceptedKindTableCommitment",
+    }));
 });

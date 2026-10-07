@@ -285,7 +285,7 @@ use block_time_forwarder::{RESULT_GT, RESULT_LT};
 use solana_pa::external_calls::encode_external_call;
 use solana_pa::state::PAStateAccount;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
-use test_forwarder::{MODE_FAIL, MODE_SILENT};
+use test_forwarder::{MODE_EMPTY, MODE_FAIL, MODE_SILENT};
 
 #[derive(Serialize)]
 struct Fixture {
@@ -349,8 +349,14 @@ enum ShapeCommand {
         #[command(flatten)]
         generate: GenerateArgs,
     },
-    /// The test forwarder returning no data.
+    /// The test forwarder returning no data where the call expects an empty
+    /// output.
     ForwarderSilent {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// The test forwarder returning the empty output the call expects.
+    ForwarderEmptyOutput {
         #[command(flatten)]
         generate: GenerateArgs,
     },
@@ -401,8 +407,8 @@ struct GenerateArgs {
     #[command(flatten)]
     prover: ProverArgs,
     /// Also write the final transaction's error variants to DIR:
-    /// wrong_root, no_aggregation, garbage_proof, corrupt_seal, zero_action
-    /// and witness_delta.
+    /// wrong_root, no_aggregation, garbage_proof, corrupt_seal, zero_action,
+    /// foreign_kind_table and witness_delta.
     #[arg(long, value_name = "DIR")]
     error_variants: Option<PathBuf>,
     /// Prove against this kind table instead of the committed empty one
@@ -443,8 +449,8 @@ enum ForwarderMode {
         output_mismatch: bool,
         multi_external_call: bool,
     },
-    TestForwarderFail,
-    TestForwarderSilent,
+    /// The test forwarder in the given mode, expecting an empty output.
+    TestForwarder(u8),
 }
 
 /// The aggregation carried by a transaction, or a clear error if it has none.
@@ -519,33 +525,12 @@ fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Expirabl
     })
 }
 
-fn test_forwarder_fail_payload_blob() -> ExpirableBlob {
-    // expected_output must be non-empty: Solana's runtime reports no return-data
-    // record both for an explicit empty return and for no return at all, so
-    // decode_external_call rejects an empty expected_output before the call is
-    // ever attempted. This test needs the call to actually reach the CPI so the
-    // test-forwarder's IntentionalFailure can propagate, so we pin a non-empty
-    // expected value; it is never compared because the CPI itself fails first.
+/// A call to the test forwarder in `mode`, expecting an empty output.
+fn test_forwarder_payload_blob(mode: u8) -> ExpirableBlob {
     encode_external_call(&SolanaExternalCall {
         program_id: test_forwarder::ID.to_bytes(),
-        instruction_data: vec![MODE_FAIL],
-        expected_output: vec![0x2a],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    })
-}
-
-fn test_forwarder_silent_payload_blob() -> ExpirableBlob {
-    // expected_output must be non-empty: Solana's runtime reports no return-data
-    // record both for an explicit empty return and for no return at all, so
-    // decode_external_call rejects an empty expected_output before the call is
-    // ever attempted. Pinning a non-empty expected value here makes the silent
-    // forwarder path a genuine output mismatch (expected [0x2a], got nothing)
-    // rather than conflating "expected empty" with "returned nothing".
-    encode_external_call(&SolanaExternalCall {
-        program_id: test_forwarder::ID.to_bytes(),
-        instruction_data: vec![MODE_SILENT],
-        expected_output: vec![0x2a],
+        instruction_data: vec![mode],
+        expected_output: vec![],
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
     })
@@ -975,8 +960,7 @@ async fn generate_test_transaction_with_external_payload(
         ForwarderMode::BlockTimeForwarder {
             output_mismatch, ..
         } => block_time_forwarder_external_payload_blob(*output_mismatch),
-        ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob(),
-        ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob(),
+        ForwarderMode::TestForwarder(mode) => test_forwarder_payload_blob(*mode),
     };
     consumed_app_data.external_payload.push(external_blob);
     if let ForwarderMode::BlockTimeForwarder {
@@ -1133,6 +1117,17 @@ fn generate_error_variant_fixtures(
         let mut zero_action = tx.clone();
         require_aggregation_mut(&mut zero_action)?.instance.actions = Vec::new();
         write_variant("zero_action.json", &zero_action)?;
+    }
+
+    {
+        // The transaction claiming a kind table that is neither the empty
+        // one nor any deployment's: the adapter refuses its commitment before
+        // it verifies the proof.
+        let mut foreign_kind_table = tx.clone();
+        require_aggregation_mut(&mut foreign_kind_table)?
+            .instance
+            .kind_table_commitment = Digest::from_bytes([0x4b; 32]);
+        write_variant("foreign_kind_table.json", &foreign_kind_table)?;
     }
 
     {
@@ -1553,6 +1548,7 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
     | ShapeCommand::OutputMismatch { generate }
     | ShapeCommand::ForwarderFail { generate }
     | ShapeCommand::ForwarderSilent { generate }
+    | ShapeCommand::ForwarderEmptyOutput { generate }
     | ShapeCommand::ConsumeOnly { generate }
     | ShapeCommand::TransferShape { generate }
     | ShapeCommand::HistoricalRootCommitter { generate }
@@ -1595,7 +1591,8 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         ),
         ShapeCommand::Batch { .. }
         | ShapeCommand::ForwarderFail { .. }
-        | ShapeCommand::ForwarderSilent { .. } => {}
+        | ShapeCommand::ForwarderSilent { .. }
+        | ShapeCommand::ForwarderEmptyOutput { .. } => {}
     }
     if let Some(dir) = &error_variants {
         eprintln!("error variants output dir: {}", dir.display());
@@ -1625,10 +1622,13 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             .await?
         }
         ShapeCommand::ForwarderFail { .. } => {
-            single_action(ForwarderMode::TestForwarderFail).await?
+            single_action(ForwarderMode::TestForwarder(MODE_FAIL)).await?
         }
         ShapeCommand::ForwarderSilent { .. } => {
-            single_action(ForwarderMode::TestForwarderSilent).await?
+            single_action(ForwarderMode::TestForwarder(MODE_SILENT)).await?
+        }
+        ShapeCommand::ForwarderEmptyOutput { .. } => {
+            single_action(ForwarderMode::TestForwarder(MODE_EMPTY)).await?
         }
         ShapeCommand::ConsumeOnly { .. } => {
             generate_consume_only_transaction(&prover, name).await?
