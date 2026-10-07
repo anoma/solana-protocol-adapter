@@ -26,7 +26,7 @@ import { MockVerifier } from "../../target/types/mock_verifier";
 import { MAX_COMPUTE_UNIT_LIMIT, initializeAdapter, pauseAdapter } from "../../client/instructions";
 import { parseCpiEvents } from "../../client/events";
 import { confirmedProvider } from "../../client/provider";
-import { deployedExecutableHash, executableHash, programDataCapacity } from "../../client/upgrade";
+import { deployedExecutableHash, executableHash, programDataCode } from "../../client/upgrade";
 import { readFileSync } from "fs";
 import { ensureSettlementLookupTable, fetchLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
@@ -238,7 +238,7 @@ export async function upgradeThroughProgram(
 ) {
   const code = readFileSync(so);
   const expected = executableHash(code);
-  const shortfall = code.length - (await programDataCapacity(provider.connection, target.programId));
+  const shortfall = code.length - (await programDataCode(provider.connection, target.programId)).length;
   if (shortfall > 0) {
     solanaCli(
       provider,

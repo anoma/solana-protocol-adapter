@@ -28,8 +28,8 @@ export function bufferExecutableHash(bufferData: Buffer): Buffer {
   return executableHash(bufferData.subarray(BUFFER_METADATA_LEN));
 }
 
-/** The code region of `programId`'s ProgramData account: its code, zero-padded to the account's size. */
-async function programDataCode(connection: Connection, programId: PublicKey): Promise<Buffer> {
+/** The code region of `programId`'s ProgramData account: its code, zero-padded to the account's size, the most code an upgrade can install. */
+export async function programDataCode(connection: Connection, programId: PublicKey): Promise<Buffer> {
   const programData = await connection.getAccountInfo(deriveProgramDataPda(programId), "confirmed");
   if (!programData) throw new Error(`${programId.toBase58()} has no ProgramData account`);
   return programData.data.subarray(PROGRAM_DATA_METADATA_LEN);
@@ -38,11 +38,6 @@ async function programDataCode(connection: Connection, programId: PublicKey): Pr
 /** The executable hash of the code `programId` runs, read from its ProgramData. */
 export async function deployedExecutableHash(connection: Connection, programId: PublicKey): Promise<Buffer> {
   return executableHash(await programDataCode(connection, programId));
-}
-
-/** The code bytes `programId`'s ProgramData account holds room for: an upgrade's code must fit in it. */
-export async function programDataCapacity(connection: Connection, programId: PublicKey): Promise<number> {
-  return (await programDataCode(connection, programId)).length;
 }
 
 /**

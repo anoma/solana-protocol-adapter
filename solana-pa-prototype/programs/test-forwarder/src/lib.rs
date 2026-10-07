@@ -11,7 +11,7 @@
 //! | 0x02      | Relays `forward_call` to `remaining_accounts[0]`  | a multi-program segment, the relayed program called at depth 3 |
 //! | 0x03      | Logs `input[1]` lines of 100 bytes, returns `Ok`  | events survive log truncation |
 //! | 0x04      | Writes `input[1..]` to `remaining_accounts[0]` and returns it | writable segment accounts, output of a state change |
-//! | 0x05      | Returns `input[1..]`                              | an empty output, which `[0x05]` returns |
+//! | 0x05      | Returns the empty output                          | an output that is empty, not absent |
 //!
 //! Empty input is treated as mode 0x00. Mode 0x03 is called directly, as an
 //! instruction of its own: it fills a transaction's 10,000-byte program-log
@@ -37,8 +37,8 @@ pub const MODE_LOG: u8 = 0x03;
 /// Writes the rest of the input to the start of the first remaining account,
 /// which this program owns, and returns it.
 pub const MODE_WRITE: u8 = 0x04;
-/// Returns the rest of the input.
-pub const MODE_RETURN: u8 = 0x05;
+/// Returns the empty output.
+pub const MODE_EMPTY: u8 = 0x05;
 /// Return data of a relay whose inner call succeeded.
 pub const RELAY_OK: u8 = 0x2a;
 
@@ -66,7 +66,7 @@ pub mod test_forwarder {
                 Ok(())
             }
             MODE_WRITE => write(ctx.remaining_accounts, &input[1..]),
-            MODE_RETURN => set_output(&input[1..]),
+            MODE_EMPTY => set_output(&[]),
             _ => Err(ErrorCode::IntentionalFailure.into()),
         }
     }

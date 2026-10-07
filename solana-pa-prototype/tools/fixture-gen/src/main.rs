@@ -285,7 +285,7 @@ use block_time_forwarder::{RESULT_GT, RESULT_LT};
 use solana_pa::external_calls::encode_external_call;
 use solana_pa::state::PAStateAccount;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
-use test_forwarder::{MODE_FAIL, MODE_RETURN, MODE_SILENT};
+use test_forwarder::{MODE_EMPTY, MODE_FAIL, MODE_SILENT};
 
 #[derive(Serialize)]
 struct Fixture {
@@ -325,10 +325,6 @@ enum Command {
     Generate(ShapeCommand),
     /// Print a fixture's transaction structure.
     Dump { input: PathBuf },
-    /// Write the error variants of a stored fixture's transaction into `out`,
-    /// as `--error-variants` does while generating it, without proving: each
-    /// variant is a mutation of the finished transaction.
-    ErrorVariants { fixture: PathBuf, out: PathBuf },
 }
 
 /// One fixture shape per subcommand, each taking only its own options.
@@ -412,8 +408,7 @@ struct GenerateArgs {
     prover: ProverArgs,
     /// Also write the final transaction's error variants to DIR:
     /// wrong_root, no_aggregation, garbage_proof, corrupt_seal, zero_action,
-    /// foreign_kind_table and witness_delta. The `error-variants` subcommand
-    /// writes them from a stored fixture.
+    /// foreign_kind_table and witness_delta.
     #[arg(long, value_name = "DIR")]
     error_variants: Option<PathBuf>,
     /// Prove against this kind table instead of the committed empty one
@@ -1208,16 +1203,6 @@ struct DerivedFixtureFields {
     selector: String,
 }
 
-/// A settlement transaction's `aggregation_proof_type`: `mock` for the
-/// localnet mock verifier's seal, `groth16` otherwise.
-fn proof_type(tx: &Transaction) -> Result<&'static str> {
-    Ok(if seal_selector(tx)? == MOCK_SELECTOR {
-        "mock"
-    } else {
-        "groth16"
-    })
-}
-
 fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
     let tx_bytes = bincode::serialize(tx).context("serialize tx")?;
     eprintln!("  {} bytes", tx_bytes.len());
@@ -1259,7 +1244,11 @@ fn finalize_and_write_fixture(
     // (aggregation_proof_type, selector).
     let proof_type = timed_phase("encode_seal", || {
         *tx = settlement_transaction(tx.clone()).context("encode the aggregation seal")?;
-        proof_type(tx)
+        Ok(if seal_selector(tx)? == MOCK_SELECTOR {
+            "mock"
+        } else {
+            "groth16"
+        })
     })?;
 
     let fields = timed_phase("derive_fixture_fields", || derive_fixture_fields(tx))?;
@@ -1411,21 +1400,6 @@ where
     Ok(result)
 }
 
-/// Writes the error variants of the transaction the fixture at `path`
-/// stores into `out_dir`, with the fixture's own name, selector, proof type
-/// and nullifiers.
-fn write_error_variants_of(path: &Path, out_dir: &Path) -> Result<()> {
-    let tx = load_fixture_tx(path)?;
-    generate_error_variant_fixtures(
-        &tx,
-        &read_fixture_name(path)?,
-        &format!("0x{}", hex::encode(seal_selector(&tx)?)),
-        proof_type(&tx)?,
-        &consumed_nullifiers_b64(&tx)?,
-        out_dir,
-    )
-}
-
 /// Read a fixture JSON and bincode-decode its transaction.
 fn load_fixture_tx(path: &Path) -> Result<Transaction> {
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -1565,7 +1539,6 @@ async fn main() -> Result<()> {
             load_kind_table(Path::new(KIND_TABLE_PATH))?;
             dump_fixture(&input)
         }
-        Command::ErrorVariants { fixture, out } => write_error_variants_of(&fixture, &out),
         Command::Generate(shape) => generate_fixture(shape).await,
     }
 }
@@ -1655,7 +1628,7 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
             single_action(ForwarderMode::TestForwarder(MODE_SILENT)).await?
         }
         ShapeCommand::ForwarderEmptyOutput { .. } => {
-            single_action(ForwarderMode::TestForwarder(MODE_RETURN)).await?
+            single_action(ForwarderMode::TestForwarder(MODE_EMPTY)).await?
         }
         ShapeCommand::ConsumeOnly { .. } => {
             generate_consume_only_transaction(&prover, name).await?
