@@ -163,7 +163,7 @@ fn test_create_root_marker_rejects_existing_marker() {
         &system_program,
         1,
     );
-    assert_anchor_err!(result, RootMarkerAlreadyExists);
+    assert_anchor_err!(result, PreExistingRoot);
 }
 
 #[test]

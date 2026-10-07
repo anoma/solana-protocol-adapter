@@ -9,7 +9,11 @@ use arm_core::Digest;
 /// The layout number of `PAStateAccount` this binary reads and writes.
 /// Bumped on every change to the account layout; unrelated to release names.
 #[constant]
-pub const SCHEMA_VERSION: u8 = 3;
+pub const SCHEMA_VERSION: u8 = 4;
+
+/// The schema version `migrate_state` migrates from.
+#[constant]
+pub const PREVIOUS_SCHEMA_VERSION: u8 = 3;
 
 /// The commitment of the empty kind table, under which every resource
 /// kind is derived via hash-to-curve: the table every deployment starts
@@ -28,11 +32,11 @@ pub struct PAStateAccount {
     /// every layout: a later binary that changes the layout reads this byte
     /// through an unchecked account to decide whether it may migrate. Every
     /// instruction that reads this account — all but `initialize`, which
-    /// creates it, and the development-only `dev_set_schema_version` —
-    /// refuses an account whose version is not `SCHEMA_VERSION`. A layout
-    /// change bumps the constant and may add, remove or reorder the other
-    /// fields: the release that makes it ships a migration that parses the
-    /// previous layout explicitly.
+    /// creates it, `migrate_state`, which requires the previous version, and
+    /// the development-only `dev_set_schema_version` — refuses an account
+    /// whose version is not `SCHEMA_VERSION`. A layout change bumps the
+    /// constant and may add, remove or reorder the other fields:
+    /// `migrate_state` parses the previous layout explicitly.
     pub schema_version: u8,
     pub bump: u8,
     /// The adapter's owner, as OpenZeppelin's `OwnableUpgradeable` stores
@@ -47,11 +51,11 @@ pub struct PAStateAccount {
     /// Expected proof selector (4 bytes), set at initialization.
     /// Validated before sending proofs to the verifier router.
     pub proof_selector: [u8; 4],
-    /// Kind-table commitment every settled aggregation instance must carry:
-    /// the empty table's at initialization, replaced by
-    /// `set_kind_table_commitment`. The aggregation circuit binds each transaction
-    /// to one kind table; this pin decides which table this deployment
-    /// accepts (sha256 of the concatenated entries; the empty table hashes
+    /// The stored kind-table commitment: the empty table's at initialization,
+    /// replaced by `set_kind_table_commitment`. The aggregation circuit binds
+    /// each transaction to one kind table; a transaction settles when that is
+    /// this table or the empty one (`is_kind_table_commitment_accepted`), as
+    /// in pa-evm (sha256 of the concatenated entries; the empty table hashes
     /// to sha256 of zero bytes).
     pub kind_table_commitment: [u8; 32],
     /// Whether settlement is paused, as pa-evm's `paused()`: `pause` sets it
@@ -67,30 +71,65 @@ pub struct PAStateAccount {
     pub frontier: Vec<[u8; 32]>,
     pub min_expiry_slots: u64,
     pub max_expiry_slots: u64,
-    /// Logic refs the authority denied (`deny_logic_ref`), as pa-evm's
-    /// logic-ref denylist: no settlement consumes or creates a resource
-    /// carrying one. Only ever grows; the account grows by one entry per
-    /// denial.
+    /// The denylist for consumed resources, as pa-evm's: no settlement
+    /// consumes a resource whose logic ref the owner added to it
+    /// (`deny_logic_refs`). Only ever grows, by one 32-byte entry per denial.
     #[max_len(0)]
-    pub denied_logic_refs: Vec<[u8; 32]>,
+    pub denied_consumed_logic_refs: Vec<[u8; 32]>,
+    /// The denylist for created resources, as pa-evm's: no settlement
+    /// creates a resource whose logic ref the owner added to it. Only ever
+    /// grows, by one 32-byte entry per denial.
+    #[max_len(0)]
+    pub denied_created_logic_refs: Vec<[u8; 32]>,
 }
 
 impl PAStateAccount {
-    /// The account at full depth, every frontier level filled, with no
-    /// denied logic ref.
+    /// The account at full depth, every frontier level filled, with empty
+    /// denylists.
     pub const MAX_SPACE: usize = Self::DISCRIMINATOR.len() + Self::INIT_SPACE;
 
-    /// The account at `depth` holding `denied` denied logic refs: full size
-    /// less the frontier levels not yet reached, plus the denylist. Every
-    /// other field has a fixed size, so the account grows only with the
-    /// frontier and the denylist.
+    /// The account at `depth` whose denylists hold `denied` entries
+    /// together: full size less the frontier levels not yet reached, plus
+    /// the denylists. Every other field has a fixed size, so the account
+    /// grows only with the frontier and the denylists.
     pub const fn space(depth: usize, denied: usize) -> usize {
         Self::MAX_SPACE - size_of::<[u8; 32]>() * (MAX_TREE_DEPTH - depth)
             + size_of::<[u8; 32]>() * denied
     }
 
-    pub fn is_logic_ref_denied(&self, logic_ref: &[u8; 32]) -> bool {
-        self.denied_logic_refs.contains(logic_ref)
+    /// Whether a transaction proven against the kind table `commitment`
+    /// settles: the stored one or the empty one, as pa-evm's
+    /// `_isKindTableCommitmentAccepted`. The empty table merges no kinds, so
+    /// a transaction that balances under it also balances under the stored
+    /// table.
+    pub fn is_kind_table_commitment_accepted(&self, commitment: &[u8; 32]) -> bool {
+        *commitment == self.kind_table_commitment || *commitment == EMPTY_KIND_TABLE_COMMITMENT
+    }
+
+    /// Whether the denylist for consumed resources (`consumed`) or the one
+    /// for created resources holds `logic_ref`, as pa-evm's
+    /// `isLogicRefDenied`.
+    pub fn is_logic_ref_denied(&self, logic_ref: &[u8; 32], consumed: bool) -> bool {
+        if consumed {
+            self.denied_consumed_logic_refs.contains(logic_ref)
+        } else {
+            self.denied_created_logic_refs.contains(logic_ref)
+        }
+    }
+
+    /// The denylist for consumed resources when `consumed`, else the one for
+    /// created resources, as pa-evm's `_deniedLogicRefs`.
+    pub fn denied_logic_refs_mut(&mut self, consumed: bool) -> &mut Vec<[u8; 32]> {
+        if consumed {
+            &mut self.denied_consumed_logic_refs
+        } else {
+            &mut self.denied_created_logic_refs
+        }
+    }
+
+    /// The entries of both denylists together, which size the account.
+    pub fn denied_count(&self) -> usize {
+        self.denied_consumed_logic_refs.len() + self.denied_created_logic_refs.len()
     }
 
     pub const INITIAL_SPACE: usize = Self::space(INITIAL_TREE_DEPTH, 0);
@@ -150,7 +189,55 @@ impl PAStateAccount {
             frontier: vec![PADDING_LEAF.into()],
             min_expiry_slots: MIN_EXPIRY_SLOTS,
             max_expiry_slots: MAX_EXPIRY_SLOTS,
-            denied_logic_refs: Vec::new(),
+            denied_consumed_logic_refs: Vec::new(),
+            denied_created_logic_refs: Vec::new(),
+        }
+    }
+}
+
+/// The state account in schema version 3 (`PREVIOUS_SCHEMA_VERSION`), which
+/// `migrate_state` reads: this layout with one denylist, which refused a
+/// resource carrying a denied logic ref whether consumed or created.
+/// Deserialized from the account's bytes after the discriminator.
+#[derive(AnchorDeserialize)]
+pub struct PreviousPAState {
+    pub schema_version: u8,
+    pub bump: u8,
+    pub owner: Pubkey,
+    pub verifier_router: Pubkey,
+    pub proof_selector: [u8; 4],
+    pub kind_table_commitment: [u8; 32],
+    pub paused: bool,
+    pub root: [u8; 32],
+    pub next_index: u64,
+    pub current_depth: u8,
+    pub frontier: Vec<[u8; 32]>,
+    pub min_expiry_slots: u64,
+    pub max_expiry_slots: u64,
+    pub denied_logic_refs: Vec<[u8; 32]>,
+}
+
+impl PreviousPAState {
+    /// This layout with the previous fields. A logic ref the previous
+    /// denylist held goes on both denylists, so the migration refuses what
+    /// the previous build refused.
+    pub fn migrate(self) -> PAStateAccount {
+        PAStateAccount {
+            schema_version: SCHEMA_VERSION,
+            bump: self.bump,
+            owner: self.owner,
+            verifier_router: self.verifier_router,
+            proof_selector: self.proof_selector,
+            kind_table_commitment: self.kind_table_commitment,
+            paused: self.paused,
+            root: self.root,
+            next_index: self.next_index,
+            current_depth: self.current_depth,
+            frontier: self.frontier,
+            min_expiry_slots: self.min_expiry_slots,
+            max_expiry_slots: self.max_expiry_slots,
+            denied_consumed_logic_refs: self.denied_logic_refs.clone(),
+            denied_created_logic_refs: self.denied_logic_refs,
         }
     }
 }

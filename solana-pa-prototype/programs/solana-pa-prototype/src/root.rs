@@ -33,7 +33,7 @@ pub fn derive_root_pda(
 ///
 /// # Errors
 /// * `PAError::RootPdaMismatch` - Provided marker doesn't match expected PDA
-/// * `PAError::RootMarkerAlreadyExists` - Marker already recorded (repeated root)
+/// * `PAError::PreExistingRoot` - Marker already recorded (repeated root)
 /// * `PAError::MarkerUnexpectedOwner` - Placeholder at the PDA is owned by
 ///   something other than the system program
 /// * `PAError::MarkerUnexpectedData` - Placeholder at the PDA holds data
@@ -56,7 +56,7 @@ pub fn create_root_marker<'info>(
     // strictly increases. Reaching this means a hash collision or a
     // tree-accounting bug, both of which must surface rather than pass quietly.
     if marker.owner == program_id {
-        return err!(PAError::RootMarkerAlreadyExists);
+        return err!(PAError::PreExistingRoot);
     }
 
     let signer_seeds: &[&[u8]] = &[

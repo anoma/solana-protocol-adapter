@@ -35,6 +35,13 @@ export async function deployedExecutableHash(connection: Connection, programId: 
   return executableHash(programData.data.subarray(PROGRAM_DATA_METADATA_LEN));
 }
 
+/** The code bytes `programId`'s ProgramData account holds room for: an upgrade's code must fit in it. */
+export async function programDataCapacity(connection: Connection, programId: PublicKey): Promise<number> {
+  const programData = await connection.getAccountInfo(deriveProgramDataPda(programId), "confirmed");
+  if (!programData) throw new Error(`${programId.toBase58()} has no ProgramData account`);
+  return programData.data.length - PROGRAM_DATA_METADATA_LEN;
+}
+
 /**
  * A program's upgrade authority, or null when the program is final. The
  * ProgramData layout: u32 account kind (3), u64 deployment slot, then the

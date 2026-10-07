@@ -467,25 +467,92 @@ pub mod protocol_adapter {
         Ok(())
     }
 
-    /// Deny a logic ref: no settlement consumes or creates a resource
-    /// carrying it again. Mirrors pa-evm's `denyLogicRef`: owner-only, the
-    /// zero ref and a ref already denied are rejected, and a denial cannot
-    /// be undone. The authority pays for the entry.
-    pub fn deny_logic_ref(ctx: Context<DenyLogicRef>, logic_ref: [u8; 32]) -> Result<()> {
-        require!(logic_ref != [0u8; 32], PAError::ZeroLogicRefNotAllowed);
+    /// Add logic refs to the denylists, each to the one for consumed
+    /// resources (`consumed`) or to the one for created resources. Mirrors
+    /// pa-evm's `denyLogicRefs`: owner-only, the zero ref and a ref already on
+    /// its denylist are rejected, no entry is ever removed, and each addition
+    /// emits `LogicRefDeniedEvent`. A ref on the created side only is
+    /// deprecated: transactions still consume its resources. A ref on both is
+    /// denied. The owner pays for the entries.
+    pub fn deny_logic_refs(
+        ctx: Context<DenyLogicRefs>,
+        logic_refs: Vec<DeniedLogicRef>,
+    ) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
-        require!(
-            !state.is_logic_ref_denied(&logic_ref),
-            PAError::LogicRefAlreadyDenied
-        );
         resize_account(
             &state.to_account_info(),
-            PAStateAccount::space(state.depth(), state.denied_logic_refs.len() + 1),
+            PAStateAccount::space(state.depth(), state.denied_count() + logic_refs.len()),
             &ctx.accounts.authority.to_account_info(),
             &ctx.accounts.system_program.to_account_info(),
         )?;
-        state.denied_logic_refs.push(logic_ref);
-        emit_cpi!(LogicRefDeniedEvent { logic_ref });
+        for DeniedLogicRef {
+            logic_ref,
+            consumed,
+        } in logic_refs
+        {
+            require!(logic_ref != [0u8; 32], PAError::ZeroLogicRefNotAllowed);
+            let denylist = state.denied_logic_refs_mut(consumed);
+            require!(
+                !denylist.contains(&logic_ref),
+                PAError::LogicRefAlreadyDenied
+            );
+            denylist.push(logic_ref);
+            emit_cpi!(LogicRefDeniedEvent {
+                logic_ref,
+                consumed
+            });
+        }
+        Ok(())
+    }
+
+    /// Bring a state account in the previous schema version, which held one
+    /// denylist for consumed and created resources alike, to this one. Each
+    /// logic ref it held goes on both denylists and is announced on each
+    /// with `LogicRefDeniedEvent`, as `deny_logic_refs` would. The
+    /// counterpart of the call pa-evm's owner passes to `upgradeToAndCall`:
+    /// run once by the owner, after the in-place upgrade and before any other
+    /// instruction, which all refuse the previous version. It parses the
+    /// previous layout rather than reinterpreting its bytes, and the owner
+    /// pays for the account's growth.
+    pub fn migrate_state(ctx: Context<MigrateState>) -> Result<()> {
+        let info = ctx.accounts.pa_state.to_account_info();
+        require_keys_eq!(*info.owner, crate::ID, PAError::NotPreviousSchema);
+        let state = {
+            let data = info.try_borrow_data()?;
+            let body = data
+                .strip_prefix(PAStateAccount::DISCRIMINATOR)
+                .ok_or(PAError::NotPreviousSchema)?;
+            require!(
+                body.first() == Some(&PREVIOUS_SCHEMA_VERSION),
+                PAError::NotPreviousSchema
+            );
+            PreviousPAState::deserialize(&mut &body[..])
+                .map_err(|_| PAError::NotPreviousSchema)?
+                .migrate()
+        };
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            state.owner,
+            PAError::OwnableUnauthorizedAccount
+        );
+        resize_account(
+            &info,
+            PAStateAccount::space(state.depth(), state.denied_count()),
+            &ctx.accounts.authority.to_account_info(),
+            &ctx.accounts.system_program.to_account_info(),
+        )?;
+        state.try_serialize(&mut &mut info.try_borrow_mut_data()?[..])?;
+        for (consumed, denylist) in [
+            (true, &state.denied_consumed_logic_refs),
+            (false, &state.denied_created_logic_refs),
+        ] {
+            for &logic_ref in denylist {
+                emit_cpi!(LogicRefDeniedEvent {
+                    logic_ref,
+                    consumed
+                });
+            }
+        }
         Ok(())
     }
 
@@ -638,7 +705,7 @@ fn maybe_grow_account<'info>(
 
     resize_account(
         pa_state_info,
-        PAStateAccount::space(target_depth, state.denied_logic_refs.len()),
+        PAStateAccount::space(target_depth, state.denied_count()),
         payer,
         system_program,
     )?;
@@ -755,7 +822,7 @@ fn execute_settlement(
 
     require!(
         !instance.actions.is_empty(),
-        PAError::InvalidTransactionData
+        PAError::EmptyTransactionNotAllowed
     );
 
     // The aggregation guest verifies compliance proofs against whatever
@@ -766,16 +833,17 @@ fn execute_settlement(
         PAError::ComplianceKeyMismatch
     );
     require!(
-        instance.kind_table_commitment == arm_core::Digest::from_bytes(state.kind_table_commitment),
-        PAError::KindTableCommitmentMismatch
+        state.is_kind_table_commitment_accepted(&instance.kind_table_commitment.into()),
+        PAError::UnacceptedKindTableCommitment
     );
-    // pa-evm refuses every consumed and created resource carrying a denied
-    // logic ref.
+    // pa-evm refuses every consumed resource whose logic ref is on the
+    // denylist for consumed resources, and every created one whose logic ref
+    // is on the denylist for created resources.
     for action in &instance.actions {
         for resource in settle::action_resources(action) {
             require!(
-                !state.is_logic_ref_denied(&resource.logic_ref.into()),
-                PAError::DeniedLogicRef
+                !state.is_logic_ref_denied(&resource.logic_ref.into(), resource.is_consumed),
+                PAError::ResourceWithDeniedLogicRef
             );
         }
     }
@@ -1010,7 +1078,25 @@ pub struct UpgradeProgram<'info> {
 
 #[event_cpi]
 #[derive(Accounts)]
-pub struct DenyLogicRef<'info> {
+pub struct MigrateState<'info> {
+    /// The owner the previous layout stores, which pays for the account's
+    /// growth; the handler checks it, since the typed account cannot read the
+    /// previous layout.
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    /// CHECK: The seeds pin the address; the handler requires this program
+    /// as owner and the previous schema's layout, which the typed account
+    /// cannot read.
+    #[account(mut, seeds = [PA_STATE_SEED], bump)]
+    pub pa_state: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}
+
+#[event_cpi]
+#[derive(Accounts)]
+pub struct DenyLogicRefs<'info> {
     #[account(
         mut,
         seeds = [PA_STATE_SEED],
@@ -1020,7 +1106,7 @@ pub struct DenyLogicRef<'info> {
     )]
     pub pa_state: Account<'info, PAStateAccount>,
 
-    /// The owner, which pays for the denylist's growth.
+    /// The owner, which pays for the denylists' growth.
     #[account(
         mut,
         constraint = authority.key() == pa_state.owner @ PAError::OwnableUnauthorizedAccount
@@ -1356,10 +1442,21 @@ pub struct CommitmentTreeRootAddedEvent {
     pub root: [u8; 32],
 }
 
-/// Mirrors pa-evm: `event LogicRefDenied(bytes32 indexed logicRef);`
+/// A logic ref to add to a denylist, as pa-evm's `DeniedLogicRef`:
+/// `consumed` names the denylist for consumed resources, else the one for
+/// created resources.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone)]
+pub struct DeniedLogicRef {
+    pub logic_ref: [u8; 32],
+    pub consumed: bool,
+}
+
+/// Mirrors pa-evm: `event LogicRefDenied(bytes32 indexed logicRef, bool
+/// consumed);`
 #[event]
 pub struct LogicRefDeniedEvent {
     pub logic_ref: [u8; 32],
+    pub consumed: bool,
 }
 
 /// Mirrors pa-evm: `event ActionExecuted(bytes32 actionTreeRoot,

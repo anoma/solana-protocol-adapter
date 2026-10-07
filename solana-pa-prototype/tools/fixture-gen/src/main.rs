@@ -325,6 +325,10 @@ enum Command {
     Generate(ShapeCommand),
     /// Print a fixture's transaction structure.
     Dump { input: PathBuf },
+    /// Write the error variants of a stored fixture's transaction into `out`,
+    /// as `--error-variants` does while generating it, without proving: each
+    /// variant is a mutation of the finished transaction.
+    ErrorVariants { fixture: PathBuf, out: PathBuf },
 }
 
 /// One fixture shape per subcommand, each taking only its own options.
@@ -407,8 +411,9 @@ struct GenerateArgs {
     #[command(flatten)]
     prover: ProverArgs,
     /// Also write the final transaction's error variants to DIR:
-    /// wrong_root, no_aggregation, garbage_proof, corrupt_seal, zero_action
-    /// and witness_delta.
+    /// wrong_root, no_aggregation, garbage_proof, corrupt_seal, zero_action,
+    /// foreign_kind_table and witness_delta. The `error-variants` subcommand
+    /// writes them from a stored fixture.
     #[arg(long, value_name = "DIR")]
     error_variants: Option<PathBuf>,
     /// Prove against this kind table instead of the committed empty one
@@ -1123,6 +1128,17 @@ fn generate_error_variant_fixtures(
     }
 
     {
+        // The transaction claiming a kind table that is neither the empty
+        // one nor any deployment's: the adapter refuses its commitment before
+        // it verifies the proof.
+        let mut foreign_kind_table = tx.clone();
+        require_aggregation_mut(&mut foreign_kind_table)?
+            .instance
+            .kind_table_commitment = Digest::from_bytes([0x4b; 32]);
+        write_variant("foreign_kind_table.json", &foreign_kind_table)?;
+    }
+
+    {
         // A WELL-FORMED transaction carrying Delta::Witness instead of the
         // proof (the actual witness the fixture was signed with). It
         // deserializes cleanly on-chain, so the PA must reject it with its
@@ -1392,6 +1408,39 @@ where
     Ok(result)
 }
 
+/// Writes the error variants of the transaction the fixture at `path`
+/// stores into `out_dir`, with the fixture's own name, selector, proof type
+/// and nullifiers.
+fn write_error_variants_of(path: &Path, out_dir: &Path) -> Result<()> {
+    let tx = load_fixture_tx(path)?;
+    let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let fixture: serde_json::Value = serde_json::from_str(&raw).context("parsing fixture JSON")?;
+    let field = |key: &str| {
+        fixture[key]
+            .as_str()
+            .ok_or_else(|| anyhow!("missing {key} in {}", path.display()))
+    };
+    let proof_type = match field("aggregation_proof_type")? {
+        "groth16" => "groth16",
+        "mock" => "mock",
+        other => bail!(
+            "unknown aggregation proof type {other} in {}",
+            path.display()
+        ),
+    };
+    let nullifiers: Vec<String> =
+        serde_json::from_value(fixture["consumed_nullifiers_b64"].clone())
+            .with_context(|| format!("reading consumed_nullifiers_b64 of {}", path.display()))?;
+    generate_error_variant_fixtures(
+        &tx,
+        field("name")?,
+        field("selector")?,
+        proof_type,
+        &nullifiers,
+        out_dir,
+    )
+}
+
 /// Read a fixture JSON and bincode-decode its transaction.
 fn load_fixture_tx(path: &Path) -> Result<Transaction> {
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
@@ -1531,6 +1580,7 @@ async fn main() -> Result<()> {
             load_kind_table(Path::new(KIND_TABLE_PATH))?;
             dump_fixture(&input)
         }
+        Command::ErrorVariants { fixture, out } => write_error_variants_of(&fixture, &out),
         Command::Generate(shape) => generate_fixture(shape).await,
     }
 }

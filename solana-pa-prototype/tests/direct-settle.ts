@@ -40,13 +40,13 @@ describe("protocol-adapter (Direct settle & duplicate nullifier)", () => {
 
     // The fixture's aggregated transaction with its instance's action list
     // emptied (fixture-gen's zero_action.json error variant, SEC-006
-    // regression): deserializes cleanly, rejected by the PA's empty-instance
-    // check.
+    // regression): deserializes cleanly, rejected as pa-evm's
+    // EmptyTransactionNotAllowed.
     const emptyTx = Buffer.from((await loadFixture("zero_action.json")).tx_b64, "base64");
 
     await assertFails(settleBuilder(payer.publicKey, emptyTx).signers([payer]).rpc(), {
       program,
-      error: "InvalidTransactionData",
+      error: "EmptyTransactionNotAllowed",
     });
   });
 

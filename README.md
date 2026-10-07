@@ -84,7 +84,7 @@ entry point for one fixture.
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
 | `./scripts/dev.sh shell` / `run <cmd>` | Interactive Nix shell / one command in it |
-| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-ref`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
+| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-refs`, `migrate-state`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
 
 ### Rebuilding From Scratch
 
@@ -201,7 +201,7 @@ The test **"rejects a tampered tx (proof binding)"** settles the fixture with on
 
 A settlement (`settle`, or `settle_from_txdata` after a TxData upload) runs in pa-evm's order:
 
-1. **Checks** — the transaction carries an aggregation and a delta proof, the compliance key and kind table match, no resource carries a denied logic ref, no nullifier repeats, and every consumed root is a known root.
+1. **Checks** — the transaction carries an aggregation and a delta proof, the compliance key matches, the kind table is the stored or the empty one, no resource's logic ref is on the denylist for its side, no nullifier repeats, and every consumed root is a known root.
 2. **Per action**, first its consumed resources (create each nullifier's marker PDA, which refuses a spent nullifier; run the resource's forwarder calls; emit its payload events), then its created resources (append each commitment to the tree; run its calls; emit its events), then `ActionExecutedEvent`.
 3. **Proof verification** — a CPI to the RISC0 verifier router, which routes the seal to the verifier registered for its selector; then the delta proof.
 4. **Root** — if the transaction created commitments, the new root's marker PDA is recorded and `CommitmentTreeRootAddedEvent` emitted.

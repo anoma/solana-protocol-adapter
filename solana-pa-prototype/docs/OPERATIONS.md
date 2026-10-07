@@ -8,7 +8,7 @@ Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enter
 
 ## The owner
 
-The adapter has one owner, as pa-evm's (OpenZeppelin's OwnableUpgradeable): set by `initialize`, stored in the state account (`PAStateAccount.owner`), and the signer of every owner-only instruction (`upgrade`, `pause`, `unpause`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_ref`, `transfer_ownership`, `renounce_ownership`; any other signer gets `OwnableUnauthorizedAccount`). `initialize` hands the program's upgrade authority from the deployer to the program's own PDA (seed `upgrade_authority`), so the loader accepts an upgrade only through the program's `upgrade`, for the owner, as a UUPS implementation authorizes its own upgrades. `initialize` announces the owner with `OwnershipTransferredEvent` from the zero key, as `OwnershipTransferred` is.
+The adapter has one owner, as pa-evm's (OpenZeppelin's OwnableUpgradeable): set by `initialize`, stored in the state account (`PAStateAccount.owner`), and the signer of every owner-only instruction (`upgrade`, `pause`, `unpause`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_refs`, `migrate_state`, `transfer_ownership`, `renounce_ownership`; any other signer gets `OwnableUnauthorizedAccount`). `initialize` hands the program's upgrade authority from the deployer to the program's own PDA (seed `upgrade_authority`), so the loader accepts an upgrade only through the program's `upgrade`, for the owner, as a UUPS implementation authorizes its own upgrades. `initialize` announces the owner with `OwnershipTransferredEvent` from the zero key, as `OwnershipTransferred` is.
 
 `transfer_ownership(new_owner)` moves the ownership at once (the zero key is refused, `OwnableInvalidOwner`); `renounce_ownership` gives it up for good: the owner becomes the zero key, and no owner-only instruction, `upgrade` included, can run again. Both emit `OwnershipTransferredEvent`. They are made by hand: no repository command or script changes an authority or closes protocol accounts on a live cluster, and the only builders of those instructions in the repository (`tests/utils/localOnly.ts`) refuse any endpoint but a local validator. The owner constructs and signs the instruction from the IDL.
 
@@ -76,7 +76,16 @@ To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster 
 - Every instruction that reads the state account refuses it when byte 8 is not the binary's own version, `txdata_init` included. `txdata_write`, `txdata_close`, and `txdata_close_expired` never load `PAStateAccount`, so they keep working against a foreign version regardless of migration status, letting uploaders reclaim rent mid-migration. An upgrade to a layout-changing binary therefore stops the rest of the adapter cold until the account is migrated; nothing misreads old bytes.
 - The refusal surfaces as one of two errors depending on the account's bytes. When the old account still deserializes under the new binary's layout — a version-byte mismatch only — the error is `UnsupportedStateSchema`. When it does not (a re-serialization shorter than an earlier one leaves stale bytes past its end, where a newer layout reads its appended fields), Anchor's `AccountDidNotDeserialize` surfaces first, because account deserialization runs before constraints. Either way the instruction is refused before it runs.
 
-A release that changes the layout ships its migration with it, the counterpart of the call pa-evm's owner passes to `upgradeToAndCall`: an instruction run once, right after upgrading the program in place and before any other instruction, signed by whoever held the ownership in the previous build. It declares the state account unchecked (the typed layout cannot read it), requires this program as owner and the previous version at byte 8, parses the previous layout (never reinterpreting its bytes: a shorter re-serialization leaves stale bytes past its end), reallocates the account, and writes the new layout with the new version; the signer pays the rent difference. Only the version byte has a fixed offset (byte 8); a new layout may add, remove or reorder the other fields, which is why the migration parses the previous layout. The release that brings the migration also brings a test that starts a validator on the previous build and runs the upgrade path.
+A release that changes the layout ships its migration with it, the counterpart of the call pa-evm's owner passes to `upgradeToAndCall`: an instruction run once, right after upgrading the program in place and before any other instruction, signed by whoever held the ownership in the previous build. It declares the state account unchecked (the typed layout cannot read it), requires this program as owner and the previous version at byte 8, parses the previous layout (never reinterpreting its bytes: a shorter re-serialization leaves stale bytes past its end), reallocates the account, and writes the new layout with the new version; the signer pays the rent difference. Only the version byte has a fixed offset (byte 8); a new layout may add, remove or reorder the other fields, which is why the migration parses the previous layout. The release that brings the migration also brings a test that starts from the previous build and runs the upgrade path: `tests/upgrade/<program>.ts`, on a validator of its own that loads the build in `tests/fixtures/previous/`.
+
+This build's migration is `migrate_state`, from schema version 3, which held one denylist for consumed and created resources alike, to 4, which holds pa-evm's two. The owner signs it and pays for the account's growth: 4 bytes for the second denylist's length and 32 per entry the previous denylist held, since each goes on both denylists, so the migrated adapter refuses what the previous build refused. It announces each entry on each denylist with `LogicRefDeniedEvent`, as `deny_logic_refs` would. Run it right after the upgrade:
+
+```sh
+./scripts/dev.sh upgrade pa --cluster <c>          # owner wallet
+./scripts/dev.sh migrate-state --cluster <c>      # owner wallet
+```
+
+This build also reads a forwarder's output as the `Vec<u8>` its `forward_call` returns, Borsh-encoded, where the previous build read the raw return data, so neither build settles a call to a forwarder built for the other. Upgrade the deployment's forwarders to builds that return a `Vec<u8>` together with the adapter, and keep settlement paused (`pause`) from the first upgrade to the last.
 
 This covers the state account only. A change to the commitment tree itself (hash, arity, leaf encoding) or to the marker PDA seeds invalidates the existing tree and marker addresses, and no in-place migration recovers that: it is a fresh deployment plus a bulk copy of roots and nullifiers.
 
@@ -118,25 +127,26 @@ The command derives the adapter's key set from the deployed programs and the PAS
 
 Record the address in the cluster's deployment record and ship it as `SETTLE_LOOKUP_TABLE` in anoma-pa-solana-client. A program-id rotation is a new deployment and gets a new table.
 
-## The logic-ref denylist
+## The logic-ref denylists
 
-The owner denies a logic ref for good, as pa-evm's owner does with `denyLogicRef`: from that slot on, no settlement consumes or creates a resource carrying it (`DeniedLogicRef`). It is the per-logic kill switch for a compromised resource logic, short of stopping the whole adapter.
+The owner adds logic refs to two denylists, as pa-evm's owner does with `denyLogicRefs`: one for consumed resources and one for created resources. From that slot on, no settlement consumes a resource whose logic ref is on the first, or creates one whose logic ref is on the second (`ResourceWithDeniedLogicRef`). A logic ref on the created side only is deprecated: transactions still consume its resources, so their holders can move out of it, but none creates new ones; deprecate a logic ref only once no application creates its resources any more. A logic ref on both is denied, the per-logic kill switch for a compromised resource logic, short of stopping the whole adapter.
 
 ```sh
-PA_DENIED_LOGIC_REF=<hex, 32 bytes> ./scripts/dev.sh deny-logic-ref --cluster <c>   # owner wallet
+PA_DENIED_LOGIC_REFS=<hex, 32 bytes>:created ./scripts/dev.sh deny-logic-refs --cluster <c>                       # deprecate (owner wallet)
+PA_DENIED_LOGIC_REFS=<hex, 32 bytes>:consumed,<hex, 32 bytes>:created ./scripts/dev.sh deny-logic-refs --cluster <c>   # deny
 ```
 
-The zero ref and a ref already denied are rejected; a denial cannot be undone. The denied refs are part of the state account (`denied_logic_refs`), which grows by 32 bytes per denial at the owner's expense, and each denial emits `LogicRefDeniedEvent`.
+Each comma-separated entry names a logic ref and the denylist it goes on, as pa-evm's `(logicRef, consumed)` pairs. The zero ref and a ref already on its denylist are rejected, and then no entry of that call is added; an entry cannot be removed. The denylists are part of the state account (`denied_consumed_logic_refs`, `denied_created_logic_refs`), which grows by 32 bytes per entry at the owner's expense, and each entry emits `LogicRefDeniedEvent`.
 
 ## The kind table
 
-The PA stores the sha256 commitment of the kind table every settled aggregation instance must carry, and rejects a transaction proven against any other table. `initialize` installs the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`) and emits `KindTableCommitmentUpdatedEvent` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
+The PA stores the sha256 commitment of a kind table, and settles a transaction proven against that table or against the empty one, as pa-evm's `_isKindTableCommitmentAccepted`: the empty table merges no kinds, so what balances under it balances under any table. A transaction proven against any other table is refused (`UnacceptedKindTableCommitment`) before its proofs are verified. `initialize` installs the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`) and emits `KindTableCommitmentUpdatedEvent` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
 
 ```sh
 PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # owner wallet
 ```
 
-The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the new value, as pa-evm's `KindTableCommitmentUpdated` does. From that slot on, transactions proven against the previous table are rejected (`KindTableCommitmentMismatch`), so provers must load the new table before it is installed. The generated Solana tables and their commitments come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
+The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the new value, as pa-evm's `KindTableCommitmentUpdated` does. From that slot on, transactions proven against the previous table are refused (`UnacceptedKindTableCommitment`), unless it is the empty one, so provers must load the new table before it is installed. The generated Solana tables and their commitments come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
 
 ## Pausing
 

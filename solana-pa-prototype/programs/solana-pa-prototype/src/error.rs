@@ -37,6 +37,10 @@ pub enum PAError {
     // Data parsing errors
     #[msg("Invalid transaction data")]
     InvalidTransactionData,
+    /// pa-evm's `EmptyTransactionNotAllowed`: an instance with no actions
+    /// would settle without the delta and aggregation proofs proving anything.
+    #[msg("The transaction has no actions")]
+    EmptyTransactionNotAllowed,
 
     // Proof verification errors
     #[msg("Invalid proof")]
@@ -73,8 +77,11 @@ pub enum PAError {
     // Aggregation instance binding errors
     #[msg("Aggregation instance compliance key does not match the compliance circuit VK")]
     ComplianceKeyMismatch,
-    #[msg("Aggregation instance kind-table commitment does not match the configured table")]
-    KindTableCommitmentMismatch,
+    /// pa-evm's `UnacceptedKindTableCommitment`.
+    #[msg(
+        "The transaction's kind-table commitment is neither the stored one nor the empty table's"
+    )]
+    UnacceptedKindTableCommitment,
     #[msg("Zero kind-table commitment not allowed")]
     ZeroKindTableCommitmentNotAllowed,
 
@@ -109,20 +116,24 @@ pub enum PAError {
     MarkerUnexpectedData,
 
     // Root retention
-    #[msg("Root marker already exists: the commitment tree produced a repeated root")]
-    RootMarkerAlreadyExists,
+    /// pa-evm's `PreExistingRoot`.
+    #[msg("The commitment tree root is already stored")]
+    PreExistingRoot,
 
     // State layout
     #[msg("PAState schema version is not the one this program binary reads; migrate the account first")]
     UnsupportedStateSchema,
+    #[msg("PAState is not a state account in the previous schema version")]
+    NotPreviousSchema,
 
     // Logic-ref denylist
     #[msg("Zero logic ref not allowed")]
     ZeroLogicRefNotAllowed,
-    #[msg("Logic ref is already denied")]
+    #[msg("Logic ref is already on that denylist")]
     LogicRefAlreadyDenied,
-    #[msg("A resource carries a denied logic ref")]
-    DeniedLogicRef,
+    /// pa-evm's `ResourceWithDeniedLogicRef`.
+    #[msg("A resource's logic ref is on the denylist for its side")]
+    ResourceWithDeniedLogicRef,
 
     // Initialization, as pa-evm's zero-value rejections
     #[msg("Zero verifier router not allowed")]

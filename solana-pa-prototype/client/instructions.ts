@@ -59,11 +59,19 @@ export function upgradeAdapter(
     .preInstructions([ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNIT_LIMIT })]);
 }
 
-/** `deny_logic_ref` by the owner, which pays for the entry. */
-export function denyLogicRef(program: Program<ProtocolAdapter>, authority: PublicKey, logicRef: number[]) {
+/** A logic ref and the denylist to add it to: the one for consumed resources, or the one for created resources. */
+export type DeniedLogicRef = { logicRef: number[]; consumed: boolean };
+
+/** `deny_logic_refs` by the owner, which pays for the entries. */
+export function denyLogicRefs(program: Program<ProtocolAdapter>, authority: PublicKey, logicRefs: DeniedLogicRef[]) {
   return program.methods
-    .denyLogicRef(logicRef)
+    .denyLogicRefs(logicRefs)
     .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/** `migrate_state` by the owner: the state account in the previous schema version, brought to this one. */
+export function migrateState(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  return program.methods.migrateState().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
 }
 
 /** `pause` by the owner: settlement stops until `unpause`. */
