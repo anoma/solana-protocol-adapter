@@ -19,7 +19,7 @@ hex = "0.4"
 k256 = "0.13"
 risc0-zkvm = "3.0.6"
 # The pass-through logic the fixtures' external calls ride on.
-anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "ab0356bd914e355df80b9f47f3dbf181413c022b", default-features = false, features = [
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "fee5441725fc03f2437d782df513a9a59eb35b0d", default-features = false, features = [
   "fixtures",
 ] }
 serde = { version = "1.0", features = ["derive"] }

@@ -432,7 +432,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-testkit"
 version = "1.0.0-rc.1"
-source = "git+https://github.com/anoma/pa-testkit?rev=ab0356bd914e355df80b9f47f3dbf181413c022b#ab0356bd914e355df80b9f47f3dbf181413c022b"
+source = "git+https://github.com/anoma/pa-testkit?rev=fee5441725fc03f2437d782df513a9a59eb35b0d#fee5441725fc03f2437d782df513a9a59eb35b0d"
 dependencies = [
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
