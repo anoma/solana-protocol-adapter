@@ -17,7 +17,7 @@ fn leaf(seed: usize) -> [u8; 32] {
 /// irrelevant to it.
 fn state_holding(tree: &CommitmentTreeState) -> PAStateAccount {
     PAStateAccount {
-        schema_version: 3,
+        schema_version: 4,
         bump: 255,
         owner: [1; 32],
         verifier_router: [2; 32],
@@ -30,7 +30,8 @@ fn state_holding(tree: &CommitmentTreeState) -> PAStateAccount {
         frontier: tree.frontier.clone(),
         min_expiry_slots: 10,
         max_expiry_slots: 1000,
-        denied_logic_refs: vec![],
+        denied_consumed_logic_refs: vec![],
+        denied_created_logic_refs: vec![],
     }
 }
 

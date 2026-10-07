@@ -6,12 +6,12 @@ use anoma_pa_solana_client::settlement_input::{
 };
 use anoma_pa_solana_client::{
     PAStateAccount, PaError, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
-    deny_logic_ref_ix, derive_pa_state_pda, pause_ix, plan_settlement,
+    deny_logic_refs_ix, derive_pa_state_pda, pause_ix, plan_settlement,
     set_kind_table_commitment_ix, unpause_ix,
 };
 use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree;
 use anoma_pa_testkit::environment::{
-    Event, Outcome, PayloadKind, ProtocolAdapter as CoreProtocolAdapter, Refusal,
+    DeniedLogicRef, Event, Outcome, PayloadKind, ProtocolAdapter as CoreProtocolAdapter, Refusal,
 };
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_rm_risc0::Digest;
@@ -279,9 +279,16 @@ impl CoreProtocolAdapter for ProtocolAdapter {
         self.as_owner(ix, "unpause the protocol adapter").await
     }
 
-    async fn deny_logic_ref(&mut self, logic_ref: Digest) -> anyhow::Result<()> {
-        let ix = deny_logic_ref_ix(&self.program, &self.payer.pubkey(), logic_ref.into());
-        self.as_owner(ix, "deny the logic ref").await
+    async fn deny_logic_refs(&mut self, logic_refs: &[DeniedLogicRef]) -> anyhow::Result<()> {
+        let entries: Vec<_> = logic_refs
+            .iter()
+            .map(|entry| anoma_pa_solana_client::DeniedLogicRef {
+                logic_ref: entry.logic_ref.into(),
+                consumed: entry.consumed,
+            })
+            .collect();
+        let ix = deny_logic_refs_ix(&self.program, &self.payer.pubkey(), &entries);
+        self.as_owner(ix, "deny the logic refs").await
     }
 }
 
@@ -328,13 +335,14 @@ fn first_failure_refusal(logs: &[String], program: &Pubkey, verifier: &Pubkey) -
 fn refusal_for(error: PaError) -> Option<Refusal> {
     match error {
         PaError::EnforcedPause => Some(Refusal::Paused),
-        PaError::DeniedLogicRef => Some(Refusal::DeniedLogicRef),
+        PaError::ResourceWithDeniedLogicRef => Some(Refusal::DeniedLogicRef),
+        PaError::UnacceptedKindTableCommitment => Some(Refusal::UnacceptedKindTableCommitment),
         PaError::NonExistingRoot => Some(Refusal::UnknownRoot),
         PaError::PreExistingNullifier => Some(Refusal::NullifierSpent),
         PaError::ForwarderCallOutputMismatch => Some(Refusal::ExternalCallOutputMismatch),
-        PaError::KindTableCommitmentMismatch
-        | PaError::ComplianceKeyMismatch
-        | PaError::InvalidProof => Some(Refusal::InvalidAggregationProof),
+        PaError::ComplianceKeyMismatch | PaError::InvalidProof => {
+            Some(Refusal::InvalidAggregationProof)
+        }
         PaError::NullifierPdaMismatch
         | PaError::RootPdaMismatch
         | PaError::TxDataExpired
@@ -345,6 +353,7 @@ fn refusal_for(error: PaError) -> Option<Refusal> {
         | PaError::TxDataNotExpired
         | PaError::InvalidExpiryConfig
         | PaError::InvalidTransactionData
+        | PaError::EmptyTransactionNotAllowed
         | PaError::VerifierRouterFailed
         | PaError::AggregationRequired
         | PaError::RiscZeroVerifierSelectorMismatch
@@ -363,11 +372,11 @@ fn refusal_for(error: PaError) -> Option<Refusal> {
         | PaError::InvalidVerifierEntry
         | PaError::TreeMaxDepthReached
         | PaError::InvalidMarker
-        | PaError::EmptyExpectedOutput
         | PaError::MarkerUnexpectedOwner
         | PaError::MarkerUnexpectedData
-        | PaError::RootMarkerAlreadyExists
+        | PaError::PreExistingRoot
         | PaError::UnsupportedStateSchema
+        | PaError::NotPreviousSchema
         | PaError::ZeroLogicRefNotAllowed
         | PaError::LogicRefAlreadyDenied
         | PaError::ZeroRiscZeroVerifierRouterNotAllowed
