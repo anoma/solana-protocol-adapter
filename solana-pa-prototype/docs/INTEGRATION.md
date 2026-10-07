@@ -32,10 +32,10 @@ External calls ride inside the proof-backed aggregation instance, in each consum
 pub struct SolanaExternalCall {
     pub program_id: [u8; 32],       // Forwarder program ID
     pub instruction_data: Vec<u8>,  // Passed to the forwarder's forward_call
-    pub expected_output: Vec<u8>,   // Must match the forwarder's return data; must be
-                                    // non-empty (EmptyExpectedOutput otherwise — Solana
-                                    // cannot represent an explicit empty return)
-    pub output_mode: OutputMode,    // ReturnData: read via get_return_data() (≤1024 bytes)
+    pub expected_output: Vec<u8>,   // Must equal the Vec<u8> the forwarder's forward_call
+                                    // returns, empty included
+    pub output_mode: OutputMode,    // ReturnData: the returned Vec<u8>, Borsh-encoded in
+                                    // the return data (get_return_data(), ≤1024 bytes)
     pub num_accounts: u8,           // Accounts in this call's remaining_accounts segment,
                                     // including the forwarder program account
 }

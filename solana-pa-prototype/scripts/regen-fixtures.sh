@@ -110,6 +110,9 @@ fi
 if wanted batch_groth16_consume_only.json; then
   gen consume-only "$OUT_DIR/batch_groth16_consume_only.json"
 fi
+if wanted batch_forwarder_empty_output.json; then
+  gen forwarder-empty-output "$OUT_DIR/batch_forwarder_empty_output.json"
+fi
 
 # The fresh phase's settlements, in their order: the committer (leaf 0) and
 # its successor, then the consumer spending the committer's resource through

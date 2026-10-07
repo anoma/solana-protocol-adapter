@@ -1,7 +1,8 @@
 use crate::error::PAError;
 use crate::external_calls::{
     build_account_metas, build_forwarder_instruction_data, decode_external_call,
-    decode_external_calls, encode_external_call, FORWARD_CALL_DISCRIMINATOR,
+    decode_external_calls, decode_forwarder_output, encode_external_call,
+    FORWARD_CALL_DISCRIMINATOR,
 };
 use crate::tests::utils::make_account_info;
 use crate::types::{OutputMode, SolanaExternalCall};
@@ -75,43 +76,64 @@ fn test_build_forwarder_instruction_data_byte_layout() {
     assert_eq!(&data[44..], &input, "input payload");
 }
 
-/// Solana cannot distinguish an explicit empty return from silence, so a call
-/// authorizing an empty output can never settle. Reject it at decode.
+/// pa-evm's forwarder calls may expect an empty output (the ERC20
+/// forwarder's), so a call expecting one decodes.
 #[test]
-fn test_decode_rejects_empty_expected_output() {
+fn test_decode_accepts_an_empty_expected_output() {
     let call = SolanaExternalCall {
-        program_id: [7u8; 32],
-        instruction_data: vec![1, 2, 3],
         expected_output: vec![],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
+        ..call(7, vec![1, 2, 3])
     };
-    let blob = encode_external_call(&call);
 
-    let result = decode_external_call(&blob);
+    let decoded = decode_external_call(&encode_external_call(&call))
+        .expect("a call expecting an empty output decodes");
+    assert_eq!(decoded, call);
+}
 
-    assert!(
-        matches!(result, Err(PAError::EmptyExpectedOutput)),
-        "expected EmptyExpectedOutput, got {:?}",
-        result
+/// A forwarder returns its output as Anchor returns a `Vec<u8>`: a 4-byte
+/// little-endian length, then the bytes.
+#[test]
+fn forwarder_output_is_the_returned_borsh_bytes() {
+    let forwarder = Pubkey::new_unique();
+    let output = |data: Vec<u8>| {
+        decode_forwarder_output(Some((forwarder, data)), &forwarder)
+            .expect("an encoded Vec<u8> from the forwarder is its output")
+    };
+    assert_eq!(output(vec![1, 0, 0, 0, 0x2a]), vec![0x2a]);
+    assert_eq!(
+        output(vec![0, 0, 0, 0]),
+        Vec::<u8>::new(),
+        "an empty output is four bytes of return data"
     );
 }
 
-/// A non-empty expected output remains valid and decodes unchanged.
+/// No return data is not an empty output, and only the called forwarder's
+/// return data, holding exactly one encoded `Vec<u8>`, is its output.
 #[test]
-fn test_decode_accepts_non_empty_expected_output() {
-    let call = SolanaExternalCall {
-        program_id: [7u8; 32],
-        instruction_data: vec![1, 2, 3],
-        expected_output: vec![0x2a],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    };
-    let blob = encode_external_call(&call);
-
-    let decoded = decode_external_call(&blob).expect("non-empty output must decode");
-
-    assert_eq!(decoded, call);
+fn forwarder_output_is_refused_unless_the_forwarder_returned_one_vec() {
+    let forwarder = Pubkey::new_unique();
+    for (return_data, why) in [
+        (None, "a forwarder that set no return data"),
+        (
+            Some((Pubkey::new_unique(), vec![0, 0, 0, 0])),
+            "return data another program set",
+        ),
+        (Some((forwarder, vec![0x2a])), "a raw byte, not a Vec<u8>"),
+        (
+            Some((forwarder, vec![2, 0, 0, 0, 0x2a])),
+            "a length past the data",
+        ),
+        (
+            Some((forwarder, vec![0, 0, 0, 0, 0x2a])),
+            "bytes after the Vec<u8>",
+        ),
+    ] {
+        let result = decode_forwarder_output(return_data, &forwarder);
+        assert!(
+            matches!(result, Err(PAError::ForwarderCallOutputMismatch)),
+            "{why}: expected ForwarderCallOutputMismatch, got {result:?}"
+        );
+    }
 }
 
 /// Signer authority must never reach a forwarder. Solana unions privileges

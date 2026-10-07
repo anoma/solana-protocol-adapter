@@ -9,7 +9,7 @@ pub use cpi::ForwarderSegments;
 
 use crate::error::PAError;
 use crate::types::SolanaExternalCall;
-use anchor_lang::prelude::AccountInfo;
+use anchor_lang::prelude::{AccountInfo, AnchorDeserialize, Pubkey};
 use anchor_lang::solana_program::instruction::AccountMeta;
 use arm_core::logic_instance::{AppData, ExpirableBlob};
 use arm_core::utils::bytes_to_words;
@@ -29,18 +29,25 @@ pub fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
 /// Decode an external call from its word-array blob.
 pub fn decode_external_call(blob: &ExpirableBlob) -> Result<SolanaExternalCall, PAError> {
     let bytes = words_to_bytes(&blob.blob);
-    let call: SolanaExternalCall =
-        bincode::deserialize(bytes).map_err(|_| PAError::InvalidExternalCallBlob)?;
+    bincode::deserialize(bytes).map_err(|_| PAError::InvalidExternalCallBlob)
+}
 
-    // Solana reports no return-data record for both `set_return_data(&[])` and a
-    // silent return, so an authorized empty output is unrepresentable. Reject it
-    // here rather than failing later as an output mismatch. Absence of return
-    // data must stay an error, never another spelling of empty.
-    if call.expected_output.is_empty() {
-        return Err(PAError::EmptyExpectedOutput);
+/// The output of a `forward_call` to `forwarder`: the `Vec<u8>` it returned,
+/// Borsh-encoded as Anchor encodes a returned value, as pa-evm's forwarder
+/// call returns `bytes`. The length prefix makes an empty output four bytes
+/// of return data, so it differs from no return data, which the runtime
+/// reports for a forwarder that set none; that, return data from another
+/// program, or anything but one encoded `Vec<u8>` is a mismatch.
+pub fn decode_forwarder_output(
+    return_data: Option<(Pubkey, Vec<u8>)>,
+    forwarder: &Pubkey,
+) -> Result<Vec<u8>, PAError> {
+    match return_data {
+        Some((program_id, data)) if program_id == *forwarder => {
+            Vec::<u8>::try_from_slice(&data).map_err(|_| PAError::ForwarderCallOutputMismatch)
+        }
+        _ => Err(PAError::ForwarderCallOutputMismatch),
     }
-
-    Ok(call)
 }
 
 /// Verify that actual output matches expected output.
