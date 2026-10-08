@@ -1,4 +1,4 @@
-use anchor_lang::prelude::{AnchorSerialize, Pubkey};
+use anchor_lang::prelude::Pubkey;
 
 /// Declare an `AccountInfo` with owned backing storage via name-shadowing.
 ///
@@ -18,7 +18,6 @@ macro_rules! make_account_info {
             &mut $name.1,
             $owner,
             $executable,
-            0,
         );
     };
 }
@@ -40,7 +39,6 @@ macro_rules! make_account_info_with_data {
             &mut $name.1,
             $owner,
             $executable,
-            0,
         );
     };
 }
@@ -73,85 +71,88 @@ macro_rules! assert_anchor_err {
 }
 pub(crate) use assert_anchor_err;
 
-use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, ZEROS};
-use crate::state::{PALifecycle, PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
-use arm_core::action::Action;
-use arm_core::compliance::ComplianceInstance;
-use arm_core::compliance_unit::ComplianceUnit;
-use arm_core::delta_types::DeltaWitness;
-use arm_core::logic_instance::{AppData, ExpirableBlob, LogicVerifierInputs};
-use arm_core::transaction::{Delta, Transaction};
+use crate::merkle::EMPTY_TREE_ROOT_INITIAL;
+use crate::state::{PAStateAccount, EMPTY_KIND_TABLE_COMMITMENT};
+use crate::verifier_router::types::{Proof, Seal};
+use arm_core::aggregation_instance::{
+    ActionAggregated, AggregationInstance, ConsumedResourceAggregated, CreatedResourceAggregated,
+};
+use arm_core::delta_proof::DeltaProof;
+use arm_core::logic_instance::{AppData, ExpirableBlob};
+use arm_core::transaction::{Aggregation, Delta, Transaction};
 use arm_core::Digest;
-use groth_16_verifier::Proof;
-use verifier_router::Seal;
-use verifier_router::Selector;
 
-/// Decode a CU's journal-bytes instance back into a structured
-/// `ComplianceInstance` for tests. Wire format stores the instance as journal
-/// bytes; tests that need to read or mutate fields go through this helper.
-pub fn decode_cu_instance(cu: &ComplianceUnit) -> ComplianceInstance {
-    ComplianceInstance::from_journal(&cu.instance)
-        .expect("test fixture compliance instance should decode")
-}
-
-/// Mutate a CU's journal-bytes instance in-place: parse, hand the structured
-/// instance to `f`, then re-encode. Returns whatever `f` returns (the caller
-/// usually wants the post-mutation field values to update LVI tags).
-pub fn mutate_cu_instance<R>(
-    cu: &mut ComplianceUnit,
-    f: impl FnOnce(&mut ComplianceInstance) -> R,
-) -> R {
-    let mut instance = decode_cu_instance(cu);
-    let r = f(&mut instance);
-    cu.instance = instance
-        .to_journal()
-        .expect("mutated compliance instance should re-encode");
-    r
-}
-
-pub fn build_tx_from_instances(instances: &[ComplianceInstance]) -> Transaction {
-    let cus: Vec<ComplianceUnit> = instances
-        .iter()
-        .map(|inst| ComplianceUnit {
-            // Wire format stores the instance as journal bytes; the test fixture
-            // is structured, so re-encode it the same way the queue worker
-            // expects to read it.
-            instance: inst
-                .to_journal()
-                .expect("test ComplianceInstance should encode to journal bytes"),
-            proof: None,
-        })
-        .collect();
-
-    let mut lvis = Vec::new();
-    for inst in instances {
-        lvis.push(LogicVerifierInputs {
-            tag: inst.consumed_nullifier,
-            verifying_key: inst.consumed_logic_ref,
-            app_data: AppData::default(),
-            proof: None,
-        });
-        lvis.push(LogicVerifierInputs {
-            tag: inst.created_commitment,
-            verifying_key: inst.created_logic_ref,
-            app_data: AppData::default(),
-            proof: None,
-        });
-    }
-
-    Transaction {
-        actions: vec![Action {
-            compliance_units: cus,
-            logic_verifier_inputs: lvis,
+/// One action with one consumed and one created resource, anchored to the
+/// initial tree root and pinned to the compliance VK and empty kind table.
+pub fn minimal_instance() -> AggregationInstance {
+    AggregationInstance {
+        compliance_key: arm_core::constants::COMPLIANCE_VK,
+        kind_table_commitment: Digest::from_bytes(EMPTY_KIND_TABLE_COMMITMENT),
+        actions: vec![ActionAggregated {
+            consumed_publics: vec![ConsumedResourceAggregated {
+                resource_nullifier: Digest::from_bytes([1u8; 32]),
+                resource_logic_ref: Digest::from_bytes([3u8; 32]),
+                commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
+                app_data: AppData::default(),
+            }],
+            created_publics: vec![CreatedResourceAggregated {
+                resource_commitment: Digest::from_bytes([2u8; 32]),
+                resource_logic_ref: Digest::from_bytes([4u8; 32]),
+                app_data: AppData::default(),
+            }],
+            delta_x: [0u32; 8],
+            delta_y: [0u32; 8],
+            action_tree_root: Digest::from_bytes([5u8; 32]),
         }],
-        delta_proof: Delta::Witness(DeltaWitness([0u8; 32])),
-        expected_balance: None,
-        aggregation_proof: None,
     }
+}
+
+/// A wire-valid but cryptographically meaningless delta proof: r = s = 1
+/// (in range and low-s), recovery id 0. All-zero components would be
+/// rejected by `DeltaProof`'s deserializer, so fixtures cannot use them.
+pub fn dummy_delta_proof() -> DeltaProof {
+    let mut signature = [0u8; 64];
+    signature[31] = 1; // r = 1
+    signature[63] = 1; // s = 1
+    DeltaProof {
+        signature,
+        recovery_id: 0,
+    }
+}
+
+/// A minimal instance as an aggregated wire transaction: no base actions, a
+/// structurally valid (but cryptographically meaningless) delta proof, and a
+/// fake seal as the aggregation proof bytes.
+pub fn create_minimal_transaction() -> Transaction {
+    Transaction {
+        actions: None,
+        delta_proof: Delta::Proof(dummy_delta_proof()),
+        expected_balance: None,
+        aggregation: Some(Aggregation {
+            proof: fake_aggregation_proof_bytes(),
+            instance: minimal_instance(),
+        }),
+    }
+}
+
+/// One action whose consumed and created resources each carry their own
+/// external payloads, for order-sensitive tests.
+pub fn instance_with_consumed_and_created_payloads(
+    consumed_payloads: Vec<ExpirableBlob>,
+    created_payloads: Vec<ExpirableBlob>,
+) -> AggregationInstance {
+    let mut instance = minimal_instance();
+    instance.actions[0].consumed_publics[0]
+        .app_data
+        .external_payload = consumed_payloads;
+    instance.actions[0].created_publics[0]
+        .app_data
+        .external_payload = created_payloads;
+    instance
 }
 
 /// Arbitrary value; verifies the proof parser extracts the selector correctly.
-pub const FAKE_SELECTOR: Selector = [0x31, 0x0f, 0xe5, 0x98];
+pub const FAKE_SELECTOR: [u8; 4] = [0x31, 0x0f, 0xe5, 0x98];
 
 pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
     let proof = Proof {
@@ -164,88 +165,10 @@ pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
         proof,
     };
 
-    seal.try_to_vec().unwrap()
-}
-
-/// One action, one CU, two LVIs (consumed + created).
-pub fn create_minimal_transaction() -> Transaction {
-    let instance = ComplianceInstance {
-        consumed_nullifier: Digest::from_bytes([1u8; 32]),
-        consumed_logic_ref: Digest::from_bytes([3u8; 32]),
-        consumed_commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
-        created_commitment: Digest::from_bytes([2u8; 32]),
-        created_logic_ref: Digest::from_bytes([4u8; 32]),
-        delta_x: [0u32; 8],
-        delta_y: [0u32; 8],
-    };
-    build_tx_from_instances(&[instance])
-}
-
-/// Attaches payloads to the first LVI (index 0) of a minimal transaction.
-/// Preserves CU-consistent LVI tags. For tests needing multiple LVIs, see
-/// `create_tag_consistent_payload_tx`.
-pub fn create_transaction_with_external_payload(payloads: Vec<ExpirableBlob>) -> Transaction {
-    let mut tx = create_minimal_transaction();
-    tx.actions[0].logic_verifier_inputs[0]
-        .app_data
-        .external_payload = payloads;
-    tx
-}
-
-/// One action, one CU, two LVIs whose tags match the CU's nullifier and
-/// commitment, each carrying its own external payloads.
-///
-/// The tags are CU-consistent, so this is valid for tests that traverse in
-/// compliance-tag order.
-pub fn create_tag_consistent_payload_tx(
-    consumed_payloads: Vec<ExpirableBlob>,
-    created_payloads: Vec<ExpirableBlob>,
-) -> Transaction {
-    let mut tx = create_minimal_transaction();
-    tx.actions[0].logic_verifier_inputs[0]
-        .app_data
-        .external_payload = consumed_payloads;
-    tx.actions[0].logic_verifier_inputs[1]
-        .app_data
-        .external_payload = created_payloads;
-    tx
+    borsh::to_vec(&seal).unwrap()
 }
 
 /// Variable-depth tree starting at depth 1 (capacity = 2 leaves).
 pub fn create_test_pa_state() -> PAStateAccount {
-    create_test_pa_state_with(Pubkey::default(), false)
-}
-
-pub fn create_test_pa_state_with(authority: Pubkey, stopped: bool) -> PAStateAccount {
-    PAStateAccount {
-        bump: 0,
-        authority,
-        pending_authority: None,
-        verifier_router: Pubkey::default(),
-        proof_selector: FAKE_SELECTOR,
-        lifecycle: if stopped {
-            PALifecycle::Stopped
-        } else {
-            PALifecycle::Running
-        },
-        root: EMPTY_TREE_ROOT_INITIAL.to_bytes(),
-        next_index: 0,
-        current_depth: INITIAL_TREE_DEPTH as u8,
-        frontier: vec![ZEROS[0].to_bytes()],
-        min_expiry_slots: MIN_EXPIRY_SLOTS,
-        max_expiry_slots: MAX_EXPIRY_SLOTS,
-    }
-}
-
-pub fn make_external_call(
-    program_id: [u8; 32],
-    instruction_data: Vec<u8>,
-) -> crate::types::SolanaExternalCall {
-    crate::types::SolanaExternalCall {
-        program_id,
-        instruction_data,
-        expected_output: vec![0x00],
-        output_mode: crate::types::OutputMode::ReturnData,
-        num_accounts: 1,
-    }
+    PAStateAccount::running(0, Pubkey::new_unique(), Pubkey::default(), FAKE_SELECTOR)
 }

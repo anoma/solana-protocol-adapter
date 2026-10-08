@@ -4,15 +4,17 @@ members = [
 ]
 resolver = "2"
 
-# solana-verify picks its deterministic build image from this version; without
-# it the tool falls back to the solana-program crate version (2.x), whose
-# platform-tools cannot parse the edition-2024 manifests in our dependency
-# graph. Keep in lockstep with flake.nix's solanaVersion and CI.
+# solana-verify picks its deterministic build image from this version (see
+# ops.sh SOLANA_VERIFY_VERSION). Keep in lockstep with flake.nix's
+# solanaVersion and CI.
 [workspace.metadata.cli]
-solana = "3.1.14"
+solana = "4.3.0"
 
 [workspace.dependencies]
-anchor-lang = "0.31.1"
+# Anchor's v1.2.1 release PR (solana-foundation/anchor#5134), whose fix #4737
+# lets a program with a field-less accounts struct compile with `cpi`. Moves to
+# the published 1.2.1 in anoma/solana-protocol-adapter#124.
+anchor-lang = { git = "https://github.com/otter-sec/anchor", rev = "2c9747a2d31bd5e94745cee6c083577f3e6675c0" }
 
 [profile.release]
 overflow-checks = true

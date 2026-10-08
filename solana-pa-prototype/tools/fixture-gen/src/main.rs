@@ -1,26 +1,30 @@
-use anchor_lang::prelude::{AnchorDeserialize as BorshDeserialize, AnchorSerialize, Pubkey};
+use anchor_lang::prelude::{borsh, AnchorDeserialize as BorshDeserialize, Pubkey};
+use anoma_pa_solana_client::merkle::merkle_path;
+use anoma_pa_solana_client::settlement_input::settlement_transaction;
+use anoma_pa_solana_client::MOCK_SELECTOR;
 use anyhow::{anyhow, bail, Context, Result};
-use arm::action::{Action, ActionExt};
-use arm::action_tree::MerkleTree;
-use arm::compliance::{initial_root, ComplianceInstance, ComplianceWitness};
-use arm::compliance_unit::{create_compliance_unit, ComplianceUnit};
-use arm::constants::{BATCH_AGGREGATION_PK, BATCH_AGGREGATION_VK, COMPLIANCE_PK, COMPLIANCE_VK};
-use arm::delta_proof::DeltaWitness;
+use arm::action::Action;
+use arm::action_tree::ActionTree;
+use arm::aggregation_instance::ConsumedResourceAggregated;
+use arm::compliance::{ComplianceWitness, INITIAL_ROOT};
+use arm::compliance_unit::ComplianceUnit;
+use arm::constants::{
+    init_kind_table_from_file, kind_table, kind_table_hash, BATCH_AGGREGATION_PK, COMPLIANCE_PK,
+    COMPLIANCE_VK,
+};
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
-use arm::logic_proof::{LogicVerifier, LogicVerifierInputsExt};
+use arm::logic_proof::LogicVerifier;
 use arm::merkle_path::MerklePath;
-use arm::nullifier_key::{NullifierKey, NullifierKeyExt};
-use arm::proving_system::encode_seal;
-use arm::proving_system::ProofType as LocalProofType;
-use arm::resource::Resource;
-use arm::transaction::{Delta, Transaction, TransactionExt};
-use arm::utils::core_to_risc0_digest;
-use arm::CoreDeltaWitness;
+use arm::nullifier_key::NullifierKey;
+use arm::proving_system::{JournalEncoding, ProofType as LocalProofType};
+use arm::resource::{ConsumedResourceWitness, Resource};
+use arm::transaction::{Aggregation, Delta, Transaction};
 use arm::Digest;
-use arm::MerklePathExt;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use clap::{Args, Parser, Subcommand, ValueEnum};
+use futures::future::try_join_all;
 use heliax_ap_orchestrator_sdk::{
     AggregateProofResult, BaseProofResult, GpuAggregationProofPayload, GpuComplianceProofPayload,
     GpuLogicProofPayload, ProofPayload, ProofType as QueueProofType, QueueClient,
@@ -28,20 +32,22 @@ use heliax_ap_orchestrator_sdk::{
 use k256::Scalar;
 use risc0_zkvm::sha::{Digestible as _, Sha256 as _};
 use risc0_zkvm::{InnerReceipt, MaybePruned, Receipt, ReceiptClaim};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use solana_pa::verifier_router::types::Seal;
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use verifier_router::Seal;
 
-use passthrough_logic_methods::{PASSTHROUGH_LOGIC_GUEST_ELF, PASSTHROUGH_LOGIC_GUEST_ID};
+use anoma_pa_testkit::fixtures::passthrough::{PASSTHROUGH_LOGIC_PK, PASSTHROUGH_LOGIC_VK};
 
-fn hash_delta_msg(msg: &[u8]) -> [u8; 32] {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(msg).into()
-}
+/// The kind table a fixture commits to unless `--kind-table` names another:
+/// the committed empty table. The compliance circuit hashes the witness's
+/// table into the instance, and the PA pins that commitment at
+/// initialization, so fixtures and deployment tooling must agree on this file.
+const KIND_TABLE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/kind_table.json");
 
 /// Per-HTTP-request timeout for queue calls. Queue-side job timeouts (5–10 min)
 /// are independent.
@@ -88,7 +94,7 @@ async fn queue_compliance_proof(
         bail!("queue returned compliance proof for a different verifying key");
     }
     Ok(ComplianceUnit {
-        proof: Some(result.receipt),
+        proof: result.receipt,
         instance: result.instance,
     })
 }
@@ -122,7 +128,7 @@ async fn queue_logic_proof<W: Serialize>(
 
 /// Hand the transaction to the queue's GPU aggregation worker. Caller-supplied
 /// `BATCH_AGGREGATION_PK` and `COMPLIANCE_VK` pin the worker to our circuit
-/// images. Returns a transaction with `aggregation_proof` populated and the
+/// images. Returns a transaction with `aggregation` populated and the
 /// individual base proofs erased.
 async fn queue_aggregate_proof(client: &QueueClient, tx: Transaction) -> Result<Transaction> {
     let serialized = bincode::serialize(&tx).context("serialize tx for aggregation")?;
@@ -150,12 +156,62 @@ enum Prover {
     Queue(QueueClient),
 }
 
+/// How a prover runs independent proving jobs.
+#[derive(Clone, Copy)]
+enum JobScheduling {
+    /// All at once: the queue proves them on its own workers.
+    Concurrent,
+    /// One at a time: concurrent local proofs exhaust the machine's CPU and
+    /// memory.
+    Sequential,
+}
+
+impl Prover {
+    fn scheduling(&self) -> JobScheduling {
+        match self {
+            Prover::Queue(_) => JobScheduling::Concurrent,
+            Prover::Local => JobScheduling::Sequential,
+        }
+    }
+}
+
+/// Run independent jobs under `scheduling`, returning their results in input
+/// order. A job does no work until it is awaited, so `Sequential` starts
+/// each only after the previous one finished.
+async fn run_jobs<T>(
+    scheduling: JobScheduling,
+    jobs: impl IntoIterator<Item = impl Future<Output = Result<T>>>,
+) -> Result<Vec<T>> {
+    match scheduling {
+        JobScheduling::Concurrent => try_join_all(jobs).await,
+        JobScheduling::Sequential => {
+            let mut results = Vec::new();
+            for job in jobs {
+                results.push(job.await?);
+            }
+            Ok(results)
+        }
+    }
+}
+
+/// Run two independent jobs of different result types under `scheduling`.
+async fn run_job_pair<A, B>(
+    scheduling: JobScheduling,
+    first: impl Future<Output = Result<A>>,
+    second: impl Future<Output = Result<B>>,
+) -> Result<(A, B)> {
+    match scheduling {
+        JobScheduling::Concurrent => futures::try_join!(first, second),
+        JobScheduling::Sequential => Ok((first.await?, second.await?)),
+    }
+}
+
 /// Prove one compliance witness locally on CPU. Runs on tokio's blocking
 /// thread pool since risc0 proving is synchronous, CPU-bound work.
 async fn local_compliance_proof(witness: &ComplianceWitness) -> Result<ComplianceUnit> {
     let witness = witness.clone();
     tokio::task::spawn_blocking(move || {
-        create_compliance_unit(&witness, LocalProofType::Succinct)
+        arm::compliance_unit::create(&witness, LocalProofType::Succinct)
             .map_err(|e| anyhow!("local compliance proof: {e:?}"))
     })
     .await
@@ -179,8 +235,12 @@ where
 /// Aggregate a transaction's base proofs into a single Groth16 proof locally.
 async fn local_aggregate_proof(mut tx: Transaction) -> Result<Transaction> {
     tokio::task::spawn_blocking(move || {
-        tx.aggregate(LocalProofType::Groth16)
-            .map_err(|e| anyhow!("local aggregate proof: {e:?}"))?;
+        arm::transaction::aggregate(
+            &mut tx,
+            LocalProofType::Groth16,
+            JournalEncoding::Risc0Serde,
+        )
+        .map_err(|e| anyhow!("local aggregate proof: {e:?}"))?;
         Ok(tx)
     })
     .await
@@ -221,351 +281,435 @@ async fn aggregate_tx(prover: &Prover, tx: Transaction) -> Result<Transaction> {
     }
 }
 
-/// `ComplianceUnit::instance` is journal bytes on the wire — parse, mutate
-/// (via `f`), and re-encode in one place.
-fn mutate_compliance_instance<R>(
-    cu: &mut ComplianceUnit,
-    f: impl FnOnce(&mut ComplianceInstance) -> R,
-) -> Result<R> {
-    let mut inst =
-        ComplianceInstance::from_journal(&cu.instance).context("parse compliance instance")?;
-    let r = f(&mut inst);
-    cu.instance = inst
-        .to_journal()
-        .context("re-encode mutated compliance instance")?;
-    Ok(r)
-}
-
 use block_time_forwarder::{RESULT_GT, RESULT_LT};
 use solana_pa::external_calls::encode_external_call;
+use solana_pa::state::PAStateAccount;
 use solana_pa::types::{OutputMode, SolanaExternalCall};
-use test_forwarder::{MODE_FAIL, MODE_SILENT};
+use test_forwarder::{MODE_EMPTY, MODE_FAIL, MODE_SILENT};
 
 #[derive(Serialize)]
 struct Fixture {
+    /// The name the fixture's resource nonces derive from (see `fixture_name`).
+    name: String,
     format: &'static str,
     aggregation_strategy: &'static str,
     aggregation_proof_type: &'static str,
     /// Groth16 verifier selector extracted from the proof's verifier_parameters.
     /// Format: "0x" + 4-byte hex (e.g., "0x73c457ba").
     selector: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    forwarder_type: Option<&'static str>,
     tx_b64: String,
     tx_tampered_b64: String,
     consumed_nullifiers_b64: Vec<String>,
+    /// Created commitments in instance order — the leaves settlement appends.
+    /// Clients derive the produced-root marker address from these plus the
+    /// on-chain tree state.
+    created_commitments_b64: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     historical_roots_b64: Vec<String>,
 }
 
 const FIXTURE_FORMAT: &str = "arm-risc0:Transaction(bincode)";
 
+/// Generate the Solana PA's test fixtures: proven, aggregated transactions
+/// the integration suite settles.
+#[derive(Parser)]
+#[command(name = "fixture-gen")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
 enum Command {
-    Generate(GenerateArgs),
-    StripCalls {
-        input: PathBuf,
-        output: PathBuf,
+    #[command(flatten)]
+    Generate(ShapeCommand),
+    /// Print a fixture's transaction structure.
+    Dump { input: PathBuf },
+}
+
+/// One fixture shape per subcommand, each taking only its own options.
+#[derive(Subcommand)]
+enum ShapeCommand {
+    /// One action whose consumed resource calls the block-time forwarder.
+    Batch {
+        /// Append a second block-time-forwarder external call.
+        #[arg(long)]
+        multi_external_call: bool,
+        #[command(flatten)]
+        generate: GenerateArgs,
     },
-    Dump {
-        input: PathBuf,
+    /// The block-time-forwarder call with a wrong expected output, for the
+    /// ForwarderCallOutputMismatch test.
+    OutputMismatch {
+        #[command(flatten)]
+        generate: GenerateArgs,
     },
-    ImportBackendResult {
-        input: PathBuf,
-        output: PathBuf,
-        root_account_dir: Option<PathBuf>,
-        program_id: [u8; 32],
+    /// The test forwarder with a failing instruction.
+    ForwarderFail {
+        #[command(flatten)]
+        generate: GenerateArgs,
     },
-    HistoricalRoot {
-        batch_groth16_path: PathBuf,
-        committer_out: PathBuf,
-        consumer_out: PathBuf,
-        prover_choice: Option<ProverChoice>,
-        mock: bool,
+    /// The test forwarder returning no data where the call expects an empty
+    /// output.
+    ForwarderSilent {
+        #[command(flatten)]
+        generate: GenerateArgs,
     },
-    Mockify {
-        input: PathBuf,
-        output: PathBuf,
+    /// The test forwarder returning the empty output the call expects.
+    ForwarderEmptyOutput {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// One action that consumes a zero-quantity ephemeral resource and
+    /// creates nothing: a settlement that appends no commitment.
+    ConsumeOnly {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// Three single-unit actions with event-emitted payload blobs and no
+    /// external calls: the captured mainnet transfer's shape.
+    TransferShape {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// One action that consumes an ephemeral resource and creates a
+    /// non-ephemeral one, which a later transaction can only spend through
+    /// a real Merkle path to a retained historical root.
+    HistoricalRootCommitter {
+        #[command(flatten)]
+        generate: GenerateArgs,
+    },
+    /// Spend the committer's resource through its Merkle path to the root
+    /// the committer's settlement produced on a fresh adapter.
+    HistoricalRootConsumer {
+        /// The committer fixture, the first settlement of a fresh adapter:
+        /// its created commitments are the tree the consumer proves
+        /// membership in.
+        #[arg(long, value_name = "FIXTURE")]
+        committer: PathBuf,
+        #[command(flatten)]
+        generate: GenerateArgs,
     },
 }
 
+/// The options every generated fixture takes.
+#[derive(Args)]
 struct GenerateArgs {
-    debug_assumptions: bool,
-    forwarder_mode: ForwarderMode,
-    nonce_seed: Option<u8>,
-    multi_external_call: bool,
-    error_variants_dir: Option<PathBuf>,
+    /// Where to write the fixture. Every resource nonce derives from its file
+    /// stem (and `--salt`), so fixtures with different names never share a
+    /// nullifier.
     out_path: PathBuf,
-    prover_choice: Option<ProverChoice>,
+    /// Set this run's fixtures apart from every other run's on the same
+    /// deployment: resource nonces derive from it too, so nothing the run
+    /// settles was spent before.
+    #[arg(long, value_name = "SALT")]
+    salt: Option<String>,
+    #[command(flatten)]
+    prover: ProverArgs,
+    /// Also write the final transaction's error variants to DIR:
+    /// wrong_root, no_aggregation, garbage_proof, corrupt_seal, zero_action,
+    /// foreign_kind_table and witness_delta.
+    #[arg(long, value_name = "DIR")]
+    error_variants: Option<PathBuf>,
+    /// Prove against this kind table instead of the committed empty one
+    /// (kind_table.json); the PA must store its commitment.
+    #[arg(long, value_name = "PATH", default_value = KIND_TABLE_PATH)]
+    kind_table: PathBuf,
+    /// Print claim digests for composition debugging.
+    #[arg(long)]
+    debug_assumptions: bool,
+}
+
+#[derive(Args)]
+struct ProverArgs {
+    /// Run the dev-mode executor instead of proving (seconds, no GPU or
+    /// container proving step), and emit a mock seal (selector 0xffffffff)
+    /// only the localnet mock verifier accepts.
+    #[arg(long, conflicts_with = "prover")]
     mock: bool,
+    /// The prover backend; defaults to queue when QUEUE_BASE_URL is set,
+    /// local otherwise. local runs risc0's CPU prover in-process (its Groth16
+    /// step needs podman/docker); queue dispatches to the AnomaPay workers
+    /// queue at QUEUE_BASE_URL, authenticated with QUEUE_AUTH_TOKEN.
+    #[arg(long, value_enum)]
+    prover: Option<ProverChoice>,
 }
 
 /// Explicit `--prover` selection. `None` (the flag was not passed) resolves
 /// to `Queue` if `QUEUE_BASE_URL` is set in the environment, `Local`
 /// otherwise — see `resolve_prover`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, ValueEnum)]
 enum ProverChoice {
     Local,
     Queue,
 }
 
 enum ForwarderMode {
-    BlockTimeForwarder { output_mismatch: bool },
-    TestForwarderFail,
-    TestForwarderSilent,
+    BlockTimeForwarder {
+        output_mismatch: bool,
+        multi_external_call: bool,
+    },
+    /// The test forwarder in the given mode, expecting an empty output.
+    TestForwarder(u8),
 }
 
-/// Extract the Groth16 selector from a transaction's aggregation proof.
-/// The selector is the first 4 bytes of the verifier_parameters digest,
-/// which is the last 32 bytes of the serialized proof.
-fn extract_selector(tx: &Transaction) -> Result<String> {
-    let agg_proof = tx
-        .aggregation_proof
+/// The aggregation carried by a transaction, or a clear error if it has none.
+fn require_aggregation(tx: &Transaction) -> Result<&Aggregation> {
+    tx.aggregation
         .as_ref()
-        .ok_or_else(|| anyhow!("no aggregation_proof found for selector extraction"))?;
-
-    let seal: Seal =
-        Seal::try_from_slice(agg_proof).context("decode Seal from aggregation_proof bytes")?;
-    Ok(format!("0x{}", hex::encode(seal.selector)))
+        .ok_or_else(|| anyhow!("transaction has no aggregation"))
 }
 
-/// Selector the localnet mock verifier is registered under in the synthetic
-/// VerifierEntry preloaded at test-validator genesis (risc0 fake-receipt
-/// convention; the real Groth16 selector is 0x73c457ba).
-const MOCK_SELECTOR: [u8; 4] = [0xff; 4];
-
-/// Claim digest a mock seal must carry, derived from the transaction alone:
-/// the digest of the batch-aggregation receipt claim over the aggregation
-/// journal the on-chain PA independently recomputes at settle time.
-fn mock_claim_digest(tx: &Transaction) -> Result<risc0_zkvm::sha::Digest> {
-    let journal = tx
-        .construct_aggregation_instance()
-        .map_err(|e| anyhow!("construct aggregation instance: {e:?}"))?;
-    Ok(compute_expected_claim_digest(
-        &journal,
-        &BATCH_AGGREGATION_VK,
-    ))
+fn require_aggregation_mut(tx: &mut Transaction) -> Result<&mut Aggregation> {
+    tx.aggregation
+        .as_mut()
+        .ok_or_else(|| anyhow!("transaction has no aggregation"))
 }
 
-/// Build the 260-byte router `Seal` the mock verifier accepts: selector
-/// 0xffffffff, claim digest in pi_c[..32], zeros elsewhere. The digest rides
-/// in pi_c because the PA negates pi_a before the router CPI.
-fn mock_seal_bytes(claim: risc0_zkvm::sha::Digest) -> Result<Vec<u8>> {
-    let mut pi_c = [0u8; 64];
-    pi_c[..32].copy_from_slice(claim.as_bytes());
-    let seal = Seal {
-        selector: MOCK_SELECTOR,
-        proof: groth_16_verifier::Proof {
-            pi_a: [0u8; 64],
-            pi_b: [0u8; 128],
-            pi_c,
-        },
-    };
-    seal.try_to_vec().context("serialize mock Seal")
+/// The verifier selector of a transaction's seal-encoded aggregation proof.
+fn seal_selector(tx: &Transaction) -> Result<[u8; 4]> {
+    let seal: Seal = Seal::try_from_slice(&require_aggregation(tx)?.proof)
+        .context("decode Seal from aggregation proof bytes")?;
+    Ok(seal.selector)
 }
 
-/// Encode a dev-mode (Fake) aggregation receipt as a mock router seal,
-/// cross-checking the receipt's claim digest against the one derived from
-/// the transaction alone so any journal-derivation drift fails loudly.
-fn encode_mock_seal(
-    fake: &risc0_zkvm::FakeReceipt<ReceiptClaim>,
-    tx: &Transaction,
-) -> Result<Vec<u8>> {
-    let receipt_claim = fake.claim.digest();
-    let derived_claim = mock_claim_digest(tx)?;
-    if receipt_claim != derived_claim {
-        bail!(
-            "dev-mode receipt claim digest ({receipt_claim}) != transaction-derived claim \
-             digest ({derived_claim}) — the aggregation journal derivation drifted"
-        );
-    }
-    mock_seal_bytes(derived_claim)
-}
-
-fn mutate_created_commitment_keep_structure(tx: &mut Transaction) -> Result<()> {
-    let action = tx
+/// Flip one bit of a tag of the aggregation instance's first action: its
+/// first created commitment, or its first consumed nullifier when it creates
+/// nothing. The transaction still decodes and settles structurally, but the
+/// journal digest the PA recomputes from the mutated instance no longer
+/// matches the proof, so verification must fail.
+fn mutate_tag_keep_structure(tx: &mut Transaction) -> Result<()> {
+    let instance = &mut require_aggregation_mut(tx)?.instance;
+    let action = instance
         .actions
         .get_mut(0)
-        .ok_or_else(|| anyhow!("tx has no actions"))?;
-    let cu = action
-        .compliance_units
-        .get_mut(0)
-        .ok_or_else(|| anyhow!("tx has no compliance units"))?;
-
-    let (old_created_commitment, new_created_commitment) =
-        mutate_compliance_instance(cu, |instance| {
-            let old = instance.created_commitment;
-            let mut new_bytes = [0u8; 32];
-            new_bytes.copy_from_slice(old.as_bytes());
-            new_bytes[0] ^= 1;
-            let new = Digest::from_bytes(new_bytes);
-            instance.created_commitment = new;
-            (old, new)
-        })?;
-
-    // Update the corresponding created logic verifier input tag so decoding and
-    // digest computation still succeeds (proof must then fail).
-    let mut updated = false;
-    for lvi in action.logic_verifier_inputs.iter_mut() {
-        if lvi.tag == old_created_commitment {
-            lvi.tag = new_created_commitment;
-            updated = true;
-            break;
+        .ok_or_else(|| anyhow!("aggregation instance has no actions"))?;
+    let tag = match action.created_publics.first_mut() {
+        Some(created) => &mut created.resource_commitment,
+        None => {
+            &mut action
+                .consumed_publics
+                .first_mut()
+                .ok_or_else(|| anyhow!("the first action has no resources"))?
+                .resource_nullifier
         }
-    }
-    if !updated {
-        return Err(anyhow!(
-            "could not find created logic verifier input for tamper"
-        ));
-    }
+    };
 
+    let mut bytes = <[u8; 32]>::from(*tag);
+    bytes[0] ^= 1;
+    *tag = Digest::from_bytes(bytes);
     Ok(())
 }
 
-fn decode_base58_32(s: &str) -> Result<[u8; 32]> {
-    let bytes = bs58::decode(s)
-        .into_vec()
-        .with_context(|| format!("invalid base58: {s}"))?;
-    bytes
-        .try_into()
-        .map_err(|v: Vec<u8>| anyhow!("expected 32 bytes, got {}", v.len()))
-}
-
-fn test_forwarder_program_id() -> Result<[u8; 32]> {
-    decode_base58_32("QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD")
-}
-
-fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> Result<ExpirableBlob> {
-    // Must match `programs/block-time-forwarder/src/lib.rs::declare_id!`.
-    let program_id = decode_base58_32("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf")?;
+fn block_time_forwarder_external_payload_blob(output_mismatch: bool) -> ExpirableBlob {
+    let program_id = block_time_forwarder::ID.to_bytes();
 
     // Use -1 so expected_time < current_time for any reasonable cluster clock.
     // The forwarder will return RESULT_LT (0x00).
     let input = (-1_i64).to_le_bytes().to_vec();
 
     // If output_mismatch is true, set expected_output to RESULT_GT which is WRONG.
-    // The forwarder will return RESULT_LT, but we expect RESULT_GT, causing ExternalCallOutputMismatch.
+    // The forwarder will return RESULT_LT, but we expect RESULT_GT, causing ForwarderCallOutputMismatch.
     let expected_output = if output_mismatch {
         vec![RESULT_GT]
     } else {
         vec![RESULT_LT]
     };
 
-    Ok(encode_external_call(&SolanaExternalCall {
+    encode_external_call(&SolanaExternalCall {
         program_id,
         instruction_data: input,
         expected_output,
         output_mode: OutputMode::ReturnData,
         num_accounts: 2,
-    }))
+    })
 }
 
-fn test_forwarder_fail_payload_blob() -> Result<ExpirableBlob> {
-    // expected_output must be non-empty: Solana's runtime reports no return-data
-    // record both for an explicit empty return and for no return at all, so
-    // decode_external_call rejects an empty expected_output before the call is
-    // ever attempted. This test needs the call to actually reach the CPI so the
-    // test-forwarder's IntentionalFailure can propagate, so we pin a non-empty
-    // expected value; it is never compared because the CPI itself fails first.
-    Ok(encode_external_call(&SolanaExternalCall {
-        program_id: test_forwarder_program_id()?,
-        instruction_data: vec![MODE_FAIL],
-        expected_output: vec![0x2a],
+/// A call to the test forwarder in `mode`, expecting an empty output.
+fn test_forwarder_payload_blob(mode: u8) -> ExpirableBlob {
+    encode_external_call(&SolanaExternalCall {
+        program_id: test_forwarder::ID.to_bytes(),
+        instruction_data: vec![mode],
+        expected_output: vec![],
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
-    }))
+    })
 }
 
-fn test_forwarder_silent_payload_blob() -> Result<ExpirableBlob> {
-    // expected_output must be non-empty: Solana's runtime reports no return-data
-    // record both for an explicit empty return and for no return at all, so
-    // decode_external_call rejects an empty expected_output before the call is
-    // ever attempted. Pinning a non-empty expected value here makes the silent
-    // forwarder path a genuine output mismatch (expected [0x2a], got nothing)
-    // rather than conflating "expected empty" with "returned nothing".
-    Ok(encode_external_call(&SolanaExternalCall {
-        program_id: test_forwarder_program_id()?,
-        instruction_data: vec![MODE_SILENT],
-        expected_output: vec![0x2a],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    }))
+/// The adapter's commitment tree after appending `leaves` in order, replayed
+/// through the program's own `append_to_tree` on a fresh state, so the root
+/// carries the on-chain growth rule rather than a second implementation.
+fn pa_tree_root(leaves: &[Digest]) -> Result<Digest> {
+    let mut state = PAStateAccount::running(0, Pubkey::default(), Pubkey::default(), [0; 4]);
+    for leaf in leaves {
+        solana_pa::merkle::append_to_tree(&mut state, *leaf)
+            .map_err(|e| anyhow!("replay append_to_tree: {e:?}"))?;
+    }
+    Ok(Digest::from_bytes(state.root))
 }
 
-async fn generate_test_transaction_with_external_payload(
-    prover: &Prover,
-    forwarder_mode: ForwarderMode,
-    nonce_seed: Option<u8>,
-    multi_external_call: bool,
-) -> Result<Transaction> {
-    // Use the passthrough logic circuit for both consumed and created resources.
-    // This allows us to bind arbitrary `app_data.external_payload` into real proofs.
-    let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
+/// The Merkle path of leaf `index` in the adapter's tree over `leaves`, as
+/// the client library derives it for integrators.
+fn pa_merkle_path(leaves: &[Digest], index: usize) -> MerklePath {
+    let leaves: Vec<[u8; 32]> = leaves.iter().map(|leaf| (*leaf).into()).collect();
+    let path: Vec<(Digest, bool)> = merkle_path(&leaves, index)
+        .into_iter()
+        .map(|(sibling, leaf_is_on_right)| (Digest::from_bytes(sibling), leaf_is_on_right))
+        .collect();
+    MerklePath::from_path(&path)
+}
 
+/// The Merkle path of leaf `index` and the root it reconstructs, checked
+/// against the adapter's own replay of the tree: a client path that
+/// disagrees with the program's growth rule fails here, not at settlement.
+fn checked_pa_merkle_path(leaves: &[Digest], index: usize) -> Result<(MerklePath, Digest)> {
+    let path = pa_merkle_path(leaves, index);
+    let expected_root = pa_tree_root(leaves)?;
+    let path_root = path.root(&leaves[index]);
+    if path_root != expected_root {
+        bail!(
+            "the Merkle path of leaf {index} does not reconstruct the adapter's root: \
+             path {} vs append_to_tree {}",
+            hex::encode(path_root.as_bytes()),
+            hex::encode(expected_root.as_bytes())
+        );
+    }
+    Ok((path, expected_root))
+}
+
+/// The action tree root of a one-consumed, one-created action: nullifier
+/// then commitment, the order the aggregation guest enforces.
+fn single_action_tree_root(consumed_nf: Digest, created_cm: Digest) -> Result<Digest> {
+    ActionTree::new(vec![consumed_nf, created_cm])
+        .root()
+        .map_err(|e| anyhow!("compute action tree root: {e:?}"))
+}
+
+/// Domain tag of the resource nonces derived from fixture names.
+const FIXTURE_NONCE_DOMAIN: &[u8] = b"solana-pa/fixture-gen/resource-nonce";
+
+/// The nonce of the `index`-th resource the fixture `fixture_name` generates:
+/// sha256 of the domain tag, the length-prefixed name, and the index. Two
+/// differently named fixtures never share a nonce, so never a nullifier, and
+/// a fixture's nonces are the same on every run.
+fn fixture_nonce(fixture_name: &str, index: u32) -> [u8; 32] {
+    let mut preimage = FIXTURE_NONCE_DOMAIN.to_vec();
+    preimage.extend_from_slice(&(fixture_name.len() as u64).to_le_bytes());
+    preimage.extend_from_slice(fixture_name.as_bytes());
+    preimage.extend_from_slice(&index.to_le_bytes());
+    arm::utils::hash_bytes(&preimage).into()
+}
+
+/// A fixture's name, which its resource nonces derive from: its file stem
+/// (`batch_groth16` for `tests/fixtures/batch_groth16.json`), followed by
+/// `/<salt>` when the run is salted.
+fn fixture_name(path: &Path, salt: Option<&str>) -> Result<String> {
+    let stem = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .ok_or_else(|| {
+            anyhow!(
+                "{} has no UTF-8 file stem to name the fixture",
+                path.display()
+            )
+        })?;
+    Ok(match salt {
+        Some(salt) => format!("{stem}/{salt}"),
+        None => stem.to_string(),
+    })
+}
+
+/// The name an existing fixture was generated under, which the resources it
+/// created derive from.
+fn read_fixture_name(path: &Path) -> Result<String> {
+    #[derive(Deserialize)]
+    struct Named {
+        name: String,
+    }
+    let named: Named = serde_json::from_slice(
+        &fs::read(path).with_context(|| format!("read {}", path.display()))?,
+    )
+    .with_context(|| format!("{} carries no fixture name", path.display()))?;
+    Ok(named.name)
+}
+
+/// The nonce of an action's first created resource: the compliance circuit
+/// requires created nonces to be derived from the action's consumed nullifiers.
+fn first_created_nonce(consumed_nf: Digest) -> Result<[u8; 32]> {
+    Resource::derive_nonce_from_nullifiers(0, &[consumed_nf])
+        .map_err(|e| anyhow!("derive created nonce: {e:?}"))
+}
+
+/// The `index`-th passthrough-logic ephemeral resource of the fixture
+/// `fixture_name` (nonce from `fixture_nonce`), its nullifier under the
+/// default nullifier key, and the resource its action creates: the same
+/// resource under `first_created_nonce`.
+fn deterministic_ephemeral_resource(
+    fixture_name: &str,
+    index: u32,
+) -> Result<(Resource, NullifierKey, Digest, Resource)> {
     let nf_key = NullifierKey::default();
-    let nf_key_cm = nf_key.commit();
-
-    // Generate one consumed and one created resource.
-    let mut consumed_resource = Resource {
-        logic_ref: passthrough_vk,
-        nk_commitment: nf_key_cm,
+    let consumed_resource = Resource {
+        logic_ref: PASSTHROUGH_LOGIC_VK,
         quantity: 1,
         is_ephemeral: true,
+        nonce: fixture_nonce(fixture_name, index),
+        nk_commitment: nf_key.commit(),
         ..Default::default()
     };
-    // Stable-ish nonce so the fixture is deterministic.
-    // Use different nonce for each fixture variant so they have different nullifiers.
-    // This prevents DuplicateNullifier errors when running multiple fixtures in a test suite.
-    let output_mismatch = matches!(
-        &forwarder_mode,
-        ForwarderMode::BlockTimeForwarder {
-            output_mismatch: true
-        }
-    );
-    let nonce_byte: u8 = nonce_seed.unwrap_or(if output_mismatch { 2 } else { 0 });
-    consumed_resource.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
     let consumed_nf = consumed_resource
         .nullifier(&nf_key)
-        .context("compute consumed nullifier")?;
-
+        .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
     let mut created_resource = consumed_resource;
-    created_resource.set_nonce(consumed_nf);
-    let created_cm = created_resource.commitment();
+    created_resource.nonce = first_created_nonce(consumed_nf)?;
+    Ok((consumed_resource, nf_key, consumed_nf, created_resource))
+}
 
-    // Create ComplianceWitness with fixed rcv for deterministic fixtures.
-    // The consumed resource is ephemeral, so use empty merkle_path and INITIAL_ROOT.
-    let compliance_witness = ComplianceWitness {
-        consumed_resource,
-        created_resource,
-        merkle_path: MerklePath::empty(),
-        rcv: Scalar::ONE.to_bytes().to_vec(),
-        nf_key,
-        ephemeral_root: initial_root(),
-    };
-    let compliance_receipt = prove_compliance(prover, &compliance_witness)
-        .await
-        .context("prove compliance")?;
+/// Build the compliance witness for a single-consumed / single-created
+/// action. Built through `from_parts` with a fixed, caller-chosen `rcv`
+/// rather than arm's randomized `from_resources*` constructors, which draw
+/// a fresh `rcv` and would make fixture generation nondeterministic.
+/// Carries the globally loaded kind table, so every instance commits to
+/// the table hash the PA pins at initialization.
+fn single_action_compliance_witness(
+    consumed: Resource,
+    cm_merkle_path: MerklePath,
+    nf_key: NullifierKey,
+    created: Resource,
+    rcv: Scalar,
+) -> ComplianceWitness {
+    ComplianceWitness::from_parts(
+        vec![ConsumedResourceWitness {
+            resource: consumed,
+            cm_merkle_path,
+            nf_key,
+        }],
+        vec![created],
+        INITIAL_ROOT,
+        &rcv.to_bytes(),
+        kind_table().to_vec(),
+    )
+}
 
-    let tags = vec![consumed_nf, created_cm];
-    let action_tree = MerkleTree::from(tags);
-    let root = action_tree.root().context("compute action tree root")?;
+/// Prove one action (one compliance unit, one consumed + one created
+/// resource): the compliance proof plus one passthrough logic proof per
+/// resource, each carrying the given app_data.
+async fn prove_action(
+    prover: &Prover,
+    compliance_witness: &ComplianceWitness,
+    consumed_app_data: AppData,
+    created_app_data: AppData,
+) -> Result<Action> {
+    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
 
-    // Create app_data with a real external payload for the consumed logic instance only.
-    let mut consumed_app_data = AppData::default();
-    let external_blob = match &forwarder_mode {
-        ForwarderMode::BlockTimeForwarder { output_mismatch } => {
-            block_time_forwarder_external_payload_blob(*output_mismatch)?
-        }
-        ForwarderMode::TestForwarderFail => test_forwarder_fail_payload_blob()?,
-        ForwarderMode::TestForwarderSilent => test_forwarder_silent_payload_blob()?,
-    };
-    consumed_app_data.external_payload.push(external_blob);
-    if multi_external_call {
-        if let ForwarderMode::BlockTimeForwarder { .. } = &forwarder_mode {
-            consumed_app_data
-                .external_payload
-                .push(block_time_forwarder_external_payload_blob(false)?);
-        }
-    }
+    let consumed = &compliance_witness.consumed_data[0];
+    let consumed_nf = consumed
+        .resource
+        .nullifier(&consumed.nf_key)
+        .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
+    let created_cm = compliance_witness.created_resources[0].commitment();
+
+    let root = single_action_tree_root(consumed_nf, created_cm)?;
 
     let consumed_instance = LogicInstance {
         tag: consumed_nf,
@@ -577,64 +721,330 @@ async fn generate_test_transaction_with_external_payload(
         tag: created_cm,
         is_consumed: false,
         root,
-        app_data: AppData::default(),
+        app_data: created_app_data,
     };
 
-    let (consumed_proof, consumed_journal) = prove_logic(
+    prove_compliance_and_logic(
         prover,
-        PASSTHROUGH_LOGIC_GUEST_ELF,
+        compliance_witness,
+        PASSTHROUGH_LOGIC_PK,
         &passthrough_vk,
         consumed_instance,
-    )
-    .await
-    .context("prove consumed passthrough logic")?;
-    let (created_proof, created_journal) = prove_logic(
-        prover,
-        PASSTHROUGH_LOGIC_GUEST_ELF,
-        &passthrough_vk,
         created_instance,
     )
     .await
-    .context("prove created passthrough logic")?;
+    .context("prove the passthrough action")
+}
 
-    let consumed_logic = LogicVerifier {
-        proof: Some(consumed_proof),
-        instance: consumed_journal,
-        verifying_key: passthrough_vk,
-    };
-    let created_logic = LogicVerifier {
-        proof: Some(created_proof),
-        instance: created_journal,
-        verifying_key: passthrough_vk,
-    };
-
-    let action = Action::new(
-        vec![compliance_receipt],
-        vec![consumed_logic, created_logic],
+/// Prove an action's compliance unit and its consumed and created
+/// resources' logic under one guest, and build the action from the proofs.
+async fn prove_compliance_and_logic<T: Serialize + Send + 'static>(
+    prover: &Prover,
+    compliance_witness: &ComplianceWitness,
+    proving_key: &'static [u8],
+    verifying_key: &Digest,
+    consumed: T,
+    created: T,
+) -> Result<Action> {
+    let (compliance_unit, logic_verifiers) = run_job_pair(
+        prover.scheduling(),
+        async {
+            prove_compliance(prover, compliance_witness)
+                .await
+                .context("prove compliance")
+        },
+        prove_logic_pair(prover, proving_key, verifying_key, consumed, created),
     )
-    .context("build action")?;
+    .await?;
+    arm::action::new(compliance_unit, logic_verifiers)
+        .map_err(|e| anyhow!("build the action from its proofs: {e:?}"))
+}
 
-    // Delta witness is derived from compliance witness RCVs.
-    let delta_witness =
-        DeltaWitness::from_bytes_vec(&[compliance_witness.rcv]).context("build delta witness")?;
+/// Prove the consumed and the created resource's logic under one guest, and
+/// return the verifiers in canonical tag order (consumed, then created), the
+/// order the aggregation guest enforces.
+async fn prove_logic_pair<T: Serialize + Send + 'static>(
+    prover: &Prover,
+    proving_key: &'static [u8],
+    verifying_key: &Digest,
+    consumed: T,
+    created: T,
+) -> Result<Vec<LogicVerifier>> {
+    let jobs = [(consumed, "consumed"), (created, "created")].map(|(witness, label)| async move {
+        let (proof, instance) = prove_logic(prover, proving_key, verifying_key, witness)
+            .await
+            .with_context(|| format!("prove the {label} resource's logic"))?;
+        Ok(LogicVerifier {
+            proof,
+            instance,
+            verifying_key: *verifying_key,
+        })
+    });
+    run_jobs(prover.scheduling(), jobs).await
+}
 
-    let tx = Transaction::create(
-        vec![action],
-        Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
-    );
-    let balanced_tx = tx
-        .generate_delta_proof(hash_delta_msg)
-        .context("generate delta proof")?;
-    balanced_tx
-        .clone()
-        .verify(hash_delta_msg)
-        .context("verify tx")?;
+/// Wrap proven actions into a balanced, delta-proved `Transaction`. The delta
+/// witness composes every action's `rcv`.
+fn assemble_transaction(actions: Vec<Action>, rcvs: &[Vec<u8>]) -> Result<Transaction> {
+    let delta_witness = arm::delta_proof::from_bytes_vec(rcvs)
+        .map_err(|e| anyhow!("build delta witness: {e:?}"))?;
 
+    let tx = Transaction::create(actions, Delta::Witness(delta_witness));
+    let balanced_tx = arm::transaction::generate_delta_proof(tx)
+        .map_err(|e| anyhow!("generate delta proof: {e:?}"))?;
+    verify_tx(&balanced_tx)?;
     Ok(balanced_tx)
+}
+
+/// Verify a transaction's proofs and delta against the loaded kind table.
+fn verify_tx(tx: &Transaction) -> Result<()> {
+    let kind_table_commitment =
+        *kind_table_hash().ok_or_else(|| anyhow!("kind table not loaded"))?;
+    arm::transaction::verify(tx, kind_table_commitment, JournalEncoding::Risc0Serde)
+        .map_err(|e| anyhow!("verify tx: {e:?}"))
+}
+
+/// Prove a one-action transaction (the shape every single-action fixture uses).
+async fn prove_single_action_transaction(
+    prover: &Prover,
+    compliance_witness: ComplianceWitness,
+    consumed_app_data: AppData,
+) -> Result<Transaction> {
+    let action = prove_action(
+        prover,
+        &compliance_witness,
+        consumed_app_data,
+        AppData::default(),
+    )
+    .await?;
+    assemble_transaction(vec![action], std::slice::from_ref(&compliance_witness.rcv))
+}
+
+/// Shape constants for the transfer-shape fixture, anchored to the real
+/// mainnet AnomaPay shielded transfer captured in May 2026 (commit e17e969,
+/// `anomapay_transfer_0e345103.json`): 3 compliance units and 3,020 wire
+/// bytes. That capture was the suite's heap-exhaustion (OOM) regression;
+/// its proving inputs lived outside this repo and the pipeline that made it
+/// is frozen, so this synthetic reproduction of its shape replaces it.
+const TRANSFER_SHAPE_ACTIONS: usize = 3;
+const CAPTURED_TRANSFER_WIRE_BYTES: usize = 3020;
+/// Per created resource: an encrypted-note-sized resource payload and a
+/// discovery payload, both with deletion criterion "never" so they are
+/// emitted as events at settlement (the indexer-facing path the real
+/// transfer exercised).
+///
+/// Sizing: the adapter's intake ceiling is the TxData account, created in a
+/// single CPI, which Solana caps at 10,240 bytes of allocation — so the
+/// largest settleable transaction is TxData's capacity (10,240 minus its
+/// 89-byte header). The fixture sits just under that ceiling: 512 + 192
+/// words = 2,816 payload bytes per created resource, 8,448 across the
+/// three, for roughly 9.9 KiB of wire. The heap-budget test observes
+/// whether settling a maximum-size transaction exceeds the default 32 KiB
+/// BPF heap (the property the captured transfer's OOM had under v1).
+const TRANSFER_SHAPE_RESOURCE_PAYLOAD_WORDS: usize = 512;
+const TRANSFER_SHAPE_DISCOVERY_PAYLOAD_WORDS: usize = 192;
+
+/// Deterministic payload blob: `words` u32 words derived from the action
+/// index, deletion criterion "never" (emitted as an event at settlement).
+fn transfer_shape_payload_blob(action_idx: usize, words: usize, salt: u32) -> ExpirableBlob {
+    ExpirableBlob {
+        blob: (0..words as u32)
+            .map(|w| (action_idx as u32) << 16 | salt << 8 | (w & 0xff))
+            .collect(),
+        deletion_criterion: solana_pa::state::DELETION_CRITERION_NEVER,
+    }
+}
+
+/// Generate the multi-action transfer-shape transaction: three single-unit
+/// actions (the fixture's nonces 0..=2, distinct rcvs so the delta points
+/// differ, as with production's random rcvs), each created resource
+/// carrying event-emitted payload blobs. No external calls — the real
+/// transfer had none.
+async fn generate_transfer_shape_transaction(
+    prover: &Prover,
+    fixture_name: &str,
+) -> Result<Transaction> {
+    let mut witnesses = Vec::with_capacity(TRANSFER_SHAPE_ACTIONS);
+    for i in 0..TRANSFER_SHAPE_ACTIONS {
+        let (consumed_resource, nf_key, _, created_resource) =
+            deterministic_ephemeral_resource(fixture_name, i as u32)?;
+
+        // Distinct rcv per action: identical rcvs (with identical kinds and
+        // quantities) would collapse the actions' delta points onto one
+        // point, which is not the shape production transactions have.
+        let rcv = Scalar::from((i + 1) as u64);
+        let witness = single_action_compliance_witness(
+            consumed_resource,
+            MerklePath::empty(),
+            nf_key,
+            created_resource,
+            rcv,
+        );
+
+        let created_app_data = AppData {
+            resource_payload: vec![transfer_shape_payload_blob(
+                i,
+                TRANSFER_SHAPE_RESOURCE_PAYLOAD_WORDS,
+                1,
+            )],
+            discovery_payload: vec![transfer_shape_payload_blob(
+                i,
+                TRANSFER_SHAPE_DISCOVERY_PAYLOAD_WORDS,
+                2,
+            )],
+            ..AppData::default()
+        };
+
+        witnesses.push((witness, created_app_data));
+    }
+
+    let actions = run_jobs(
+        prover.scheduling(),
+        witnesses.iter().map(|(witness, created_app_data)| {
+            prove_action(
+                prover,
+                witness,
+                AppData::default(),
+                created_app_data.clone(),
+            )
+        }),
+    )
+    .await?;
+    let rcvs: Vec<Vec<u8>> = witnesses
+        .into_iter()
+        .map(|(witness, _)| witness.rcv)
+        .collect();
+    assemble_transaction(actions, &rcvs)
+}
+
+/// The transfer-shape fixture must be at least as large on the wire as the
+/// captured mainnet transfer it replaces, or the OOM-regression coverage is
+/// weaker than the real transaction it stands in for. Checked against the
+/// final fixture bytes (aggregated, seal-encoded), which is the
+/// representation the capture's 3,020 bytes measured.
+fn check_transfer_shape_wire_size(tx_b64: &str) -> Result<()> {
+    let wire_bytes = BASE64
+        .decode(tx_b64)
+        .context("decode transfer-shape fixture bytes")?
+        .len();
+    if wire_bytes < CAPTURED_TRANSFER_WIRE_BYTES {
+        bail!(
+            "transfer-shape fixture is {wire_bytes} wire bytes, smaller than the \
+             {CAPTURED_TRANSFER_WIRE_BYTES}-byte captured mainnet transfer it replaces — \
+             increase the payload sizes"
+        );
+    }
+    Ok(())
+}
+
+async fn generate_test_transaction_with_external_payload(
+    prover: &Prover,
+    forwarder_mode: ForwarderMode,
+    fixture_name: &str,
+) -> Result<Transaction> {
+    let (consumed_resource, nf_key, _, created_resource) =
+        deterministic_ephemeral_resource(fixture_name, 0)?;
+    // The consumed resource is ephemeral, so it needs no inclusion proof.
+    let compliance_witness = single_action_compliance_witness(
+        consumed_resource,
+        MerklePath::empty(),
+        nf_key,
+        created_resource,
+        Scalar::ONE,
+    );
+
+    // Bind the external payload into the consumed resource's app_data via
+    // the passthrough logic circuit, which commits whatever it is given.
+    let mut consumed_app_data = AppData::default();
+    let external_blob = match &forwarder_mode {
+        ForwarderMode::BlockTimeForwarder {
+            output_mismatch, ..
+        } => block_time_forwarder_external_payload_blob(*output_mismatch),
+        ForwarderMode::TestForwarder(mode) => test_forwarder_payload_blob(*mode),
+    };
+    consumed_app_data.external_payload.push(external_blob);
+    if let ForwarderMode::BlockTimeForwarder {
+        multi_external_call: true,
+        ..
+    } = forwarder_mode
+    {
+        consumed_app_data
+            .external_payload
+            .push(block_time_forwarder_external_payload_blob(false));
+    }
+
+    prove_single_action_transaction(prover, compliance_witness, consumed_app_data).await
+}
+
+/// A one-action transaction that consumes a zero-quantity ephemeral
+/// passthrough resource and creates nothing, so its settlement appends no
+/// commitment. The zero quantity keeps the action balanced with no created
+/// resource to offset it.
+async fn generate_consume_only_transaction(
+    prover: &Prover,
+    fixture_name: &str,
+) -> Result<Transaction> {
+    let (mut consumed, nf_key, _, _) = deterministic_ephemeral_resource(fixture_name, 0)?;
+    consumed.quantity = 0;
+    let consumed_nf = consumed
+        .nullifier(&nf_key)
+        .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
+    let compliance_witness = ComplianceWitness::from_parts(
+        vec![ConsumedResourceWitness {
+            resource: consumed,
+            cm_merkle_path: MerklePath::empty(),
+            nf_key,
+        }],
+        vec![],
+        INITIAL_ROOT,
+        &Scalar::ONE.to_bytes(),
+        kind_table().to_vec(),
+    );
+    let root = ActionTree::new(vec![consumed_nf])
+        .root()
+        .map_err(|e| anyhow!("compute action tree root: {e:?}"))?;
+    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
+    let consumed_instance = LogicInstance {
+        tag: consumed_nf,
+        is_consumed: true,
+        root,
+        app_data: AppData::default(),
+    };
+
+    let (compliance_unit, (proof, instance)) = run_job_pair(
+        prover.scheduling(),
+        async {
+            prove_compliance(prover, &compliance_witness)
+                .await
+                .context("prove compliance")
+        },
+        async {
+            prove_logic(
+                prover,
+                PASSTHROUGH_LOGIC_PK,
+                &passthrough_vk,
+                consumed_instance,
+            )
+            .await
+            .context("prove the consumed resource's logic")
+        },
+    )
+    .await?;
+    let action = arm::action::new(
+        compliance_unit,
+        vec![LogicVerifier {
+            proof,
+            instance,
+            verifying_key: passthrough_vk,
+        }],
+    )
+    .map_err(|e| anyhow!("build the action from its proofs: {e:?}"))?;
+    assemble_transaction(vec![action], std::slice::from_ref(&compliance_witness.rcv))
 }
 
 fn generate_error_variant_fixtures(
     tx: &Transaction,
+    name: &str,
     selector: &str,
     proof_type: &'static str,
     nullifiers_b64: &[String],
@@ -647,14 +1057,15 @@ fn generate_error_variant_fixtures(
         let tx_bytes = bincode::serialize(variant_tx)
             .with_context(|| format!("serialize variant tx for {file_name}"))?;
         let fixture = Fixture {
+            name: name.to_owned(),
             format: FIXTURE_FORMAT,
             aggregation_strategy: "batch",
             aggregation_proof_type: proof_type,
             selector: selector.to_owned(),
-            forwarder_type: None,
             tx_b64: BASE64.encode(tx_bytes),
             tx_tampered_b64: String::new(),
             consumed_nullifiers_b64: nullifiers_b64.to_vec(),
+            created_commitments_b64: Vec::new(),
             historical_roots_b64: Vec::new(),
         };
 
@@ -666,121 +1077,128 @@ fn generate_error_variant_fixtures(
 
     {
         let mut wrong_root = tx.clone();
-        let action = wrong_root
+        let instance = &mut require_aggregation_mut(&mut wrong_root)?.instance;
+        let consumed = instance
             .actions
             .get_mut(0)
-            .ok_or_else(|| anyhow!("tx has no actions"))?;
-        let cu = action
-            .compliance_units
-            .get_mut(0)
-            .ok_or_else(|| anyhow!("tx has no compliance units"))?;
-        mutate_compliance_instance(cu, |instance| {
-            instance.consumed_commitment_tree_root = Digest::from_bytes([1u8; 32]);
-        })?;
+            .and_then(|a| a.consumed_publics.get_mut(0))
+            .ok_or_else(|| anyhow!("aggregation instance has no consumed resources"))?;
+        consumed.commitment_tree_root = Digest::from_bytes([1u8; 32]);
         write_variant("wrong_root.json", &wrong_root)?;
     }
 
     {
         let mut agg_variant = tx.clone();
-        agg_variant.aggregation_proof = None;
+        agg_variant.aggregation = None;
         write_variant("no_aggregation.json", &agg_variant)?;
+    }
 
-        agg_variant.aggregation_proof = Some(vec![0xDE; 64]);
-        write_variant("garbage_proof.json", &agg_variant)?;
+    {
+        let mut garbage = tx.clone();
+        require_aggregation_mut(&mut garbage)?.proof = vec![0xDE; 64];
+        write_variant("garbage_proof.json", &garbage)?;
+    }
+
+    {
+        // A well-formed seal under the fixture's own selector whose proof
+        // point pi_c is corrupted: it decodes and routes to the verifier,
+        // which must reject it. pi_c[0] lies in the claim digest a mock seal
+        // carries, so the mock verifier rejects it as the Groth16 one does.
+        let mut corrupt_seal = tx.clone();
+        let aggregation = require_aggregation_mut(&mut corrupt_seal)?;
+        let mut seal = Seal::try_from_slice(&aggregation.proof)
+            .context("decode Seal from aggregation proof bytes")?;
+        seal.proof.pi_c[0] ^= 0xff;
+        aggregation.proof = borsh::to_vec(&seal).context("serialize corrupted Seal")?;
+        write_variant("corrupt_seal.json", &corrupt_seal)?;
+    }
+
+    {
+        let mut zero_action = tx.clone();
+        require_aggregation_mut(&mut zero_action)?.instance.actions = Vec::new();
+        write_variant("zero_action.json", &zero_action)?;
+    }
+
+    {
+        // The transaction claiming a kind table that is neither the empty
+        // one nor any deployment's: the adapter refuses its commitment before
+        // it verifies the proof.
+        let mut foreign_kind_table = tx.clone();
+        require_aggregation_mut(&mut foreign_kind_table)?
+            .instance
+            .kind_table_commitment = Digest::from_bytes([0x4b; 32]);
+        write_variant("foreign_kind_table.json", &foreign_kind_table)?;
+    }
+
+    {
+        // A WELL-FORMED transaction carrying Delta::Witness instead of the
+        // proof (the actual witness the fixture was signed with). It
+        // deserializes cleanly on-chain, so the PA must reject it with its
+        // own witness check — never by crashing while deserializing the
+        // scalar (the k256 stack-overflow class the v2 core split removed).
+        let mut witness_delta = tx.clone();
+        witness_delta.delta_proof = Delta::Witness(
+            arm::delta_proof::DeltaWitness::from_bytes(&Scalar::ONE.to_bytes())
+                .map_err(|e| anyhow!("build witness-delta variant: {e:?}"))?,
+        );
+        write_variant("witness_delta.json", &witness_delta)?;
     }
 
     Ok(())
 }
 
-fn compliance_instances(tx: &Transaction) -> Result<Vec<ComplianceInstance>> {
-    tx.actions
+/// Every consumed resource of a transaction's aggregation instance, in
+/// action order: the single definition of that traversal.
+fn consumed_publics(tx: &Transaction) -> Result<impl Iterator<Item = &ConsumedResourceAggregated>> {
+    Ok(require_aggregation(tx)?
+        .instance
+        .actions
         .iter()
-        .flat_map(|action| action.compliance_units.iter())
-        .map(|cu| {
-            ComplianceInstance::from_journal(&cu.instance)
-                .context("decode compliance instance from journal bytes")
-        })
-        .collect()
+        .flat_map(|action| &action.consumed_publics))
 }
 
 fn consumed_nullifiers_b64(tx: &Transaction) -> Result<Vec<String>> {
-    Ok(compliance_instances(tx)?
-        .into_iter()
-        .map(|instance| BASE64.encode(instance.consumed_nullifier.as_bytes()))
+    Ok(consumed_publics(tx)?
+        .map(|c| BASE64.encode(c.resource_nullifier.as_bytes()))
+        .collect())
+}
+
+/// The created commitments of an aggregated transaction in instance order:
+/// the leaves its settlement appends.
+fn created_commitments(tx: &Transaction) -> Result<Vec<Digest>> {
+    Ok(require_aggregation(tx)?
+        .instance
+        .actions
+        .iter()
+        .flat_map(|action| &action.created_publics)
+        .map(|c| c.resource_commitment)
+        .collect())
+}
+
+fn created_commitments_b64(tx: &Transaction) -> Result<Vec<String>> {
+    Ok(created_commitments(tx)?
+        .iter()
+        .map(|c| BASE64.encode(c.as_bytes()))
         .collect())
 }
 
 fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
-    let initial = initial_root();
-    let mut roots = BTreeSet::new();
-    for instance in compliance_instances(tx)? {
-        let root = instance.consumed_commitment_tree_root;
-        if root != initial {
-            roots.insert(root.to_bytes());
-        }
-    }
+    let roots: BTreeSet<[u8; 32]> = consumed_publics(tx)?
+        .filter(|c| c.commitment_tree_root != INITIAL_ROOT)
+        .map(|c| <[u8; 32]>::from(c.commitment_tree_root))
+        .collect();
     Ok(roots.into_iter().collect())
-}
-
-#[derive(Serialize)]
-struct ValidatorAccountFixture {
-    pubkey: String,
-    account: ValidatorAccount,
-}
-
-#[derive(Serialize)]
-struct ValidatorAccount {
-    lamports: u64,
-    data: [String; 2],
-    owner: String,
-    executable: bool,
-    #[serde(rename = "rentEpoch")]
-    rent_epoch: u64,
-    space: u64,
-}
-
-fn write_root_marker_accounts(
-    roots: &[[u8; 32]],
-    program_id: [u8; 32],
-    out_dir: &Path,
-) -> Result<()> {
-    fs::create_dir_all(out_dir)
-        .with_context(|| format!("create root marker account dir {}", out_dir.display()))?;
-
-    let pa_program_id = Pubkey::new_from_array(program_id);
-    let (pa_state, _) =
-        Pubkey::find_program_address(&[solana_pa::state::PA_STATE_SEED], &pa_program_id);
-
-    for root in roots {
-        let (marker, _) = solana_pa::root::derive_root_pda(&pa_program_id, &pa_state, root);
-        let account = ValidatorAccountFixture {
-            pubkey: marker.to_string(),
-            account: ValidatorAccount {
-                lamports: 1_000_000,
-                data: [String::new(), "base64".to_string()],
-                owner: pa_program_id.to_string(),
-                executable: false,
-                rent_epoch: u64::MAX,
-                space: 0,
-            },
-        };
-        let out_path = out_dir.join(format!("root-marker-{marker}.json"));
-        fs::write(&out_path, serde_json::to_vec_pretty(&account)?)
-            .with_context(|| format!("write root marker account {}", out_path.display()))?;
-    }
-
-    Ok(())
 }
 
 /// Fields every fixture derives from a seal-encoded transaction: the
 /// serialized transaction and a serialized tampered clone (base64), its
 /// consumed nullifiers and historical roots (base64), and the seal's
-/// selector. Shared by the generate, import, and mockify paths so every
-/// fixture follows the same on-disk convention.
+/// selector.
 struct DerivedFixtureFields {
     tx_b64: String,
     tx_tampered_b64: String,
     consumed_nullifiers_b64: Vec<String>,
+    created_commitments_b64: Vec<String>,
     historical_roots_b64: Vec<String>,
     selector: String,
 }
@@ -790,16 +1208,20 @@ fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
     eprintln!("  {} bytes", tx_bytes.len());
 
     let mut tx_tampered = tx.clone();
-    mutate_created_commitment_keep_structure(&mut tx_tampered)?;
+    mutate_tag_keep_structure(&mut tx_tampered)?;
     let tampered_bytes = bincode::serialize(&tx_tampered).context("serialize tampered tx")?;
 
-    let selector = extract_selector(tx).context("extract selector from proof")?;
+    let selector = format!(
+        "0x{}",
+        hex::encode(seal_selector(tx).context("extract selector from proof")?)
+    );
     eprintln!("  selector: {selector}");
 
     Ok(DerivedFixtureFields {
         tx_b64: BASE64.encode(tx_bytes),
         tx_tampered_b64: BASE64.encode(tampered_bytes),
         consumed_nullifiers_b64: consumed_nullifiers_b64(tx)?,
+        created_commitments_b64: created_commitments_b64(tx)?,
         historical_roots_b64: historical_roots(tx)?
             .iter()
             .map(|root| BASE64.encode(root))
@@ -808,91 +1230,38 @@ fn derive_fixture_fields(tx: &Transaction) -> Result<DerivedFixtureFields> {
     })
 }
 
-fn import_backend_result_fixture(
-    input: &Path,
-    output: &Path,
-    root_account_dir: Option<&Path>,
-    program_id: [u8; 32],
-) -> Result<()> {
-    let raw = fs::read(input).with_context(|| format!("read {}", input.display()))?;
-    let mut tx: Transaction = serde_json::from_slice(&raw)
-        .with_context(|| format!("decode backend Transaction JSON {}", input.display()))?;
-
-    tx.verify_aggregation()
-        .context("verify imported backend aggregation proof")?;
-
-    let roots = historical_roots(&tx).context("extract imported historical roots")?;
-
-    let agg_proof_bytes = tx
-        .aggregation_proof
-        .as_ref()
-        .ok_or_else(|| anyhow!("imported transaction is missing aggregation_proof"))?;
-    tx.aggregation_proof = Some(encode_seal(agg_proof_bytes).context("encode imported seal")?);
-
-    let fields = derive_fixture_fields(&tx).context("derive imported fixture fields")?;
-    let fixture = Fixture {
-        format: FIXTURE_FORMAT,
-        aggregation_strategy: "batch",
-        aggregation_proof_type: "groth16",
-        selector: fields.selector,
-        forwarder_type: Some("anomapay_transfer"),
-        tx_b64: fields.tx_b64,
-        tx_tampered_b64: fields.tx_tampered_b64,
-        consumed_nullifiers_b64: fields.consumed_nullifiers_b64,
-        historical_roots_b64: fields.historical_roots_b64,
-    };
-
-    if let Some(parent) = output.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create dir {parent:?}"))?;
-    }
-    fs::write(output, serde_json::to_vec_pretty(&fixture)?)
-        .with_context(|| format!("write imported fixture {}", output.display()))?;
-
-    if let Some(root_account_dir) = root_account_dir {
-        write_root_marker_accounts(&roots, program_id, root_account_dir)?;
-    }
-
-    Ok(())
-}
-
 /// Seal-encode the aggregation proof, serialize the transaction (and a
 /// tampered clone), extract nullifiers/selector/historical roots, and write
-/// the resulting `Fixture` JSON. Shared by the default `Generate` path and
-/// the `historical-root` path so both fixtures follow the exact same
-/// on-disk convention.
+/// the resulting `Fixture` JSON under `name`.
 fn finalize_and_write_fixture(
     tx: &mut Transaction,
     out_path: &Path,
-    forwarder_type: Option<&'static str>,
+    name: String,
 ) -> Result<Fixture> {
-    // The receipt type decides the seal encoding: dev-mode (Fake) receipts
+    // The client crate's settlement transaction: dev-mode (Fake) receipts
     // become mock seals for the localnet mock verifier, real Groth16
-    // receipts go through arm's canonical seal encoding. The fixture is
-    // labeled accordingly (aggregation_proof_type, selector).
+    // receipts arm's seal. The fixture is labeled by the seal's selector
+    // (aggregation_proof_type, selector).
     let proof_type = timed_phase("encode_seal", || {
-        let agg_proof_bytes = tx.aggregation_proof.take().unwrap();
-        let inner: InnerReceipt =
-            bincode::deserialize(&agg_proof_bytes).context("decode aggregation receipt")?;
-        Ok(if let InnerReceipt::Fake(fake) = inner {
-            eprintln!("  dev-mode receipt -> mock seal (selector 0xffffffff)");
-            tx.aggregation_proof = Some(encode_mock_seal(&fake, tx)?);
+        *tx = settlement_transaction(tx.clone()).context("encode the aggregation seal")?;
+        Ok(if seal_selector(tx)? == MOCK_SELECTOR {
             "mock"
         } else {
-            tx.aggregation_proof = Some(encode_seal(&agg_proof_bytes).context("encode seal")?);
             "groth16"
         })
     })?;
 
     let fields = timed_phase("derive_fixture_fields", || derive_fixture_fields(tx))?;
     let fixture = Fixture {
+        name,
         format: FIXTURE_FORMAT,
         aggregation_strategy: "batch",
         aggregation_proof_type: proof_type,
         selector: fields.selector,
-        forwarder_type,
         tx_b64: fields.tx_b64,
         tx_tampered_b64: fields.tx_tampered_b64,
         consumed_nullifiers_b64: fields.consumed_nullifiers_b64,
+        created_commitments_b64: fields.created_commitments_b64,
         historical_roots_b64: fields.historical_roots_b64,
     };
 
@@ -910,373 +1279,98 @@ fn finalize_and_write_fixture(
     Ok(fixture)
 }
 
-/// Nonce byte reserved for the historical-root committer/consumer pair.
-/// Existing fixtures use 0 (default), 2 (output-mismatch), and 3-7
-/// (`--nonce-seed`, see v2/v3/multi-call/forwarder-fail/forwarder-silent), so
-/// 8 is unused and avoids a `DuplicateNullifier` collision.
-const HISTORICAL_ROOT_NONCE_BYTE: u8 = 8;
-
-/// Read an existing single-action, single-compliance-unit fixture and return
-/// the digest of its created resource's commitment -- the leaf that
-/// settlement inserted into the on-chain commitment tree at index 0. Used to
-/// reconstruct, off-chain, the exact tree state the historical-root
-/// committer transaction lands in as leaf index 1.
-fn read_sole_created_commitment(path: &Path) -> Result<Digest> {
-    let (_, tx) = load_fixture_tx(path)?;
-
-    if tx.actions.len() != 1 || tx.actions[0].compliance_units.len() != 1 {
-        bail!(
-            "{} must have exactly one action with one compliance unit to serve as \
-             the known single-leaf tree base for historical-root fixture generation \
-             (found {} action(s))",
-            path.display(),
-            tx.actions.len()
-        );
-    }
-    let instance = ComplianceInstance::from_journal(&tx.actions[0].compliance_units[0].instance)
-        .context("decode compliance instance")?;
-    Ok(instance.created_commitment)
-}
-
-/// Build the (unproven) compliance witness and matching created resource for
-/// the historical-root *committer* transaction: consumes a fresh ephemeral
-/// resource as usual, but its created resource is genuinely non-ephemeral
-/// (`is_ephemeral: false`), so a later transaction can consume it through a
-/// real Merkle-inclusion proof rather than the ephemeral-root shortcut.
-/// Returns the witness plus the created resource and the nullifier key that
-/// unlocks it, both needed to build the consumer transaction afterward.
-fn build_historical_root_committer_witness() -> Result<(ComplianceWitness, Resource, NullifierKey)>
-{
-    let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
-    let nf_key = NullifierKey::default();
-    let nf_key_cm = nf_key.commit();
-
-    let mut consumed_resource = Resource {
-        logic_ref: passthrough_vk,
-        nk_commitment: nf_key_cm,
-        quantity: 1,
-        is_ephemeral: true,
-        ..Default::default()
-    };
-    consumed_resource.nonce = [[HISTORICAL_ROOT_NONCE_BYTE; 16], [0u8; 16]]
-        .concat()
-        .try_into()
-        .unwrap();
-    let consumed_nf = consumed_resource
-        .nullifier(&nf_key)
-        .context("compute committer consumed nullifier")?;
-
-    let mut created_resource = consumed_resource;
-    created_resource.set_nonce(consumed_nf);
+/// Build the compliance witness for the historical-root *committer*
+/// transaction: consumes a fresh ephemeral resource as usual, but its
+/// created resource is genuinely non-ephemeral (`is_ephemeral: false`), so a
+/// later transaction can consume it through a real Merkle-inclusion proof
+/// rather than the ephemeral-root shortcut. Returns the witness plus the
+/// created resource and the nullifier key that unlocks it, both needed to
+/// build the consumer transaction afterward. The consumed resource carries
+/// the committer fixture's first nonce.
+fn build_historical_root_committer_witness(
+    committer_name: &str,
+) -> Result<(ComplianceWitness, Resource, NullifierKey)> {
+    let (consumed_resource, nf_key, _, mut created_resource) =
+        deterministic_ephemeral_resource(committer_name, 0)?;
     created_resource.is_ephemeral = false;
 
-    let compliance_witness = ComplianceWitness {
+    let compliance_witness = single_action_compliance_witness(
         consumed_resource,
+        MerklePath::empty(),
+        nf_key.clone(),
         created_resource,
-        merkle_path: MerklePath::empty(),
-        rcv: Scalar::ONE.to_bytes().to_vec(),
-        nf_key: nf_key.clone(),
-        ephemeral_root: initial_root(),
-    };
+        Scalar::ONE,
+    );
 
     Ok((compliance_witness, created_resource, nf_key))
 }
 
-/// Build the (unproven) compliance witness and matching created resource for
-/// the historical-root *consumer* transaction: genuinely consumes
-/// `committed_resource` (is_ephemeral: false) via `merkle_path`, which must
-/// reconstruct the real on-chain root the committer's settlement produced.
+/// Build the compliance witness for the historical-root *consumer*
+/// transaction: genuinely consumes `committed_resource` (is_ephemeral:
+/// false) via `merkle_path`, which must reconstruct the real on-chain root
+/// the committer's settlement produced.
 fn build_historical_root_consumer_witness(
     committed_resource: Resource,
     committer_nf_key: NullifierKey,
     merkle_path: MerklePath,
-) -> Result<(ComplianceWitness, Resource)> {
-    let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
+) -> Result<ComplianceWitness> {
+    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
 
     let consumed_nf = committed_resource
         .nullifier(&committer_nf_key)
-        .context("compute consumer's consumed nullifier")?;
+        .map_err(|e| anyhow!("compute consumer's consumed nullifier: {e:?}"))?;
 
     let output_nf_key = NullifierKey::default();
-    let mut created_resource = Resource {
+    let created_resource = Resource {
         logic_ref: passthrough_vk,
         nk_commitment: output_nf_key.commit(),
         quantity: 1,
         is_ephemeral: true,
+        nonce: first_created_nonce(consumed_nf)?,
         ..Default::default()
     };
-    created_resource.set_nonce(consumed_nf);
 
-    // Built literally (like the committer's witness) rather than via arm's
-    // from_resources_with_path, which draws a random rcv and would make
-    // fixture generation nondeterministic.
-    let compliance_witness = ComplianceWitness {
-        consumed_resource: committed_resource,
-        created_resource,
+    Ok(single_action_compliance_witness(
+        committed_resource,
         merkle_path,
-        rcv: Scalar::ONE.to_bytes().to_vec(),
-        nf_key: committer_nf_key,
-        ephemeral_root: initial_root(),
-    };
-
-    Ok((compliance_witness, created_resource))
+        committer_nf_key,
+        created_resource,
+        Scalar::ONE,
+    ))
 }
 
-/// Prove `compliance_witness` and wrap it (plus a matching pair of
-/// passthrough logic proofs) into a balanced, delta-proved `Transaction`.
-/// No external call: this is used only by the historical-root committer and
-/// consumer, which test root retention, not the forwarder CPI path.
-async fn prove_historical_root_transaction(
+/// The historical-root consumer: spends the resource the committer fixture
+/// `committer_name` created, the last of `leaves` (the tree settled before
+/// the consumer), through its Merkle path. The root that path reconstructs is
+/// a real historical root, never the initial one, so settlement must find
+/// its marker.
+async fn generate_historical_root_consumer_transaction(
     prover: &Prover,
-    compliance_witness: ComplianceWitness,
-    created_resource: Resource,
+    committer_name: &str,
+    leaves: &[Digest],
 ) -> Result<Transaction> {
-    let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
-
-    let consumed_cm = compliance_witness.consumed_resource.commitment();
-    let consumed_nf = compliance_witness
-        .consumed_resource
-        .nullifier_from_commitment(&compliance_witness.nf_key, &consumed_cm)
-        .context("compute consumed nullifier")?;
-    let created_cm = created_resource.commitment();
-    let rcv = compliance_witness.rcv.clone();
-
-    let compliance_receipt = prove_compliance(prover, &compliance_witness)
-        .await
-        .context("prove compliance")?;
-
-    let tags = vec![consumed_nf, created_cm];
-    let action_tree = MerkleTree::from(tags);
-    let root = action_tree.root().context("compute action tree root")?;
-
-    let consumed_instance = LogicInstance {
-        tag: consumed_nf,
-        is_consumed: true,
-        root,
-        app_data: AppData::default(),
-    };
-    let created_instance = LogicInstance {
-        tag: created_cm,
-        is_consumed: false,
-        root,
-        app_data: AppData::default(),
-    };
-
-    let (consumed_proof, consumed_journal) = prove_logic(
-        prover,
-        PASSTHROUGH_LOGIC_GUEST_ELF,
-        &passthrough_vk,
-        consumed_instance,
-    )
-    .await
-    .context("prove consumed passthrough logic")?;
-    let (created_proof, created_journal) = prove_logic(
-        prover,
-        PASSTHROUGH_LOGIC_GUEST_ELF,
-        &passthrough_vk,
-        created_instance,
-    )
-    .await
-    .context("prove created passthrough logic")?;
-
-    let consumed_logic = LogicVerifier {
-        proof: Some(consumed_proof),
-        instance: consumed_journal,
-        verifying_key: passthrough_vk,
-    };
-    let created_logic = LogicVerifier {
-        proof: Some(created_proof),
-        instance: created_journal,
-        verifying_key: passthrough_vk,
-    };
-
-    let action = Action::new(
-        vec![compliance_receipt],
-        vec![consumed_logic, created_logic],
-    )
-    .context("build action")?;
-
-    let delta_witness = DeltaWitness::from_bytes_vec(&[rcv]).context("build delta witness")?;
-
-    let tx = Transaction::create(
-        vec![action],
-        Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
-    );
-    let balanced_tx = tx
-        .generate_delta_proof(hash_delta_msg)
-        .context("generate delta proof")?;
-    balanced_tx
-        .clone()
-        .verify(hash_delta_msg)
-        .context("verify tx")?;
-
-    Ok(balanced_tx)
-}
-
-/// Generate the historical-root committer and consumer fixtures.
-///
-/// The committer transaction's created resource is genuinely non-ephemeral,
-/// so it is inserted into the on-chain commitment tree the same way as any
-/// other created resource, but it can later be *consumed* through a real
-/// Merkle-inclusion proof (unlike every other existing fixture's created
-/// resource, which is `is_ephemeral: true` and can therefore only ever be
-/// re-admitted through the unconstrained `ephemeral_root` shortcut).
-///
-/// The committer is expected to settle immediately after `batch_groth16.json`
-/// (leaf index 0) and nothing else, landing at leaf index 1: the on-chain
-/// tree grows from depth 1 to depth 2, and the resulting root is
-/// `hash_two(hash_two(batch_groth16_leaf, committer_leaf), ZEROS[1])`. That
-/// exact computation is replicated here using the PA's own on-chain merkle
-/// constants (`solana_pa::merkle`), and independently cross-checked against
-/// `MerklePathExt::root()` (arm's own hash) before any proof is generated, so
-/// a divergence between the two hash implementations fails loudly instead of
-/// producing a fixture that can never settle.
-async fn generate_historical_root_fixtures(
-    batch_groth16_path: &Path,
-    committer_out: &Path,
-    consumer_out: &Path,
-    prover_choice: Option<ProverChoice>,
-) -> Result<()> {
-    let prover = resolve_prover(prover_choice)?;
-    match &prover {
-        Prover::Local => eprintln!("prover: local (CPU risc0 prover)"),
-        Prover::Queue(_) => eprintln!(
-            "prover: queue ({})",
-            env::var("QUEUE_BASE_URL").unwrap_or_default()
-        ),
-    }
-
-    let batch_groth16_leaf = read_sole_created_commitment(batch_groth16_path)
-        .context("read batch_groth16.json's committed leaf")?;
-
-    eprintln!("phase: generate historical-root committer transaction");
-    let commit_start = Instant::now();
-    let (committer_witness, committed_resource, committer_nf_key) =
-        build_historical_root_committer_witness()?;
-    let committer_created_resource = committer_witness.created_resource;
-    let mut committer_tx =
-        prove_historical_root_transaction(&prover, committer_witness, committer_created_resource)
-            .await
-            .context("build committer transaction")?;
-    eprintln!(
-        "phase done: committer transaction ({})",
-        fmt_duration(commit_start.elapsed())
-    );
-
-    eprintln!("phase: aggregate committer transaction (batch, groth16)");
-    let agg_start = Instant::now();
-    committer_tx = aggregate_tx(&prover, committer_tx)
-        .await
-        .context("aggregate committer tx")?;
-    eprintln!(
-        "phase done: aggregate committer ({})",
-        fmt_duration(agg_start.elapsed())
-    );
-    committer_tx
-        .verify_aggregation()
-        .context("verify committer aggregated proof")?;
-
-    finalize_and_write_fixture(
-        &mut committer_tx,
-        committer_out,
-        Some("historical_root_committer"),
-    )
-    .context("write committer fixture")?;
-
-    // Independently reconstruct the root the on-chain program will produce
-    // once batch_groth16.json (leaf 0) and this committer (leaf 1) have both
-    // settled, using the PA's own on-chain constants/hash directly -- not
-    // ARM's hash -- so the two implementations are cross-checked rather than
-    // assumed equivalent.
+    let (_, committed_resource, committer_nf_key) =
+        build_historical_root_committer_witness(committer_name)?;
     let committed_cm = committed_resource.commitment();
-    let expected_root = solana_pa::merkle::hash_two(
-        &solana_pa::merkle::hash_two(&batch_groth16_leaf, &committed_cm),
-        &solana_pa::merkle::ZEROS[1],
-    );
-
-    let merkle_path = MerklePath::from_path(&[
-        (batch_groth16_leaf, true),
-        (solana_pa::merkle::ZEROS[1], false),
-    ]);
-    let path_root = merkle_path.root(&committed_cm);
-    if path_root != expected_root {
+    let index = leaves.len().checked_sub(1).ok_or_else(|| {
+        anyhow!("the consumer needs the leaves settled before it, the committer's last")
+    })?;
+    if leaves[index] != committed_cm {
         bail!(
-            "historical-root merkle path does not reconstruct the on-chain root: \
-             ARM MerklePath::root()={} vs PA on-chain hash_two()={} -- the two hash \
-             implementations must match before any proof is generated",
-            hex::encode(path_root.to_bytes()),
-            hex::encode(expected_root.to_bytes())
+            "the last leaf must be the committer's created commitment {}, found {}",
+            hex::encode(committed_cm.as_bytes()),
+            hex::encode(leaves[index].as_bytes())
         );
     }
+    let (merkle_path, root) = checked_pa_merkle_path(leaves, index)?;
     eprintln!(
-        "verified: MerklePath::root() matches the PA's own hash_two computation ({})",
-        hex::encode(expected_root.to_bytes())
+        "verified: the committed resource is leaf {index} of {}; root {}",
+        leaves.len(),
+        hex::encode(root.as_bytes())
     );
-
-    eprintln!("phase: generate historical-root consumer transaction");
-    let consume_start = Instant::now();
-    let (consumer_witness, consumer_created_resource) =
-        build_historical_root_consumer_witness(committed_resource, committer_nf_key, merkle_path)
-            .context("build consumer witness")?;
-    let mut consumer_tx =
-        prove_historical_root_transaction(&prover, consumer_witness, consumer_created_resource)
-            .await
-            .context("build consumer transaction")?;
-    eprintln!(
-        "phase done: consumer transaction ({})",
-        fmt_duration(consume_start.elapsed())
-    );
-
-    eprintln!("phase: aggregate consumer transaction (batch, groth16)");
-    let agg_start = Instant::now();
-    consumer_tx = aggregate_tx(&prover, consumer_tx)
-        .await
-        .context("aggregate consumer tx")?;
-    eprintln!(
-        "phase done: aggregate consumer ({})",
-        fmt_duration(agg_start.elapsed())
-    );
-    consumer_tx
-        .verify_aggregation()
-        .context("verify consumer aggregated proof")?;
-
-    // The whole point of this fixture: the consumed root must be a genuine,
-    // non-padding historical root. If it were PADDING_LEAF, is_root_valid
-    // would accept it unconditionally before the marker lookup ever runs,
-    // exactly the coverage gap this fixture exists to close.
-    let consumer_instance = compliance_instances(&consumer_tx)
-        .context("decode consumer compliance instances")?
-        .into_iter()
-        .next()
-        .ok_or_else(|| anyhow!("consumer tx has no compliance instances"))?;
-    if consumer_instance.consumed_commitment_tree_root == initial_root() {
-        bail!(
-            "consumer's consumed_commitment_tree_root is PADDING_LEAF -- this fixture \
-             would prove nothing about historical root retention"
-        );
-    }
-    if consumer_instance.consumed_commitment_tree_root.to_bytes() != expected_root.to_bytes() {
-        bail!(
-            "consumer's consumed_commitment_tree_root ({}) does not match the expected \
-             historical root ({})",
-            hex::encode(consumer_instance.consumed_commitment_tree_root.to_bytes()),
-            hex::encode(expected_root.to_bytes())
-        );
-    }
-    eprintln!(
-        "confirmed: consumer's consumed_commitment_tree_root = {} (non-padding, matches the \
-         committer's post-settlement root)",
-        hex::encode(consumer_instance.consumed_commitment_tree_root.to_bytes())
-    );
-
-    finalize_and_write_fixture(
-        &mut consumer_tx,
-        consumer_out,
-        Some("historical_root_consumer"),
-    )
-    .context("write consumer fixture")?;
-
-    Ok(())
+    let witness =
+        build_historical_root_consumer_witness(committed_resource, committer_nf_key, merkle_path)?;
+    prove_single_action_transaction(prover, witness, AppData::default()).await
 }
 
 fn fmt_duration(d: Duration) -> String {
@@ -1306,11 +1400,8 @@ where
     Ok(result)
 }
 
-/// Read a fixture JSON and bincode-decode its transaction. Returns the raw
-/// JSON map alongside so callers can rewrite fields in place.
-fn load_fixture_tx(
-    path: &Path,
-) -> Result<(serde_json::Map<String, serde_json::Value>, Transaction)> {
+/// Read a fixture JSON and bincode-decode its transaction.
+fn load_fixture_tx(path: &Path) -> Result<Transaction> {
     let raw = fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let map: serde_json::Map<String, serde_json::Value> =
         serde_json::from_str(&raw).context("parsing fixture JSON")?;
@@ -1319,404 +1410,68 @@ fn load_fixture_tx(
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow!("missing tx_b64 field in {}", path.display()))?;
     let tx_bytes = BASE64.decode(tx_b64).context("decoding tx_b64")?;
-    let tx: Transaction =
-        bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")?;
-    Ok((map, tx))
-}
-
-fn strip_calls_from_fixture(input: &Path, output: &Path) -> Result<()> {
-    let (mut fixture, mut tx) = load_fixture_tx(input)?;
-
-    let mut stripped = 0usize;
-    for action in &mut tx.actions {
-        for lvi in &mut action.logic_verifier_inputs {
-            let count = lvi.app_data.external_payload.len();
-            if count > 0 {
-                eprintln!(
-                    "  Stripping {} external_payload blob(s) from LVI tag {:?}",
-                    count,
-                    &lvi.tag.to_bytes()[..4]
-                );
-                lvi.app_data.external_payload.clear();
-                stripped += count;
-            }
-        }
-    }
-    eprintln!("Stripped {} external call(s) total", stripped);
-
-    let modified_bytes = bincode::serialize(&tx).context("re-serializing Transaction")?;
-    fixture.insert("tx_b64".into(), BASE64.encode(&modified_bytes).into());
-    fixture.remove("forwarder_type");
-
-    let output_str = serde_json::to_string_pretty(&fixture).context("serializing fixture")?;
-    fs::write(output, output_str).with_context(|| format!("writing {}", output.display()))?;
-    eprintln!("Wrote fixture to {}", output.display());
-    Ok(())
-}
-
-/// Convert an existing (real-proof) fixture into its mock twin: replace the
-/// aggregation seal with a mock seal derived from the transaction alone and
-/// relabel selector/proof type. Everything else about the transaction stays
-/// byte-identical, which the recomputed nullifier/root cross-checks enforce.
-/// Exists for imported fixtures whose proving inputs are not in this repo
-/// (the dev-mode pipeline cannot regenerate them).
-fn mockify_fixture(input: &Path, output: &Path) -> Result<()> {
-    let (mut fixture, mut tx) = load_fixture_tx(input)?;
-
-    if tx.aggregation_proof.is_none() {
-        bail!("fixture transaction has no aggregation_proof to replace");
-    }
-    tx.aggregation_proof = Some(mock_seal_bytes(mock_claim_digest(&tx)?)?);
-
-    let fields = derive_fixture_fields(&tx)?;
-
-    // The mock twin must change nothing but the seal: the recomputed
-    // derived fields must match the input fixture exactly.
-    let existing_nullifiers: Vec<String> =
-        serde_json::from_value(fixture["consumed_nullifiers_b64"].clone())
-            .context("parsing consumed_nullifiers_b64")?;
-    if fields.consumed_nullifiers_b64 != existing_nullifiers {
-        bail!("recomputed nullifiers differ from the input fixture's — refusing to write");
-    }
-    let existing_roots: Vec<String> = fixture
-        .get("historical_roots_b64")
-        .map(|value| serde_json::from_value(value.clone()))
-        .transpose()
-        .context("parsing historical_roots_b64")?
-        .unwrap_or_default();
-    if fields.historical_roots_b64 != existing_roots {
-        bail!("recomputed historical roots differ from the input fixture's — refusing to write");
-    }
-
-    fixture.insert("tx_b64".into(), fields.tx_b64.into());
-    fixture.insert("tx_tampered_b64".into(), fields.tx_tampered_b64.into());
-    fixture.insert("selector".into(), fields.selector.into());
-    fixture.insert("aggregation_proof_type".into(), "mock".into());
-
-    fs::write(output, serde_json::to_string_pretty(&fixture)?)
-        .with_context(|| format!("writing {}", output.display()))?;
-    eprintln!("wrote mock fixture: {}", output.display());
-    Ok(())
+    bincode::deserialize(&tx_bytes).context("deserializing Transaction from bincode")
 }
 
 fn dump_fixture(input: &Path) -> Result<()> {
-    let (_, tx) = load_fixture_tx(input)?;
+    let tx = load_fixture_tx(input)?;
 
     eprintln!("Transaction:");
-    eprintln!("  actions: {}", tx.actions.len());
-    for (ai, action) in tx.actions.iter().enumerate() {
-        eprintln!("  Action {}:", ai);
-        eprintln!("    compliance_units: {}", action.compliance_units.len());
-        for (ci, cu) in action.compliance_units.iter().enumerate() {
-            let instance = ComplianceInstance::from_journal(&cu.instance)
-                .context("decode compliance instance for dump")?;
-            let nf = instance.consumed_nullifier.to_bytes();
-            let cm = instance.created_commitment.to_bytes();
+    match &tx.aggregation {
+        Some(aggregation) => {
+            let instance = &aggregation.instance;
+            eprintln!("  aggregation instance:");
             eprintln!(
-                "    CU {}: nullifier={:02x}{:02x}..., commitment={:02x}{:02x}...",
-                ci, nf[0], nf[1], cm[0], cm[1]
+                "    compliance_key: {}",
+                hex::encode(&instance.compliance_key.as_bytes()[..4])
             );
+            eprintln!(
+                "    kind_table_commitment: {}",
+                hex::encode(&instance.kind_table_commitment.as_bytes()[..4])
+            );
+            eprintln!("    actions: {}", instance.actions.len());
+            for (ai, action) in instance.actions.iter().enumerate() {
+                eprintln!("    Action {}:", ai);
+                for (ci, consumed) in action.consumed_publics.iter().enumerate() {
+                    let nf = consumed.resource_nullifier.as_bytes();
+                    eprintln!(
+                        "      consumed {}: nullifier={:02x}{:02x}..., external_payload={}",
+                        ci,
+                        nf[0],
+                        nf[1],
+                        consumed.app_data.external_payload.len()
+                    );
+                }
+                for (ci, created) in action.created_publics.iter().enumerate() {
+                    let cm = created.resource_commitment.as_bytes();
+                    eprintln!(
+                        "      created {}: commitment={:02x}{:02x}..., external_payload={}",
+                        ci,
+                        cm[0],
+                        cm[1],
+                        created.app_data.external_payload.len()
+                    );
+                }
+            }
+            eprintln!("  aggregation proof: {} bytes", aggregation.proof.len());
         }
-        eprintln!(
-            "    logic_verifier_inputs: {}",
-            action.logic_verifier_inputs.len()
-        );
-        for (li, lvi) in action.logic_verifier_inputs.iter().enumerate() {
-            let tag = lvi.tag.to_bytes();
-            let ext = lvi.app_data.external_payload.len();
-            eprintln!(
-                "    LVI {}: tag={:02x}{:02x}..., vk={:02x}{:02x}..., external_payload={}",
-                li,
-                tag[0],
-                tag[1],
-                lvi.verifying_key.to_bytes()[0],
-                lvi.verifying_key.to_bytes()[1],
-                ext
-            );
+        None => {
+            let actions = tx.actions.as_deref().unwrap_or(&[]);
+            eprintln!("  actions (unaggregated): {}", actions.len());
+            for (ai, action) in actions.iter().enumerate() {
+                eprintln!(
+                    "  Action {}: logic_verifier_inputs: {}",
+                    ai,
+                    action.logic_verifier_inputs.len()
+                );
+            }
         }
     }
     eprintln!(
         "  delta_proof: {:?}",
         std::mem::discriminant(&tx.delta_proof)
     );
-    eprintln!(
-        "  aggregation_proof: {} bytes",
-        tx.aggregation_proof.as_ref().map_or(0, |p| p.len())
-    );
     Ok(())
-}
-
-fn print_usage() {
-    eprintln!(
-        "Usage:\n  fixture-gen [OPTIONS] [OUT_PATH]         Generate a fixture (default)\n  fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>\n  fixture-gen strip-calls <IN> <OUT>       Remove external calls from a fixture\n  fixture-gen dump <IN>                    Print transaction structure\n  fixture-gen mockify <IN> <OUT>           Convert an existing fixture into its mock twin\n  fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]\n                                            Generate the historical-root committer/consumer fixture pair\n\nGenerate options:\n  --debug-assumptions      Print claim digests for composition debugging\n  --output-mismatch        Wrong expected_output for ExternalCallOutputMismatch test\n  --forwarder-fail         Test-forwarder with failing instruction\n  --forwarder-silent       Test-forwarder with no return data\n  --nonce-seed N           Override deterministic nonce byte for nullifier derivation\n  --multi-external-call    Append a second block-time-forwarder external call blob\n  --error-variants DIR     Write wrong_root/no_aggregation/garbage_proof variants\n  --mock                   Dev-mode executor instead of proving (seconds, no GPU or\n                           podman proving step); emits a mock seal (selector 0xffffffff)\n                           only the localnet mock verifier accepts\n  --prover <local|queue>   Select the prover backend (default: queue if QUEUE_BASE_URL\n                           is set, local otherwise). local runs risc0's CPU prover\n                           in-process; queue dispatches to the AnomaPay workers queue\n                           via QUEUE_BASE_URL/QUEUE_AUTH_TOKEN.\n\nNotes:\n  - At most one of --output-mismatch, --forwarder-fail, --forwarder-silent.\n  - import-backend-result converts backend Transaction JSON into the on-chain TxData bincode fixture.\n  - With --prover queue (or no --prover and QUEUE_BASE_URL set), QUEUE_BASE_URL and\n    QUEUE_AUTH_TOKEN must be set; proofs are dispatched to the workers queue.\n  - With --prover local (or no --prover and QUEUE_BASE_URL unset), proofs run on the\n    local CPU risc0 prover; the Groth16 aggregation step needs a container runtime\n    (podman/docker) for the STARK -> Groth16 wrapper.\n  - --error-variants writes to DIR from the final aggregated tx.\n  - mockify replaces only the aggregation seal of an existing fixture; use it for\n    imported fixtures whose proving inputs are not in this repo.\n"
-    );
-}
-
-fn parse_import_backend_result_args(args: impl Iterator<Item = String>) -> Result<Command> {
-    let mut args = args;
-    let mut root_account_dir: Option<PathBuf> = None;
-    let mut program_id_b58: Option<String> = None;
-    let mut positionals: Vec<PathBuf> = Vec::new();
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--root-account-dir" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--root-account-dir requires a value"))?;
-                root_account_dir = Some(PathBuf::from(value));
-            }
-            "--program-id" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--program-id requires a value"))?;
-                program_id_b58 = Some(value);
-            }
-            _ if arg.starts_with("--root-account-dir=") => {
-                let value = arg
-                    .split_once('=')
-                    .map(|(_, value)| value)
-                    .ok_or_else(|| anyhow!("--root-account-dir requires a value"))?;
-                root_account_dir = Some(PathBuf::from(value));
-            }
-            _ if arg.starts_with("--program-id=") => {
-                let value = arg
-                    .split_once('=')
-                    .map(|(_, value)| value)
-                    .ok_or_else(|| anyhow!("--program-id requires a value"))?;
-                program_id_b58 = Some(value.to_string());
-            }
-            _ if arg.starts_with('-') => {
-                return Err(anyhow!("unknown flag in import-backend-result mode: {arg}"));
-            }
-            _ => positionals.push(PathBuf::from(arg)),
-        }
-    }
-
-    if positionals.len() != 2 {
-        return Err(anyhow!(
-            "Usage: fixture-gen import-backend-result --program-id PROGRAM_ID_B58 [--root-account-dir DIR] <IN_JSON> <OUT_JSON>"
-        ));
-    }
-    let program_id_b58 = program_id_b58
-        .ok_or_else(|| anyhow!("import-backend-result requires --program-id PROGRAM_ID_B58"))?;
-    let program_id = decode_base58_32(&program_id_b58).context("invalid --program-id")?;
-
-    Ok(Command::ImportBackendResult {
-        input: positionals.remove(0),
-        output: positionals.remove(0),
-        root_account_dir,
-        program_id,
-    })
-}
-
-fn parse_historical_root_args(args: impl Iterator<Item = String>) -> Result<Command> {
-    let mut positionals: Vec<PathBuf> = Vec::new();
-    let mut prover_choice: Option<ProverChoice> = None;
-    let mut mock = false;
-    let mut args = args;
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--mock" => {
-                mock = true;
-            }
-            "--prover" => {
-                let value = args
-                    .next()
-                    .ok_or_else(|| anyhow!("--prover requires a value"))?;
-                prover_choice = Some(match value.as_str() {
-                    "local" => ProverChoice::Local,
-                    "queue" => ProverChoice::Queue,
-                    _ => {
-                        return Err(anyhow!(
-                            "invalid --prover value: {value} (expected local or queue)"
-                        ))
-                    }
-                });
-            }
-            _ if arg.starts_with('-') => {
-                return Err(anyhow!("unknown flag in historical-root mode: {arg}"));
-            }
-            _ => positionals.push(PathBuf::from(arg)),
-        }
-    }
-
-    if positionals.len() != 3 {
-        return Err(anyhow!(
-            "Usage: fixture-gen historical-root <batch_groth16.json> <committer_out.json> <consumer_out.json> [--prover local|queue] [--mock]"
-        ));
-    }
-
-    Ok(Command::HistoricalRoot {
-        batch_groth16_path: positionals.remove(0),
-        committer_out: positionals.remove(0),
-        consumer_out: positionals.remove(0),
-        prover_choice,
-        mock,
-    })
-}
-
-fn parse_args() -> Result<Command> {
-    let mut raw_args: Vec<String> = env::args().skip(1).collect();
-
-    // Check for subcommands before flag parsing.
-    if let Some(first) = raw_args.first() {
-        match first.as_str() {
-            "strip-calls" => {
-                if raw_args.len() != 3 {
-                    return Err(anyhow!(
-                        "Usage: fixture-gen strip-calls <input.json> <output.json>"
-                    ));
-                }
-                let output = PathBuf::from(raw_args.remove(2));
-                let input = PathBuf::from(raw_args.remove(1));
-                return Ok(Command::StripCalls { input, output });
-            }
-            "dump" => {
-                if raw_args.len() != 2 {
-                    return Err(anyhow!("Usage: fixture-gen dump <input.json>"));
-                }
-                let input = PathBuf::from(raw_args.remove(1));
-                return Ok(Command::Dump { input });
-            }
-            "import-backend-result" => {
-                let args = raw_args.into_iter().skip(1);
-                return parse_import_backend_result_args(args);
-            }
-            "historical-root" => {
-                let args = raw_args.into_iter().skip(1);
-                return parse_historical_root_args(args);
-            }
-            "mockify" => {
-                if raw_args.len() != 3 {
-                    return Err(anyhow!(
-                        "Usage: fixture-gen mockify <input.json> <output.json>"
-                    ));
-                }
-                let output = PathBuf::from(raw_args.remove(2));
-                let input = PathBuf::from(raw_args.remove(1));
-                return Ok(Command::Mockify { input, output });
-            }
-            _ => {}
-        }
-    }
-
-    let mut args = raw_args.into_iter();
-    let mut debug_assumptions = false;
-    let mut forwarder_mode: Option<ForwarderMode> = None;
-    let mut nonce_seed: Option<u8> = None;
-    let mut multi_external_call = false;
-    let mut error_variants_dir: Option<PathBuf> = None;
-    let mut out_path: Option<PathBuf> = None;
-    let mut prover_choice: Option<ProverChoice> = None;
-    let mut mock = false;
-
-    while let Some(arg) = args.next() {
-        // Handle positional arguments before splitting on '='.
-        if !arg.starts_with('-') {
-            if out_path.is_some() {
-                return Err(anyhow!("unexpected extra argument: {arg}"));
-            }
-            out_path = Some(PathBuf::from(arg));
-            continue;
-        }
-
-        // Support both "--flag value" and "--flag=value" uniformly.
-        let (flag, eq_value) = match arg.find('=') {
-            Some(pos) => (&arg[..pos], Some(&arg[pos + 1..])),
-            None => (arg.as_str(), None),
-        };
-
-        match flag {
-            "-h" | "--help" => {
-                print_usage();
-                std::process::exit(0);
-            }
-            "--debug-assumptions" => {
-                debug_assumptions = true;
-            }
-            "--output-mismatch" | "--forwarder-fail" | "--forwarder-silent" => {
-                if forwarder_mode.is_some() {
-                    return Err(anyhow!(
-                        "at most one of --output-mismatch, --forwarder-fail, --forwarder-silent may be set"
-                    ));
-                }
-                forwarder_mode = Some(match flag {
-                    "--output-mismatch" => ForwarderMode::BlockTimeForwarder {
-                        output_mismatch: true,
-                    },
-                    "--forwarder-fail" => ForwarderMode::TestForwarderFail,
-                    "--forwarder-silent" => ForwarderMode::TestForwarderSilent,
-                    _ => unreachable!(),
-                });
-            }
-            "--nonce-seed" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--nonce-seed requires a value"))?;
-                let parsed = value
-                    .parse::<u8>()
-                    .with_context(|| format!("invalid --nonce-seed value: {value}"))?;
-                nonce_seed = Some(parsed);
-            }
-            "--multi-external-call" => {
-                multi_external_call = true;
-            }
-            "--mock" => {
-                mock = true;
-            }
-            "--error-variants" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--error-variants requires a value"))?;
-                if value.is_empty() {
-                    return Err(anyhow!(
-                        "--error-variants requires a non-empty directory path"
-                    ));
-                }
-                error_variants_dir = Some(PathBuf::from(value));
-            }
-            "--prover" => {
-                let value = eq_value
-                    .map(|s| s.to_string())
-                    .or_else(|| args.next())
-                    .ok_or_else(|| anyhow!("--prover requires a value"))?;
-                prover_choice = Some(match value.as_str() {
-                    "local" => ProverChoice::Local,
-                    "queue" => ProverChoice::Queue,
-                    _ => {
-                        return Err(anyhow!(
-                            "invalid --prover value: {value} (expected local or queue)"
-                        ))
-                    }
-                });
-            }
-            _ => {
-                return Err(anyhow!("unknown flag: {arg}"));
-            }
-        }
-    }
-
-    let out_path = out_path
-        .unwrap_or_else(|| PathBuf::from("solana-pa-prototype/tests/fixtures/batch_groth16.json"));
-
-    let forwarder_mode = forwarder_mode.unwrap_or(ForwarderMode::BlockTimeForwarder {
-        output_mismatch: false,
-    });
-
-    Ok(Command::Generate(GenerateArgs {
-        debug_assumptions,
-        forwarder_mode,
-        nonce_seed,
-        multi_external_call,
-        error_variants_dir,
-        out_path,
-        prover_choice,
-        mock,
-    }))
 }
 
 /// Enter mock mode (no-op unless `mock`): proofs run through the local
@@ -1725,25 +1480,19 @@ fn parse_args() -> Result<Command> {
 /// into a mock seal. RISC0_DEV_MODE is a runtime env var read by risc0 at
 /// proving time; setting it here keeps the flag self-contained instead of
 /// depending on ambient environment state.
-fn apply_mock_mode(
-    mock: bool,
-    prover_choice: Option<ProverChoice>,
-) -> Result<Option<ProverChoice>> {
+fn apply_mock_mode(&ProverArgs { mock, prover }: &ProverArgs) -> Option<ProverChoice> {
     if !mock {
-        return Ok(prover_choice);
-    }
-    if matches!(prover_choice, Some(ProverChoice::Queue)) {
-        bail!("--mock generates dev-mode receipts with the local executor; --prover queue is incompatible");
+        return prover;
     }
     env::set_var("RISC0_DEV_MODE", "1");
     eprintln!("mode: mock (dev-mode receipts -> mock seal, selector 0xffffffff)");
-    Ok(Some(ProverChoice::Local))
+    Some(ProverChoice::Local)
 }
 
 /// Resolve the `Prover` to use: an explicit `--prover` wins; otherwise default
 /// to `Queue` when `QUEUE_BASE_URL` is set (preserving today's behavior when a
 /// queue is configured), `Local` otherwise (so fixture-gen works out of the
-/// box with no queue credentials).
+/// box with no queue credentials). Logs the resolved prover.
 fn resolve_prover(choice: Option<ProverChoice>) -> Result<Prover> {
     let choice = choice.unwrap_or_else(|| {
         if env::var("QUEUE_BASE_URL").is_ok() {
@@ -1752,65 +1501,10 @@ fn resolve_prover(choice: Option<ProverChoice>) -> Result<Prover> {
             ProverChoice::Local
         }
     });
-    match choice {
-        ProverChoice::Local => Ok(Prover::Local),
-        ProverChoice::Queue => Ok(Prover::Queue(build_queue_client()?)),
-    }
-}
-
-#[tokio::main]
-async fn main() -> Result<()> {
-    let GenerateArgs {
-        debug_assumptions,
-        forwarder_mode,
-        nonce_seed,
-        multi_external_call,
-        error_variants_dir,
-        out_path,
-        prover_choice,
-        mock,
-    } = match parse_args()? {
-        Command::StripCalls { input, output } => return strip_calls_from_fixture(&input, &output),
-        Command::Dump { input } => return dump_fixture(&input),
-        Command::ImportBackendResult {
-            input,
-            output,
-            root_account_dir,
-            program_id,
-        } => {
-            return import_backend_result_fixture(
-                &input,
-                &output,
-                root_account_dir.as_deref(),
-                program_id,
-            );
-        }
-        Command::HistoricalRoot {
-            batch_groth16_path,
-            committer_out,
-            consumer_out,
-            prover_choice,
-            mock,
-        } => {
-            let prover_choice = apply_mock_mode(mock, prover_choice)?;
-            return generate_historical_root_fixtures(
-                &batch_groth16_path,
-                &committer_out,
-                &consumer_out,
-                prover_choice,
-            )
-            .await;
-        }
-        Command::Mockify { input, output } => {
-            return mockify_fixture(&input, &output);
-        }
-        Command::Generate(args) => args,
+    let prover = match choice {
+        ProverChoice::Local => Prover::Local,
+        ProverChoice::Queue => Prover::Queue(build_queue_client()?),
     };
-
-    let total_start = Instant::now();
-
-    let prover_choice = apply_mock_mode(mock, prover_choice)?;
-    let prover = resolve_prover(prover_choice)?;
     match &prover {
         Prover::Local => eprintln!("prover: local (CPU risc0 prover)"),
         Prover::Queue(_) => eprintln!(
@@ -1818,42 +1512,149 @@ async fn main() -> Result<()> {
             env::var("QUEUE_BASE_URL").unwrap_or_default()
         ),
     }
+    Ok(prover)
+}
+
+/// Load the kind table every proving and verification path checks witness
+/// kind tables against.
+fn load_kind_table(path: &Path) -> Result<()> {
+    init_kind_table_from_file(path)
+        .map_err(|e| anyhow!("load kind table {}: {e:?}", path.display()))?;
+    eprintln!(
+        "kind table: {} (commitment {})",
+        path.display(),
+        hex::encode(
+            kind_table_hash()
+                .ok_or_else(|| anyhow!("kind table not loaded"))?
+                .as_bytes()
+        )
+    );
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    match Cli::parse().command {
+        Command::Dump { input } => {
+            load_kind_table(Path::new(KIND_TABLE_PATH))?;
+            dump_fixture(&input)
+        }
+        Command::Generate(shape) => generate_fixture(shape).await,
+    }
+}
+
+async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
+    let (ShapeCommand::Batch { generate, .. }
+    | ShapeCommand::OutputMismatch { generate }
+    | ShapeCommand::ForwarderFail { generate }
+    | ShapeCommand::ForwarderSilent { generate }
+    | ShapeCommand::ForwarderEmptyOutput { generate }
+    | ShapeCommand::ConsumeOnly { generate }
+    | ShapeCommand::TransferShape { generate }
+    | ShapeCommand::HistoricalRootCommitter { generate }
+    | ShapeCommand::HistoricalRootConsumer { generate, .. }) = &shape;
+    let GenerateArgs {
+        out_path,
+        salt,
+        prover,
+        error_variants,
+        kind_table,
+        debug_assumptions,
+    } = generate;
+    load_kind_table(kind_table)?;
+    let total_start = Instant::now();
+
+    let prover = resolve_prover(apply_mock_mode(prover))?;
 
     eprintln!("fixture output: {}", out_path.display());
     eprintln!("mode: aggregated (batch Groth16)");
-    if let ForwarderMode::BlockTimeForwarder {
-        output_mismatch: true,
-    } = &forwarder_mode
-    {
-        eprintln!(
-            "mode: output-mismatch (intentionally wrong expected_output for ExternalCallOutputMismatch test)"
-        );
+    match &shape {
+        ShapeCommand::Batch {
+            multi_external_call: true,
+            ..
+        } => eprintln!("mode: multi-external-call (two external payload blobs)"),
+        ShapeCommand::OutputMismatch { .. } => eprintln!(
+            "mode: output-mismatch (intentionally wrong expected_output for ForwarderCallOutputMismatch test)"
+        ),
+        ShapeCommand::ConsumeOnly { .. } => {
+            eprintln!("mode: consume-only (one zero-quantity consumed resource, nothing created)")
+        }
+        ShapeCommand::TransferShape { .. } => eprintln!(
+            "mode: transfer-shape ({TRANSFER_SHAPE_ACTIONS} actions, event-emitted payloads, no external calls)"
+        ),
+        ShapeCommand::HistoricalRootCommitter { .. } => {
+            eprintln!("mode: historical-root committer (creates a non-ephemeral resource)")
+        }
+        ShapeCommand::HistoricalRootConsumer { committer, .. } => eprintln!(
+            "mode: historical-root consumer (spends committer {}'s resource)",
+            committer.display()
+        ),
+        ShapeCommand::Batch { .. }
+        | ShapeCommand::ForwarderFail { .. }
+        | ShapeCommand::ForwarderSilent { .. }
+        | ShapeCommand::ForwarderEmptyOutput { .. } => {}
     }
-    if let Some(seed) = nonce_seed {
-        eprintln!("mode: nonce-seed override ({seed})");
-    }
-    if multi_external_call {
-        eprintln!("mode: multi-external-call (two external payload blobs)");
-    }
-    if let Some(dir) = &error_variants_dir {
+    if let Some(dir) = &error_variants {
         eprintln!("error variants output dir: {}", dir.display());
     }
 
     eprintln!("phase: generate_test_transaction");
     let gen_start = Instant::now();
-    let mut tx = generate_test_transaction_with_external_payload(
-        &prover,
-        forwarder_mode,
-        nonce_seed,
-        multi_external_call,
-    )
-    .await?;
+    let name = fixture_name(out_path, salt.as_deref())?;
+    let name = name.as_str();
+    let single_action = |mode| generate_test_transaction_with_external_payload(&prover, mode, name);
+    let mut tx = match &shape {
+        ShapeCommand::Batch {
+            multi_external_call,
+            ..
+        } => {
+            single_action(ForwarderMode::BlockTimeForwarder {
+                output_mismatch: false,
+                multi_external_call: *multi_external_call,
+            })
+            .await?
+        }
+        ShapeCommand::OutputMismatch { .. } => {
+            single_action(ForwarderMode::BlockTimeForwarder {
+                output_mismatch: true,
+                multi_external_call: false,
+            })
+            .await?
+        }
+        ShapeCommand::ForwarderFail { .. } => {
+            single_action(ForwarderMode::TestForwarder(MODE_FAIL)).await?
+        }
+        ShapeCommand::ForwarderSilent { .. } => {
+            single_action(ForwarderMode::TestForwarder(MODE_SILENT)).await?
+        }
+        ShapeCommand::ForwarderEmptyOutput { .. } => {
+            single_action(ForwarderMode::TestForwarder(MODE_EMPTY)).await?
+        }
+        ShapeCommand::ConsumeOnly { .. } => {
+            generate_consume_only_transaction(&prover, name).await?
+        }
+        ShapeCommand::TransferShape { .. } => {
+            generate_transfer_shape_transaction(&prover, name).await?
+        }
+        ShapeCommand::HistoricalRootCommitter { .. } => {
+            let (witness, _, _) = build_historical_root_committer_witness(name)?;
+            prove_single_action_transaction(&prover, witness, AppData::default()).await?
+        }
+        ShapeCommand::HistoricalRootConsumer { committer, .. } => {
+            generate_historical_root_consumer_transaction(
+                &prover,
+                &read_fixture_name(committer)?,
+                &created_commitments(&load_fixture_tx(committer)?)?,
+            )
+            .await?
+        }
+    };
     eprintln!(
         "phase done: generate_test_transaction ({})",
         fmt_duration(gen_start.elapsed())
     );
 
-    if debug_assumptions {
+    if *debug_assumptions {
         timed_phase(
             "debug_assumptions (claim digests must match env::verify calls)",
             || debug_batch_assumptions(&tx),
@@ -1871,15 +1672,21 @@ async fn main() -> Result<()> {
     );
 
     timed_phase("verify_aggregation", || {
-        tx.verify_aggregation().context("verify aggregated proof")
+        arm::transaction::verify_aggregation(&tx, JournalEncoding::Risc0Serde)
+            .map_err(|e| anyhow!("verify aggregated proof: {e:?}"))
     })?;
 
-    let fixture = finalize_and_write_fixture(&mut tx, &out_path, None)?;
+    let fixture = finalize_and_write_fixture(&mut tx, out_path, name.to_string())?;
 
-    if let Some(dir) = error_variants_dir.as_deref() {
+    if matches!(shape, ShapeCommand::TransferShape { .. }) {
+        check_transfer_shape_wire_size(&fixture.tx_b64)?;
+    }
+
+    if let Some(dir) = error_variants.as_deref() {
         timed_phase("write_error_variants", || {
             generate_error_variant_fixtures(
                 &tx,
+                &fixture.name,
                 &fixture.selector,
                 fixture.aggregation_proof_type,
                 &fixture.consumed_nullifiers_b64,
@@ -1900,10 +1707,7 @@ fn compute_expected_claim_digest(journal: &[u8], vk: &Digest) -> risc0_zkvm::sha
     let words = arm::utils::bytes_to_words(journal);
     let padded_bytes = arm::utils::words_to_bytes(&words);
     let journal_digest = *risc0_zkvm::sha::Impl::hash_bytes(padded_bytes);
-    let expected_claim = ReceiptClaim::ok(
-        core_to_risc0_digest(vk),
-        MaybePruned::Pruned(journal_digest),
-    );
+    let expected_claim = ReceiptClaim::ok(*vk, MaybePruned::Pruned(journal_digest));
     expected_claim.digest()
 }
 
@@ -1918,95 +1722,39 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
     // Print a small header so the important line can be grepped.
     eprintln!("debug_assumptions: start");
 
-    let mut compliance_idx = 0usize;
-    for action in &tx.actions {
-        for cu in &action.compliance_units {
-            let Some(proof_bytes) = &cu.proof else {
-                eprintln!("debug_assumptions: compliance[{compliance_idx}] proof is None");
-                compliance_idx += 1;
-                continue;
-            };
-
-            let inner: InnerReceipt =
-                bincode::deserialize(proof_bytes).context("decode compliance InnerReceipt")?;
-            // Wire instance is already journal bytes — no re-serialization needed.
-            let journal = cu.instance.clone();
-            let receipt = Receipt::new(inner, journal.clone());
-            let receipt_claim_digest = receipt.claim().context("read compliance claim")?.digest();
-
-            let expected_claim_digest =
-                compute_expected_claim_digest(&journal, &arm::constants::COMPLIANCE_VK);
-
-            eprintln!(
-                "debug_assumptions: receipt_claim_digest={} expected_claim_digest={}",
-                receipt_claim_digest, expected_claim_digest
-            );
-
-            compliance_idx += 1;
-        }
+    let compliance_receipts = arm::transaction::get_compliance_inner_receipts(tx)
+        .map_err(|e| anyhow!("decode compliance receipts: {e:?}"))?;
+    let compliance_journals = arm::transaction::get_compliance_instances(tx);
+    for (idx, (inner, journal)) in compliance_receipts
+        .into_iter()
+        .zip(compliance_journals)
+        .enumerate()
+    {
+        let receipt = Receipt::new(inner, journal.clone());
+        let receipt_claim_digest = receipt.claim().context("read compliance claim")?.digest();
+        let expected_claim_digest = compute_expected_claim_digest(&journal, &COMPLIANCE_VK);
+        eprintln!(
+            "debug_assumptions: compliance[{idx}] receipt_claim_digest={} expected_claim_digest={}",
+            receipt_claim_digest, expected_claim_digest
+        );
     }
 
-    let mut logic_idx = 0usize;
-    for (action_idx, action) in tx.actions.iter().enumerate() {
-        // Mirror `arm::action::Action::get_logic_verifiers` to derive the logic instances that the
-        // batch aggregation circuit verifies.
-        let (tags, logics): (Vec<Digest>, Vec<Digest>) =
-            solana_pa::encoding::extract_tags_and_logic_refs(action)
-                .map_err(|e| anyhow!("extract tags / logic refs: {e:?}"))?;
-
-        let action_tree = arm::action_tree::MerkleTree::from(tags.clone());
-        let root = action_tree.root().context("compute action tree root")?;
-
-        if tags.len() != action.logic_verifier_inputs.len() {
-            return Err(anyhow!(
-                "action[{action_idx}] tag count {} != logic_verifier_inputs {}",
-                tags.len(),
-                action.logic_verifier_inputs.len()
-            ));
-        }
-
-        for (index, (tag, expected_vk)) in tags.iter().zip(logics.iter()).enumerate() {
-            let input = action
-                .logic_verifier_inputs
-                .iter()
-                .find(|input| &input.tag == tag)
-                .ok_or_else(|| anyhow!("action[{action_idx}] missing logic input for tag"))?;
-            if input.verifying_key != *expected_vk {
-                return Err(anyhow!(
-                    "action[{action_idx}] verifying key mismatch for tag"
-                ));
-            }
-
-            let is_consumed = index % 2 == 0;
-            let verifier = input
-                .clone()
-                .to_logic_verifier(is_consumed, root)
-                .context("build logic verifier (instance bytes)")?;
-
-            let Some(proof_bytes) = &verifier.proof else {
-                eprintln!("debug_assumptions: logic[{logic_idx}] proof is None");
-                logic_idx += 1;
-                continue;
-            };
-
-            let inner: InnerReceipt =
-                bincode::deserialize(proof_bytes).context("decode logic InnerReceipt")?;
-            let receipt = Receipt::new(inner, verifier.instance.clone());
-            let receipt_claim_digest = receipt.claim().context("read logic claim")?.digest();
-
-            let expected_claim_digest =
-                compute_expected_claim_digest(&verifier.instance, &verifier.verifying_key);
-
-            eprintln!(
-                "debug_assumptions: logic[{logic_idx}] instance_len={} (mod4={}) receipt_claim_digest={} expected_claim_digest={}",
-                verifier.instance.len(),
-                verifier.instance.len() % 4,
-                receipt_claim_digest,
-                expected_claim_digest
-            );
-
-            logic_idx += 1;
-        }
+    let logic_verifiers = arm::transaction::get_logic_verifiers(tx)
+        .map_err(|e| anyhow!("reconstruct logic verifiers: {e:?}"))?;
+    for (idx, verifier) in logic_verifiers.iter().enumerate() {
+        let inner: InnerReceipt =
+            bincode::deserialize(&verifier.proof).context("decode logic InnerReceipt")?;
+        let receipt = Receipt::new(inner, verifier.instance.clone());
+        let receipt_claim_digest = receipt.claim().context("read logic claim")?.digest();
+        let expected_claim_digest =
+            compute_expected_claim_digest(&verifier.instance, &verifier.verifying_key);
+        eprintln!(
+            "debug_assumptions: logic[{idx}] instance_len={} (mod4={}) receipt_claim_digest={} expected_claim_digest={}",
+            verifier.instance.len(),
+            verifier.instance.len() % 4,
+            receipt_claim_digest,
+            expected_claim_digest
+        );
     }
 
     eprintln!("debug_assumptions: end");
@@ -2016,58 +1764,237 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arm::compliance::ComplianceInstance;
     // Tests build transactions via the local arm prover directly (not through
     // `Prover::Local`/`spawn_blocking`) so they stay synchronous. Requires
     // `RISC0_DEV_MODE=1` to run.
 
-    #[test]
-    fn decode_base58_32_system_program() {
-        // Solana system program: "11111111111111111111111111111111" (32 '1's) = 32 zero bytes
-        let result = decode_base58_32("11111111111111111111111111111111").unwrap();
-        assert_eq!(result, [0u8; 32]);
+    fn init_test_kind_table() {
+        init_kind_table_from_file(Path::new(KIND_TABLE_PATH)).expect("load committed kind table");
     }
 
+    fn synthetic_leaves(n: usize) -> Vec<Digest> {
+        (0..n)
+            .map(|i| Digest::from_bytes([i as u8 + 1; 32]))
+            .collect()
+    }
+
+    /// Every leaf's path reconstructs the root the adapter's own
+    /// `append_to_tree` produces, for trees below and above the growth points.
     #[test]
-    fn decode_base58_32_wrong_length_returns_error() {
-        assert!(decode_base58_32("1").is_err());
+    fn pa_merkle_path_reconstructs_the_adapter_root_for_every_leaf() {
+        for n in 1..=12 {
+            let leaves = synthetic_leaves(n);
+            for i in 0..n {
+                checked_pa_merkle_path(&leaves, i)
+                    .unwrap_or_else(|e| panic!("leaf {i} of {n}: {e}"));
+            }
+        }
+    }
+
+    /// A salted run names its fixtures apart from the unsalted set and from
+    /// every other salt, so their resources never share a nullifier.
+    #[test]
+    fn salt_sets_the_fixture_name_apart() {
+        let path = Path::new("tests/fixtures/batch_groth16.json");
+        assert_eq!(fixture_name(path, None).unwrap(), "batch_groth16");
+        assert_eq!(
+            fixture_name(path, Some("run1")).unwrap(),
+            "batch_groth16/run1"
+        );
+        assert_ne!(
+            fixture_nullifier(&fixture_name(path, Some("run1")).unwrap(), 0),
+            fixture_nullifier(&fixture_name(path, Some("run2")).unwrap(), 0),
+            "two salted runs must not share a nullifier"
+        );
+    }
+
+    /// Tracks how many mock proving jobs are in flight, and the most ever.
+    #[derive(Default)]
+    struct InFlight {
+        now: std::cell::Cell<usize>,
+        max: std::cell::Cell<usize>,
+    }
+
+    /// A mock proving job returning `id`: it enters, yields `yields` times
+    /// (so jobs given more yields finish later), and leaves.
+    async fn mock_job(in_flight: &InFlight, id: usize, yields: usize) -> Result<usize> {
+        in_flight.now.set(in_flight.now.get() + 1);
+        in_flight
+            .max
+            .set(in_flight.max.get().max(in_flight.now.get()));
+        for _ in 0..yields {
+            tokio::task::yield_now().await;
+        }
+        in_flight.now.set(in_flight.now.get() - 1);
+        Ok(id)
+    }
+
+    /// Queue jobs are all in flight together, and their results come back in
+    /// input order even though the later jobs finish first.
+    #[tokio::test]
+    async fn concurrent_jobs_overlap_and_keep_input_order() {
+        let in_flight = InFlight::default();
+        let jobs = (0..3).map(|id| mock_job(&in_flight, id, 3 - id));
+        let results = run_jobs(JobScheduling::Concurrent, jobs).await.unwrap();
+        assert_eq!(results, vec![0, 1, 2], "results must keep input order");
+        assert_eq!(in_flight.max.get(), 3, "all three jobs must run at once");
+
+        let in_flight = InFlight::default();
+        let pair = run_job_pair(
+            JobScheduling::Concurrent,
+            mock_job(&in_flight, 0, 2),
+            mock_job(&in_flight, 1, 1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(pair, (0, 1), "the pair must keep input order");
+        assert_eq!(in_flight.max.get(), 2, "both jobs must run at once");
+    }
+
+    /// Local jobs run strictly one at a time, in input order.
+    #[tokio::test]
+    async fn sequential_jobs_never_overlap() {
+        let in_flight = InFlight::default();
+        let jobs = (0..3).map(|id| mock_job(&in_flight, id, 3 - id));
+        let results = run_jobs(JobScheduling::Sequential, jobs).await.unwrap();
+        assert_eq!(results, vec![0, 1, 2], "results must keep input order");
+        assert_eq!(in_flight.max.get(), 1, "only one job may run at a time");
+
+        let in_flight = InFlight::default();
+        let pair = run_job_pair(
+            JobScheduling::Sequential,
+            mock_job(&in_flight, 0, 2),
+            mock_job(&in_flight, 1, 1),
+        )
+        .await
+        .unwrap();
+        assert_eq!(pair, (0, 1), "the pair must keep input order");
+        assert_eq!(in_flight.max.get(), 1, "only one job may run at a time");
+    }
+
+    /// The local prover schedules sequentially: proving in parallel on one
+    /// machine exhausts it.
+    #[test]
+    fn local_prover_schedules_sequentially() {
+        assert!(matches!(
+            Prover::Local.scheduling(),
+            JobScheduling::Sequential
+        ));
+    }
+
+    /// Each fixture shape is its own subcommand, and options that belong to
+    /// another shape are rejected by the parser.
+    #[test]
+    fn subcommands_accept_only_their_own_options() {
+        let parse = |args: &[&str]| {
+            Cli::try_parse_from(std::iter::once("fixture-gen").chain(args.iter().copied()))
+        };
+        assert!(parse(&["batch", "--multi-external-call", "out.json"]).is_ok());
+        assert!(parse(&[
+            "historical-root-consumer",
+            "--committer",
+            "a.json",
+            "out.json"
+        ])
+        .is_ok());
+        for rejected in [
+            &["historical-root-consumer", "out.json"][..],
+            &["forwarder-fail", "--multi-external-call", "out.json"],
+            &["transfer-shape", "--multi-external-call", "out.json"],
+            &["batch", "--committer", "a.json", "out.json"],
+            &["output-mismatch", "--multi-external-call", "out.json"],
+            &[
+                "historical-root-consumer",
+                "--committer",
+                "a.json",
+                "--committer",
+                "b.json",
+                "out.json",
+            ],
+            &[
+                "historical-root-committer",
+                "--multi-external-call",
+                "out.json",
+            ],
+            &["batch", "--mock", "--prover", "queue", "out.json"],
+            &["batch", "--error-variants", "", "out.json"],
+            &[
+                "historical-root",
+                "--kind-table",
+                "t.json",
+                "a.json",
+                "b.json",
+                "c.json",
+            ],
+            &["batch"],
+        ] {
+            assert!(parse(rejected).is_err(), "must reject {rejected:?}");
+        }
+    }
+
+    fn fixture_nullifier(fixture_name: &str, index: u32) -> Digest {
+        let (_, _, nullifier, _) = deterministic_ephemeral_resource(fixture_name, index).unwrap();
+        nullifier
+    }
+
+    /// A fixture's nullifiers are a function of its name alone: the same name
+    /// gives the same nullifier on every run, and different names (or
+    /// different resource indices within one fixture) give different ones.
+    #[test]
+    fn fixture_nullifiers_derive_from_the_fixture_name() {
+        assert_eq!(
+            fixture_nullifier("batch_groth16", 0),
+            fixture_nullifier("batch_groth16", 0),
+            "the same fixture name must derive the same nullifier"
+        );
+        assert_ne!(
+            fixture_nullifier("batch_a", 0),
+            fixture_nullifier("batch_b", 0),
+            "differently named fixtures must not share a nullifier"
+        );
+        assert_ne!(
+            fixture_nullifier("batch_groth16_transfer_shape", 0),
+            fixture_nullifier("batch_groth16_transfer_shape", 1),
+            "a fixture's resources must not share a nullifier"
+        );
+    }
+
+    /// `ComplianceUnit::instance` is journal bytes on the wire — parse,
+    /// mutate (via `f`), and re-encode in one place.
+    fn mutate_compliance_instance<R>(
+        cu: &mut ComplianceUnit,
+        f: impl FnOnce(&mut ComplianceInstance) -> R,
+    ) -> Result<R> {
+        let mut inst: ComplianceInstance =
+            arm::proving_system::journal_to_instance(&cu.instance)
+                .map_err(|e| anyhow!("parse compliance instance: {e:?}"))?;
+        let r = f(&mut inst);
+        cu.instance = arm::proving_system::instance_to_journal(&inst)
+            .map_err(|e| anyhow!("re-encode mutated compliance instance: {e:?}"))?;
+        Ok(r)
     }
 
     /// Helper: build a minimal valid transaction with a real delta proof.
     /// Uses the passthrough logic circuit and ephemeral resources.
-    fn build_valid_tx_with_delta_proof(nonce_byte: u8) -> Transaction {
-        let nf_key = NullifierKey::default();
-        let nf_key_cm = nf_key.commit();
-        let passthrough_vk = Digest(PASSTHROUGH_LOGIC_GUEST_ID);
+    fn build_valid_tx_with_delta_proof(fixture_name: &str) -> Transaction {
+        init_test_kind_table();
+        let (consumed, nf_key, consumed_nf, created) =
+            deterministic_ephemeral_resource(fixture_name, 0).unwrap();
+        let passthrough_vk = PASSTHROUGH_LOGIC_VK;
+        let created_cm = created.commitment();
 
-        let mut consumed = Resource {
-            logic_ref: passthrough_vk,
-            nk_commitment: nf_key_cm,
-            quantity: 1,
-            is_ephemeral: true,
-            ..Default::default()
-        };
-        consumed.nonce = [[nonce_byte; 16], [0u8; 16]].concat().try_into().unwrap();
-        let consumed_nf = consumed.nullifier(&nf_key).unwrap();
-
-        let mut created = consumed;
-        created.set_nonce(consumed_nf);
-
-        let witness = ComplianceWitness {
-            consumed_resource: consumed,
-            created_resource: created,
-            merkle_path: MerklePath::empty(),
-            rcv: Scalar::ONE.to_bytes().to_vec(),
+        let witness = single_action_compliance_witness(
+            consumed,
+            MerklePath::empty(),
             nf_key,
-            ephemeral_root: initial_root(),
-        };
-        let cu = create_compliance_unit(&witness, LocalProofType::Succinct).unwrap();
+            created,
+            Scalar::ONE,
+        );
+        let cu = arm::compliance_unit::create(&witness, LocalProofType::Succinct).unwrap();
 
-        let inst = ComplianceInstance::from_journal(&cu.instance).unwrap();
-        let consumed_nf = inst.consumed_nullifier;
-        let created_cm = inst.created_commitment;
         let tags = vec![consumed_nf, created_cm];
-        let tree = MerkleTree::from(tags);
-        let root = tree.root().unwrap();
+        let root = ActionTree::new(tags).root().unwrap();
 
         let consumed_instance = LogicInstance {
             tag: consumed_nf,
@@ -2083,79 +2010,82 @@ mod tests {
         };
 
         let (cp, cj) = arm::proving_system::prove(
-            PASSTHROUGH_LOGIC_GUEST_ELF,
+            PASSTHROUGH_LOGIC_PK,
             &consumed_instance,
             LocalProofType::Succinct,
         )
         .unwrap();
         let (crp, crj) = arm::proving_system::prove(
-            PASSTHROUGH_LOGIC_GUEST_ELF,
+            PASSTHROUGH_LOGIC_PK,
             &created_instance,
             LocalProofType::Succinct,
         )
         .unwrap();
 
         let consumed_logic = LogicVerifier {
-            proof: Some(cp),
+            proof: cp,
             instance: cj,
             verifying_key: passthrough_vk,
         };
         let created_logic = LogicVerifier {
-            proof: Some(crp),
+            proof: crp,
             instance: crj,
             verifying_key: passthrough_vk,
         };
 
-        let action = Action::new(vec![cu], vec![consumed_logic, created_logic]).unwrap();
+        let action = arm::action::new(cu, vec![consumed_logic, created_logic]).unwrap();
 
-        let delta_witness = DeltaWitness::from_bytes_vec(&[witness.rcv]).unwrap();
-        let tx = Transaction::create(
-            vec![action],
-            Delta::Witness(CoreDeltaWitness(delta_witness.to_bytes())),
-        );
-        tx.generate_delta_proof(hash_delta_msg).unwrap()
+        let delta_witness =
+            arm::delta_proof::from_bytes_vec(std::slice::from_ref(&witness.rcv)).unwrap();
+        let tx = Transaction::create(vec![action], Delta::Witness(delta_witness));
+        arm::transaction::generate_delta_proof(tx).unwrap()
     }
 
     /// A valid transaction must pass delta verification via the k256 path.
     #[test]
     fn valid_tx_passes_delta_verification() {
-        let tx = build_valid_tx_with_delta_proof(100);
-        tx.verify(hash_delta_msg).unwrap();
+        let tx = build_valid_tx_with_delta_proof("valid_tx");
+        verify_tx(&tx).unwrap();
     }
 
     /// Swapping the nullifier and commitment tags in the delta message
     /// must invalidate the delta proof signature.
     #[test]
     fn swapped_tags_invalidate_delta_proof() {
-        let tx = build_valid_tx_with_delta_proof(101);
-        tx.clone().verify(hash_delta_msg).unwrap();
+        let tx = build_valid_tx_with_delta_proof("swapped_tags");
+        verify_tx(&tx).unwrap();
 
-        // Swap nullifier and commitment in the compliance instance.
-        // This changes the delta message (which is [nf, cm] → [cm, nf]),
+        // Swap nullifier and commitment in the compliance instance. This
+        // changes the action tree root and therefore the delta message,
         // invalidating the signature over the original message hash.
         let mut swapped = tx.clone();
-        mutate_compliance_instance(&mut swapped.actions[0].compliance_units[0], |inst| {
-            std::mem::swap(&mut inst.consumed_nullifier, &mut inst.created_commitment);
+        let actions = swapped.actions.as_mut().unwrap();
+        mutate_compliance_instance(&mut actions[0].compliance_unit, |inst| {
+            std::mem::swap(
+                &mut inst.consumed_publics[0].resource_nullifier,
+                &mut inst.created_publics[0].resource_commitment,
+            );
         })
         .unwrap();
 
-        let result = swapped.verify(hash_delta_msg);
+        let result = verify_tx(&swapped);
         assert!(result.is_err(), "swapped nf/cm must invalidate delta proof");
     }
 
     /// Mutating a single delta coordinate must invalidate the delta proof.
     #[test]
     fn mutated_delta_x_invalidates_proof() {
-        let mut tx = build_valid_tx_with_delta_proof(102);
-        tx.clone().verify(hash_delta_msg).unwrap();
+        let mut tx = build_valid_tx_with_delta_proof("mutated_delta_x");
+        verify_tx(&tx).unwrap();
 
         // Flip a word in delta_x
-        mutate_compliance_instance(&mut tx.actions[0].compliance_units[0], |inst| {
+        let actions = tx.actions.as_mut().unwrap();
+        mutate_compliance_instance(&mut actions[0].compliance_unit, |inst| {
             inst.delta_x[0] ^= 0xFFFFFFFF;
         })
         .unwrap();
 
-        let result = tx.verify(hash_delta_msg);
+        let result = verify_tx(&tx);
         assert!(
             result.is_err(),
             "mutated delta_x must invalidate delta proof"
@@ -2165,16 +2095,17 @@ mod tests {
     /// Mutating a nullifier must invalidate the delta proof (changes the message hash).
     #[test]
     fn mutated_nullifier_invalidates_delta_proof() {
-        let mut tx = build_valid_tx_with_delta_proof(103);
-        tx.clone().verify(hash_delta_msg).unwrap();
+        let mut tx = build_valid_tx_with_delta_proof("mutated_nullifier");
+        verify_tx(&tx).unwrap();
 
         // Corrupt the nullifier
-        mutate_compliance_instance(&mut tx.actions[0].compliance_units[0], |inst| {
-            inst.consumed_nullifier = Digest::from_bytes([0xFF; 32]);
+        let actions = tx.actions.as_mut().unwrap();
+        mutate_compliance_instance(&mut actions[0].compliance_unit, |inst| {
+            inst.consumed_publics[0].resource_nullifier = Digest::from_bytes([0xFF; 32]);
         })
         .unwrap();
 
-        let result = tx.verify(hash_delta_msg);
+        let result = verify_tx(&tx);
         assert!(
             result.is_err(),
             "mutated nullifier must invalidate delta proof"

@@ -1,0 +1,13 @@
+{
+  "name": "batch_groth16_rejected",
+  "format": "arm-risc0:Transaction(bincode)",
+  "aggregation_strategy": "batch",
+  "aggregation_proof_type": "groth16",
+  "selector": "0x73c457ba",
+  "tx_b64": "AAAAAAAgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAEEAQAAAAAAAHPEV7out4f77ylwUpkrIn/F5PoKcgYTCh8Ozl/jynd7G52hwCWJyJgHHz1eJs45g6jWx/z7WEa4cGYH+7A+lr9olA+NKIp4QFcquhuejVpsDz/FIPEJxhVSEttfNQHhyrgS728prIypn7C2njt29oZwEMa91DkQLcUf39R6R6CJVrdOVyPWPmx/nEkZOvB5iRqQuYSlsUY0+ZSHdpGlOnVrj1egAg1wFWpQjEvTUWf0pNeEjRr0R6xw/D0yNmVaus5jZbMPC0CS2XJGjBm0pVGygGtj02pTelcmPRwQCbjgtRnpoQiiZkOTlScr+luQb76mvLS4bUUuaEtdBZMdHaUPZuEAQGxg+HpbtUKn/HMBulwB/ncktbPJ4zUhTQkqELQF9aDjsMRCmPwcFJr79MiZb7kkJ65B5GSbk0yklZkbeFK4VQEAAAAAAAAAAQAAAAAAAACOzuBvN0I7KWFBUdiJrnasAunNaCTqlcfGqWwGqQR9cn4LNQHnGiz0AuawZISxxH742Y7OWnS5p0pyqe2JYHfuzB0vg4RF23rsQx357oqHH0Dnql4GT8BWYz74xg+rewYAAAAAAAAAAAAAAAAAAAAAAQAAAAAAAAAQAAAAAAAAACknv5Zu5k1JmYvmcnEdpB0LyVDvelUNPdXV90b+OM5OCAAAAAAAAAD//////////wEAAAAAAAAAAAAAAAACAAAAAAAAAAAAAAAAAAABAAAAAAAAAJJ0Tog1mb8GoRy5QV4lHJlROEI1e+wzkebNNOlgLK2vfgs1AecaLPQC5rBkhLHEfvjZjs5adLmnSnKp7Ylgd+4AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHm+Zn753LusVaBilc6HCwcCm/zbLc4o2VnygVsW+BeYSDradyajxGVdpPv8DhEIqP0XtEimhVQZnEfQj/sQ1LiCw6ByI4RI6M2mwZgimAMmIDY326wumq8Or1najoUixw==",
+  "tx_tampered_b64": "",
+  "consumed_nullifiers_b64": [
+    "js7gbzdCOylhQVHYia52rALpzWgk6pXHxqlsBqkEfXI="
+  ],
+  "created_commitments_b64": []
+}

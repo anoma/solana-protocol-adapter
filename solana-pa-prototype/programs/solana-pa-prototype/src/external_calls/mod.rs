@@ -5,17 +5,15 @@
 mod cpi;
 
 #[cfg(not(test))]
-pub use cpi::execute_external_calls;
+pub use cpi::ForwarderSegments;
 
 use crate::error::PAError;
 use crate::types::SolanaExternalCall;
-use anchor_lang::prelude::AccountInfo;
+use anchor_lang::prelude::{AccountInfo, Pubkey};
 use anchor_lang::solana_program::instruction::AccountMeta;
-use arm_core::logic_instance::ExpirableBlob;
-use arm_core::transaction::Transaction;
+use arm_core::logic_instance::{AppData, ExpirableBlob};
 use arm_core::utils::bytes_to_words;
 use arm_core::utils::words_to_bytes;
-use arm_core::Digest;
 
 /// Encode a SolanaExternalCall into an ExpirableBlob (word-array format).
 /// The on-chain program only decodes; this is used by tests and fixture-gen.
@@ -31,59 +29,47 @@ pub fn encode_external_call(call: &SolanaExternalCall) -> ExpirableBlob {
 /// Decode an external call from its word-array blob.
 pub fn decode_external_call(blob: &ExpirableBlob) -> Result<SolanaExternalCall, PAError> {
     let bytes = words_to_bytes(&blob.blob);
-    let call: SolanaExternalCall =
-        bincode::deserialize(bytes).map_err(|_| PAError::InvalidExternalCallBlob)?;
+    bincode::deserialize(bytes).map_err(|_| PAError::InvalidExternalCallBlob)
+}
 
-    // Solana reports no return-data record for both `set_return_data(&[])` and a
-    // silent return, so an authorized empty output is unrepresentable. Reject it
-    // here rather than failing later as an output mismatch. Absence of return
-    // data must stay an error, never another spelling of empty.
-    if call.expected_output.is_empty() {
-        return Err(PAError::EmptyExpectedOutput);
+/// The output of a `forward_call` to `forwarder`: the `Vec<u8>` it returned,
+/// Borsh-encoded as Anchor encodes a returned value, as pa-evm's forwarder
+/// call returns `bytes`. The length prefix makes an empty output four bytes
+/// of return data, so it differs from no return data, which the runtime
+/// reports for a forwarder that set none; that, return data from another
+/// program, or anything but one encoded `Vec<u8>` is a mismatch.
+pub fn decode_forwarder_output(
+    return_data: Option<(Pubkey, Vec<u8>)>,
+    forwarder: &Pubkey,
+) -> Result<Vec<u8>, PAError> {
+    let (program_id, mut data) = return_data.ok_or(PAError::ForwarderCallOutputMismatch)?;
+    let encodes_one_vec = data
+        .split_first_chunk::<4>()
+        .is_some_and(|(len, output)| u32::from_le_bytes(*len) as usize == output.len());
+    if program_id != *forwarder || !encodes_one_vec {
+        return Err(PAError::ForwarderCallOutputMismatch);
     }
-
-    Ok(call)
+    // Decoded in place: the settlement's heap never frees, so a decoded copy
+    // would stay allocated.
+    data.drain(..4);
+    Ok(data)
 }
 
 /// Verify that actual output matches expected output.
 pub fn verify_output(expected: &[u8], actual: &[u8]) -> Result<(), PAError> {
     if expected != actual {
-        return Err(PAError::ExternalCallOutputMismatch);
+        return Err(PAError::ForwarderCallOutputMismatch);
     }
     Ok(())
 }
 
-/// Extract external calls from a transaction in compliance-tag order.
-///
-/// The aggregation journal is built by walking each action's compliance units and
-/// looking up the matching logic input by tag (`encoding.rs`). Execution order
-/// must come from that same traversal, otherwise the serialized order of
-/// `logic_verifier_inputs` becomes a second authority over effects that the proof
-/// does not bind.
-pub fn extract_external_calls(
-    tx: &Transaction,
-) -> Result<Vec<(Digest, SolanaExternalCall)>, PAError> {
-    let total: usize = tx
-        .actions
+/// A resource's external calls, decoded in the order its app data lists them.
+pub fn decode_external_calls(app_data: &AppData) -> Result<Vec<SolanaExternalCall>, PAError> {
+    app_data
+        .external_payload
         .iter()
-        .flat_map(|a| &a.logic_verifier_inputs)
-        .map(|lvi| lvi.app_data.external_payload.len())
-        .sum();
-    let mut calls = Vec::with_capacity(total);
-
-    for action in &tx.actions {
-        crate::encoding::visit_logic_inputs_in_tag_order(
-            action,
-            |_idx, _action_tree_root, lvi| {
-                for blob in &lvi.app_data.external_payload {
-                    calls.push((lvi.verifying_key, decode_external_call(blob)?));
-                }
-                Ok(())
-            },
-        )?;
-    }
-
-    Ok(calls)
+        .map(decode_external_call)
+        .collect()
 }
 
 /// Build the account metas for a forwarder CPI from its segment.
@@ -107,7 +93,7 @@ pub fn build_account_metas(segment: &[AccountInfo<'_>]) -> Vec<AccountMeta> {
         .collect()
 }
 
-/// Anchor discriminator for BlockTimeForwarder::forward_call (sha256("global:forward_call")[..8])
+/// Anchor discriminator of every forwarder's `forward_call` (sha256("global:forward_call")[..8])
 pub const FORWARD_CALL_DISCRIMINATOR: [u8; 8] = hex_literal::hex!("9faae00afd696cde");
 
 /// Build instruction data for a forwarder's forward_call instruction.

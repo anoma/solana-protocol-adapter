@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, anthony/arm-v2-port]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -11,12 +11,13 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  RUST_VERSION: "1.93.0"
-  # Must match the Solana pinned by flake.nix (solanaVersion) — the SBF build
-  # runs under platform-tools' own cargo, and an older one cannot parse
-  # edition-2024 manifests in the dependency graph.
-  SOLANA_VERSION: "3.1.14"
-  ANCHOR_VERSION: "0.31.1"
+  # Must match flake.nix's rustToolchain.
+  RUST_VERSION: "1.98.1"
+  # Must match flake.nix's solanaVersion.
+  SOLANA_VERSION: "4.3.0"
+  # The Anchor commit solana-pa-prototype/Cargo.toml pins (see there); no
+  # release binary exists for it, so the CLI is built from source.
+  ANCHOR_REV: "2c9747a2d31bd5e94745cee6c083577f3e6675c0"
 
 jobs:
   # Rust format check
@@ -24,7 +25,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -43,7 +44,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -58,31 +59,19 @@ jobs:
         with:
           workspaces: solana-pa-prototype
 
+      # Lints the workspace, then each program with dev features (e.g. the
+      # PA's dev-teardown instructions) again with them enabled, since
+      # production builds never compile that gated code.
       - name: Run clippy
         working-directory: ./solana-pa-prototype
-        run: |
-          cargo clippy --workspace --all-targets -- \
-            -D warnings \
-            -A unexpected_cfgs \
-            -A deprecated
-
-      # close_markers_batch and its account struct compile only under
-      # dev-teardown, which production builds do not enable. Without this the
-      # gated code is never linted at all.
-      - name: Run clippy (dev-teardown feature)
-        working-directory: ./solana-pa-prototype
-        run: |
-          cargo clippy -p protocol-adapter --features dev-teardown --all-targets -- \
-            -D warnings \
-            -A unexpected_cfgs \
-            -A deprecated
+        run: ./scripts/ops.sh clippy
 
   # Rust unit tests
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -98,7 +87,64 @@ jobs:
 
       - name: Run tests
         working-directory: ./solana-pa-prototype
-        run: cargo test -p protocol-adapter -p block-time-forwarder
+        run: ./scripts/ops.sh unit-test
+
+  # The integration-test harness (crates/integration-test, its own
+  # workspace): its format check, clippy and local tests on surfpool. Its e2e
+  # cases need devnet and a prover (ops.sh harness-test --e2e).
+  harness:
+    name: Harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: rustfmt, clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates/integration-test
+
+      - name: Check formatting and run clippy
+        working-directory: ./solana-pa-prototype
+        run: ./scripts/ops.sh harness-lint
+
+      - name: Run tests
+        working-directory: ./solana-pa-prototype
+        run: ./scripts/ops.sh harness-test
+
+  # The integration-test harness ships the programs it loads; each must be
+  # the deterministic build of this commit.
+  harness-programs:
+    name: Harness Programs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      # Caches ~/.cargo/bin, so solana-verify is built once per version.
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install solana-verify
+        run: cargo install solana-verify --version 0.5.2 --locked
+
+      - name: Check the committed binaries are the deterministic builds
+        working-directory: ./solana-pa-prototype
+        run: ./scripts/ops.sh harness-programs --check
 
   # Build the programs once; the per-mode test jobs below reuse the
   # artifacts instead of repeating the SBF build.
@@ -107,7 +153,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
@@ -125,9 +171,9 @@ jobs:
           workspaces: solana-pa-prototype
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install Yarn
         run: npm install -g yarn
@@ -141,21 +187,22 @@ jobs:
         run: solana-keygen new --no-bip39-passphrase
 
       - name: Install Anchor CLI
-        run: |
-          curl -fsSL -o anchor "https://github.com/coral-xyz/anchor/releases/download/v${{ env.ANCHOR_VERSION }}/anchor-${{ env.ANCHOR_VERSION }}-x86_64-unknown-linux-gnu"
-          chmod +x anchor
-          sudo mv anchor /usr/local/bin/
+        run: cargo install --git https://github.com/otter-sec/anchor --rev "${{ env.ANCHOR_REV }}" --locked anchor-cli
 
       - name: Install node dependencies
         working-directory: ./solana-pa-prototype
-        run: yarn install --frozen-lockfile || yarn install
+        run: yarn install --frozen-lockfile
+
+      - name: Check TypeScript formatting
+        working-directory: ./solana-pa-prototype
+        run: yarn run lint
 
       - name: Build programs
         working-directory: ./solana-pa-prototype
         run: ./scripts/anchor-test.sh build
 
       - name: Upload program artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: anchor-programs
           if-no-files-found: error
@@ -178,14 +225,14 @@ jobs:
       matrix:
         mode: [real, mock]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 24
 
       - name: Install Yarn
         run: npm install -g yarn
@@ -198,18 +245,12 @@ jobs:
       - name: Create Solana keypair
         run: solana-keygen new --no-bip39-passphrase
 
-      - name: Install Anchor CLI
-        run: |
-          curl -fsSL -o anchor "https://github.com/coral-xyz/anchor/releases/download/v${{ env.ANCHOR_VERSION }}/anchor-${{ env.ANCHOR_VERSION }}-x86_64-unknown-linux-gnu"
-          chmod +x anchor
-          sudo mv anchor /usr/local/bin/
-
       - name: Install node dependencies
         working-directory: ./solana-pa-prototype
-        run: yarn install --frozen-lockfile || yarn install
+        run: yarn install --frozen-lockfile
 
       - name: Download program artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: anchor-programs
           path: solana-pa-prototype/target

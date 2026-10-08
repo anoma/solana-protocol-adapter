@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Cluster operations for the PA programs: build, deploy, initialize, status,
-# emergency stop, teardown. One code path for every cluster — the target
+# pause/unpause. One code path for every cluster — the target
 # cluster is a flag, never baked into a script. All per-cluster differences
 # (RPC URL, explorer links, wallet default, dev-teardown policy) are data set
 # in resolve_cluster.
@@ -15,81 +15,125 @@ PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=validator-deploy.sh
 source "${SCRIPT_DIR}/validator-deploy.sh"
 
-# Deployable program targets: shorthand → binary name under target/deploy/.
-# test-forwarder and mock-verifier are deliberately absent: they exist only
-# for the local integration suite and are never deployed to a real cluster.
-declare -A PROGRAMS=(
-  [pa]="protocol_adapter"
-  [btf]="block_time_forwarder"
-)
-
-# Source file per target. Directory names are historical and deliberately do
-# not track the crate/binary name (the PA crate is protocol-adapter, its
-# directory solana-pa-prototype), so this cannot be derived by munging.
-declare -A PROGRAM_LIBRS=(
-  [pa]="programs/solana-pa-prototype/src/lib.rs"
-  [btf]="programs/block-time-forwarder/src/lib.rs"
-)
-
 usage() {
   cat <<USAGE
 Usage: ops.sh <command> [target] --cluster <localnet|devnet|mainnet> [flags]
 
 Commands:
-  deploy [pa|btf|all]    First-time deploy (default target: all). Deploys the
-                         production build; initializes the PA if deployed.
-  upgrade [pa|btf|all]   Rebuild + deploy over existing programs
-  teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent. Closed
-                         program IDs are burned forever.
-  close-pdas             Close all PA marker PDAs, reclaim rent. Requires the
-                         deployed PA to be a --dev-teardown build (the
-                         instruction is absent from production builds).
+  deploy [${DEPLOY_TARGETS}|all]
+                         First-time deploy (default target: all). Deploys the
+                         production build; on localnet the PA is initialized
+                         at once, while on devnet/mainnet each program's IDL
+                         is published and init is left for after the
+                         metadata accounts are given to the owner.
+  upgrade [${DEPLOY_TARGETS}|all]
+                         Rebuild + upgrade existing programs in place: through
+                         their own upgrade (owner wallet) once their upgrade
+                         authority is their PDA, else through the loader
   init                   Initialize PA state (idempotent)
-  estop                  EMERGENCY STOP the PA — terminal, no resume.
-                         Requires --yes.
+  set-kind-table         Replace the PA's kind-table commitment with
+                         PA_KIND_TABLE_COMMITMENT (owner wallet).
+  deny-logic-refs        Add each PA_DENIED_LOGIC_REFS entry
+                         (<hex>:<consumed|created>, comma-separated) to the
+                         denylist for consumed or for created resources;
+                         created alone deprecates, both deny. Cannot be
+                         undone (owner wallet).
+  migrate-state          Bring PAState from the previous schema version to
+                         this build's, once, right after the upgrade (owner
+                         wallet).
+  lookup-table           Create the deployment's settlement lookup table, or
+                         extend the one in PA_LOOKUP_TABLE with any missing
+                         key. See scripts/lookup-table.ts.
+  pause                  Pause settlement (owner-only; pa-evm's pause())
+  unpause                Resume settlement (owner-only; pa-evm's unpause())
   status                 Show deployment status + wallet balance
   balance                Show wallet address and balance
-  idl-publish            Publish the PA's production IDL on chain (init or
-                         upgrade the Anchor IDL account; signer must be the
-                         upgrade authority)
-  test [--cluster <c>]   No cluster (or localnet): full deterministic local
-                         integration flow. devnet/mainnet: cluster-safe test
-                         subset against the programs deployed there.
+  idl-publish [${DEPLOY_TARGETS}|all]
+                         Publish each program's production IDL on chain (the
+                         program's canonical Program Metadata IDL account;
+                         signer must be the upgrade authority to create it,
+                         the upgrade authority or its authority to update it)
+  test [--cluster <c>] [spec file...]
+                         No cluster (or localnet): full deterministic local
+                         integration flow, every spec file on one validator.
+                         devnet/mainnet: proves a fixture set for the
+                         deployment (new salt, PA_KIND_TABLE), then runs the
+                         spec files that build on any state, without the
+                         tests tagged @localnet, against the programs
+                         deployed there; refused when the wallet holds an
+                         owner's role (a stored owner, or an upgrade
+                         authority that is not the program's PDA). Spec files
+                         (paths under tests/) restrict the run to them.
   build-dev [--no-idl]   Build all programs (dev-teardown enabled), no deploy
   build-release          Build the production binaries, no deploy (verifies
-                         close_markers_batch is absent from the IDL)
-  sync-ids               Sync declare_id!/Anchor.toml/test refs to the
-                         committed program keypairs (use after rotating IDs)
+                         each production IDL is its development IDL minus
+                         the declared dev-only instructions)
+  clippy                 Lint every program, and each one with dev features
+                         again with them enabled
+  unit-test              The Rust unit tests (cargo test --workspace) at the
+                         local addresses
   verify-build [--cluster <c>]
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
+  harness-programs [--check]
+                         Deterministic builds of the four programs the
+                         integration-test harness loads (the PA, the mock
+                         verifier, the test forwarder and the block-time
+                         forwarder) at the local addresses, written to its
+                         programs/; with --check, fails when a committed
+                         binary is not the fresh build
+  harness-lint           The integration-test harness's format check, and
+                         clippy with its e2e feature, warnings denied
+  harness-test [--e2e]   The integration-test harness's tests on its local
+                         runtime; with --e2e, its e2e cases on a fork of
+                         devnet (DEVNET_RPC_URL), proven by the queue
+                         (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN) or locally
+                         (E2E_PROVER=local)
   validator              Start the local test validator (RISC0 verifier stack
-                         cloned from devnet, marker fixtures preloaded)
-  validator-deploy       Sync IDs, build, start the validator, deploy all
-                         programs, and keep the validator running
+                         and Program Metadata program copied from devnet,
+                         marker fixtures preloaded)
+  refresh-devnet-programs --url <rpc>
+                         Replace the committed copy of the devnet programs
+                         (devnet-programs/) with devnet's current state
+  validator-deploy       Build, start the validator with all programs
+                         loaded at genesis, and keep it running
 
 Flags:
-  --cluster <c>    Target cluster (required except test/build-dev/build-release)
+  --cluster <c>    Target cluster (required except test/unit-test/build-dev/build-release/
+                   clippy/validator/validator-deploy/harness-programs/harness-lint/
+                   harness-test; optional for verify-build). Program addresses
+                   come from env/localnet.env and, for another cluster,
+                   env/<cluster>.env on top; a
+                   first deploy reads each program's keypair path from the
+                   uncommitted env/<cluster>.keys.env
+                   (<NAME>_PROGRAM_KEYPAIR=<path>).
   --wallet <path>  Wallet keypair. Defaults: devnet → scripts/devnet-wallet.json,
                    localnet → ~/.config/solana/id.json, mainnet → none (required).
                    The wallet must exist; nothing is auto-generated.
-  --url <rpc>      Override the cluster's default RPC URL
+  --url <rpc>      The cluster's RPC endpoint. devnet and mainnet have no
+                   default: pass --url or set DEVNET_RPC_URL / MAINNET_RPC_URL
+                   (the operator's RPC provider, never the public endpoint)
   --no-idl         build-dev: skip IDL generation (faster compile check)
   --dev-teardown   deploy/upgrade: build with the dev-teardown feature
-                   (close_markers_batch enabled). Refused on mainnet.
+                   (close_markers_batch enabled). Localnet only.
   --prebuilt       deploy/upgrade: ship the existing target/deploy artifacts
-                   without rebuilding (for verify-build output)
-  --mode <m>       test: real (default) runs the suite against Groth16
-                   fixtures and the devnet-cloned verifier; mock runs it
-                   against mock fixtures and the localnet mock verifier.
-                   mock is localnet-only.
-  --yes            Confirm irreversible actions (estop)
+                   without rebuilding (for verify-build output); test: run the
+                   cluster run against the programs already deployed (a
+                   running local validator included)
+  --mode <m>       test: real runs the suite against Groth16 fixtures and
+                   the devnet-cloned verifier; mock runs it against mock
+                   fixtures and the localnet mock verifier. mock is
+                   localnet-only. Default: PA_TEST_MODE, else real.
 
 Initialization parameters (required by deploy/init when the PA is a target):
+  PA_OWNER             The adapter's initial owner (base58), who alone pauses,
+                       upgrades and configures it, as pa-evm's initialOwner.
   PA_VERIFIER_ROUTER   RISC0 verifier router program ID (base58).
                        Devnet: ${VERIFIER_ROUTER}
   PA_PROOF_SELECTOR    4-byte Groth16 verifier selector (hex).
                        Devnet: ${GROTH16_SELECTOR}
+
+The PA starts on the empty kind table; set-kind-table installs another.
 USAGE
   exit 1
 }
@@ -104,8 +148,10 @@ RPC_OVERRIDE=""
 NO_IDL=false
 DEV_TEARDOWN=false
 PREBUILT=false
-ASSUME_YES=false
-TEST_MODE="real"
+CHECK=false
+E2E=false
+TEST_MODE="${PA_TEST_MODE:-real}"
+SPEC_FILES=()
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -136,15 +182,18 @@ while [[ $# -gt 0 ]]; do
       PREBUILT=true
       shift
       ;;
+    --check)
+      CHECK=true
+      shift
+      ;;
+    --e2e)
+      E2E=true
+      shift
+      ;;
     --mode)
       [[ $# -ge 2 ]] || { echo "❌ --mode requires a value" >&2; exit 1; }
       TEST_MODE="$2"
-      validate_test_mode "$TEST_MODE"
       shift 2
-      ;;
-    --yes)
-      ASSUME_YES=true
-      shift
       ;;
     --*)
       echo "❌ Unknown flag: $1" >&2
@@ -153,6 +202,8 @@ while [[ $# -gt 0 ]]; do
     *)
       if [[ -z "$COMMAND" ]]; then
         COMMAND="$1"
+      elif [[ "$COMMAND" == "test" ]]; then
+        SPEC_FILES+=("$1")
       elif [[ -z "$TARGET" ]]; then
         TARGET="$1"
       else
@@ -164,6 +215,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+validate_test_mode "$TEST_MODE"
 [[ -n "$COMMAND" ]] || usage
 
 # ---------- cluster resolution ----------
@@ -184,14 +236,13 @@ resolve_cluster() {
       ALLOW_DEV_TEARDOWN=true
       ;;
     devnet)
-      RPC_URL="https://api.devnet.solana.com"
+      RPC_URL="${DEVNET_RPC_URL:-}"
       EXPLORER_QS="?cluster=devnet"
       PRINT_EXPLORER=true
-      ALLOW_DEV_TEARDOWN=true
       default_wallet="${PROJECT_DIR}/scripts/devnet-wallet.json"
       ;;
     mainnet)
-      RPC_URL="https://api.mainnet-beta.solana.com"
+      RPC_URL="${MAINNET_RPC_URL:-}"
       PRINT_EXPLORER=true
       ;;
     "")
@@ -206,6 +257,12 @@ resolve_cluster() {
 
   if [[ -n "$RPC_OVERRIDE" ]]; then
     RPC_URL="$RPC_OVERRIDE"
+  fi
+  # A cluster operation goes through the operator's RPC provider, never the
+  # rate-limited public endpoint.
+  if [[ -z "$RPC_URL" ]]; then
+    echo "❌ No RPC endpoint for ${CLUSTER}: pass --url <rpc> or set ${CLUSTER^^}_RPC_URL." >&2
+    exit 1
   fi
 
   WALLET="${WALLET_OVERRIDE:-$default_wallet}"
@@ -248,14 +305,31 @@ ensure_balance() {
   exit 1
 }
 
-get_program_id() {
-  local name="$1"
-  solana-keygen pubkey "target/deploy/${name}-keypair.json"
+# True when <program_id> is a program on the cluster, false when no account
+# exists there; any other failure (an unreachable RPC) exits.
+is_deployed() {
+  local program_id="$1" out
+  if out="$(solana program show "$program_id" --url "$RPC_URL" 2>&1)"; then
+    return 0
+  fi
+  if [[ "$out" == "Error: Unable to find the account ${program_id}" ]]; then
+    return 1
+  fi
+  echo "❌ solana program show ${program_id} failed: ${out}" >&2
+  exit 1
 }
 
-is_deployed() {
-  local program_id="$1"
-  solana program show "$program_id" --url "$RPC_URL" >/dev/null 2>&1
+# Exit unless program <pid> (called <label> in the message) is deployed on
+# the cluster; with <deploy-args>, name the dev.sh command that deploys it.
+require_deployed() {
+  local pid="$1" label="$2" deploy_args="${3:-}"
+  if ! is_deployed "$pid"; then
+    echo "❌ ${label} (${pid}) is not deployed on ${CLUSTER}"
+    if [[ -n "$deploy_args" ]]; then
+      echo "Run: ./scripts/dev.sh ${deploy_args} --cluster ${CLUSTER}"
+    fi
+    exit 1
+  fi
 }
 
 print_explorer_link() {
@@ -265,44 +339,99 @@ print_explorer_link() {
   fi
 }
 
-deploy_one() {
+# An upgrade writes the new binary over the existing program-data account,
+# which must be at least as large. `solana program deploy` extends it by the
+# exact shortfall, but the upgradeable loader rejects ExtendProgram below
+# 10240 bytes ("ExtendProgram requires a minimum of 10240 additional bytes or
+# to extend to maximum size"), so a small growth fails the deploy. Extend by
+# the shortfall, raised to that minimum, before deploying.
+extend_program_data_if_needed() {
   local name="$1"
+  local program_id="$2"
+  is_deployed "$program_id" || return 0
+  local current_len new_len shortfall
+  current_len="$(solana program show "$program_id" --url "$RPC_URL" | awk '/^Data Length:/ {print $3}')"
+  [[ "$current_len" =~ ^[0-9]+$ ]] || { echo "❌ Could not read the data length of ${program_id}" >&2; exit 1; }
+  new_len="$(stat -c %s "target/deploy/${name}.so")"
+  (( new_len > current_len )) || return 0
+  shortfall=$(( new_len - current_len ))
+  local min_extend=10240
+  (( shortfall < min_extend )) && shortfall=$min_extend
+  echo "Extending ${name} program data by ${shortfall} bytes (${current_len} on chain, ${new_len} needed)..."
+  solana program extend "$program_id" "$shortfall" --keypair "$WALLET" --url "$RPC_URL"
+}
+
+# Deploy <name>'s binary with --program-id <program-id-arg>: its address for a
+# program already there, its keypair to create it (program_id_args).
+deploy_one() {
+  local name="$1" program_id_arg="$2"
   local program_id
   program_id="$(get_program_id "$name")"
 
+  extend_program_data_if_needed "$name" "$program_id"
   echo "Deploying ${name} (${program_id})..."
   if ! solana program deploy \
     "target/deploy/${name}.so" \
     --keypair "$WALLET" \
-    --program-id "target/deploy/${name}-keypair.json" \
+    --program-id "$program_id_arg" \
     --url "$RPC_URL" 2>&1; then
     echo ""
     echo "❌ Deploy failed for ${name}."
-    echo "If the program was previously closed (teardown), the ID is permanently burned."
-    echo "To recover: delete target/deploy/${name}-keypair.json, run 'anchor build --no-idl'"
-    echo "to generate a new keypair, then deploy again."
+    echo "If the program was previously closed, the address is permanently burned:"
+    echo "generate a new keypair outside the repository, set its address in"
+    echo "env/${CLUSTER}.env and its path in env/${CLUSTER}.keys.env, then deploy again."
     exit 1
   fi
   echo "  ✅ ${name} deployed: ${program_id}"
   print_explorer_link "$program_id"
 }
 
-close_one() {
-  local name="$1"
-  local program_id
-  program_id="$(get_program_id "$name")"
-
-  if ! is_deployed "$program_id"; then
-    echo "  ${name} (${program_id}): not deployed, skipping"
-    return 0
+# Upgrade <name> in place along the path its upgrade authority leaves. The
+# protocol adapter owns its upgrades once initialized: its upgrade authority
+# becomes its own PDA, and only its owner-only `upgrade` replaces its code,
+# as pa-evm's UUPS contract authorizes its own upgrades. It upgrades through
+# itself when the authority is that PDA, and through the loader while the
+# wallet still holds it (before `initialize` hands it over); every other
+# program never owns its upgrades and upgrades through the loader.
+upgrade_one() {
+  local name="$1" path
+  if [[ "$name" != protocol_adapter ]]; then
+    deploy_one "$name" "$(get_program_id "$name")"
+    return
   fi
+  path="$(run_ts scripts/upgrade-program.ts path "$name")"
+  case "$path" in
+    loader) deploy_one "$name" "$(get_program_id "$name")" ;;
+    program) upgrade_through_program "$name" ;;
+    *)
+      echo "❌ upgrade-program.ts printed '${path}' as ${name}'s upgrade path" >&2
+      exit 1
+      ;;
+  esac
+}
 
-  echo "Closing ${name} (${program_id})..."
-  solana program close "$program_id" \
-    --keypair "$WALLET" \
-    --url "$RPC_URL" \
-    --bypass-warning
-  echo "  ✅ ${name} closed, rent reclaimed"
+# The owner writes the new code to a loader buffer and calls the program's
+# `upgrade` with it, which hands the buffer to the program's upgrade
+# authority PDA and upgrades.
+upgrade_through_program() {
+  local name="$1" program_id output buffer
+  program_id="$(get_program_id "$name")"
+  extend_program_data_if_needed "$name" "$program_id"
+  echo "Writing ${name}'s code to a buffer..."
+  output="$(solana program write-buffer "target/deploy/${name}.so" --keypair "$WALLET" --url "$RPC_URL")"
+  echo "$output"
+  buffer="$(awk '/^Buffer:/ {print $2}' <<<"$output")"
+  if [[ -z "$buffer" ]]; then
+    echo "❌ solana program write-buffer printed no buffer address" >&2
+    exit 1
+  fi
+  if ! run_ts scripts/upgrade-program.ts upgrade "$name" "$buffer"; then
+    echo "❌ The upgrade of ${name} failed. Buffer ${buffer} still holds its rent, under the wallet's authority:" >&2
+    echo "   reclaim it with: solana program close ${buffer} --keypair ${WALLET} --url <rpc>" >&2
+    exit 1
+  fi
+  echo "  ✅ ${name} upgraded: ${program_id}"
+  print_explorer_link "$program_id"
 }
 
 build_for_deploy() {
@@ -316,7 +445,7 @@ build_for_deploy() {
     # a solana-verify deterministic build, which a rebuild here would clobber.
     local t so
     for t in $(resolve_targets "$TARGET"); do
-      so="target/deploy/${PROGRAMS[$t]}.so"
+      so="target/deploy/${PROGRAM_BY_TARGET[$t]}.so"
       if [[ ! -f "$so" ]]; then
         echo "❌ --prebuilt: ${so} does not exist. Build it first (e.g. verify-build" >&2
         echo "   for the PA's deterministic artifact, build-release for the rest)." >&2
@@ -330,8 +459,8 @@ build_for_deploy() {
   if [[ "$DEV_TEARDOWN" == "true" ]]; then
     if [[ "$ALLOW_DEV_TEARDOWN" != "true" ]]; then
       echo "❌ --dev-teardown is refused on ${CLUSTER}: close_markers_batch deletes" >&2
-      echo "   nullifier markers (replay protection) and must never exist in a" >&2
-      echo "   production deployment." >&2
+      echo "   nullifier markers (replay protection) and never exists on a live" >&2
+      echo "   cluster." >&2
       exit 1
     fi
     build_programs_dev
@@ -340,42 +469,57 @@ build_for_deploy() {
   fi
 }
 
-# Cluster deploys never generate fresh program IDs implicitly: an ID that
-# isn't committed (or already present locally) would deploy to an address
-# nothing else knows about.
-require_deploy_keypairs() {
-  if ! restore_program_keypairs; then
-    echo "❌ Program keypairs are missing from target/deploy/ and not in git." >&2
-    echo "   Generate them with './scripts/dev.sh anchor-build', commit the ones" >&2
-    echo "   you intend to deploy, then re-run." >&2
+# The path of <name>'s keypair, from the uncommitted env/<cluster>.keys.env
+# (<NAME>_PROGRAM_KEYPAIR=<path>). It must be the keypair of the address
+# env/<cluster>.env gives the program: the binary has that address compiled
+# in, and every PDA derivation depends on it.
+program_keypair() {
+  local name="$1" keys var path address actual
+  keys="${PROJECT_DIR}/env/${CLUSTER}.keys.env"
+  var="$(program_keypair_var "$name")"
+  if [[ -f "$keys" ]]; then
+    path="$(source "$keys"; echo "${!var:-}")"
+  fi
+  address="$(get_program_id "$name")"
+  if [[ -z "${path:-}" ]]; then
+    echo "❌ ${name} is not deployed at ${address}; creating it takes its keypair." >&2
+    echo "   Name the keypair's path in ${keys}: ${var}=<path>" >&2
     exit 1
   fi
+  if [[ ! -f "$path" ]]; then
+    echo "❌ ${var} names ${path}, which does not exist." >&2
+    exit 1
+  fi
+  actual="$(solana-keygen pubkey "$path")"
+  if [[ "$actual" != "$address" ]]; then
+    echo "❌ ${path} is the keypair of ${actual}, but env/${CLUSTER}.env gives ${name} the address ${address}." >&2
+    exit 1
+  fi
+  echo "$path"
 }
 
-# The deployed binary bakes in declare_id!, and every PDA derivation depends
-# on it. If declare_id! and the deploy keypair disagree, the deployment is
-# broken in ways that only surface at settlement time — catch it here.
-assert_declare_id_synced() {
-  local targets="$1"
-  local t name lib_rs declared actual
-  for t in $targets; do
-    name="${PROGRAMS[$t]}"
-    lib_rs="${PROGRAM_LIBRS[$t]}"
-    declared="$(read_declare_id "$lib_rs")"
-    actual="$(get_program_id "$name")"
-    if [[ "$declared" != "$actual" ]]; then
-      echo "❌ ${name}: declare_id! (${declared}) does not match the deploy keypair (${actual})." >&2
-      echo "   Sync them before deploying (anchor-test runs sync_program_ids, or fix ${lib_rs})." >&2
-      exit 1
+# The --program-id each of <targets> deploys with, resolved before building:
+# its address when it is already deployed (a redeploy), else its keypair,
+# since creating a program at an address takes the address's keypair.
+declare -A PROGRAM_ID_ARG
+program_id_args() {
+  local t name address
+  for t in $1; do
+    name="${PROGRAM_BY_TARGET[$t]}"
+    address="$(get_program_id "$name")"
+    if is_deployed "$address"; then
+      PROGRAM_ID_ARG[$name]="$address"
+    else
+      PROGRAM_ID_ARG[$name]="$(program_keypair "$name")"
     fi
   done
 }
 
 require_init_params() {
-  if [[ -z "${PA_VERIFIER_ROUTER:-}" || -z "${PA_PROOF_SELECTOR:-}" ]]; then
-    echo "❌ Missing PA_VERIFIER_ROUTER and/or PA_PROOF_SELECTOR." >&2
-    echo "   initialize pins the verifier router and proof selector for the" >&2
-    echo "   lifetime of the deployment; there is no safe default." >&2
+  if [[ -z "${PA_OWNER:-}" || -z "${PA_VERIFIER_ROUTER:-}" || -z "${PA_PROOF_SELECTOR:-}" ]]; then
+    echo "❌ Missing PA_OWNER, PA_VERIFIER_ROUTER and/or PA_PROOF_SELECTOR." >&2
+    echo "   initialize sets the owner and pins the verifier router and proof" >&2
+    echo "   selector for the lifetime of the deployment; there is no safe default." >&2
     echo "   Devnet values:" >&2
     echo "     PA_VERIFIER_ROUTER=${VERIFIER_ROUTER}" >&2
     echo "     PA_PROOF_SELECTOR=${GROTH16_SELECTOR}" >&2
@@ -383,35 +527,26 @@ require_init_params() {
   fi
 }
 
-# Resolve target list from user argument to space-separated shorthand names.
+# Resolve target list from user argument to space-separated target names.
 resolve_targets() {
   local target="${1:-all}"
-  case "$target" in
-    all)
-      echo "${!PROGRAMS[*]}"
-      ;;
-    pa|btf)
-      echo "$target"
-      ;;
-    *)
-      echo "❌ Unknown target: ${target}" >&2
-      echo "Valid targets: pa, btf, all" >&2
-      exit 1
-      ;;
-  esac
+  if [[ "$target" == "all" ]]; then
+    echo "${PROGRAM_TARGETS[*]}"
+  elif [[ -n "${PROGRAM_BY_TARGET[$target]+set}" ]]; then
+    echo "$target"
+  else
+    echo "❌ Unknown target: ${target}" >&2
+    echo "Valid targets: ${PROGRAM_TARGETS[*]}, all" >&2
+    exit 1
+  fi
 }
 
-# Estimate minimum SOL needed for deployment.
-# PA ~4.7 SOL (659K binary), BTF ~1.3 SOL (177K binary).
-# Estimates include headroom for transaction fees.
+# Minimum SOL needed to deploy the given targets (PROGRAM_TABLE's sol column).
 estimate_balance_needed() {
   local targets="$1"
-  local total=0
+  local t total=0
   for t in $targets; do
-    case "$t" in
-      pa)  total=$(awk "BEGIN{print $total + 5}") ;;
-      btf) total=$(awk "BEGIN{print $total + 2}") ;;
-    esac
+    total=$(awk "BEGIN{print $total + ${PROGRAM_DEPLOY_SOL[$t]}}")
   done
   echo "$total"
 }
@@ -442,23 +577,37 @@ cmd_deploy() {
     require_init_params
   fi
 
-  require_deploy_keypairs
-  assert_declare_id_synced "$targets"
+  program_id_args "$targets"
   ensure_balance "$(estimate_balance_needed "$targets")"
   build_for_deploy
 
+  local name
   for t in $targets; do
-    deploy_one "${PROGRAMS[$t]}"
+    name="${PROGRAM_BY_TARGET[$t]}"
+    deploy_one "$name" "${PROGRAM_ID_ARG[$name]}"
   done
 
-  if [[ " $targets " == *" pa "* ]]; then
-    init_pa
+  # `initialize` hands each self-upgrading program's upgrade authority to the
+  # program, and only the upgrade authority creates the program's canonical
+  # metadata accounts. On devnet and mainnet the IDLs are published first, and
+  # initialization waits until the deployer has given those accounts to the
+  # owner, by hand (docs/OPERATIONS.md).
+  if [[ "$CLUSTER" == "localnet" ]]; then
+    if [[ " $targets " == *" pa "* ]]; then
+      init_pa
+    fi
+  else
+    cmd_idl_publish
+    if [[ " $targets " == *" pa "* ]]; then
+      echo "Next, by hand: give the adapter's canonical metadata accounts to its owner, then run init" \
+        "(docs/OPERATIONS.md, Deploy and initialize)."
+    fi
   fi
 
   echo ""
   echo "✅ Deploy complete (${CLUSTER})"
   for t in $targets; do
-    echo "  ${t}: $(get_program_id "${PROGRAMS[$t]}")"
+    echo "  ${t}: $(get_program_id "${PROGRAM_BY_TARGET[$t]}")"
   done
 }
 
@@ -468,13 +617,10 @@ cmd_upgrade() {
 
   require_cmd anchor
 
-  require_deploy_keypairs
-  assert_declare_id_synced "$targets"
-
   # Verify target programs are already deployed
   for t in $targets; do
     local pid
-    pid="$(get_program_id "${PROGRAMS[$t]}")"
+    pid="$(get_program_id "${PROGRAM_BY_TARGET[$t]}")"
     if ! is_deployed "$pid"; then
       echo "❌ ${t} (${pid}) is not deployed — use 'deploy' for first-time deployment"
       exit 1
@@ -483,90 +629,59 @@ cmd_upgrade() {
 
   build_for_deploy
 
-  # Deploy overwrites the existing program binary in-place (no close needed)
   for t in $targets; do
-    deploy_one "${PROGRAMS[$t]}"
+    upgrade_one "${PROGRAM_BY_TARGET[$t]}"
   done
 
   echo ""
   echo "✅ Upgrade complete (${CLUSTER})"
   for t in $targets; do
-    echo "  ${t}: $(get_program_id "${PROGRAMS[$t]}")"
+    echo "  ${t}: $(get_program_id "${PROGRAM_BY_TARGET[$t]}")"
   done
 }
 
-cmd_teardown() {
-  local targets
-  targets="$(resolve_targets "$TARGET")"
-
+# The adapter operations below run a TS script against the deployed PA.
+require_pa_deployed() {
   require_cmd npx
-
-  echo "⚠️  WARNING: solana program close is PERMANENT."
-  echo "Closed program IDs cannot be reused. You will need new keypairs to deploy again."
-  echo ""
-
-  # Close PDA accounts first (programs must still be deployed for close instructions to work)
-  echo "==> Closing PDA accounts before closing programs..."
-  cmd_close_pdas || echo "⚠ PDA close failed or partially completed — continuing with program close"
-  echo ""
-
-  for t in $targets; do
-    close_one "${PROGRAMS[$t]}"
-  done
-
-  echo ""
-  echo "✅ Teardown complete (${CLUSTER})"
-}
-
-cmd_close_pdas() {
-  require_cmd npx
-
-  echo "Closing PA marker PDA accounts..."
-  # close-pdas.ts requires the deployed PA to expose close_markers_batch
-  # (a dev-teardown build) and errors with instructions if it doesn't.
-  run_ts scripts/close-pdas.ts
+  local pid
+  pid="$(get_program_id "protocol_adapter")"
+  require_deployed "$pid" "PA" "deploy pa"
 }
 
 cmd_init() {
-  require_cmd npx
-
   require_init_params
-
-  local pid
-  pid="$(get_program_id "protocol_adapter")"
-  if ! is_deployed "$pid"; then
-    echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
-    echo "Run: ./scripts/dev.sh deploy pa --cluster ${CLUSTER}"
-    exit 1
-  fi
-
+  require_pa_deployed
   init_pa
 }
 
-cmd_estop() {
-  require_cmd npx
+cmd_set_kind_table() {
+  require_pa_deployed
+  run_ts scripts/set-kind-table.ts
+}
 
-  local pid
-  pid="$(get_program_id "protocol_adapter")"
-  if ! is_deployed "$pid"; then
-    echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
-    exit 1
-  fi
+cmd_deny_logic_refs() {
+  require_pa_deployed
+  run_ts scripts/deny-logic-refs.ts
+}
 
-  if [[ "$ASSUME_YES" != "true" ]]; then
-    echo "Emergency stop is TERMINAL: there is no resume instruction, and the"
-    echo "PAState account for this program ID can never be re-initialized."
-    echo "Recovery is migration to a new deployment."
-    echo ""
-    echo "  Cluster: ${CLUSTER}"
-    echo "  PA program: ${pid}"
-    echo "  Authority wallet: $(get_wallet_pubkey)"
-    echo ""
-    echo "Re-run with --yes to execute."
-    exit 1
-  fi
+cmd_migrate_state() {
+  require_pa_deployed
+  run_ts scripts/migrate-state.ts
+}
 
-  run_ts scripts/estop-pa.ts
+cmd_lookup_table() {
+  require_pa_deployed
+  run_ts scripts/lookup-table.ts
+}
+
+cmd_pause() {
+  require_pa_deployed
+  run_ts scripts/pause-pa.ts pause
+}
+
+cmd_unpause() {
+  require_pa_deployed
+  run_ts scripts/pause-pa.ts unpause
 }
 
 cmd_status() {
@@ -581,36 +696,31 @@ cmd_status() {
   print_explorer_link "$pubkey"
   echo ""
 
-  for t in "${!PROGRAMS[@]}"; do
-    local name="${PROGRAMS[$t]}"
-    local keypair="target/deploy/${name}-keypair.json"
-    if [[ -f "$keypair" ]]; then
-      local pid
-      pid="$(solana-keygen pubkey "$keypair")"
-      if is_deployed "$pid"; then
-        echo "${t} (${name}): ✅ deployed — ${pid}"
-      else
-        echo "${t} (${name}): not deployed — ${pid}"
-      fi
-      print_explorer_link "$pid"
+  for t in "${PROGRAM_TARGETS[@]}"; do
+    local name="${PROGRAM_BY_TARGET[$t]}"
+    local pid
+    pid="$(get_program_id "$name")"
+    if is_deployed "$pid"; then
+      echo "${t} (${name}): ✅ deployed — ${pid}"
     else
-      echo "${t} (${name}): no keypair (run anchor build first)"
+      echo "${t} (${name}): not deployed — ${pid}"
     fi
+    print_explorer_link "$pid"
   done
   echo ""
 
   # PAState PDA
-  if [[ -f "target/deploy/protocol_adapter-keypair.json" ]]; then
-    local pa_pid pa_state pa_state_addr
-    pa_pid="$(get_program_id "protocol_adapter")"
-    pa_state="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" 2>/dev/null | head -1 || true)"
-    if [[ -n "$pa_state" ]]; then
-      pa_state_addr="$(echo "$pa_state" | awk '{print $1}')"
-      if solana account "$pa_state_addr" --url "$RPC_URL" >/dev/null 2>&1; then
-        echo "PAState PDA: ✅ initialized — ${pa_state_addr}"
-      else
-        echo "PAState PDA: not initialized — ${pa_state_addr}"
-      fi
+  local pa_pid pa_state_addr out
+  pa_pid="$(get_program_id "protocol_adapter")"
+  pa_state_addr="$(solana find-program-derived-address "$pa_pid" string:pa_state --url "$RPC_URL" | awk 'NR == 1 { print $1 }')"
+  if [[ -n "$pa_state_addr" ]]; then
+    if out="$(solana account "$pa_state_addr" --url "$RPC_URL" 2>&1)"; then
+      echo "PAState PDA: ✅ initialized — ${pa_state_addr}"
+    elif [[ "$out" == "Error: AccountNotFound: pubkey=${pa_state_addr}" ]]; then
+      echo "PAState PDA: not initialized — ${pa_state_addr}"
+    else
+      echo "❌ solana account ${pa_state_addr} failed: ${out}" >&2
+      exit 1
     fi
   fi
 }
@@ -619,19 +729,73 @@ cmd_balance() {
   echo "$(get_wallet_pubkey)  $(get_balance) SOL"
 }
 
+# solana-verify maps [workspace.metadata.cli] solana (Cargo.toml) to a build
+# image through a table compiled into each release; 0.5.2 is the release whose
+# table has the Solana version pinned there.
+SOLANA_VERIFY_VERSION="0.5.2"
+
+# Deterministic build of program <name> at the loaded program addresses, into
+# target/deploy/<name>.so. solana-verify builds in a container from the
+# repository alone, passing its trailing arguments to `cargo build`; the
+# program addresses go in as cargo [env] configuration, which a remote
+# verification repeats.
+deterministic_build() {
+  local library="$1" name address_config=()
+  # A missing solana-verify fails the substitution ("command not found") and
+  # the comparison both.
+  if [[ "$(solana-verify --version)" != "solana-verify ${SOLANA_VERIFY_VERSION}" ]]; then
+    echo "❌ The deterministic build needs solana-verify ${SOLANA_VERIFY_VERSION}. Install with:" >&2
+    echo "   cargo install solana-verify --version ${SOLANA_VERIFY_VERSION} --locked" >&2
+    exit 1
+  fi
+  for name in "${PROGRAM_NAMES[@]}"; do
+    address_config+=(--config "env.$(program_id_var "$name")=\"$(get_program_id "$name")\"")
+  done
+  checked_sbf_build solana-verify build --library-name "$library" --arch "$SBPF_ARCH" -- "${address_config[@]}"
+}
+
+# The programs the integration-test harness loads, as it ships them: the
+# deterministic builds at the local addresses (env/localnet.env), so a
+# consumer pinning the harness by tag runs exactly the program of that tag.
+HARNESS_PROGRAMS=(protocol_adapter mock_verifier test_forwarder block_time_forwarder)
+HARNESS_DIR="${PROJECT_DIR}/../crates/integration-test"
+HARNESS_PROGRAMS_DIR="${HARNESS_DIR}/programs"
+
+# Build the harness programs deterministically and write them to
+# HARNESS_PROGRAMS_DIR; with --check, fail instead when a committed binary is
+# not, byte for byte, the fresh build.
+cmd_harness_programs() {
+  local name built committed failed=0
+  for name in "${HARNESS_PROGRAMS[@]}"; do
+    deterministic_build "$name"
+    built="target/deploy/${name}.so"
+    committed="${HARNESS_PROGRAMS_DIR}/${name}.so"
+    if [[ "$CHECK" == "true" ]]; then
+      if [[ ! -f "$committed" ]]; then
+        echo "❌ ${committed} is missing; write it with ./scripts/dev.sh harness-programs." >&2
+        failed=1
+      elif cmp -s "$built" "$committed"; then
+        echo "✅ ${name}: the committed binary is the deterministic build"
+      else
+        echo "❌ ${name}: the committed binary is not the deterministic build; rewrite it with ./scripts/dev.sh harness-programs." >&2
+        failed=1
+      fi
+    else
+      mkdir -p "$HARNESS_PROGRAMS_DIR"
+      cp "$built" "$committed"
+      echo "Wrote ${committed} ($(solana-verify get-executable-hash "$committed"))"
+    fi
+  done
+  return "$failed"
+}
+
 # Deterministic (verifiable) build of the PA via solana-verify's pinned
 # Docker image; with a cluster, also compares against the deployed program's
 # hash. The resulting target/deploy/protocol_adapter.so is the artifact that
 # must be shipped (deploy/upgrade --prebuilt) for verification to succeed —
 # any local rebuild produces different bytes.
 cmd_verify_build() {
-  if ! command -v solana-verify >/dev/null 2>&1; then
-    echo "❌ solana-verify is not installed. Install with:" >&2
-    echo "   cargo install solana-verify --locked" >&2
-    exit 1
-  fi
-
-  solana-verify build --library-name protocol_adapter
+  deterministic_build protocol_adapter
 
   local built
   built="$(solana-verify get-executable-hash target/deploy/protocol_adapter.so)"
@@ -652,60 +816,37 @@ cmd_verify_build() {
   fi
 }
 
-# Publish the PA's production IDL on chain (Anchor's IDL account, derived
-# from the program ID), so explorers and generic Anchor clients decode the
-# program's instructions, accounts, and events straight from the cluster.
-# Builds the production IDL first — the build self-checks that the dev-only
-# close_markers_batch instruction is absent, so a dev IDL cannot be
-# published by accident. Signer must be the program's upgrade authority.
+# Publish each target program's production IDL on chain as the program's
+# canonical Program Metadata "idl" account (derived from the program ID), so
+# explorers and generic Anchor clients decode the program's instructions,
+# accounts, and events straight from the cluster. Builds the production IDLs
+# first — the build self-checks that the dev-only instructions are absent, so
+# a dev IDL cannot be published by accident. The program's upgrade authority
+# creates the account; it or the account's explicit authority updates it
+# (client/programMetadata.ts).
 cmd_idl_publish() {
-  require_cmd anchor
+  require_cmd npx
 
-  local pid idl_path="target/idl/protocol_adapter.json"
-  pid="$(get_program_id "protocol_adapter")"
-  if ! is_deployed "$pid"; then
-    echo "❌ PA (${pid}) is not deployed on ${CLUSTER}"
-    exit 1
-  fi
+  local targets t
+  targets="$(resolve_targets "$TARGET")"
+  for t in $targets; do
+    require_deployed "$(get_program_id "${PROGRAM_BY_TARGET[$t]}")" "$t" "deploy ${t}"
+  done
 
   build_programs_release
 
-  if anchor idl fetch "$pid" --provider.cluster "$RPC_URL" >/dev/null 2>&1; then
-    echo "IDL account exists — upgrading..."
-    anchor idl upgrade "$pid" \
-      --filepath "$idl_path" \
-      --provider.cluster "$RPC_URL" \
-      --provider.wallet "$WALLET"
-  else
-    echo "No IDL account — initializing..."
-    anchor idl init "$pid" \
-      --filepath "$idl_path" \
-      --provider.cluster "$RPC_URL" \
-      --provider.wallet "$WALLET"
-  fi
+  for t in $targets; do
+    publish_idl "${PROGRAM_BY_TARGET[$t]}"
+  done
+}
 
-  # Read back what the cluster now serves rather than assuming the write
-  # landed; a mismatch here must fail loudly. `anchor idl fetch`
-  # re-serializes with sorted keys, so compare canonicalized JSON, not text.
-  local fetched
-  fetched="$(mktemp)"
-  anchor idl fetch "$pid" --provider.cluster "$RPC_URL" > "$fetched"
-  if ! node -e '
-    const fs = require("fs");
-    const canon = (v) =>
-      Array.isArray(v) ? v.map(canon)
-      : v && typeof v === "object"
-        ? Object.fromEntries(Object.keys(v).sort().map((k) => [k, canon(v[k])]))
-        : v;
-    const read = (p) => JSON.stringify(canon(JSON.parse(fs.readFileSync(p, "utf-8"))));
-    process.exit(read(process.argv[1]) === read(process.argv[2]) ? 0 : 1);
-  ' "$fetched" "$idl_path"; then
-    echo "❌ Fetched on-chain IDL does not match ${idl_path}" >&2
-    rm -f "$fetched"
-    exit 1
-  fi
-  rm -f "$fetched"
-  echo "✅ On-chain IDL for ${pid} matches ${idl_path} (${CLUSTER})"
+# Publish <name>'s production IDL, built by build_programs_release, as the
+# program's canonical Program Metadata IDL account, and check the cluster
+# serves exactly that file.
+publish_idl() {
+  local name="$1" idl_path
+  idl_path="target/idl/${name}.json"
+  run_ts scripts/publish-idl.ts "$idl_path"
 }
 
 cmd_test() {
@@ -714,41 +855,114 @@ cmd_test() {
 
   ensure_balance 2
 
-  # Verify both programs are deployed
-  for t in "${!PROGRAMS[@]}"; do
-    local pid
-    pid="$(get_program_id "${PROGRAMS[$t]}")"
-    if ! is_deployed "$pid"; then
-      echo "❌ ${t} (${pid}) is not deployed on ${CLUSTER}"
-      echo "Run: ./scripts/dev.sh deploy --cluster ${CLUSTER}"
-      exit 1
-    fi
+  # Verify the cluster programs are deployed
+  local pids=() t pid
+  for t in "${PROGRAM_TARGETS[@]}"; do
+    pid="$(get_program_id "${PROGRAM_BY_TARGET[$t]}")"
+    require_deployed "$pid" "$t" "deploy"
+    pids+=("$pid")
   done
 
   ensure_node_modules
+  build_dev_idls
 
-  # Cluster-safe test describe blocks (explicit allowlist).
-  # Tests that require test-forwarder or permanently mutate state are excluded.
-  local grep_pattern
-  grep_pattern=$(cat <<'GREP'
-Groth16 batch aggregation E2E|Re-initialization guard|Direct settle & duplicate nullifier|Settle error paths|Issue #6: Emergency Stop|TxData Expiration|TxData authority and bounds checks|update_expiry_config|TxData expiration enforcement|Settlement error paths — fixture variants|Tree growth and multi-settlement
-GREP
-  )
+  # The wallet must own none of the programs under test: their owner is their
+  # upgrade authority, and a spec signing as the owner could pause the
+  # deployment, replace its kind table, or renounce the authority for good.
+  # A local validator's deployment is disposable and owned by the local wallet.
+  if [[ "$CLUSTER" != "localnet" ]]; then
+    run_ts scripts/cluster-test-guard.ts "${pids[@]}"
+    # Settlements go through the deployment's own lookup table; without it the
+    # suite would create a table of its own on the cluster, and leave it.
+    if [[ -z "${PA_SETTLEMENT_TABLE:-}" ]]; then
+      echo "❌ Set PA_SETTLEMENT_TABLE to the deployment's settlement lookup table (its deployment record names it)." >&2
+      exit 1
+    fi
+  fi
 
-  echo "Running cluster-safe integration tests (${CLUSTER})..."
-  ANCHOR_PROVIDER_URL="$RPC_URL" \
-  ANCHOR_WALLET="$WALLET" \
-    yarn run ts-mocha -p ./tsconfig.json -t 1000000 \
-      --grep "$grep_pattern" \
-      'tests/**/*.ts'
+  # The run proves its own fixture set for the deployment: under a salt no
+  # earlier run used, so nothing in it was settled before, and against the
+  # kind table the deployment stores. Each fixture is proven when a test
+  # first loads it (tests/utils/fixtures.ts), so the run stops at the first
+  # failure and proves only what its tests use.
+  if [[ -z "${PA_KIND_TABLE:-}" || ! -f "$PA_KIND_TABLE" ]]; then
+    echo "❌ Set PA_KIND_TABLE to the kind table (JSON, as fixture-gen reads it) whose commitment the deployment stores;" >&2
+    echo "   the run proves its fixtures against it." >&2
+    exit 1
+  fi
+  # PA_FIXTURE_SALT continues an interrupted run's set, whose fixtures were
+  # proven but not settled; a fixture it already settled fails loudly as
+  # settled.
+  local salt fixture_dir
+  salt="${PA_FIXTURE_SALT:-${CLUSTER}-$(date -u +%Y%m%dT%H%M%SZ)}"
+  fixture_dir="${PROJECT_DIR}/.cache/cluster-fixtures/${salt}"
+  mkdir -p "$fixture_dir"
+  echo "The run's fixtures (salt ${salt}) are proven into ${fixture_dir} as tests need them"
+  # Every spec file loads the suite harness, which reads the primary fixture
+  # for the deployment's proof selector before any test runs.
+  if [[ ! -f "${fixture_dir}/batch_groth16.json" ]]; then
+    "${SCRIPT_DIR}/regen-fixtures.sh" real --out "$fixture_dir" --salt "$salt" --kind-table "$PA_KIND_TABLE" \
+      --only batch_groth16.json
+  fi
+
+  # The suite's files that build on whatever state they find, or the ones
+  # given, each in its own mocha process against the deployment, without the
+  # tests tagged @localnet: those need the owner, change a deployment
+  # setting, or call a program deployed only on a local validator.
+  local specs=()
+  if [[ ${#SPEC_FILES[@]} -gt 0 ]]; then
+    specs=("${SPEC_FILES[@]}")
+  else
+    mapfile -t specs < <(history_spec_files)
+  fi
+
+  # No per-test timeout (-t 0): a test that first loads a fixture proves it,
+  # for as long as proving takes, and a timeout would abandon a test that
+  # goes on settling in the background. The RPC calls and confirmations the
+  # tests wait on carry their own timeouts.
+  echo "Running cluster integration tests (${CLUSTER}): ${specs[*]}"
+  local spec
+  for spec in "${specs[@]}"; do
+    echo "==> ${spec}"
+    ANCHOR_PROVIDER_URL="$RPC_URL" \
+    ANCHOR_WALLET="$WALLET" \
+    PA_TEST_MODE=real \
+    PA_FIXTURE_DIR="$fixture_dir" \
+    PA_FIXTURE_SALT="$salt" \
+    PA_KIND_TABLE="$PA_KIND_TABLE" \
+    PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE:-}" \
+      yarn run ts-mocha --type-check -p ./tsconfig.json -t 0 --grep @localnet --invert "$spec"
+  done
 
   echo ""
   echo "✅ Cluster tests passed (${CLUSTER})"
 }
 
+# The workspace pass unifies features, so a program another one depends on
+# (with `no-entrypoint`) is linted there only without its entrypoint. Each
+# program is therefore also linted on its own: as built (its entrypoint), with
+# its dev features when it has them (their gated code compiles only with
+# them), and with `cpi`, the feature another program depends on it with to
+# call it.
+cmd_clippy() {
+  load_workspace_programs
+  check_program_ids_not_in_tree
+  cargo clippy --workspace --all-targets -- -D warnings
+  local name package
+  for name in "${PROGRAM_NAMES[@]}"; do
+    package="${PROGRAM_PACKAGE[$name]}"
+    cargo clippy -p "$package" --all-targets -- -D warnings
+    if [[ "${PROGRAM_DEV_FEATURES[$name]}" != "-" ]]; then
+      cargo clippy -p "$package" --features "${PROGRAM_DEV_FEATURES[$name]}" --all-targets -- -D warnings
+    fi
+    cargo clippy -p "$package" --features cpi --all-targets -- -D warnings
+  done
+}
+
 # ---------- dispatch ----------
 
 cd "$PROJECT_DIR"
+load_program_ids "${CLUSTER:-localnet}"
 
 case "$COMMAND" in
   build-dev)
@@ -759,19 +973,19 @@ case "$COMMAND" in
       build_programs_dev
     fi
     ;;
-  sync-ids)
-    # Adopt the program IDs in target/deploy/ (restored from git, or freshly
-    # committed when rotating to new IDs): sync declare_id!, Anchor.toml,
-    # and the fixture/test references.
-    require_cmd anchor
-    require_cmd solana-keygen
-    require_cmd yarn
-    require_cmd node
-    sync_program_ids
-    ;;
   build-release)
     require_cmd anchor
+    require_cmd node
     build_programs_release
+    ;;
+  clippy)
+    require_cmd cargo
+    require_cmd node
+    cmd_clippy
+    ;;
+  unit-test)
+    require_cmd cargo
+    cargo test --workspace
     ;;
   verify-build)
     if [[ -n "$CLUSTER" ]]; then
@@ -781,28 +995,61 @@ case "$COMMAND" in
     fi
     cmd_verify_build
     ;;
+  harness-programs)
+    if [[ -n "$CLUSTER" ]]; then
+      echo "❌ harness-programs builds at the local addresses; it takes no --cluster." >&2
+      exit 1
+    fi
+    cmd_harness_programs
+    ;;
+  harness-lint)
+    require_cmd cargo
+    cargo fmt --manifest-path "${HARNESS_DIR}/Cargo.toml" -- --check
+    cargo clippy --manifest-path "${HARNESS_DIR}/Cargo.toml" --all-targets --features e2e -- -D warnings
+    ;;
+  harness-test)
+    require_cmd cargo
+    if [[ "$E2E" == "true" ]]; then
+      # The e2e cases (the harness reads DEVNET_RPC_URL, E2E_PROVER, and
+      # QUEUE_BASE_URL and QUEUE_AUTH_TOKEN for the queue) one at a time, like
+      # pa-evm's, in release mode, since risc0 proves far faster optimized.
+      RUST_TEST_THREADS=1 cargo test --release --manifest-path "${HARNESS_DIR}/Cargo.toml" --features e2e e2e_test
+    else
+      cargo test --manifest-path "${HARNESS_DIR}/Cargo.toml"
+    fi
+    ;;
+  refresh-devnet-programs)
+    if [[ -z "$RPC_OVERRIDE" ]]; then
+      echo "❌ refresh-devnet-programs reads devnet through --url <rpc>; there is no default endpoint." >&2
+      exit 1
+    fi
+    require_cmd solana
+    require_cmd jq
+    refresh_devnet_programs "$RPC_OVERRIDE"
+    ;;
   validator)
     require_cmd solana-test-validator
-    # start_validator (validator-deploy.sh) clones the RISC0 verifier stack
-    # from devnet and preloads the root-marker account fixtures — a bare
-    # validator cannot settle anything.
+    # start_validator (validator-deploy.sh) preloads the devnet programs and
+    # the synthetic verifier-entry account fixtures — a bare validator cannot
+    # settle anything.
+    require_cmd solana
     start_validator
     trap 'stop_validator' EXIT INT TERM
     echo "Validator running (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
     tail -f "$VALIDATOR_LOG"
     ;;
   validator-deploy)
-    # Full local stack, kept running: sync IDs, build, start the validator,
-    # deploy all programs, then hold the validator up for external clients
-    # (harnesses, manual testing). Ctrl-C tears the validator down.
+    # Full local stack, kept running: build, start the validator
+    # with every program loaded at genesis, then hold it up for external
+    # clients (harnesses, manual testing). Ctrl-C tears the validator down.
     require_commands
     ensure_wallet
     ensure_lockfile_sync
-    sync_program_ids
+    ensure_node_modules
     build_programs_dev
-    start_validator
+    workspace_program_args
+    start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
     trap 'stop_validator' EXIT INT TERM
-    deploy_programs
     echo "Validator running with programs deployed (pid ${VALIDATOR_PID}); log: ${VALIDATOR_LOG}"
     tail -f "$VALIDATOR_LOG"
     ;;
@@ -812,15 +1059,16 @@ case "$COMMAND" in
     # on localnet) — the validation path for verify-build artifacts, which
     # the full flow would rebuild and clobber.
     if [[ "$PREBUILT" != "true" && ( -z "$CLUSTER" || "$CLUSTER" == "localnet" ) ]]; then
-      # Full deterministic local flow: sync IDs, build, start a validator,
-      # deploy, run the whole suite. Guard against Cargo.lock skew first.
+      # Full deterministic local flow: build, then the spec files
+      # (all, or the ones given) on one validator with the programs loaded at
+      # genesis. Guard against Cargo.lock skew first.
       ensure_lockfile_sync
-      PA_TEST_MODE="$TEST_MODE" exec "${SCRIPT_DIR}/anchor-test.sh"
+      PA_TEST_MODE="$TEST_MODE" exec "${SCRIPT_DIR}/anchor-test.sh" all "${SPEC_FILES[@]}"
     fi
     # Everything below is the cluster-subset path, where the mock verifier
     # is never deployed.
     if [[ "$TEST_MODE" == "mock" ]]; then
-      echo "❌ --mode mock is localnet-only (the mock verifier never deploys to a real cluster)" >&2
+      echo "❌ Mock mode (--mode mock or PA_TEST_MODE=mock) is localnet-only (the mock verifier never deploys to a real cluster)" >&2
       exit 1
     fi
     require_cmd solana
@@ -828,7 +1076,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|teardown|close-pdas|init|estop|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-table|deny-logic-refs|migrate-state|lookup-table|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

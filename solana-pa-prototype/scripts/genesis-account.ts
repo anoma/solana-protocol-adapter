@@ -2,8 +2,8 @@
  * Shared writer for solana-test-validator genesis account fixtures — the
  * JSON files `--account <address> <file>` loads, named
  * `<prefix><address>.json` so start_validator can recover the address from
- * the filename. Used by the regen scripts for root markers and the mock
- * VerifierEntry.
+ * the filename. Used for root markers, the mock VerifierEntry, and the
+ * suite's settlement lookup table.
  */
 import * as fs from "fs";
 import * as path from "path";
@@ -40,10 +40,7 @@ export function writeGenesisAccountFixtures(args: {
       },
     };
     const outPath = path.join(outDir, `${prefix}${pubkey.toBase58()}.json`);
-    const body = JSON.stringify(account, null, 2).replace(
-      '"__RENT_EPOCH__"',
-      "18446744073709551615"
-    );
+    const body = JSON.stringify(account, null, 2).replace('"__RENT_EPOCH__"', "18446744073709551615");
     fs.writeFileSync(outPath, body);
     console.log(`  wrote ${outPath} (owner ${owner.toBase58()})`);
   }

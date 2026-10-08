@@ -36,14 +36,17 @@ run_in_project() {
 # shellcheck source=validator-deploy.sh
 source "${SCRIPT_DIR}/validator-deploy.sh"
 
-# Run `cargo update -p <pkg>` against every present lockfile so all three stay
-# pinned to the same commit. Use after bumping a git-dep branch HEAD.
-sync_lockfiles_for_package() {
-  local pkg="$1"
-  if [[ -z "$pkg" ]]; then
-    echo "Usage: $0 lock-sync <package>" >&2
-    exit 1
-  fi
+# Every command here builds or runs against the local addresses; cluster
+# operations (dispatched to ops.sh) load their cluster's on top.
+load_program_ids localnet
+
+# Re-lock every present lockfile to its manifests' pins, so all of them pin the
+# same commit once the manifests do. `cargo update --workspace` re-locks only
+# the entries whose pin no longer matches; `cargo update -p` re-resolves other
+# packages too, and can move one onto a version the rest of the graph does not
+# build with (five8 accepts both five8_core 0.1 and 1.0; solana-keypair needs
+# 1.0).
+sync_lockfiles() {
   local lockfile manifest_rel
   for lockfile in "${LOCK_FILES[@]}"; do
     manifest_rel="${lockfile%Cargo.lock}Cargo.toml"
@@ -51,7 +54,7 @@ sync_lockfiles_for_package() {
       continue
     fi
     echo "==> ${lockfile}"
-    run_in_project "cargo update --manifest-path '${manifest_rel}' -p '${pkg}'"
+    run_in_project "cargo update --workspace --manifest-path '${manifest_rel}'"
   done
 }
 
@@ -67,7 +70,7 @@ case "${1:-}" in
     ;;
 
   test)
-    run_in_project "cargo test --workspace"
+    run_in_project "./scripts/ops.sh unit-test"
     ;;
 
   anchor-build)
@@ -77,8 +80,8 @@ case "${1:-}" in
     ;;
 
   release-build)
-    # Production build: no dev-teardown; verifies close_markers_batch is
-    # absent from the generated IDL.
+    # Production build: no dev features; verifies each production IDL is the
+    # development IDL minus the declared dev-only instructions.
     run_in_project "./scripts/ops.sh build-release"
     ;;
 
@@ -87,18 +90,18 @@ case "${1:-}" in
     # full deterministic local flow; devnet/mainnet runs the cluster-safe
     # subset against the programs already deployed there.
     shift
-    run_in_project "./scripts/ops.sh test $*"
+    run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|teardown|close-pdas|init|estop|status|balance|sync-ids|idl-publish|verify-build)
+  deploy|upgrade|init|set-kind-table|deny-logic-refs|migrate-state|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
-    run_in_project "./scripts/ops.sh $*"
+    run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
 
   validator)
-    # ops.sh validator uses start_validator (validator-deploy.sh), which
-    # clones the RISC0 verifier stack from devnet and preloads the marker
-    # fixtures — a bare validator cannot settle anything.
+    # ops.sh validator uses start_validator (validator-deploy.sh), which loads
+    # the devnet programs and preloads the marker fixtures — a bare validator
+    # cannot settle anything.
     run_in_project "./scripts/ops.sh validator"
     ;;
 
@@ -114,9 +117,15 @@ case "${1:-}" in
     run_in_project "cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- $*"
     ;;
 
-  lock-sync)
+  regen-fixtures)
+    # Regenerate the COMPLETE fixture set for one proof mode, sequentially.
     shift
-    sync_lockfiles_for_package "${1:-}"
+    ensure_lockfile_sync
+    run_in_project "./scripts/regen-fixtures.sh $(printf '%q ' "$@")"
+    ;;
+
+  lock-sync)
+    sync_lockfiles
     ;;
 
   lock-check)
@@ -130,6 +139,11 @@ case "${1:-}" in
     run_in_project "RISC0_DEV_MODE=1 RISC0_SKIP_BUILD=1 cargo test --manifest-path tools/fixture-gen/Cargo.toml"
     ;;
 
+  harness-lint|harness-test)
+    # The integration-test harness's checks — see ./scripts/ops.sh.
+    run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
+    ;;
+
   update-deps)
     run_in_project "rm -f yarn.lock package-lock.json && yarn install"
     ;;
@@ -139,16 +153,16 @@ case "${1:-}" in
     ;;
 
   fmt)
-    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check"
+    run_in_project "cargo fmt --all -- --check && cargo fmt --manifest-path tools/fixture-gen/Cargo.toml --all -- --check && yarn run lint"
     ;;
 
   clippy)
-    run_in_project "cargo clippy --workspace --all-targets -- -D warnings -A unexpected_cfgs -A deprecated && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings -A unexpected_cfgs -A deprecated"
+    run_in_project "./scripts/ops.sh clippy && cargo clippy --manifest-path tools/fixture-gen/Cargo.toml --all-targets -- -D warnings && ./scripts/ops.sh harness-lint"
     ;;
 
   coverage)
     echo "Building test binaries..."
-    BUILD_JSON=$(run_in_project "cargo test -p protocol-adapter -p block-time-forwarder --no-run --message-format=json 2>/dev/null")
+    BUILD_JSON=$(run_in_project "cargo test --workspace --no-run --message-format=json")
     BINS=$(echo "$BUILD_JSON" | jq -r 'select(.executable != null and .profile.test == true) | .executable')
 
     if [[ -z "$BINS" ]]; then
@@ -167,9 +181,9 @@ case "${1:-}" in
     done
 
     # Find merged coverage (or single-binary coverage)
-    COV_JSON=$(find "$KCOV_DIR" -name coverage.json -path "*/kcov-merged/*" 2>/dev/null | head -1)
+    COV_JSON=$(find "$KCOV_DIR" -name coverage.json -path "*/kcov-merged/*" -print -quit)
     if [[ -z "$COV_JSON" ]]; then
-      COV_JSON=$(find "$KCOV_DIR" -name coverage.json 2>/dev/null | head -1)
+      COV_JSON=$(find "$KCOV_DIR" -name coverage.json -print -quit)
     fi
 
     if [[ -z "$COV_JSON" ]]; then
@@ -188,12 +202,7 @@ src_files = []
 test_files = []
 for fi in files:
     fname = fi.get("file", "")
-    if "block-time-forwarder/" in fname:
-        short = "btf/" + fname.split("block-time-forwarder/")[-1]
-    elif "solana-pa-prototype/programs/solana-pa-prototype/" in fname:
-        short = fname.split("solana-pa-prototype/programs/solana-pa-prototype/")[-1]
-    else:
-        short = fname
+    short = fname.split("/programs/")[-1]
     cov = int(fi.get("covered_lines", 0))
     tot = int(fi.get("total_lines", 0))
     pct = float(fi.get("percent_covered", "0"))
@@ -236,34 +245,59 @@ PYEOF
     echo "Commands:"
     echo "  shell        Enter the Nix development shell"
     echo "  test         Run Rust tests"
-    echo "  fmt          Check Rust formatting"
-    echo "  clippy       Run clippy lints"
+    echo "  fmt          Check formatting: Rust (the programs, fixture-gen) and TypeScript (prettier)"
+    echo "  clippy       Run clippy lints, and harness-lint"
     echo "  anchor-build Build Anchor programs (development build, dev-teardown enabled)"
-    echo "  release-build Build the production binaries (no dev-teardown; verifies"
-    echo "               close_markers_batch is absent from the IDL)"
-    echo "  anchor-test [--cluster <c>]"
-    echo "               Local: full deterministic integration flow (default)."
-    echo "               devnet/mainnet: cluster-safe subset against deployed programs"
-    echo "  gen-fixtures Generate test fixtures (pass output paths as args)"
+    echo "  release-build Build the production binaries (no dev features; verifies each"
+    echo "               IDL is the development IDL minus the declared dev-only instructions)"
+    echo "  anchor-test [--cluster <c>] [--mode <real|mock>] [--prebuilt] [spec file...]"
+    echo "               Local: full deterministic integration flow (default),"
+    echo "               every spec file on one validator; spec files"
+    echo "               (e.g. tests/settle.ts) restrict the run."
+    echo "               devnet/mainnet, or --prebuilt: cluster-safe subset against"
+    echo "               the programs already deployed there"
+    echo "  gen-fixtures <shape> [options] OUT"
+    echo "               Generate one fixture (gen-fixtures --help lists the shapes)"
+    echo "  regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH]"
+    echo "               Regenerate the complete fixture set for one proof mode"
+    echo "               (sequential; real mode is hours of CPU proving)"
     echo "  fixture-test Run fixture-gen tests"
-    echo "  validator    Start a local Solana validator"
+    echo "  harness-programs [--check]"
+    echo "               Write the integration-test harness's program binaries (the"
+    echo "               deterministic builds); --check fails when they are not"
+    echo "  harness-lint The integration-test harness's format check and clippy"
+    echo "  harness-test [--e2e]"
+    echo "               The integration-test harness's tests; with --e2e, its e2e cases"
+    echo "               on a fork of devnet (DEVNET_RPC_URL), proven by the queue"
+    echo "               (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN) or locally (E2E_PROVER=local)"
+    echo "  validator    Start a local Solana validator (devnet programs only)"
+    echo "  validator-deploy Build, start a validator with every program loaded"
+    echo "               at genesis, and keep it running"
+    echo "  refresh-devnet-programs --url <rpc>"
+    echo "               Replace the committed copy of the devnet programs"
+    echo "               (devnet-programs/) with devnet's current state"
     echo "  update-deps  Regenerate yarn.lock"
     echo "  coverage     Run unit tests with kcov and report line coverage"
     echo "  clean        Remove local validator/test artifacts"
     echo "  lock-check   Verify Cargo.lock files agree on shared git deps"
-    echo "  lock-sync <pkg>  Update <pkg> in every Cargo.lock so they re-align"
+    echo "  lock-sync    Re-lock every Cargo.lock to its manifests' pins"
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
     echo ""
-    echo "Cluster operations (all take --cluster <localnet|devnet|mainnet>;"
-    echo "see ./scripts/ops.sh for all flags, wallet defaults, and required env):"
-    echo "  deploy [pa|btf|all]    First-time deploy (production build; --dev-teardown opts in)"
-    echo "  upgrade [pa|btf|all]   Rebuild + deploy over existing programs"
-    echo "  teardown [pa|btf|all]  PERMANENT: close programs, reclaim rent"
-    echo "  close-pdas             Close all PA marker PDAs (needs a dev-teardown build)"
-    echo "  init                   Initialize PA state (idempotent; needs PA_VERIFIER_ROUTER"
-    echo "                         and PA_PROOF_SELECTOR)"
-    echo "  estop                  EMERGENCY STOP the PA (terminal; requires --yes)"
-    echo "  sync-ids               Sync declare_id!/Anchor.toml/test refs to the committed keypairs"
+    echo "Cluster operations (take --cluster <localnet|devnet|mainnet>, optional for"
+    echo "verify-build; program addresses come from env/<cluster>.env; see"
+    echo "./scripts/ops.sh for all flags, wallet defaults, and required env):"
+    echo "  deploy [${DEPLOY_TARGETS}|all]    First-time deploy (production build; --dev-teardown opts in)"
+    echo "  upgrade [${DEPLOY_TARGETS}|all]   Rebuild + deploy over existing programs"
+    echo "  init                   Initialize PA state (idempotent; needs PA_OWNER,"
+    echo "                         PA_VERIFIER_ROUTER and PA_PROOF_SELECTOR)"
+    echo "  set-kind-table         Replace the PA's kind-table commitment (PA_KIND_TABLE_COMMITMENT)"
+    echo "  deny-logic-refs        Add logic refs to the consumed or created denylist (PA_DENIED_LOGIC_REFS)"
+    echo "  migrate-state          Migrate PAState from the previous schema version, after the upgrade"
+    echo "  lookup-table           Create/extend the deployment's settlement lookup table"
+    echo "  idl-publish            Publish the production IDL on chain"
+    echo "  verify-build           Deterministic solana-verify build of the PA; with"
+    echo "                         --cluster, compares against the deployed program"
+    echo "  pause / unpause        Pause or resume settlement (owner-only)"
     echo "  status                 Show deployment status + wallet balance"
     echo "  balance                Show wallet address and balance"
     exit 1

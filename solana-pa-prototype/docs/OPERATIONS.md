@@ -1,53 +1,59 @@
 # Operating a Protocol Adapter Deployment
 
-This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, run it, stop it in an emergency, and retire it permanently. The one fact that shapes everything here: **Solana programs are upgradeable, so "stopped forever" is not enforced by the chain — it is enforced by how you handle two keys.** The EVM Protocol Adapter gets finality for free because its contract is immutable — its `emergencyStop()` has no unpause, no key can resurrect a stopped instance, and its only operational document is a deploy/release checklist. On Solana the equivalent finality is an operator action (burning the upgrade authority), it must come last, and the stop/retire half of the lifecycle below is the part EVM immutability does automatically.
+This document is the operator's procedure set for a Protocol Adapter (PA) deployment: how to deploy and initialize it, upgrade it, run it, pause it, and retire it permanently. The one fact that shapes everything here: **the adapter is upgradeable by its owner, so "paused forever" is not enforced by the chain — it is enforced by custody of the ownership.** The same holds for pa-evm V2, a UUPS proxy its owner upgrades in place (`upgradeToAndCall`) and pauses and unpauses (`pause()`, `unpause()`); the Solana adapter has the same owner-only `upgrade`, `pause` and `unpause`. Renouncing the ownership, the last Sunsetting step, makes a pause permanent.
 
-All commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically. Every command takes `--cluster <localnet|devnet|mainnet>`; see `scripts/ops.sh` for all flags.
+Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically; cluster operations take `--cluster <localnet|devnet|mainnet>` (see `scripts/ops.sh` for all flags). devnet and mainnet operations go through the operator's RPC provider: pass `--url <rpc>` or set `DEVNET_RPC_URL` / `MAINNET_RPC_URL`; there is no public-endpoint default. Commands shown as `solana`, `npx` or `solana-verify` run directly.
 
-## The two keys
+`dev.sh anchor-test --cluster <devnet|mainnet>` runs the local suite's tests against the live deployment, building on whatever history it holds: every spec file outside `tests/fresh/` and `tests/terminal/`, without the tests tagged `@localnet` (those need the owner, change a deployment setting, or call a program deployed only on a local validator). The run first proves its own fixture set for the deployment, under a salt no earlier run used and against the kind table it stores, so name that table's JSON (as fixture-gen reads it) in `PA_KIND_TABLE`; proving runs locally unless `QUEUE_BASE_URL` sends it to the workers queue. Its wallet must own nothing under test: the run refuses a wallet that holds an owner's role: the adapter's stored owner, or a program's upgrade authority while that is not the program's own PDA. Use a separate funded test wallet (`--wallet`), and name the deployment's settlement lookup table in `PA_SETTLEMENT_TABLE` (without it the suite would create and leave a table of its own).
 
-A deployment has two independent authorities:
+## The owner
 
-| Authority | Lives in | Controls | Moved by |
-|---|---|---|---|
-| PA authority | `PAStateAccount.authority` | `emergency_stop`, `update_expiry_config`, authority transfer | `propose_authority` + `accept_authority` (two-step, on chain) |
-| Upgrade authority | BPF loader's ProgramData account | replacing the program binary; signing `initialize`; final immutability | `solana program set-upgrade-authority` |
+The adapter has one owner, as pa-evm's (OpenZeppelin's OwnableUpgradeable): set by `initialize`, stored in the state account (`PAStateAccount.owner`), and the signer of every owner-only instruction (`upgrade`, `pause`, `unpause`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_refs`, `migrate_state`, `transfer_ownership`, `renounce_ownership`; any other signer gets `OwnableUnauthorizedAccount`). `initialize` hands the program's upgrade authority from the deployer to the program's own PDA (seed `upgrade_authority`), so the loader accepts an upgrade only through the program's `upgrade`, for the owner, as a UUPS implementation authorizes its own upgrades. `initialize` announces the owner with `OwnershipTransferredEvent` from the zero key, as `OwnershipTransferred` is.
 
-They start as the same key: `initialize` requires its payer to be the program's upgrade authority, and records that payer as the initial PA authority (`programs/solana-pa-prototype/src/lib.rs`, the `Initialize` accounts constraint and handler). After initialization no instruction ever compares them, so they can be split freely — the integration suite exercises operation with them split (`tests/solana-pa-prototype.ts`, the authority transfer tests).
+`transfer_ownership(new_owner)` moves the ownership at once (the zero key is refused, `OwnableInvalidOwner`); `renounce_ownership` gives it up for good: the owner becomes the zero key, and no owner-only instruction, `upgrade` included, can run again. Both emit `OwnershipTransferredEvent`. They are made by hand: no repository command or script changes an authority or closes protocol accounts on a live cluster, and the only builders of those instructions in the repository (`tests/utils/localOnly.ts`) refuse any endpoint but a local validator. The owner constructs and signs the instruction from the IDL.
 
-Two consequences to keep in mind:
 
-- The PA authority alone decides an emergency stop, regardless of who can upgrade the program.
-- Whoever holds the upgrade authority can replace the program binary — which means they could deploy code that undoes a stop. A stop is only as permanent as upgrade-authority custody.
-
-Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
+The owner can replace the program binary, which means it could deploy code that undoes a stop: a stop is only as permanent as the ownership's custody. Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
 
 ## Deploy and initialize
 
 Prerequisites:
 
 1. A funded wallet for the target cluster (per-cluster defaults and the `--wallet` flag: `scripts/ops.sh` usage). `deploy` checks the balance against its own size-based estimate before building and refuses with the amount needed.
-2. The two initialization parameters, exported as environment variables. `initialize` pins them for the lifetime of the deployment — there is no safe default and no way to change them later:
+2. The three initialization parameters, exported as environment variables. `initialize` makes `PA_OWNER` the owner and pins the router and selector for the lifetime of the deployment — there is no safe default, and no way to change the router or selector later:
 
    ```sh
+   export PA_OWNER=<the owner's pubkey>
    export PA_VERIFIER_ROUTER=<verifier router program ID>
    export PA_PROOF_SELECTOR=<4-byte hex selector>
    ```
 
    Running `deploy pa` without them set prints the current devnet values, which are defined once in `scripts/validator-deploy.sh` and recorded in the cluster's deployment record.
-3. Program keypairs present under `target/deploy/` (they are committed to git and restored automatically). Cluster deploys refuse to invent fresh program IDs; if you intend a new ID, generate keypairs with `./scripts/dev.sh anchor-build` and commit the ones you deploy.
+3. Each program's address in `env/<cluster>.env`, and, for a program not yet deployed to the cluster, its keypair's path in the uncommitted `env/<cluster>.keys.env` (`env/README.md`). A deploy refuses a keypair whose address is not the one `env/<cluster>.env` gives the program; a new address is a new line in `env/<cluster>.env`, committed with the deployment record.
 
 Procedure:
 
 ```sh
-./scripts/dev.sh deploy pa --cluster devnet        # or: deploy all
+./scripts/dev.sh deploy pa --cluster devnet        # or: deploy all; publishes the IDL, stops before init
+# by hand: write the security metadata (below), then give both metadata accounts to the owner
+./scripts/dev.sh init --cluster devnet             # hands the upgrade authority to the program
 ./scripts/dev.sh status --cluster devnet           # verify: deployed + PAState initialized
-./scripts/dev.sh idl-publish --cluster devnet      # put the production IDL on chain
 ```
 
-`deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which is the only build whose markers can later be reclaimed by `close-pdas`.
+On devnet and mainnet, `deploy pa` publishes the IDL and stops before `initialize`. The program's canonical metadata accounts (Program Metadata program: `idl`, and `security` below) are created only by the program's upgrade authority, which `initialize` hands to the program. Before `init`, the deployer gives each of them to the owner, who signs every later update:
 
-`idl-publish` stores the production IDL in the program's Anchor IDL account on chain, so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), then verifies the cluster serves exactly the published file. Rerun it after every `upgrade` that changes the interface.
+```sh
+npx @solana-program/program-metadata@latest set-authority idl <PROGRAM_ID> --new-authority <owner> \
+  --keypair <deployer keypair> --rpc <rpc>
+npx @solana-program/program-metadata@latest set-authority security <PROGRAM_ID> --new-authority <owner> \
+  --keypair <deployer keypair> --rpc <rpc>
+```
+
+On localnet, `deploy pa` publishes no IDL and initializes at once.
+
+`deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which carries `close_markers_batch`; it is refused on every cluster but localnet, so a live deployment never has an instruction that deletes replay protection.
+
+`idl-publish` stores each program's production IDL (`idl-publish pa` or `btf`; both by default) in the program's canonical Program Metadata IDL account on chain, so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), writes it through the `@solana-program/program-metadata` library (`client/programMetadata.ts`), then verifies the cluster serves exactly the published file. The Program Metadata program lets two signers write a canonical account: the program's upgrade authority, and the account's explicit authority (`set-authority`, above). Its CLI, which `anchor idl upgrade` runs, admits only the first, so once `initialize` has given a program's upgrade authority to the program, only the library can update the IDL, signed by the owner as the account's authority. Rerun `idl-publish` after every `upgrade` that changes the interface.
 
 The program's display metadata — name, icon, description, project links, and the security contact (`security@anoma.foundation`, same as the EVM PA's `@custom:security-contact`) — lives in `docs/program-metadata.json` and is published to the program-metadata PDA that Solana Explorer reads:
 
@@ -56,11 +62,34 @@ npx @solana-program/program-metadata@latest write security <PROGRAM_ID> \
   docs/program-metadata.json --rpc <rpc-url> --keypair scripts/devnet-wallet.json
 ```
 
-Signer must be the program's upgrade authority. Republish after changing the JSON. The logo URL is the public Anoma GitHub org avatar: this repository is private, so assets in it (`docs/assets/anoma-logo.jpeg`) are not fetchable by explorers — a publicly served URL is required.
+The first write, which creates the account, is signed by the program's upgrade authority, before `initialize`; later writes by the account's authority, the owner (above). Republish after changing the JSON. The logo URL is the public Anoma GitHub org avatar: this repository is private, so assets in it (`docs/assets/anoma-logo.jpeg`) are not fetchable by explorers — a publicly served URL is required.
 
 After a first deployment, update `docs/DEVNET_DEPLOYMENT.md` (or the equivalent record for the cluster) with the program IDs, wallet, router, selector, and date.
 
-To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster <c>`. Upgrading replaces the binary in place; it does not touch PAState, markers, or the initialization parameters.
+To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster <c>`, with the owner's wallet. It writes the new binary to a loader buffer the owner holds and calls the program's `upgrade` with it, which hands the buffer to the program's PDA and upgrades through the loader, announcing `UpgradedEvent` with the new code's executable hash (sha256 of the code without trailing zero bytes, what `solana-verify get-program-hash` reports); the command checks that the program then runs that code. While the wallet still holds the upgrade authority (before `initialize`), it upgrades through the loader directly. Upgrading replaces the binary in place; it does not touch PAState, markers, or the initialization parameters. The new code runs from the next slot.
+
+### Upgrades that change the state layout
+
+`upgrade` replaces code only. The state account (`PAStateAccount`, PDA seed `pa_state`) keeps whatever bytes it had, so a binary whose account layout differs from the deployed one cannot read it. The adapter makes that failure explicit instead of accidental:
+
+- Byte 8 of the account data (the first byte after Anchor's discriminator) is the **schema version**, written by `initialize` from `SCHEMA_VERSION` (programs/solana-pa-prototype/src/state.rs, exported in the IDL). It is a layout number and changes only when the layout does.
+- Every instruction that reads the state account refuses it when byte 8 is not the binary's own version, `txdata_init` included. `txdata_write`, `txdata_close`, and `txdata_close_expired` never load `PAStateAccount`, so they keep working against a foreign version regardless of migration status, letting uploaders reclaim rent mid-migration. An upgrade to a layout-changing binary therefore stops the rest of the adapter cold until the account is migrated; nothing misreads old bytes.
+- The refusal surfaces as one of two errors depending on the account's bytes. When the old account still deserializes under the new binary's layout — a version-byte mismatch only — the error is `UnsupportedStateSchema`. When it does not (a re-serialization shorter than an earlier one leaves stale bytes past its end, where a newer layout reads its appended fields), Anchor's `AccountDidNotDeserialize` surfaces first, because account deserialization runs before constraints. Either way the instruction is refused before it runs.
+
+A release that changes the layout ships its migration with it, the counterpart of the call pa-evm's owner passes to `upgradeToAndCall`: an instruction run once, right after upgrading the program in place and before any other instruction, signed by whoever held the ownership in the previous build. It declares the state account unchecked (the typed layout cannot read it), requires this program as owner and the previous version at byte 8, parses the previous layout (never reinterpreting its bytes: a shorter re-serialization leaves stale bytes past its end), reallocates the account, and writes the new layout with the new version; the signer pays the rent difference. Only the version byte has a fixed offset (byte 8); a new layout may add, remove or reorder the other fields, which is why the migration parses the previous layout. The release that brings the migration also brings a test that starts from the previous build and runs the upgrade path: `tests/upgrade/<program>.ts`, on a validator of its own that loads the build in `tests/fixtures/previous/`.
+
+This build's migration is `migrate_state`, from schema version 3, which held one denylist for consumed and created resources alike, to 4, which holds pa-evm's two. The owner signs it and pays for the account's growth: 4 bytes for the second denylist's length and 32 per entry the previous denylist held, since each goes on both denylists, so the migrated adapter refuses what the previous build refused. It announces each entry on each denylist with `LogicRefDeniedEvent`, as `deny_logic_refs` would, then the new schema version with `InitializedEvent`, as OpenZeppelin's `reinitializer(n)` does. Run it right after the upgrade:
+
+```sh
+./scripts/dev.sh upgrade pa --cluster <c>          # owner wallet
+./scripts/dev.sh migrate-state --cluster <c>      # owner wallet
+```
+
+This build also reads a forwarder's output as the `Vec<u8>` its `forward_call` returns, Borsh-encoded, where the previous build read the raw return data, so neither build settles a call to a forwarder built for the other. Upgrade the deployment's forwarders to builds that return a `Vec<u8>` together with the adapter, and keep settlement paused (`pause`) from the first upgrade to the last.
+
+This covers the state account only. A change to the commitment tree itself (hash, arity, leaf encoding) or to the marker PDA seeds invalidates the existing tree and marker addresses, and no in-place migration recovers that: it is a fresh deployment plus a bulk copy of roots and nullifiers.
+
+The development build's `dev_set_schema_version` instruction exists only to test the refusal; the release build asserts it is absent, alongside `close_markers_batch`.
 
 ### Verified (reproducible) builds
 
@@ -71,58 +100,90 @@ The deployed PA should be the deterministic `solana-verify` Docker build, so the
 ./scripts/dev.sh upgrade pa --cluster devnet --prebuilt   # ship that exact artifact
 ```
 
-`verify-build` builds with the pinned image (`[workspace.metadata.cli]` in `Cargo.toml` selects it — keep it in lockstep with `flake.nix`) and fails loudly if the deployed program doesn't match. **A normal build overwrites the artifact with non-matching bytes** — after any `anchor-test` or `build-*`, rerun `verify-build` before an upgrade you intend to keep verified. Validate the artifact behaviorally before shipping: `dev.sh validator` (backgrounded), `dev.sh deploy --cluster localnet --prebuilt`, `dev.sh anchor-test --cluster localnet --prebuilt`.
+`verify-build` needs solana-verify 0.5.2 (`cargo install solana-verify --version 0.5.2 --locked`). It builds with the pinned image (`[workspace.metadata.cli]` in `Cargo.toml` selects it — keep it in lockstep with `flake.nix`) for SBPF v3, the architecture every build of these programs targets, and fails loudly if the deployed program doesn't match. **A normal build overwrites the artifact with non-matching bytes** — after any `anchor-build`, `release-build`, `anchor-test`, `idl-publish`, or `deploy`/`upgrade` without `--prebuilt`, rerun `verify-build` before an upgrade you intend to keep verified. `verify-build` builds only the PA. To validate the artifact behaviorally before shipping, with every program's production binary in `target/deploy` (`release-build`, then `verify-build`) and the `PA_*` initialization variables exported: `dev.sh validator` (backgrounded), `dev.sh deploy --cluster localnet --prebuilt`, `dev.sh anchor-test --cluster localnet --prebuilt`.
+
+The integration-test harness ships the deterministic builds of the four programs it loads, the PA, the mock verifier, the test forwarder and the block-time forwarder (`HARNESS_PROGRAMS` in `scripts/ops.sh`), at the local addresses (`crates/integration-test/programs/`), so a repository pinning the harness runs exactly the programs of the tag it pins. A change to any of these programs' source changes its build: rewrite the copies in the same change with `./scripts/dev.sh harness-programs`, which CI's Harness Programs job checks (`harness-programs --check`). Like `verify-build`, it overwrites `target/deploy`.
 
 The deployment is then reproduced and checked with:
 
 ```sh
 solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
   https://github.com/anoma/solana-protocol-adapter --mount-path solana-pa-prototype \
-  --library-name protocol_adapter
+  --library-name protocol_adapter --arch v3
 ```
 
 **Reach depends on repo visibility.** This repository is private, so today only people with read access (their git credentials satisfy the clone) can run the check; the on-chain verification PDA points at a repo outsiders cannot fetch. The explorer "Verified" badge requires more on both axes: the OtterSec remote API serves mainnet only, and its worker must be able to clone the repo — i.e. the source (at least at the recorded commit) must be public. A mainnet deployment that should carry the badge therefore requires opening the source; that is a product decision, not an operational step.
 
-## Emergency stop
+## The settlement lookup table
 
-The stop exists for one scenario: the deployment can no longer be trusted — typically a suspected vulnerability — and settlement must halt now.
+Every settlement carries accounts that never change for a deployment: the adapter's (PAState, the system program, the verifier router, its router PDA and verifier entry, the verifier program, the event authority), the clock sysvar and the block-time forwarder its example call reads, and the fixed accounts of each forwarder the deployment's settlements call. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps a settlement with forwarder calls inside the 1,232-byte packet.
 
 ```sh
-./scripts/dev.sh estop --cluster devnet        # prints what will happen, then refuses
-./scripts/dev.sh estop --cluster devnet --yes  # executes
+./scripts/dev.sh lookup-table --cluster devnet                      # create
+PA_LOOKUP_TABLE=<address> ./scripts/dev.sh lookup-table --cluster devnet  # extend
 ```
 
-The command must be signed by the PA authority. It flips the lifecycle flag from Running to Stopped and there is no instruction that flips it back.
+The command derives the adapter's key set from the deployed programs and the PAState's pinned router and selector, so it runs after `deploy pa`. The signing wallet is the table's authority and stays so (the table is not frozen): each forwarder's operator extends it with that forwarder's fixed accounts (the SPL token forwarder's `lookup-table` command, in anoma/anomapay-spl-token-forwarder, adds its own and each supported mint's escrow account). A table entry need not exist on chain when it is added. Extending is idempotent; a rerun adds only what is missing.
 
-What stops: `settle` and `settle_from_txdata` reject every transaction with `PAError::Stopped`. Those are the only two instructions gated on the lifecycle flag.
+Record the address in the cluster's deployment record and ship it as `SETTLE_LOOKUP_TABLE` in anoma-pa-solana-client. A program-id rotation is a new deployment and gets a new table.
 
-What keeps working: everything else. All accounts (PAState, the commitment tree, nullifier and root markers) remain on chain and readable forever. Transaction-data upload accounts can still be closed and their rent reclaimed by their owners. Authority transfer and expiry configuration still function.
+## The logic-ref denylists
 
-What a stop does **not** do: it does not prevent the upgrade-authority holder from deploying a modified binary. If the stop is meant to be permanent, finish the job with the Sunsetting steps below.
+The owner adds logic refs to two denylists, as pa-evm's owner does with `denyLogicRefs`: one for consumed resources and one for created resources. From that slot on, no settlement consumes a resource whose logic ref is on the first, or creates one whose logic ref is on the second (`ResourceWithDeniedLogicRef`). A logic ref on the created side only is deprecated: transactions still consume its resources, so their holders can move out of it, but none creates new ones; deprecate a logic ref only once no application creates its resources any more. A logic ref on both is denied, the per-logic kill switch for a compromised resource logic, short of stopping the whole adapter.
+
+```sh
+PA_DENIED_LOGIC_REFS=<hex, 32 bytes>:created ./scripts/dev.sh deny-logic-refs --cluster <c>                       # deprecate (owner wallet)
+PA_DENIED_LOGIC_REFS=<hex, 32 bytes>:consumed,<hex, 32 bytes>:created ./scripts/dev.sh deny-logic-refs --cluster <c>   # deny
+```
+
+Each comma-separated entry names a logic ref and the denylist it goes on, as pa-evm's `(logicRef, consumed)` pairs. The zero ref and a ref already on its denylist are rejected, and then no entry of that call is added; an entry cannot be removed. The denylists are part of the state account (`denied_consumed_logic_refs`, `denied_created_logic_refs`), which grows by 32 bytes per entry at the owner's expense, and each entry emits `LogicRefDeniedEvent`.
+
+## The kind table
+
+The PA stores the sha256 commitment of a kind table, and settles a transaction proven against that table or against the empty one, as pa-evm's `_isKindTableCommitmentAccepted`: the empty table merges no kinds, so what balances under it balances under any table. A transaction proven against any other table is refused (`UnacceptedKindTableCommitment`) before its proofs are verified. `initialize` installs the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`) and emits `KindTableCommitmentUpdatedEvent` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
+
+```sh
+PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # owner wallet
+```
+
+The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the new value, as pa-evm's `KindTableCommitmentUpdated` does. From that slot on, transactions proven against the previous table are refused (`UnacceptedKindTableCommitment`), unless it is the empty one, so provers must load the new table before it is installed. The generated Solana tables and their commitments come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
+
+## Pausing
+
+A pause halts settlement, as pa-evm's owner does with `pause()`: for a suspected vulnerability, or while an upgrade that fixes one is prepared. `unpause` resumes it, as pa-evm's `unpause()` does.
+
+```sh
+./scripts/dev.sh pause --cluster devnet     # owner wallet
+./scripts/dev.sh unpause --cluster devnet   # owner wallet
+```
+
+Both are owner-only. `pause` is refused while already paused (`EnforcedPause`) and `unpause` while not paused (`ExpectedPause`), as OpenZeppelin's Pausable refuses them; each emits `PausedEvent` / `UnpausedEvent` with the signer, as `Paused(account)` / `Unpaused(account)` do. The commands are idempotent: they do nothing when the adapter is already in the requested state.
+
+What pauses: `settle` and `settle_from_txdata` reject every transaction with `EnforcedPause`. Those are the only two instructions gated on the flag, as `execute` is pa-evm's only `whenNotPaused` function.
+
+What keeps working: everything else. All accounts (PAState, the commitment tree, nullifier and root markers) remain on chain and readable. Transaction-data upload accounts can still be closed and their rent reclaimed by their owners. Expiry configuration, the kind table, the denylist, upgrades, and moving the ownership still function.
+
+A pause is as permanent as the ownership's custody: the owner can unpause. To make it permanent, finish with the Sunsetting steps below.
 
 ### The second kill switch: the verifier
 
-Settlement also depends on RISC0's verifier router (the program pinned at `initialize`). The router keeps its own per-verifier emergency stop, checked inside the router during the verification call — the PA does not check it and cannot: a failed cross-program invocation aborts the whole transaction, so the PA never sees the error to translate it. This mirrors the EVM PA, whose `isEmergencyStopped()` reports true if either its own pause or the RISC0 verifier's pause is set.
+Settlement also depends on RISC0's verifier router (the program pinned at `initialize`). The router keeps its own per-verifier emergency stop, checked inside the router during the verification call — the PA does not check it and cannot: a failed cross-program invocation aborts the whole transaction, so the PA never sees the error to translate it. As in pa-evm V2, the adapter reports the two separately: `PAStateAccount.paused` is its own pause, and the `risc_zero_verifier_paused` view (read by simulation, as pa-evm's `riscZeroVerifierPaused()`) reads the router's verifier entry for the deployment's selector. `initialize` refuses a verifier the router has already paused (`RiscZeroVerifierPaused`), as pa-evm's initializer does.
 
 Diagnosis is by transaction logs: a router-side stop shows the router program's own `SelectorDeactivated` error in the failed transaction's logs, clearly distinct from a proof failure. Whether anyone outside this project can trip that switch depends on who owns the router deployment — the current owner is in the cluster's deployment record.
 
 ## Recovery
 
-Recovery from a stopped PA is migration to a new deployment. There is no in-protocol recovery mechanism; the EVM PA makes the same choice.
+A pause is recovered in place: fix the code if needed (`upgrade`, then any migration), then `unpause`, as pa-evm's owner does with `upgradeToAndCall` and `unpause()`. The tree, markers and every resource stay valid.
 
-Concretely, migration means: deploy a fresh PA under a new program ID (new keypair), initialize it, and have applications re-establish their state against the new deployment's empty commitment tree. The stopped deployment's tree, markers, and history remain on chain and readable forever, so nothing about the old state is lost as evidence — but resources committed to the old tree cannot be settled anywhere, and value they represent must be recovered at the application layer (each application proves what it owned in the old tree and re-issues it in the new one, under whatever policy its owners decide).
+When the deployment itself cannot be trusted any more, recovery is migration to a new deployment: deploy a fresh PA under a new program ID (new keypair), initialize it, and have applications re-establish their state against the new deployment's empty commitment tree. The old deployment's tree, markers, and history remain on chain and readable, so nothing about the old state is lost as evidence — but resources committed to the old tree cannot be settled in the new one, and value they represent must be recovered at the application layer (each application proves what it owned in the old tree and re-issues it in the new one, under whatever policy its owners decide).
 
-The PAState account of a stopped deployment can never be re-initialized. This is deliberate: the account address derives from a fixed seed, so re-initializing would resurrect old nullifier-marker addresses and let previously spent notes spend again.
+The PAState account can never be re-initialized. This is deliberate: the account address derives from a fixed seed, so re-initializing would resurrect old nullifier-marker addresses and let previously spent notes spend again.
 
 ## Sunsetting
 
-Permanent retirement, in order. The order matters because `initialize` requires a live upgrade authority: once the authority is gone, that program ID can never host a PA again — which is the point, but only as the final step.
+Permanent retirement, as pa-evm's owner retires its adapter, in order:
 
-1. **Stop settlement.** `./scripts/dev.sh estop --cluster <c> --yes`.
-2. **Reclaim marker rent — development builds only.** `./scripts/dev.sh close-pdas --cluster <c>` closes nullifier and root markers via `close_markers_batch`, which requires the Stopped state and exists only in `--dev-teardown` builds. Production builds abandon marker rent by design; there is deliberately no production path that deletes replay-protection markers. The command validates the instruction against the locally built IDL, so run a development build first (`./scripts/dev.sh run "./scripts/ops.sh build-dev"`) if the last build was a production one — observed during the first devnet retirement.
-3. **End the program.** Two mutually exclusive options:
-   - `solana program close <PROGRAM_ID> --bypass-warning` — reclaims the program account's rent and burns the program ID permanently (`./scripts/dev.sh teardown --cluster <c>` does steps 2 and 3 together), or
-   - `solana program set-upgrade-authority <PROGRAM_ID> --final` — keeps the stopped program on chain forever but makes it immutable: no future upgrade can undo the stop, and the state remains readable at its original addresses.
-
-For a beta deployment on devnet, closing the program (reclaiming rent) is the normal end. Immutability-by-burned-authority is the shape a mainnet retirement would take when the historical state should stay served at its known addresses.
+1. **Pause settlement.** `./scripts/dev.sh pause --cluster <c>`.
+2. **Marker rent stays.** Nullifier and root markers are replay protection; no build deployed to a live cluster has an instruction that deletes them, so their rent is abandoned by design.
+3. **Renounce the ownership, by hand** (The owner). No one can unpause, upgrade or reconfigure the adapter again. The paused program stays on chain and its state stays readable at its original addresses; its upgrade authority remains the program's PDA, which only `upgrade` could use, so the program can no longer be closed either.
 

@@ -35,80 +35,72 @@ fn invoke_forwarder(
     Ok(())
 }
 
-fn read_forwarder_output(
-    output_mode: &OutputMode,
-    program_id: &Pubkey,
-) -> Result<Vec<u8>, PAError> {
+fn read_forwarder_output(output_mode: &OutputMode, forwarder: &Pubkey) -> Result<Vec<u8>, PAError> {
     match output_mode {
-        OutputMode::ReturnData => {
-            let (returned_program_id, return_data) =
-                get_return_data().ok_or(PAError::ExternalCallOutputMismatch)?;
-            if returned_program_id != *program_id {
-                return Err(PAError::ExternalCallOutputMismatch);
-            }
-            Ok(return_data)
-        }
+        OutputMode::ReturnData => super::decode_forwarder_output(get_return_data(), forwarder),
     }
 }
 
-/// Solana analog to EVM's `_executeForwarderCall`: invoke, verify output, emit event.
-fn execute_forwarder_call<'info>(
+/// Solana analog to EVM's `_executeForwarderCall`: invoke, verify output,
+/// return the event the caller emits.
+fn execute_forwarder_call(
     logic_ref: &arm_core::Digest,
     call: SolanaExternalCall,
-    segment: &[AccountInfo<'info>],
-) -> Result<(), PAError> {
-    invoke_forwarder(&logic_ref.to_bytes(), &call.instruction_data, segment)?;
+    segment: &[AccountInfo<'_>],
+) -> Result<crate::ForwarderCallExecutedEvent, PAError> {
+    invoke_forwarder(&(*logic_ref).into(), &call.instruction_data, segment)?;
 
     let forwarder = *segment[0].key;
     let actual_output = read_forwarder_output(&call.output_mode, &forwarder)?;
 
     super::verify_output(&call.expected_output, &actual_output)?;
 
-    anchor_lang::prelude::emit!(crate::ForwarderCallExecutedEvent {
-        forwarder,
+    Ok(crate::ForwarderCallExecutedEvent {
+        untrusted_forwarder: forwarder,
         input: call.instruction_data,
         output: actual_output,
-    });
-
-    Ok(())
+    })
 }
 
-/// Execute all external calls from a transaction via CPI.
-pub fn execute_external_calls(
-    tx: &arm_core::transaction::Transaction,
-    remaining_accounts: &[AccountInfo<'_>],
-    nullifier_count: usize,
-) -> Result<(), PAError> {
-    let calls = super::extract_external_calls(tx)?;
+/// The forwarder account segments of `remaining_accounts` after the
+/// nullifier markers, taken in call order as each resource's calls run.
+pub struct ForwarderSegments<'a, 'info> {
+    accounts: &'a [AccountInfo<'info>],
+}
 
-    if remaining_accounts.len() < nullifier_count {
-        return Err(PAError::InvalidTransactionData);
-    }
-    let external_accounts = &remaining_accounts[nullifier_count..];
-
-    let mut cursor = 0usize;
-    for (logic_ref, call) in calls.into_iter() {
-        let seg_len = call.num_accounts as usize;
-        let seg_end = cursor
-            .checked_add(seg_len)
+impl<'a, 'info> ForwarderSegments<'a, 'info> {
+    pub fn new(
+        remaining_accounts: &'a [AccountInfo<'info>],
+        nullifier_count: usize,
+    ) -> Result<Self, PAError> {
+        let accounts = remaining_accounts
+            .get(nullifier_count..)
             .ok_or(PAError::InvalidTransactionData)?;
-        if seg_end > external_accounts.len() {
-            return Err(PAError::InvalidTransactionData);
-        }
-
-        // Validate that the segment's first account matches the expected forwarder program ID.
-        if seg_len == 0 {
-            return Err(PAError::InvalidTransactionData);
-        }
-        let expected_program = Pubkey::new_from_array(call.program_id);
-        if external_accounts[cursor].key != &expected_program {
-            return Err(PAError::UnregisteredForwarder);
-        }
-
-        execute_forwarder_call(&logic_ref, call, &external_accounts[cursor..seg_end])?;
-
-        cursor = seg_end;
+        Ok(Self { accounts })
     }
 
-    Ok(())
+    /// Solana analog to EVM's `_executeForwarderCalls`: run a resource's
+    /// external calls, each through the next segment, whose first account
+    /// must be the forwarder the call names. Returns one event per call.
+    pub fn execute(
+        &mut self,
+        logic_ref: &arm_core::Digest,
+        app_data: &arm_core::logic_instance::AppData,
+    ) -> Result<Vec<crate::ForwarderCallExecutedEvent>, PAError> {
+        let calls = super::decode_external_calls(app_data)?;
+        let mut events = Vec::with_capacity(calls.len());
+        for call in calls {
+            let seg_len = call.num_accounts as usize;
+            if seg_len == 0 || seg_len > self.accounts.len() {
+                return Err(PAError::InvalidTransactionData);
+            }
+            let (segment, rest) = self.accounts.split_at(seg_len);
+            if segment[0].key != &Pubkey::new_from_array(call.program_id) {
+                return Err(PAError::UnregisteredForwarder);
+            }
+            events.push(execute_forwarder_call(logic_ref, call, segment)?);
+            self.accounts = rest;
+        }
+        Ok(events)
+    }
 }

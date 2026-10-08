@@ -2,41 +2,6 @@
 resolution = true
 skip-lint = false
 
-[programs.devnet]
-block_time_forwarder = "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
-mock_verifier = "H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKvgDhrvVVHvHf"
-protocol_adapter = "9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF"
-test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
-
-[programs.localnet]
-block_time_forwarder = "3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf"
-mock_verifier = "H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKvgDhrvVVHvHf"
-protocol_adapter = "9hDoEFv9hyECfruQUxDetE8CiuFrB2fbCiHuD5GUKFeF"
-test_forwarder = "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD"
-
 [provider]
 cluster = "localnet"
 wallet = "~/.config/solana/id.json"
-
-# Clone RISC0 verifier programs and state from devnet at startup
-[test.validator]
-url = "https://api.devnet.solana.com"
-
-# Verifier Router Program
-[[test.validator.clone]]
-address = "BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"
-
-# Groth16 Verifier Program
-[[test.validator.clone]]
-address = "2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"
-
-# Router PDA (initialized state)
-[[test.validator.clone]]
-address = "9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"
-
-# Verifier Entry PDA (groth16 selector 0x73c457ba registered)
-[[test.validator.clone]]
-address = "4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
-
-[scripts]
-test = "yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 tests/**/*.ts"

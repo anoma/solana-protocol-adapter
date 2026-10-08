@@ -1,156 +1,60 @@
 use crate::error::PAError;
 use crate::external_calls::{
     build_account_metas, build_forwarder_instruction_data, decode_external_call,
-    encode_external_call, extract_external_calls, FORWARD_CALL_DISCRIMINATOR,
+    decode_external_calls, decode_forwarder_output, encode_external_call,
+    FORWARD_CALL_DISCRIMINATOR,
 };
-use crate::tests::utils::{
-    create_minimal_transaction, create_tag_consistent_payload_tx,
-    create_transaction_with_external_payload, make_account_info,
-};
+use crate::tests::utils::make_account_info;
 use crate::types::{OutputMode, SolanaExternalCall};
 use anchor_lang::prelude::Pubkey;
-use arm_core::logic_instance::ExpirableBlob;
-use arm_core::Digest;
+use arm_core::logic_instance::{AppData, ExpirableBlob};
+
+fn call(program_id: u8, instruction_data: Vec<u8>) -> SolanaExternalCall {
+    SolanaExternalCall {
+        program_id: [program_id; 32],
+        instruction_data,
+        expected_output: vec![0x00],
+        output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
+    }
+}
 
 #[test]
-fn test_extract_external_calls_empty() {
-    let tx = create_minimal_transaction();
-    let calls = extract_external_calls(&tx).unwrap();
+fn decode_external_calls_of_app_data_without_calls_is_empty() {
+    let calls = decode_external_calls(&AppData::default()).unwrap();
     assert!(
         calls.is_empty(),
-        "Transaction with no external_payload should return empty vec"
+        "app data with no external payload has no calls"
     );
 }
 
+/// A resource's calls run in the order its app data lists them, as pa-evm's
+/// `_executeForwarderCalls` iterates the external payload.
 #[test]
-fn test_extract_external_calls_single() {
-    let call = SolanaExternalCall {
-        program_id: [0xAA; 32],
-        instruction_data: vec![1, 2, 3, 4],
-        expected_output: vec![0x00],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
+fn decode_external_calls_keeps_the_listed_order() {
+    let (first, second) = (call(0xAA, vec![1]), call(0xBB, vec![2]));
+    let app_data = AppData {
+        external_payload: vec![encode_external_call(&first), encode_external_call(&second)],
+        ..AppData::default()
     };
-    let blob = encode_external_call(&call);
-
-    let tx = create_transaction_with_external_payload(vec![blob]);
-
-    let extracted = extract_external_calls(&tx).unwrap();
-    assert_eq!(extracted.len(), 1, "Should extract exactly one call");
-
-    let (_, extracted_call) = &extracted[0];
-    assert_eq!(extracted_call.program_id, call.program_id);
-    assert_eq!(extracted_call.instruction_data, call.instruction_data);
-    assert_eq!(extracted_call.expected_output, call.expected_output);
-}
-
-/// Execution order must follow the compliance-tag traversal, not the wire order
-/// of logic_verifier_inputs. Reversing the wire entries must not change the
-/// order of extracted calls.
-#[test]
-fn test_extract_external_calls_follows_tag_order_not_wire_order() {
-    let call_a = SolanaExternalCall {
-        program_id: [0xAA; 32],
-        instruction_data: vec![0x01],
-        expected_output: vec![0x00],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    };
-    let call_b = SolanaExternalCall {
-        program_id: [0xBB; 32],
-        instruction_data: vec![0x02],
-        expected_output: vec![0x00],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    };
-
-    let tx = create_tag_consistent_payload_tx(
-        vec![encode_external_call(&call_a)],
-        vec![encode_external_call(&call_b)],
-    );
-    let ordered = extract_external_calls(&tx).expect("canonical tx must extract");
-    assert_eq!(ordered.len(), 2);
-    assert_eq!(ordered[0].1.instruction_data, vec![0x01]);
-    assert_eq!(ordered[1].1.instruction_data, vec![0x02]);
-
-    // Reverse only the wire order. The compliance units are untouched, so the
-    // proof would still verify; extraction order must be unchanged.
-    let mut reversed = tx.clone();
-    reversed.actions[0].logic_verifier_inputs.reverse();
-    let after = extract_external_calls(&reversed).expect("reordered tx must extract");
-
-    assert_eq!(
-        after.len(),
-        2,
-        "reordering wire entries must not drop calls"
-    );
-    assert_eq!(
-        after[0].1.instruction_data,
-        vec![0x01],
-        "first call must still be the consumed-tag call"
-    );
-    assert_eq!(
-        after[1].1.instruction_data,
-        vec![0x02],
-        "second call must still be the created-tag call"
-    );
-}
-
-/// A tag appearing twice makes the mapping ambiguous and must be rejected.
-#[test]
-fn test_extract_external_calls_rejects_duplicate_tags() {
-    let tx_base = create_minimal_transaction();
-    let mut tx = tx_base.clone();
-    tx.actions[0].logic_verifier_inputs[1].tag = tx.actions[0].logic_verifier_inputs[0].tag;
-
-    let result = extract_external_calls(&tx);
-
-    assert!(
-        matches!(result, Err(PAError::InvalidTransactionData)),
-        "duplicate LVI tags must be rejected, got {:?}",
-        result
-    );
+    let decoded = decode_external_calls(&app_data).unwrap();
+    assert_eq!(decoded.len(), 2);
+    assert_eq!(decoded[0].program_id, first.program_id);
+    assert_eq!(decoded[0].instruction_data, first.instruction_data);
+    assert_eq!(decoded[1].program_id, second.program_id);
+    assert_eq!(decoded[1].instruction_data, second.instruction_data);
 }
 
 #[test]
-fn test_extract_external_calls_invalid_blob() {
-    let invalid_blob = ExpirableBlob {
-        blob: vec![0xDEADBEEF], // Invalid data
-        deletion_criterion: 0,
+fn decode_external_calls_rejects_an_invalid_blob() {
+    let app_data = AppData {
+        external_payload: vec![ExpirableBlob {
+            blob: vec![0xDEADBEEF],
+            deletion_criterion: 0,
+        }],
+        ..AppData::default()
     };
-
-    let tx = create_transaction_with_external_payload(vec![invalid_blob]);
-
-    let result = extract_external_calls(&tx);
-    assert!(result.is_err(), "Invalid blob should return error");
-}
-
-#[test]
-fn test_extract_external_calls_logic_ref_association() {
-    let call = SolanaExternalCall {
-        program_id: [0xAA; 32],
-        instruction_data: vec![1, 2, 3, 4],
-        expected_output: vec![0x00],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    };
-    let blob = encode_external_call(&call);
-
-    let verifying_key = Digest::from_bytes([0xBB; 32]);
-    let mut tx = create_transaction_with_external_payload(vec![blob]);
-    crate::tests::utils::mutate_cu_instance(&mut tx.actions[0].compliance_units[0], |inst| {
-        inst.consumed_logic_ref = verifying_key
-    });
-    tx.actions[0].logic_verifier_inputs[0].verifying_key = verifying_key;
-
-    let extracted = extract_external_calls(&tx).unwrap();
-    assert_eq!(extracted.len(), 1);
-
-    let (logic_ref, _) = &extracted[0];
-    assert_eq!(
-        *logic_ref, verifying_key,
-        "Logic ref should match verifying_key from LVI"
-    );
+    assert!(decode_external_calls(&app_data).is_err());
 }
 
 #[test]
@@ -172,43 +76,64 @@ fn test_build_forwarder_instruction_data_byte_layout() {
     assert_eq!(&data[44..], &input, "input payload");
 }
 
-/// Solana cannot distinguish an explicit empty return from silence, so a call
-/// authorizing an empty output can never settle. Reject it at decode.
+/// pa-evm's forwarder calls may expect an empty output (the ERC20
+/// forwarder's), so a call expecting one decodes.
 #[test]
-fn test_decode_rejects_empty_expected_output() {
+fn test_decode_accepts_an_empty_expected_output() {
     let call = SolanaExternalCall {
-        program_id: [7u8; 32],
-        instruction_data: vec![1, 2, 3],
         expected_output: vec![],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
+        ..call(7, vec![1, 2, 3])
     };
-    let blob = encode_external_call(&call);
 
-    let result = decode_external_call(&blob);
+    let decoded = decode_external_call(&encode_external_call(&call))
+        .expect("a call expecting an empty output decodes");
+    assert_eq!(decoded, call);
+}
 
-    assert!(
-        matches!(result, Err(PAError::EmptyExpectedOutput)),
-        "expected EmptyExpectedOutput, got {:?}",
-        result
+/// A forwarder returns its output as Anchor returns a `Vec<u8>`: a 4-byte
+/// little-endian length, then the bytes.
+#[test]
+fn forwarder_output_is_the_returned_borsh_bytes() {
+    let forwarder = Pubkey::new_unique();
+    let output = |data: Vec<u8>| {
+        decode_forwarder_output(Some((forwarder, data)), &forwarder)
+            .expect("an encoded Vec<u8> from the forwarder is its output")
+    };
+    assert_eq!(output(vec![1, 0, 0, 0, 0x2a]), vec![0x2a]);
+    assert_eq!(
+        output(vec![0, 0, 0, 0]),
+        Vec::<u8>::new(),
+        "an empty output is four bytes of return data"
     );
 }
 
-/// A non-empty expected output remains valid and decodes unchanged.
+/// No return data is not an empty output, and only the called forwarder's
+/// return data, holding exactly one encoded `Vec<u8>`, is its output.
 #[test]
-fn test_decode_accepts_non_empty_expected_output() {
-    let call = SolanaExternalCall {
-        program_id: [7u8; 32],
-        instruction_data: vec![1, 2, 3],
-        expected_output: vec![0x2a],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    };
-    let blob = encode_external_call(&call);
-
-    let decoded = decode_external_call(&blob).expect("non-empty output must decode");
-
-    assert_eq!(decoded, call);
+fn forwarder_output_is_refused_unless_the_forwarder_returned_one_vec() {
+    let forwarder = Pubkey::new_unique();
+    for (return_data, why) in [
+        (None, "a forwarder that set no return data"),
+        (
+            Some((Pubkey::new_unique(), vec![0, 0, 0, 0])),
+            "return data another program set",
+        ),
+        (Some((forwarder, vec![0x2a])), "a raw byte, not a Vec<u8>"),
+        (
+            Some((forwarder, vec![2, 0, 0, 0, 0x2a])),
+            "a length past the data",
+        ),
+        (
+            Some((forwarder, vec![0, 0, 0, 0, 0x2a])),
+            "bytes after the Vec<u8>",
+        ),
+    ] {
+        let result = decode_forwarder_output(return_data, &forwarder);
+        assert!(
+            matches!(result, Err(PAError::ForwarderCallOutputMismatch)),
+            "{why}: expected ForwarderCallOutputMismatch, got {result:?}"
+        );
+    }
 }
 
 /// Signer authority must never reach a forwarder. Solana unions privileges
