@@ -178,6 +178,10 @@ pub mod protocol_adapter {
         emit_cpi!(KindTableCommitmentUpdatedEvent {
             kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
         });
+        // OpenZeppelin's `initializer` announces the version once the body ran.
+        emit_cpi!(InitializedEvent {
+            version: SCHEMA_VERSION.into(),
+        });
 
         msg!("PAState initialized with empty commitment tree");
         Ok(())
@@ -508,7 +512,8 @@ pub mod protocol_adapter {
     /// Bring a state account in the previous schema version, which held one
     /// denylist for consumed and created resources alike, to this one. Each
     /// logic ref it held goes on both denylists and is announced on each
-    /// with `LogicRefDeniedEvent`, as `deny_logic_refs` would. The
+    /// with `LogicRefDeniedEvent`, as `deny_logic_refs` would, and then the
+    /// new version with `InitializedEvent`. The
     /// counterpart of the call pa-evm's owner passes to `upgradeToAndCall`:
     /// run once by the owner, after the in-place upgrade and before any other
     /// instruction, which all refuse the previous version. It parses the
@@ -550,6 +555,10 @@ pub mod protocol_adapter {
                 });
             }
         }
+        // As OpenZeppelin's `reinitializer(n)`, once the body ran.
+        emit_cpi!(InitializedEvent {
+            version: SCHEMA_VERSION.into(),
+        });
         Ok(())
     }
 
@@ -1419,6 +1428,14 @@ pub struct UnpausedEvent {
 pub struct OwnershipTransferredEvent {
     pub previous_owner: Pubkey,
     pub new_owner: Pubkey,
+}
+
+/// Mirrors OpenZeppelin Initializable: `event Initialized(uint64 version);`.
+/// `initialize` announces the state's schema version, and `migrate_state`
+/// the version it brings the state to, as a `reinitializer(n)` would.
+#[event]
+pub struct InitializedEvent {
+    pub version: u64,
 }
 
 /// Mirrors ERC1967: `event Upgraded(address indexed implementation);`. A

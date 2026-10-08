@@ -1,14 +1,14 @@
 /**
  * `initialize`: only the program's upgrade authority may call it (AUTH-01);
  * it sets the owner and hands the upgrade authority to the program's PDA,
- * and starts every deployment on the empty kind table, announcing the owner
- * and the table as pa-evm's initializer does. Needs an adapter that was
+ * and starts every deployment on the empty kind table, announcing the owner,
+ * the table and the initialized version as pa-evm's initializer does. Needs an adapter that was
  * never initialized: it runs first, on the fresh deployment the rest of the
  * suite builds on.
  */
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { EMPTY_KIND_TABLE_COMMITMENT } from "../../client/constants";
+import { EMPTY_KIND_TABLE_COMMITMENT, SCHEMA_VERSION } from "../../client/constants";
 import { initializeAdapter } from "../../client/instructions";
 import { deriveUpgradeAuthorityPda } from "../../client/pda";
 import { upgradeAuthority } from "../../client/upgrade";
@@ -118,16 +118,24 @@ describe("protocol-adapter (initialize)", () => {
     assert.deepEqual(Buffer.from(state.root as number[]), EMPTY_TREE_ROOT_INITIAL, "the root is the empty tree's");
     // pa-evm's initializer sets the owner (OwnershipTransferred from the zero
     // address), adds the empty tree's root (CommitmentTreeRootAdded) and
-    // installs the empty kind table (KindTableCommitmentUpdated), in that order.
+    // installs the empty kind table (KindTableCommitmentUpdated), in that
+    // order; OpenZeppelin's `initializer` then announces the version
+    // (Initialized), here the state's schema version.
     const { events } = await cpiEventsOf(sig);
     assert.deepEqual(
       events.map((e) => e.name),
-      ["ownershipTransferredEvent", "commitmentTreeRootAddedEvent", "kindTableCommitmentUpdatedEvent"],
+      [
+        "ownershipTransferredEvent",
+        "commitmentTreeRootAddedEvent",
+        "kindTableCommitmentUpdatedEvent",
+        "initializedEvent",
+      ],
       "initialize emits pa-evm's initializer events in order",
     );
     assert.equal(events[0].data.previousOwner.toBase58(), PublicKey.default.toBase58(), "from no owner");
     assert.equal(events[0].data.newOwner.toBase58(), provider.wallet.publicKey.toBase58(), "to the initial owner");
     assert.deepEqual(Buffer.from(events[1].data.root), EMPTY_TREE_ROOT_INITIAL, "the empty tree's root");
     assert.deepEqual(Buffer.from(events[2].data.kindTableCommitment), EMPTY_KIND_TABLE_COMMITMENT);
+    assert.equal(events[3].data.version.toNumber(), SCHEMA_VERSION, "the state's schema version");
   });
 });

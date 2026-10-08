@@ -125,13 +125,18 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
     const sig = await migrateState(program, wallet).rpc();
     const { events } = await cpiEventsOf(sig);
     assert.deepEqual(
-      events.map((e) => [e.name, Array.from(e.data.logicRef), e.data.consumed]),
+      events.slice(0, -1).map((e) => [e.name, Array.from(e.data.logicRef), e.data.consumed]),
       [
         ["logicRefDeniedEvent", deniedBefore, true],
         ["logicRefDeniedEvent", deniedBefore, false],
       ],
       "the migration announces the entry on each denylist, as deny_logic_refs would",
     );
+    // As OpenZeppelin's `reinitializer(n)`, the migration then announces the
+    // version it brought the state to.
+    const last = events[events.length - 1];
+    assert.equal(last.name, "initializedEvent", "the migration ends with Initialized");
+    assert.equal(last.data.version.toNumber(), SCHEMA_VERSION, "the new schema version");
 
     const state: any = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.schemaVersion, SCHEMA_VERSION, "the state is in this build's layout");
