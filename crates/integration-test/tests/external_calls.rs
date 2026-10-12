@@ -30,16 +30,25 @@ use surfpool_sdk::Pubkey;
 const WRITTEN: [u8; 4] = [1, 2, 3, 4];
 const UNWRITTEN: [u8; 4] = [0; 4];
 
-/// A forwarder whose every call takes the same accounts.
-struct Fixed(CallAccounts);
+/// A forwarder whose every call takes the same segment, with the same
+/// instructions preceding the settlement.
+struct Fixed {
+    segment: Vec<AccountMeta>,
+    preceding: Vec<Instruction>,
+}
 
 impl Forwarder for Fixed {
     fn call_accounts<'a>(
         &'a self,
         _rpc: &'a RpcClient,
-        _call: &'a SolanaExternalCall,
+        calls: &'a [SolanaExternalCall],
     ) -> BoxFuture<'a, anyhow::Result<CallAccounts>> {
-        Box::pin(async move { Ok(self.0.clone()) })
+        Box::pin(async move {
+            Ok(CallAccounts {
+                segments: vec![self.segment.clone(); calls.len()],
+                preceding: self.preceding.clone(),
+            })
+        })
     }
 }
 
@@ -104,10 +113,10 @@ impl Setup {
             output_mode: OutputMode::ReturnData,
             num_accounts: u8::try_from(segment.len())?,
         };
-        self.env.protocol_adapter.forwarders.register(
-            self.forwarder,
-            Arc::new(Fixed(CallAccounts { segment, preceding })),
-        );
+        self.env
+            .protocol_adapter
+            .forwarders
+            .register(self.forwarder, Arc::new(Fixed { segment, preceding }));
         let action = passthrough::build(
             seed,
             vec![bytes_to_words(&call.encode())],

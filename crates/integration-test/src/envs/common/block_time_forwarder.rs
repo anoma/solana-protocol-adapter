@@ -28,14 +28,19 @@ impl Forwarder for ClockReader {
     fn call_accounts<'a>(
         &'a self,
         _rpc: &'a RpcClient,
-        call: &'a SolanaExternalCall,
+        calls: &'a [SolanaExternalCall],
     ) -> BoxFuture<'a, anyhow::Result<CallAccounts>> {
         Box::pin(async move {
             Ok(CallAccounts {
-                segment: vec![
-                    AccountMeta::new_readonly(call.program_id.into(), false),
-                    AccountMeta::new_readonly(solana_sdk_ids::sysvar::clock::ID, false),
-                ],
+                segments: calls
+                    .iter()
+                    .map(|call| {
+                        vec![
+                            AccountMeta::new_readonly(call.program_id.into(), false),
+                            AccountMeta::new_readonly(solana_sdk_ids::sysvar::clock::ID, false),
+                        ]
+                    })
+                    .collect(),
                 preceding: vec![],
             })
         })
