@@ -3,8 +3,8 @@ use std::sync::Arc;
 use anoma_pa_solana_client::events::PaEvent;
 use anoma_pa_solana_client::forwarders::Forwarders;
 use anoma_pa_solana_client::submission::{
-    SimulationOutcome, Submission, first_failure, read_adapter_state, read_verifier_program,
-    simulate,
+    Failure, SimulationOutcome, Submission, read_adapter_state, read_verifier_program,
+    settlement_failure,
 };
 use anoma_pa_solana_client::{
     PAStateAccount, PaError, TXDATA_EXPIRY_SLOTS_DEFAULT, deny_logic_refs_ix, pause_ix,
@@ -201,19 +201,18 @@ impl ProtocolAdapter {
         transaction: Transaction,
         skip_risc_zero_proof_verification: bool,
     ) -> anyhow::Result<Result<u64, PaError>> {
-        let simulation = self
+        let outcome = self
             .prepare(transaction)
             .await?
-            .plan_simulation(skip_risc_zero_proof_verification)?;
-        Ok(
-            match simulate(&self.rpc, &self.program, &self.payer.pubkey(), &simulation).await? {
-                SimulationOutcome::Executable { units_consumed } => {
-                    Ok(units_consumed.context("the simulation reports no compute units")?)
-                }
-                SimulationOutcome::Refused(error) => Err(error),
-                other => anyhow::bail!("the simulation did not end in an adapter error: {other:?}"),
-            },
-        )
+            .simulate(&self.rpc, skip_risc_zero_proof_verification)
+            .await?;
+        Ok(match outcome {
+            SimulationOutcome::Executable { units_consumed } => {
+                Ok(units_consumed.context("the simulation reports no compute units")?)
+            }
+            SimulationOutcome::Failed(Failure::Adapter(error)) => Err(error),
+            other => anyhow::bail!("the simulation did not end in an adapter error: {other:?}"),
+        })
     }
 
     /// Why the adapter refused the settlement that failed with `error`, from
@@ -295,24 +294,19 @@ impl CoreProtocolAdapter for ProtocolAdapter {
     }
 }
 
-/// The refusal a settlement's log names, from the failure that ended it:
-/// any custom error of the `verifier` refuses the aggregation proof; an error
-/// of the adapter's own is the refusal its `PaError` is. `None` for any other
-/// failure.
+/// The refusal a settlement's log names, from the failure that ended it
+/// (`settlement_failure`): the verifier refusing the aggregation proof, or
+/// the adapter's own error, the refusal its `PaError` is. `None` for any
+/// other failure.
 fn refusal_in_logs(
     logs: &[String],
     program: &Pubkey,
     verifier: &Pubkey,
 ) -> anyhow::Result<Option<Refusal>> {
-    let Some((failed, code)) = first_failure(logs)? else {
-        return Ok(None);
-    };
-    Ok(if failed == *verifier {
-        Some(Refusal::InvalidAggregationProof)
-    } else if failed == *program {
-        PaError::from_code(code).and_then(refusal_for)
-    } else {
-        None
+    Ok(match settlement_failure(logs, program, verifier)? {
+        Some(Failure::ProofRefused { .. }) => Some(Refusal::InvalidAggregationProof),
+        Some(Failure::Adapter(error)) => refusal_for(error),
+        Some(Failure::Program { .. }) | None => None,
     })
 }
 
@@ -436,39 +430,6 @@ mod tests {
         let code = PaError::ForwarderCallOutputMismatch.code();
         let logs = [invoke(ADAPTER, 1), failure(ADAPTER, code)];
         assert_eq!(refusal(&logs), Some(Refusal::ExternalCallOutputMismatch));
-    }
-
-    #[test]
-    fn a_programs_log_line_reading_like_a_failure_is_not_the_failure() {
-        let logs = [
-            invoke(ADAPTER, 1),
-            invoke(FORWARDER, 2),
-            // A program's own log lines start "Program log: ", whatever follows.
-            format!(
-                "Program log: {}",
-                failure(ADAPTER, PaError::NonExistingRoot.code())
-            ),
-            format!("Program {FORWARDER} success"),
-            failure(ADAPTER, PaError::ForwarderCallOutputMismatch.code()),
-        ];
-        assert_eq!(refusal(&logs), Some(Refusal::ExternalCallOutputMismatch));
-    }
-
-    #[test]
-    fn a_truncated_log_names_no_failure() {
-        // The runtime drops lines past its log limit, the inner program's
-        // failure line among them, while a shorter later line can still fit:
-        // the line left may carry another program's code.
-        let code = PaError::NonExistingRoot.code();
-        let logs = [
-            invoke(ADAPTER, 1),
-            invoke(FORWARDER, 2),
-            "Log truncated".to_owned(),
-            failure(ADAPTER, code),
-        ];
-        let error = refusal_in_logs(&logs, &ADAPTER, &VERIFIER)
-            .expect_err("a truncated log does not say which program failed");
-        assert!(format!("{error:#}").contains("truncated"), "{error:#}");
     }
 
     #[test]

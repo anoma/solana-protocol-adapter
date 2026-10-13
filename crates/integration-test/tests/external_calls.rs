@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use anoma_pa_solana_client::events::PaEvent;
 use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};
-use anoma_pa_solana_client::forwarders::{CallAccounts, Forwarder, ForwarderError};
+use anoma_pa_solana_client::forwarders::{CallAccountsFuture, Forwarder};
+use anoma_pa_solana_client::settlement::CallAccounts;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
 use anoma_pa_solana_integration_test::executed::Executed;
 use anoma_pa_solana_integration_test::test_forwarder::{
@@ -20,7 +21,6 @@ use anoma_pa_testkit::prove_actions;
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_rm_risc0::utils::bytes_to_words;
 use anyhow::Context;
-use futures::future::BoxFuture;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -43,7 +43,8 @@ impl Forwarder for Fixed {
         &'a self,
         _rpc: &'a RpcClient,
         calls: &'a [SolanaExternalCall],
-    ) -> BoxFuture<'a, Result<CallAccounts, ForwarderError>> {
+        _preceding_start: usize,
+    ) -> CallAccountsFuture<'a> {
         Box::pin(async move {
             Ok(CallAccounts {
                 segments: vec![self.segment.clone(); calls.len()],

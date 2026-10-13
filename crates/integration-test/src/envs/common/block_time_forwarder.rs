@@ -7,12 +7,12 @@ use std::sync::Arc;
 use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};
 use anoma_pa_testkit::environment::TimeComparison;
 use anoma_rm_risc0::utils::bytes_to_words;
-use futures::future::BoxFuture;
 use solana_instruction::AccountMeta;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 use super::environment::Environment;
-use anoma_pa_solana_client::forwarders::{CallAccounts, Forwarder, ForwarderError};
+use anoma_pa_solana_client::forwarders::{CallAccountsFuture, Forwarder};
+use anoma_pa_solana_client::settlement::CallAccounts;
 
 /// The forwarder's build, at the local address `env/localnet.env` names
 /// `BLOCK_TIME_FORWARDER` (`dev.sh harness-programs`).
@@ -29,7 +29,8 @@ impl Forwarder for ClockReader {
         &'a self,
         _rpc: &'a RpcClient,
         calls: &'a [SolanaExternalCall],
-    ) -> BoxFuture<'a, Result<CallAccounts, ForwarderError>> {
+        _preceding_start: usize,
+    ) -> CallAccountsFuture<'a> {
         Box::pin(async move {
             Ok(CallAccounts {
                 segments: calls
