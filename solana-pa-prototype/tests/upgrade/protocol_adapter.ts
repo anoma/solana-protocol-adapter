@@ -17,12 +17,12 @@ import {
   initializeAdapter,
   migrateState,
   pauseAdapter,
-  setKindTableCommitment,
+  setKindTableRoot,
   unpauseAdapter,
   upgradeAdapter,
 } from "../../client/instructions";
 import { VERIFIER_ROUTER_ID } from "../../client/verifier";
-import { createdCommitmentsOf, loadFixture } from "../utils/fixtures";
+import { createdCommitmentsOf, loadFixture, loadPreviousFixture } from "../utils/fixtures";
 import { assertFails, randomRef, sendSettlementV1, uploadTxData } from "../utils/helpers";
 import { predictRootMarkerPda } from "../utils/merkle";
 import {
@@ -64,7 +64,7 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
   // forwarder's raw return data, which this build's forwarders encode as a
   // Vec<u8>.
   it("builds history through the previous build", async () => {
-    const fixture = await loadFixture("batch_groth16_transfer_shape.json");
+    const fixture = loadPreviousFixture("batch_groth16_transfer_shape.json");
     const authority = await funder.fresh(2);
     const { uploadId, txData } = await uploadTxData(
       previous as any,
@@ -105,7 +105,7 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
   // layout lacks the second denylist's length, so it does not read as this
   // one, and nothing misreads the account.
   it("refuses an owner-only instruction before the state is migrated", () =>
-    assertFails(setKindTableCommitment(program, wallet, Array.from(stateBefore.kindTableCommitment)).rpc(), {
+    assertFails(setKindTableRoot(program, wallet, Array.from(stateBefore.kindTableCommitment)).rpc(), {
       program,
       error: "AccountDidNotDeserialize",
       account: "pa_state",
@@ -140,7 +140,15 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
 
     const state: any = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.schemaVersion, SCHEMA_VERSION, "the state is in this build's layout");
-    const { schemaVersion: _before, deniedLogicRefs: _denied, ...carried } = stateBefore;
+    const { schemaVersion: _before, deniedLogicRefs: _denied, ...before } = stateBefore;
+    // The same bytes under this build's name: the previous IDL calls the
+    // stored kind table `kindTableCommitment`.
+    const carried = Object.fromEntries(
+      Object.entries(before).map(([field, value]) => [
+        field === "kindTableCommitment" ? "kindTableRoot" : field,
+        value,
+      ]),
+    );
     const { schemaVersion: _after, deniedConsumedLogicRefs, deniedCreatedLogicRefs, ...kept } = state;
     assert.equal(JSON.stringify(kept), JSON.stringify(carried), "every other field carries over");
     for (const denylist of [deniedConsumedLogicRefs, deniedCreatedLogicRefs]) {
@@ -173,6 +181,6 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
     await upgradeThroughProgram(program, ADAPTER_SO, "upgradedEvent", (buffer, spill) =>
       upgradeAdapter(program, wallet, buffer, spill),
     );
-    await setKindTableCommitment(program, wallet, Array.from(stateBefore.kindTableCommitment)).rpc();
+    await setKindTableRoot(program, wallet, Array.from(stateBefore.kindTableCommitment)).rpc();
   });
 });

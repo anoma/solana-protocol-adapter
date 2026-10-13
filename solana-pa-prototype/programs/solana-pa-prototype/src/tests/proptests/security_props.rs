@@ -42,7 +42,7 @@ fn every_instance_field_mutation_changes_journal_digest() {
         }),
         ("action tree root", |i, d| i.actions[0].action_tree_root = d),
         ("compliance key", |i, d| i.compliance_key = d),
-        ("kind table commitment", |i, d| i.kind_table_commitment = d),
+        ("kind table root", |i, d| i.kind_table_root = d),
         ("app data", |i, _| {
             i.actions[0].consumed_publics[0]
                 .app_data

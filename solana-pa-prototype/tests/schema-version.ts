@@ -5,7 +5,7 @@
 import * as anchor from "@anchor-lang/core";
 import { AccountMeta, PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { denyLogicRefs, migrateState, setKindTableCommitment, upgradeAdapter } from "../client/instructions";
+import { denyLogicRefs, migrateState, setKindTableRoot, upgradeAdapter } from "../client/instructions";
 import {
   localCloseMarkersBatch,
   localRenounceAdapterOwnership,
@@ -122,8 +122,8 @@ describe("protocol-adapter (dev_set_schema_version tooling) @localnet", () => {
         run: () => setExpiryBounds(1, 2),
       },
       {
-        name: "set_kind_table_commitment",
-        run: () => setKindTableCommitment(program, provider.wallet.publicKey, randomRef()).rpc(),
+        name: "set_kind_table_root",
+        run: () => setKindTableRoot(program, provider.wallet.publicKey, randomRef()).rpc(),
       },
       {
         name: "deny_logic_refs",

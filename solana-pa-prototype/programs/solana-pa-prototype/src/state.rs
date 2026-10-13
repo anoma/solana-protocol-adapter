@@ -15,12 +15,13 @@ pub const SCHEMA_VERSION: u8 = 4;
 #[constant]
 pub const PREVIOUS_SCHEMA_VERSION: u8 = 3;
 
-/// The commitment of the empty kind table, under which every resource
-/// kind is derived via hash-to-curve: the table every deployment starts
-/// on, as pa-evm's `_EMPTY_KIND_TABLE_COMMITMENT`.
+/// The root of the empty kind table, under which every resource kind is
+/// derived via hash-to-curve: the table every deployment starts on, as
+/// pa-evm's `EMPTY_KIND_TABLE_ROOT`. A Merkle tree without entries has its
+/// padding leaf as its root, `sha256("EMPTY")`.
 #[constant]
-pub const EMPTY_KIND_TABLE_COMMITMENT: [u8; 32] =
-    hex_literal::hex!("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+pub const EMPTY_KIND_TABLE_ROOT: [u8; 32] =
+    hex_literal::hex!("cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06");
 
 /// Protocol Adapter state — commitment tree frontier with variable depth (1-32).
 /// Nullifiers and historical roots are stored as separate PDA marker accounts.
@@ -51,13 +52,12 @@ pub struct PAStateAccount {
     /// Expected proof selector (4 bytes), set at initialization.
     /// Validated before sending proofs to the verifier router.
     pub proof_selector: [u8; 4],
-    /// The stored kind-table commitment: the empty table's at initialization,
-    /// replaced by `set_kind_table_commitment`. The aggregation circuit binds
-    /// each transaction to one kind table; a transaction settles when that is
-    /// this table or the empty one (`is_kind_table_commitment_accepted`), as
-    /// in pa-evm (sha256 of the concatenated entries; the empty table hashes
-    /// to sha256 of zero bytes).
-    pub kind_table_commitment: [u8; 32],
+    /// The stored kind-table root: the empty table's at initialization,
+    /// replaced by `set_kind_table_root`. The aggregation circuit binds
+    /// each transaction to one kind table, by the Merkle root of its entries;
+    /// a transaction settles when that is this table or the empty one
+    /// (`is_kind_table_root_accepted`), as in pa-evm.
+    pub kind_table_root: [u8; 32],
     /// Whether settlement is paused, as pa-evm's `paused()`: `pause` sets it
     /// and `unpause` clears it, both owner-only.
     pub paused: bool,
@@ -97,13 +97,13 @@ impl PAStateAccount {
             + size_of::<[u8; 32]>() * denied
     }
 
-    /// Whether a transaction proven against the kind table `commitment`
+    /// Whether a transaction proven against the kind table with root `root`
     /// settles: the stored one or the empty one, as pa-evm's
-    /// `_isKindTableCommitmentAccepted`. The empty table merges no kinds, so
+    /// `_isKindTableRootAccepted`. The empty table merges no kinds, so
     /// a transaction that balances under it also balances under the stored
     /// table.
-    pub fn is_kind_table_commitment_accepted(&self, commitment: &[u8; 32]) -> bool {
-        *commitment == self.kind_table_commitment || *commitment == EMPTY_KIND_TABLE_COMMITMENT
+    pub fn is_kind_table_root_accepted(&self, root: &[u8; 32]) -> bool {
+        *root == self.kind_table_root || *root == EMPTY_KIND_TABLE_ROOT
     }
 
     /// Whether the denylist for consumed resources (`consumed`) or the one
@@ -186,7 +186,7 @@ impl PAStateAccount {
             owner,
             verifier_router,
             proof_selector,
-            kind_table_commitment: EMPTY_KIND_TABLE_COMMITMENT,
+            kind_table_root: EMPTY_KIND_TABLE_ROOT,
             paused: false,
             root: EMPTY_TREE_ROOT_INITIAL.into(),
             next_index: 0,
@@ -211,7 +211,7 @@ pub struct PreviousPAState {
     pub owner: Pubkey,
     pub verifier_router: Pubkey,
     pub proof_selector: [u8; 4],
-    pub kind_table_commitment: [u8; 32],
+    pub kind_table_root: [u8; 32],
     pub paused: bool,
     pub root: [u8; 32],
     pub next_index: u64,
@@ -233,7 +233,7 @@ impl PreviousPAState {
             owner: self.owner,
             verifier_router: self.verifier_router,
             proof_selector: self.proof_selector,
-            kind_table_commitment: self.kind_table_commitment,
+            kind_table_root: self.kind_table_root,
             paused: self.paused,
             root: self.root,
             next_index: self.next_index,

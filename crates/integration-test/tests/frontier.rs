@@ -22,7 +22,7 @@ fn state_holding(tree: &CommitmentTreeState) -> PAStateAccount {
         owner: [1; 32],
         verifier_router: [2; 32],
         proof_selector: [0xff; 4],
-        kind_table_commitment: [0; 32],
+        kind_table_root: [0; 32],
         paused: false,
         root: tree.root,
         next_index: tree.next_index,

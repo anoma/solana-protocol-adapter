@@ -6,11 +6,11 @@ use anyhow::{anyhow, bail, Context, Result};
 use arm::action::Action;
 use arm::action_tree::ActionTree;
 use arm::aggregation_instance::ConsumedResourceAggregated;
-use arm::compliance::{ComplianceWitness, INITIAL_ROOT};
+use arm::compliance::{ComplianceWitness, KindPath, INITIAL_ROOT};
 use arm::compliance_unit::ComplianceUnit;
 use arm::constants::{
-    init_kind_table_from_file, kind_table, kind_table_hash, BATCH_AGGREGATION_PK, COMPLIANCE_PK,
-    COMPLIANCE_VK,
+    global_kind_table, init_kind_table_from_file, kind_table_root, BATCH_AGGREGATION_PK,
+    COMPLIANCE_PK, COMPLIANCE_VK,
 };
 use arm::logic_instance::ExpirableBlob;
 use arm::logic_instance::{AppData, LogicInstance};
@@ -412,7 +412,7 @@ struct GenerateArgs {
     #[arg(long, value_name = "DIR")]
     error_variants: Option<PathBuf>,
     /// Prove against this kind table instead of the committed empty one
-    /// (kind_table.json); the PA must store its commitment.
+    /// (kind_table.json); the PA must store its root.
     #[arg(long, value_name = "PATH", default_value = KIND_TABLE_PATH)]
     kind_table: PathBuf,
     /// Print claim digests for composition debugging.
@@ -669,8 +669,8 @@ fn deterministic_ephemeral_resource(
 /// action. Built through `from_parts` with a fixed, caller-chosen `rcv`
 /// rather than arm's randomized `from_resources*` constructors, which draw
 /// a fresh `rcv` and would make fixture generation nondeterministic.
-/// Carries the globally loaded kind table, so every instance commits to
-/// the table hash the PA pins at initialization.
+/// Carries the resources' paths in the globally loaded kind table, so the
+/// instance commits to that table's root when it lists one of them.
 fn single_action_compliance_witness(
     consumed: Resource,
     cm_merkle_path: MerklePath,
@@ -678,17 +678,25 @@ fn single_action_compliance_witness(
     created: Resource,
     rcv: Scalar,
 ) -> ComplianceWitness {
-    ComplianceWitness::from_parts(
-        vec![ConsumedResourceWitness {
-            resource: consumed,
-            cm_merkle_path,
-            nf_key,
-        }],
-        vec![created],
-        INITIAL_ROOT,
-        &rcv.to_bytes(),
-        kind_table().to_vec(),
-    )
+    let consumed = vec![ConsumedResourceWitness {
+        resource: consumed,
+        cm_merkle_path,
+        nf_key,
+    }];
+    let created = vec![created];
+    let kind_paths = kind_paths(&consumed, &created);
+    ComplianceWitness::from_parts(consumed, created, INITIAL_ROOT, &rcv.to_bytes(), kind_paths)
+}
+
+/// The paths of a witness's resources in the globally loaded kind table,
+/// consumed first, then created, as the compliance circuit reads them: a
+/// resource the table does not list has none, and the circuit derives its
+/// kind point by hash-to-curve. An instance whose resources are all unlisted
+/// commits to the empty table's root.
+fn kind_paths(consumed: &[ConsumedResourceWitness], created: &[Resource]) -> Vec<Option<KindPath>> {
+    global_kind_table()
+        .expect("the kind table is loaded before any witness is built")
+        .kind_paths_for(consumed, created)
 }
 
 /// Prove one action (one compliance unit, one consumed + one created
@@ -798,9 +806,8 @@ fn assemble_transaction(actions: Vec<Action>, rcvs: &[Vec<u8>]) -> Result<Transa
 
 /// Verify a transaction's proofs and delta against the loaded kind table.
 fn verify_tx(tx: &Transaction) -> Result<()> {
-    let kind_table_commitment =
-        *kind_table_hash().ok_or_else(|| anyhow!("kind table not loaded"))?;
-    arm::transaction::verify(tx, kind_table_commitment, JournalEncoding::Risc0Serde)
+    let kind_table_root = kind_table_root().ok_or_else(|| anyhow!("kind table not loaded"))?;
+    arm::transaction::verify(tx, kind_table_root, JournalEncoding::Risc0Serde)
         .map_err(|e| anyhow!("verify tx: {e:?}"))
 }
 
@@ -989,16 +996,18 @@ async fn generate_consume_only_transaction(
     let consumed_nf = consumed
         .nullifier(&nf_key)
         .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
+    let consumed = vec![ConsumedResourceWitness {
+        resource: consumed,
+        cm_merkle_path: MerklePath::empty(),
+        nf_key,
+    }];
+    let kind_paths = kind_paths(&consumed, &[]);
     let compliance_witness = ComplianceWitness::from_parts(
-        vec![ConsumedResourceWitness {
-            resource: consumed,
-            cm_merkle_path: MerklePath::empty(),
-            nf_key,
-        }],
+        consumed,
         vec![],
         INITIAL_ROOT,
         &Scalar::ONE.to_bytes(),
-        kind_table().to_vec(),
+        kind_paths,
     );
     let root = ActionTree::new(vec![consumed_nf])
         .root()
@@ -1143,7 +1152,7 @@ fn generate_error_variant_fixtures(
         let mut foreign_kind_table = tx.clone();
         require_aggregation_mut(&mut foreign_kind_table)?
             .instance
-            .kind_table_commitment = Digest::from_bytes([0x4b; 32]);
+            .kind_table_root = Digest::from_bytes([0x4b; 32]);
         write_variant("foreign_kind_table.json", &foreign_kind_table)?;
     }
 
@@ -1443,8 +1452,8 @@ fn dump_fixture(input: &Path) -> Result<()> {
                 hex::encode(&instance.compliance_key.as_bytes()[..4])
             );
             eprintln!(
-                "    kind_table_commitment: {}",
-                hex::encode(&instance.kind_table_commitment.as_bytes()[..4])
+                "    kind_table_root: {}",
+                hex::encode(&instance.kind_table_root.as_bytes()[..4])
             );
             eprintln!("    actions: {}", instance.actions.len());
             for (ai, action) in instance.actions.iter().enumerate() {
@@ -1538,10 +1547,10 @@ fn load_kind_table(path: &Path) -> Result<()> {
     init_kind_table_from_file(path)
         .map_err(|e| anyhow!("load kind table {}: {e:?}", path.display()))?;
     eprintln!(
-        "kind table: {} (commitment {})",
+        "kind table: {} (root {})",
         path.display(),
         hex::encode(
-            kind_table_hash()
+            kind_table_root()
                 .ok_or_else(|| anyhow!("kind table not loaded"))?
                 .as_bytes()
         )

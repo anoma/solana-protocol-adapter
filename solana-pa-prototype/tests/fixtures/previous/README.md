@@ -17,5 +17,11 @@ reports for the file. `protocol_adapter.json` is its production IDL, fetched
 with `anchor idl fetch` from its Program Metadata account on the same day; the
 test calls the previous build's own instructions through it.
 
+`batch_groth16_transfer_shape.json` (and `mock/` for the mock suite) is the
+fixture the previous build settles before the upgrade, proven for its circuits
+(arm-risc0 2.0.0-rc.6): the fixture of that name at `anthony/arm-v2-port`
+`db4279b`, before the move to rc.7 regenerated the set. A build only accepts
+proofs of its own circuits, so these are not regenerated with the set.
+
 Replace a program's files with its deployed build whenever a release changes
 one of its layouts, and the migrations and the upgrade test with them.

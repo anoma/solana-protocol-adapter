@@ -11,7 +11,7 @@
 #   --salt SALT       derive every nonce from SALT too, so nothing proven was
 #                     settled before on the deployment it is proven for
 #   --kind-table PATH prove against that kind table instead of the committed
-#                     empty one; the deployment must store its commitment
+#                     empty one; the deployment must store its root
 #   --only FILE       prove only the recipe that writes FILE (an error variant
 #                     comes with its base); fixtures it spends from must exist
 # A cluster run proves each fixture with the first three, and --only, when a
