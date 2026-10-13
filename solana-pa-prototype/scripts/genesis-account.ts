@@ -2,8 +2,7 @@
  * Shared writer for solana-test-validator genesis account fixtures — the
  * JSON files `--account <address> <file>` loads, named
  * `<prefix><address>.json` so start_validator can recover the address from
- * the filename. Used for root markers, the mock VerifierEntry, and the
- * suite's settlement lookup table.
+ * the filename. Used for root markers and the mock VerifierEntry.
  */
 import * as fs from "fs";
 import * as path from "path";

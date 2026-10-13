@@ -6,8 +6,8 @@ Call-level mechanics — instruction call sequences, account lists, PDA derivati
 
 ## Two submission paths
 
-- **`settle(transaction_data: Vec<u8>)`** — one instruction carrying the whole serialized transaction. Only usable when the transaction fits in a single Solana transaction.
-- **`txdata_init` → `txdata_write` (repeated) → `settle_from_txdata`** — upload the serialized transaction in chunks to a buffer account, then settle from it. This is the normal path; real transactions with proofs do not fit in one Solana transaction.
+- **`settle(transaction_data: Vec<u8>)`** — one instruction carrying the whole serialized transaction, in one v1 Solana transaction (SIMD-0385, up to 4,096 bytes). AnomaPay's wraps and unwraps, and its transfers of up to four consumed and four created resources, fit.
+- **`txdata_init` → `txdata_write` (repeated) → `settle_from_txdata`** — upload the serialized transaction in chunks to a buffer account, then settle from it: for a transaction too large for one Solana transaction.
 
 Both paths verify the same things and emit the same events. Settlement is rejected while the deployment is paused.
 

@@ -23,7 +23,7 @@ import {
 } from "../../client/instructions";
 import { VERIFIER_ROUTER_ID } from "../../client/verifier";
 import { createdCommitmentsOf, loadFixture } from "../utils/fixtures";
-import { assertFails, randomRef, sendV0, uploadTxData } from "../utils/helpers";
+import { assertFails, randomRef, sendSettlementV1, uploadTxData } from "../utils/helpers";
 import { predictRootMarkerPda } from "../utils/merkle";
 import {
   PROOF_SELECTOR,
@@ -45,7 +45,7 @@ const previous: Program<any> = new Program(
 );
 
 describe("protocol-adapter (upgraded in place from schema 3)", () => {
-  const { funder, settlementTable, settleUnsettledFixture } = useAdapterSuite({ initialize: false });
+  const { funder, settleUnsettledFixture } = useAdapterSuite({ initialize: false });
   const wallet = provider.wallet.publicKey;
   const deniedBefore = randomRef();
   let stateBefore: any;
@@ -78,8 +78,8 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
       txData,
       await predictRootMarkerPda(previous as any, paState, createdCommitmentsOf(fixture)),
       deriveNullifierAccounts(fixture.consumed_nullifiers_b64),
-    ).transaction();
-    await sendV0(provider, settle.instructions, [authority], await settlementTable());
+    ).instruction();
+    await sendSettlementV1(provider, [settle], [authority]);
     await previous.methods
       .txdataClose(uploadId)
       .accountsPartial({ txData, authority: authority.publicKey, refund: authority.publicKey })

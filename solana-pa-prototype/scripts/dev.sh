@@ -93,7 +93,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-table|deny-logic-refs|migrate-state|lookup-table|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs)
+  deploy|upgrade|init|set-kind-table|deny-logic-refs|migrate-state|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -293,7 +293,6 @@ PYEOF
     echo "  set-kind-table         Replace the PA's kind-table commitment (PA_KIND_TABLE_COMMITMENT)"
     echo "  deny-logic-refs        Add logic refs to the consumed or created denylist (PA_DENIED_LOGIC_REFS)"
     echo "  migrate-state          Migrate PAState from the previous schema version, after the upgrade"
-    echo "  lookup-table           Create/extend the deployment's settlement lookup table"
     echo "  idl-publish            Publish the production IDL on chain"
     echo "  verify-build           Deterministic solana-verify build of the PA; with"
     echo "                         --cluster, compares against the deployed program"

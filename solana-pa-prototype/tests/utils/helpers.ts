@@ -1,24 +1,39 @@
 /**
  * Test-suite helpers: funding and draining keypairs, error assertions,
- * TxData uploads, and v0 transaction sending.
+ * TxData uploads, and v1 settlement transactions.
  */
 import { keccak_256 } from "@noble/hashes/sha3";
 import * as anchor from "@anchor-lang/core";
 import { Idl, Program } from "@anchor-lang/core";
 import {
-  AddressLookupTableAccount,
   Connection,
   Keypair,
   LAMPORTS_PER_SOL,
-  MessageV0,
   PublicKey,
   SendTransactionError,
   SystemProgram,
   Transaction,
   TransactionInstruction,
-  TransactionMessage,
-  VersionedTransaction,
 } from "@solana/web3.js";
+import {
+  AccountRole,
+  address,
+  appendTransactionMessageInstructions,
+  type Blockhash,
+  compileTransaction,
+  createKeyPairFromBytes,
+  createTransactionMessage,
+  getBase64EncodedWireTransaction,
+  type Instruction,
+  pipe,
+  setTransactionMessageComputeUnitLimit,
+  setTransactionMessageFeePayer,
+  setTransactionMessageHeapSize,
+  setTransactionMessageLifetimeUsingBlockhash,
+  setTransactionMessageLoadedAccountsDataSizeLimit,
+  signTransaction,
+} from "@solana/kit";
+import { MAX_COMPUTE_UNIT_LIMIT } from "../../client/instructions";
 import { assert } from "chai";
 import { execFileSync } from "child_process";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
@@ -278,7 +293,7 @@ export async function confirmedTransaction(
   sig: string,
 ): Promise<anchor.web3.VersionedTransactionResponse> {
   await connection.confirmTransaction(sig, "confirmed");
-  const tx = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+  const tx = await connection.getTransaction(sig, { commitment: "confirmed", maxSupportedTransactionVersion: 1 });
   assert.ok(tx, `transaction ${sig} is fetchable once confirmed`);
   return tx!;
 }
@@ -298,33 +313,78 @@ export async function waitForSlotPast(
   throw new Error(`Timed out waiting for slot past ${targetSlot} after ${timeoutMs}ms`);
 }
 
-/** Compile `instructions` into a v0 message against `table`, the provider wallet paying. */
-export async function compileV0(
-  provider: anchor.AnchorProvider,
-  instructions: TransactionInstruction[],
-  table: AddressLookupTableAccount,
-): Promise<MessageV0> {
-  const { blockhash } = await provider.connection.getLatestBlockhash("confirmed");
-  return new TransactionMessage({
-    payerKey: provider.wallet.publicKey,
-    recentBlockhash: blockhash,
-    instructions,
-  }).compileToV0Message([table]);
+/** The heap frame settlement needs: bincode-deserializing an ARM transaction overruns the default 32 KiB. */
+const SETTLE_HEAP_FRAME_BYTES = 256 * 1024;
+
+/**
+ * The account data a transaction may load: the runtime's maximum (64 MiB),
+ * which legacy and v0 transactions get by default and a v1 transaction
+ * states (unset, it is 0).
+ */
+const MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES = 64 * 1024 * 1024;
+
+/** A web3.js instruction as @solana/kit's. */
+function kitInstruction(ix: TransactionInstruction): Instruction {
+  return {
+    programAddress: address(ix.programId.toBase58()),
+    accounts: ix.keys.map((key) => ({
+      address: address(key.pubkey.toBase58()),
+      role: key.isSigner
+        ? key.isWritable
+          ? AccountRole.WRITABLE_SIGNER
+          : AccountRole.READONLY_SIGNER
+        : key.isWritable
+          ? AccountRole.WRITABLE
+          : AccountRole.READONLY,
+    })),
+    data: new Uint8Array(ix.data),
+  };
 }
 
 /**
- * Send `instructions` as a v0 transaction against `table`, signed by the
- * wallet and `signers`. The provider wraps a failed transaction's logs into
- * the thrown error as it does for legacy transactions.
+ * Send `instructions` as one v1 transaction (SIMD-0385), the shape every
+ * submitter sends a settlement in: the full compute budget, the heap frame
+ * settlement needs and the loaded-account-data limit in its header, paid by
+ * the wallet and signed by it and `signers`. web3.js 1.x cannot serialize a v1
+ * message, so @solana/kit compiles and signs it; web3.js sends its bytes, so a
+ * refused transaction throws SendTransactionError with the runtime's logs, as
+ * `provider.sendAndConfirm` does.
  */
-export async function sendV0(
+export async function sendSettlementV1(
   provider: anchor.AnchorProvider,
   instructions: TransactionInstruction[],
   signers: Keypair[],
-  table: AddressLookupTableAccount,
 ): Promise<string> {
-  const message = await compileV0(provider, instructions, table);
-  return provider.sendAndConfirm(new VersionedTransaction(message), signers);
+  const payer = (provider.wallet as anchor.Wallet).payer;
+  const { blockhash, lastValidBlockHeight } = await provider.connection.getLatestBlockhash("confirmed");
+  const message = pipe(
+    createTransactionMessage({ version: 1 }),
+    (m) => setTransactionMessageFeePayer(address(payer.publicKey.toBase58()), m),
+    (m) =>
+      setTransactionMessageLifetimeUsingBlockhash(
+        { blockhash: blockhash as Blockhash, lastValidBlockHeight: BigInt(lastValidBlockHeight) },
+        m,
+      ),
+    (m) => setTransactionMessageComputeUnitLimit(MAX_COMPUTE_UNIT_LIMIT, m),
+    (m) => setTransactionMessageHeapSize(SETTLE_HEAP_FRAME_BYTES, m),
+    (m) => setTransactionMessageLoadedAccountsDataSizeLimit(MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES, m),
+    (m) => appendTransactionMessageInstructions(instructions.map(kitInstruction), m),
+  );
+  const keyPairs = await Promise.all(
+    [payer, ...signers.filter((s) => !s.publicKey.equals(payer.publicKey))].map((k) =>
+      createKeyPairFromBytes(k.secretKey),
+    ),
+  );
+  const signed = await signTransaction(keyPairs, compileTransaction(message));
+  const signature = await provider.connection.sendRawTransaction(
+    Buffer.from(getBase64EncodedWireTransaction(signed), "base64"),
+  );
+  const { value } = await provider.connection.confirmTransaction(
+    { signature, blockhash, lastValidBlockHeight },
+    "confirmed",
+  );
+  if (value.err) throw new Error(`settlement ${signature} failed: ${JSON.stringify(value.err)}`);
+  return signature;
 }
 
 /**

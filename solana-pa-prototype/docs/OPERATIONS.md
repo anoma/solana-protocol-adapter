@@ -4,7 +4,7 @@ This document is the operator's procedure set for a Protocol Adapter (PA) deploy
 
 Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically; cluster operations take `--cluster <localnet|devnet|mainnet>` (see `scripts/ops.sh` for all flags). devnet and mainnet operations go through the operator's RPC provider: pass `--url <rpc>` or set `DEVNET_RPC_URL` / `MAINNET_RPC_URL`; there is no public-endpoint default. Commands shown as `solana`, `npx` or `solana-verify` run directly.
 
-`dev.sh anchor-test --cluster <devnet|mainnet>` runs the local suite's tests against the live deployment, building on whatever history it holds: every spec file outside `tests/fresh/` and `tests/terminal/`, without the tests tagged `@localnet` (those need the owner, change a deployment setting, or call a program deployed only on a local validator). The run first proves its own fixture set for the deployment, under a salt no earlier run used and against the kind table it stores, so name that table's JSON (as fixture-gen reads it) in `PA_KIND_TABLE`; proving runs locally unless `QUEUE_BASE_URL` sends it to the workers queue. Its wallet must own nothing under test: the run refuses a wallet that holds an owner's role: the adapter's stored owner, or a program's upgrade authority while that is not the program's own PDA. Use a separate funded test wallet (`--wallet`), and name the deployment's settlement lookup table in `PA_SETTLEMENT_TABLE` (without it the suite would create and leave a table of its own).
+`dev.sh anchor-test --cluster <devnet|mainnet>` runs the local suite's tests against the live deployment, building on whatever history it holds: every spec file outside `tests/fresh/` and `tests/terminal/`, without the tests tagged `@localnet` (those need the owner, change a deployment setting, or call a program deployed only on a local validator). The run first proves its own fixture set for the deployment, under a salt no earlier run used and against the kind table it stores, so name that table's JSON (as fixture-gen reads it) in `PA_KIND_TABLE`; proving runs locally unless `QUEUE_BASE_URL` sends it to the workers queue. Its wallet must own nothing under test: the run refuses a wallet that holds an owner's role: the adapter's stored owner, or a program's upgrade authority while that is not the program's own PDA. Use a separate funded test wallet (`--wallet`).
 
 ## The owner
 
@@ -113,19 +113,6 @@ solana-verify verify-from-repo -u <rpc> --program-id <PROGRAM_ID> \
 ```
 
 **Reach depends on repo visibility.** This repository is private, so today only people with read access (their git credentials satisfy the clone) can run the check; the on-chain verification PDA points at a repo outsiders cannot fetch. The explorer "Verified" badge requires more on both axes: the OtterSec remote API serves mainnet only, and its worker must be able to clone the repo — i.e. the source (at least at the recorded commit) must be public. A mainnet deployment that should carry the badge therefore requires opening the source; that is a product decision, not an operational step.
-
-## The settlement lookup table
-
-Every settlement carries accounts that never change for a deployment: the adapter's (PAState, the system program, the verifier router, its router PDA and verifier entry, the verifier program, the event authority), the clock sysvar and the block-time forwarder its example call reads, and the fixed accounts of each forwarder the deployment's settlements call. Submitters send settlements as v0 transactions against an address lookup table holding those keys, which costs one byte per key instead of 32 and keeps a settlement with forwarder calls inside the 1,232-byte packet.
-
-```sh
-./scripts/dev.sh lookup-table --cluster devnet                      # create
-PA_LOOKUP_TABLE=<address> ./scripts/dev.sh lookup-table --cluster devnet  # extend
-```
-
-The command derives the adapter's key set from the deployed programs and the PAState's pinned router and selector, so it runs after `deploy pa`. The signing wallet is the table's authority and stays so (the table is not frozen): each forwarder's operator extends it with that forwarder's fixed accounts (the SPL token forwarder's `lookup-table` command, in anoma/anomapay-spl-token-forwarder, adds its own and each supported mint's escrow account). A table entry need not exist on chain when it is added. Extending is idempotent; a rerun adds only what is missing.
-
-Record the address in the cluster's deployment record and ship it as `SETTLE_LOOKUP_TABLE` in anoma-pa-solana-client. A program-id rotation is a new deployment and gets a new table.
 
 ## The logic-ref denylists
 

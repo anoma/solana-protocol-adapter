@@ -2,15 +2,13 @@
  * The protocol adapter as the spec files drive it: program handles, the
  * settlement builders, precondition helpers, and
  * `useAdapterSuite`, the hooks a spec file installs inside its own top-level
- * describe. Spec files, and genesis-settlement-table.ts for the suite's
- * settlement keys, import this module: it resolves the workspace programs
- * when loaded.
+ * describe. Spec files import this module: it resolves the workspace
+ * programs when loaded.
  */
 import * as anchor from "@anchor-lang/core";
 import { Program } from "@anchor-lang/core";
 import {
   AccountMeta,
-  AddressLookupTableAccount,
   ComputeBudgetProgram,
   Keypair,
   LAMPORTS_PER_SOL,
@@ -28,7 +26,6 @@ import { parseCpiEvents } from "../../client/events";
 import { confirmedProvider } from "../../client/provider";
 import { deployedExecutableHash, executableHash, programDataCode } from "../../client/upgrade";
 import { readFileSync } from "fs";
-import { ensureSettlementLookupTable, fetchLookupTable, settlementLookupKeys } from "../../client/lookupTable";
 import {
   deriveNullifierAccounts as deriveNullifierAccountsFromB64,
   derivePaStatePda,
@@ -48,7 +45,7 @@ import {
   ExpectedFailure,
   initTxData as initTxDataOf,
   makeFunder,
-  sendV0,
+  sendSettlementV1,
   solanaCli,
   TxDataUpload,
   uploadTxData as uploadTxDataTo,
@@ -333,17 +330,6 @@ export function settleBuilder(
     .preInstructions(settleBudget(heapFrame));
 }
 
-/** The suite deployment's settlement keys. */
-export function suiteSettlementKeys(): PublicKey[] {
-  return settlementLookupKeys({
-    paProgram: program.programId,
-    verifierRouter: VERIFIER_ROUTER_ID,
-    proofSelector: PROOF_SELECTOR,
-    verifierProgram: VERIFIER.program,
-    blockTimeForwarder: blockTimeForwarderId,
-  });
-}
-
 type TxDataEntry = { uploadId: anchor.BN; txData: PublicKey; authority: Keypair };
 
 /**
@@ -359,28 +345,8 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
   const funder = makeFunder(provider);
   // TxData accounts this file's tests opened, closed after each test.
   const openTxData: TxDataEntry[] = [];
-  let table: AddressLookupTableAccount | undefined;
   let suiteStartBalance = 0;
   let testStartBalance = 0;
-
-  /**
-   * The deployment's settlement lookup table: settlements are v0
-   * transactions against it, the shape every submitter sends. The local
-   * suite's validator starts with it (PA_SETTLEMENT_TABLE, see
-   * genesis-settlement-table.ts); a cluster run names the deployment's own
-   * (ops.sh requires PA_SETTLEMENT_TABLE there).
-   */
-  async function settlementTable(): Promise<AddressLookupTableAccount> {
-    if (table) return table;
-    const genesis = process.env.PA_SETTLEMENT_TABLE;
-    if (genesis) return (table = await fetchLookupTable(provider.connection, new PublicKey(genesis)));
-    ({ table } = await ensureSettlementLookupTable(
-      provider.connection,
-      (provider.wallet as anchor.Wallet).payer,
-      suiteSettlementKeys(),
-    ));
-    return table;
-  }
 
   async function uploadTxData(
     authority: Keypair,
@@ -428,12 +394,12 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
   }
 
   /**
-   * Upload `payload` under `authority` and settle it as a v0 transaction
-   * against the deployment's lookup table, the shape every submitter sends.
-   * The produced-root marker is `newRootMarker`, or predicted from
-   * `createdCommitments`.
+   * Upload `payload` under `authority` and settle it from the upload in one
+   * v1 transaction, the shape a submitter sends a settlement too large for
+   * one transaction in. The produced-root marker is `newRootMarker`, or
+   * predicted from `createdCommitments`.
    */
-  async function uploadAndSettleV0(
+  async function uploadAndSettle(
     authority: Keypair,
     payload: Buffer,
     remainingAccounts: AccountMeta[],
@@ -451,14 +417,16 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
       );
       newRootMarker = await predictRootMarkerPda(options.createdCommitments);
     }
+    // The v1 transaction's header carries the compute budget and heap frame
+    // the builder's pre-instructions would.
     const settle = await settleFromTxDataBuilder(
       authority.publicKey,
       uploadId,
       txData,
       newRootMarker,
       remainingAccounts,
-    ).transaction();
-    return sendV0(provider, settle.instructions, [authority], await settlementTable());
+    ).instruction();
+    return sendSettlementV1(provider, [settle], [authority]);
   }
 
   async function settleFixtureViaTxData(
@@ -466,7 +434,7 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
     remainingAccounts: AccountMeta[],
     options?: { newRootMarker?: PublicKey | null; createdCommitments?: Buffer[] },
   ): Promise<string> {
-    return uploadAndSettleV0(await funder.fresh(2), payload, remainingAccounts, options);
+    return uploadAndSettle(await funder.fresh(2), payload, remainingAccounts, options);
   }
 
   /**
@@ -563,12 +531,11 @@ export function useAdapterSuite(options: { initialize?: boolean } = {}) {
 
   return {
     funder,
-    settlementTable,
     uploadTxData,
     initTxData,
     closeTxData,
     keepTxData,
-    uploadAndSettleV0,
+    uploadAndSettle,
     settleFixtureViaTxData,
     settleUnsettledFixture,
     settleFixture,

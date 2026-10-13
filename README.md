@@ -38,7 +38,7 @@ cd solana-protocol-adapter/solana-pa-prototype
 
 The script:
 1. Builds the programs at the addresses in `env/localnet.env`.
-2. Starts one validator with the programs, the devnet verifier stack and Program Metadata program (the committed copy in `devnet-programs/`) and the suite's settlement lookup table loaded at genesis, warped to slot 1, and runs every spec file under `tests/` against it, so the deployment builds up as much history as the suite makes: first `tests/fresh/` (initialization, which only works on a fresh deployment), then every other file, each building on whatever state it finds, then `tests/terminal/` in numbered order (denials, marker teardown, the renounced ownership: changes no later test could run after).
+2. Starts one validator with the programs, the devnet verifier stack and Program Metadata program (the committed copy in `devnet-programs/`) loaded at genesis, and runs every spec file under `tests/` against it, so the deployment builds up as much history as the suite makes: first `tests/fresh/` (initialization, which only works on a fresh deployment), then every other file, each building on whatever state it finds, then `tests/terminal/` in numbered order (denials, marker teardown, the renounced ownership: changes no later test could run after).
 
 ### Proof Modes
 
@@ -84,7 +84,7 @@ entry point for one fixture.
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
 | `./scripts/dev.sh shell` / `run <cmd>` | Interactive Nix shell / one command in it |
-| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-refs`, `migrate-state`, `lookup-table`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
+| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-refs`, `migrate-state`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
 
 ### Rebuilding From Scratch
 
@@ -332,7 +332,7 @@ anoma_pa_testkit::execute_tx(&mut env, tx).await?;
 - **`local`** (default feature): an offline [surfpool](https://github.com/txtx/surfpool) runtime with the verifier router and Program Metadata program copies, the mock verifier, and the adapter build the crate ships (`crates/integration-test/programs/`, the deterministic build of the tag, which CI checks), initialized with the mock selector; pa-testkit's local prover.
 - **`e2e`**: a runtime forking devnet (`DEVNET_RPC_URL`), on the adapter devnet runs with the state it holds, except that the default signer takes its ownership (the fork's state rewritten) so the tests can make the owner's calls; the kind table recorded for devnet is checked against the one it stores; real proofs, from pa-testkit's queue prover (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`) or, with `E2E_PROVER=local` (the default without `QUEUE_BASE_URL`), its risc0 prover on this machine, whose Groth16 step needs a container runtime (the Nix shell's podman).
 
-`ProtocolAdapter::settle` settles the way every submitter does (the client crate's `settlement_input` and `plan_settlement`: upload, settle as a v0 transaction through a settlement lookup table, close) and returns pa-testkit's `Outcome`: the events the adapter emitted, read back, or the `Refusal` its error names (the first program to fail in the runtime's simulation and the Anchor error it returned; any error of the verifier refuses the proof). Any other failure is an error, with the runtime's log. The adapter's tree and latest root come from its state account, and the tree the harness keeps (`env.protocol_adapter.commitment_tree`, which gives paths to the commitments the tests create) must give the root the adapter stores after each settlement. The owner's calls (pause, unpause, the kind table, the logic-ref denylist) are signed by the default signer, which owns the adapter. A transaction whose proof calls a forwarder settles once the forwarder is registered: the proof commits each call but not its accounts, so `env.protocol_adapter.forwarders.register(program, forwarder)` names, for that program, a `forwarders::Forwarder` that gives each call its CPI segment and any instructions that must precede the settlement (a wrap's ed25519 signature check). A call to an unregistered program fails before anything is sent. `extend_lookup_table` adds a forwarder's fixed accounts to the settlement lookup table, as a deployment's table holds them. A consumer deploys its own program with `env.deploy_program` and sends its setup (a mint, a token account, an approval) with `env.send`, which the default signer pays for. `env.protocol_adapter.submit` settles as `settle` does and returns the settlement as `executed::Executed` (its log and the events each program emitted by self-invocation) or the refusal; `settled` requires the settlement. The local environment's `deploy_test_forwarder` deploys the adapter's test forwarder, whose log mode fills a transaction's log budget. The suite's block-time calls deploy the example block-time forwarder in either environment. `env.write_buffer` places a program in a loader buffer, the code an upgrade instruction installs, and `env.take_ownership` makes a key the adapter's owner.
+`ProtocolAdapter::settle` settles the way every submitter does (the client crate's `settlement_input` and `plan_settlement`: one v1 transaction carrying the input when it fits, otherwise the upload, `settle_from_txdata` and the upload's close) and returns pa-testkit's `Outcome`: the events the adapter emitted, read back, or the `Refusal` its error names (the first program to fail in the runtime's simulation and the Anchor error it returned; any error of the verifier refuses the proof). Any other failure is an error, with the runtime's log. The adapter's tree and latest root come from its state account, and the tree the harness keeps (`env.protocol_adapter.commitment_tree`, which gives paths to the commitments the tests create) must give the root the adapter stores after each settlement. The owner's calls (pause, unpause, the kind table, the logic-ref denylist) are signed by the default signer, which owns the adapter. A transaction whose proof calls a forwarder settles once the forwarder is registered: the proof commits each call but not its accounts, so `env.protocol_adapter.forwarders.register(program, forwarder)` names, for that program, a `forwarders::Forwarder` that gives each call its CPI segment and any instructions that must precede the settlement (a wrap's ed25519 signature check). A call to an unregistered program fails before anything is sent. A consumer deploys its own program with `env.deploy_program` and sends its setup (a mint, a token account, an approval) with `env.send`, which the default signer pays for. `env.protocol_adapter.submit` settles as `settle` does and returns the settlement as `executed::Executed` (its log and the events each program emitted by self-invocation) or the refusal; `settled` requires the settlement. The local environment's `deploy_test_forwarder` deploys the adapter's test forwarder, whose log mode fills a transaction's log budget. The suite's block-time calls deploy the example block-time forwarder in either environment. `env.write_buffer` places a program in a loader buffer, the code an upgrade instruction installs, and `env.take_ownership` makes a key the adapter's owner.
 
 A test reads the environment through its public fields (the runtime's RPC client, the funded default signer and the adapter's address are `env.protocol_adapter.rpc`, `.payer` and `.program`). `suite_tests!` emits pa-testkit's chain-agnostic tests for an environment: every one of them, in both environments.
 
@@ -342,28 +342,14 @@ Clients submit RM transactions to the adapter for settlement. `docs/INTEGRATION.
 
 ### Transaction Flow
 
-1. **Upload the RM transaction** when it does not fit in one Solana transaction alongside the settle accounts (the 1232-byte limit covers the whole transaction):
-   ```typescript
-   // Initialize TxData account
-   await program.methods.txdataInit(uploadId, capacity, expiresSlot)
-     .accounts({ txData, authority, systemProgram })
-     .rpc();
+Settlements are v1 transactions (SIMD-0385: up to 4,096 bytes, no address lookup tables, the compute budget in the message header). The header carries a compute-unit limit, a 256 KiB heap frame and the loaded-account-data limit, which a v1 transaction must state. web3.js 1.x cannot build v1 messages: use `@solana/kit` (the suite's `sendSettlementV1` in `tests/utils/helpers.ts`), or the Rust client crate's `transaction_message`.
 
-   // Write chunks
-   for (let offset = 0; offset < payload.length; offset += chunkSize) {
-     await program.methods.txdataWrite(uploadId, offset, payload.subarray(offset, offset + chunkSize))
-       .accounts({ txData, authority })
-       .rpc();
-   }
-   ```
-
-2. **Settle**:
+1. **Settle in one transaction** when it fits: the instructions that must precede the settlement (a forwarder's signature checks), then `settle` carrying the serialized transaction:
    ```typescript
-   await program.methods.settleFromTxdata(uploadId)
+   const settle = await program.methods.settle(payload)
      .accounts({
        paState,
-       txData,
-       authority,
+       payer,
        systemProgram,
        newRootMarker,       // the post-settlement root's marker PDA; null when the transaction creates nothing
        verifierRouterProgram,
@@ -379,11 +365,21 @@ Clients submit RM transactions to the adapter for settlement. `docs/INTEGRATION.
        { pubkey: forwarderAccount1, isWritable: false, isSigner: false },
        // ... more forwarder accounts
      ])
-     .preInstructions([
-       ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
-       ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 }),
-     ])
+     .instruction();
+   // Send [...preceding, settle] as one v1 transaction.
+   ```
+
+2. **Otherwise upload it first**, then settle from the upload with `settle_from_txdata`, which takes `settle`'s accounts plus the upload's:
+   ```typescript
+   await program.methods.txdataInit(uploadId, capacity, expiresSlot)
+     .accounts({ txData, authority, systemProgram })
      .rpc();
+   for (let offset = 0; offset < payload.length; offset += chunkSize) {
+     await program.methods.txdataWrite(uploadId, offset, payload.subarray(offset, offset + chunkSize))
+       .accounts({ txData, authority })
+       .rpc();
+   }
+   // Send [...preceding, settleFromTxdata(uploadId)] as one v1 transaction, then txdataClose.
    ```
 
 ### Deriving PDAs
