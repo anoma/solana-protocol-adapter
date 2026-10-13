@@ -192,39 +192,24 @@ pub mod protocol_adapter {
         ctx: Context<'info, Settle<'info>>,
         transaction_data: Vec<u8>,
     ) -> Result<()> {
-        require!(!ctx.accounts.pa_state.paused, PAError::EnforcedPause);
-
-        let tx: Transaction = bincode::deserialize(&transaction_data)
-            .map_err(|_| error!(PAError::InvalidTransactionData))?;
-
-        let pa_state_info = ctx.accounts.pa_state.to_account_info();
-        let payer = ctx.accounts.payer.to_account_info();
-
-        let events = events::EventCpi {
-            authority: ctx.accounts.event_authority.to_account_info(),
-        };
-
-        execute_settlement(
-            &mut ctx.accounts.pa_state,
-            &tx,
-            SettlementAccounts {
-                pa_state: pa_state_info,
-                payer,
-                system_program: ctx.accounts.system_program.to_account_info(),
-                new_root_marker: ctx.accounts.new_root_marker.as_deref(),
-                remaining: ctx.remaining_accounts,
-                verifier: VerifierAccounts {
-                    router_program_id: ctx.accounts.verifier_router_program.key(),
-                    router: ctx.accounts.router.to_account_info(),
-                    verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
-                    verifier_program: ctx.accounts.verifier_program.to_account_info(),
-                },
-                events,
-            },
-        )?;
-
+        settle_inline(ctx, &transaction_data, false)?;
         msg!("Settlement complete");
         Ok(())
+    }
+
+    /// pa-evm's `simulateExecute`: settles `transaction_data` as `settle`
+    /// does, without verifying its RISC Zero proof when
+    /// `skip_risc_zero_proof_verification` is set (the proof's selector is
+    /// still checked), and then fails with `Simulated`, so nothing it did
+    /// lands. A transaction that would not execute fails with the error
+    /// `settle` would.
+    pub fn simulate_execute<'info>(
+        ctx: Context<'info, Settle<'info>>,
+        transaction_data: Vec<u8>,
+        skip_risc_zero_proof_verification: bool,
+    ) -> Result<()> {
+        settle_inline(ctx, &transaction_data, skip_risc_zero_proof_verification)?;
+        err!(PAError::Simulated)
     }
 
     /// Initialize a TxData account for chunked upload.
@@ -402,6 +387,7 @@ pub mod protocol_adapter {
                 },
                 events,
             },
+            false,
         )?;
 
         msg!("Settlement from TxData complete");
@@ -410,8 +396,8 @@ pub mod protocol_adapter {
 
     /// Pause settlement. Mirrors pa-evm's `pause()`: owner-only, refused
     /// while already paused (`EnforcedPause`), announced with `PausedEvent`.
-    /// While paused, `settle` and `settle_from_txdata` refuse every
-    /// transaction; nothing else is gated.
+    /// While paused, `settle`, `settle_from_txdata` and `simulate_execute`
+    /// refuse every transaction; nothing else is gated.
     ///
     /// A permanent shutdown is a pause followed by `renounce_ownership`, as
     /// on pa-evm: with no owner, no one can unpause or upgrade.
@@ -749,6 +735,46 @@ fn resize_account<'info>(
     Ok(())
 }
 
+/// Settles `transaction_data`, carried in the instruction: `settle`, and
+/// `simulate_execute` before it fails.
+fn settle_inline<'info>(
+    ctx: Context<'info, Settle<'info>>,
+    transaction_data: &[u8],
+    skip_risc_zero_proof_verification: bool,
+) -> Result<()> {
+    require!(!ctx.accounts.pa_state.paused, PAError::EnforcedPause);
+
+    let tx: Transaction = bincode::deserialize(transaction_data)
+        .map_err(|_| error!(PAError::InvalidTransactionData))?;
+
+    let pa_state_info = ctx.accounts.pa_state.to_account_info();
+    let payer = ctx.accounts.payer.to_account_info();
+
+    let events = events::EventCpi {
+        authority: ctx.accounts.event_authority.to_account_info(),
+    };
+
+    execute_settlement(
+        &mut ctx.accounts.pa_state,
+        &tx,
+        SettlementAccounts {
+            pa_state: pa_state_info,
+            payer,
+            system_program: ctx.accounts.system_program.to_account_info(),
+            new_root_marker: ctx.accounts.new_root_marker.as_deref(),
+            remaining: ctx.remaining_accounts,
+            verifier: VerifierAccounts {
+                router_program_id: ctx.accounts.verifier_router_program.key(),
+                router: ctx.accounts.router.to_account_info(),
+                verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
+                verifier_program: ctx.accounts.verifier_program.to_account_info(),
+            },
+            events,
+        },
+        skip_risc_zero_proof_verification,
+    )
+}
+
 /// Require every root consumed by the instance to be one the adapter accepts.
 ///
 /// Takes `state` by shared reference on purpose: validation must not be able to
@@ -791,7 +817,8 @@ struct SettlementAccounts<'a, 'info> {
     events: events::EventCpi<'info>,
 }
 
-/// Shared settlement logic for both settle and settle_from_txdata, in
+/// Shared settlement logic for settle, settle_from_txdata and
+/// simulate_execute, in
 /// pa-evm's `_execute` order. For each action: each consumed resource's
 /// nullifier is recorded, then its forwarder calls run and its payload events
 /// are emitted; each created resource's commitment is appended, then its calls
@@ -806,6 +833,7 @@ fn execute_settlement(
     state: &mut PAStateAccount,
     tx: &Transaction,
     accounts: SettlementAccounts<'_, '_>,
+    skip_risc_zero_proof_verification: bool,
 ) -> Result<()> {
     let pa_state_key = accounts.pa_state.key;
     let events = &accounts.events;
@@ -919,11 +947,19 @@ fn execute_settlement(
         events.emit(&executed)?;
     }
 
-    let prepared = prepare_proof_for_verification(aggregation, state.proof_selector)
-        .map_err(|e| -> anchor_lang::error::Error { e.into() })?;
+    if skip_risc_zero_proof_verification {
+        // pa-evm checks the proof's selector, its first four bytes, whether or
+        // not it verifies the proof.
+        let selector = aggregation.proof.get(..4).ok_or(PAError::InvalidProof)?;
+        require!(
+            selector == state.proof_selector,
+            PAError::RiscZeroVerifierSelectorMismatch
+        );
+    } else {
+        let prepared = prepare_proof_for_verification(aggregation, state.proof_selector)
+            .map_err(|e| -> anchor_lang::error::Error { e.into() })?;
 
-    msg!("Verifying aggregated proof via verifier_router");
-    {
+        msg!("Verifying aggregated proof via verifier_router");
         let verifier = &accounts.verifier;
         let cpi_accounts = verifier_router::cpi::accounts::Verify {
             router: verifier.router.clone(),
