@@ -1,6 +1,5 @@
 //! A confirmed transaction as a test reads it back: the transaction as sent,
-//! the keys its lookup tables loaded, the runtime's log of it, and the
-//! instructions its programs invoked, among them the events a program emits
+//! the runtime's log of it, and the instructions its programs invoked, among them the events a program emits
 //! by invoking itself (Anchor's `emit_cpi!`).
 
 use anoma_pa_solana_client::EVENT_IX_TAG;
@@ -12,7 +11,7 @@ use solana_rpc_client_types::config::RpcTransactionConfig;
 use solana_signature::Signature;
 use solana_transaction::versioned::VersionedTransaction;
 use solana_transaction_status_client_types::{
-    UiInnerInstructions, UiInstruction, UiLoadedAddresses, UiTransactionEncoding,
+    UiInnerInstructions, UiInstruction, UiTransactionEncoding,
 };
 use surfpool_sdk::Pubkey;
 
@@ -20,8 +19,6 @@ use surfpool_sdk::Pubkey;
 pub struct Executed {
     /// The transaction as it was sent.
     pub transaction: VersionedTransaction,
-    /// The keys its lookup tables loaded, writable before read-only.
-    pub loaded: Vec<Pubkey>,
     /// The transaction's log, as the runtime kept it: past its byte limit
     /// the runtime truncates it.
     pub logs: Vec<String>,
@@ -39,7 +36,7 @@ impl Executed {
                 RpcTransactionConfig {
                     encoding: Some(UiTransactionEncoding::Base64),
                     commitment: Some(CommitmentConfig::confirmed()),
-                    max_supported_transaction_version: Some(0),
+                    max_supported_transaction_version: Some(1),
                 },
             )
             .await
@@ -53,22 +50,9 @@ impl Executed {
             .decode()
             .with_context(|| format!("failed to decode the transaction {signature}"))?;
 
-        let addresses: Option<UiLoadedAddresses> = meta.loaded_addresses.into();
-        let loaded = match addresses {
-            Some(addresses) => addresses
-                .writable
-                .iter()
-                .chain(&addresses.readonly)
-                .map(|key| {
-                    key.parse()
-                        .with_context(|| format!("the loaded address {key} is not base58"))
-                })
-                .collect::<anyhow::Result<Vec<Pubkey>>>()?,
-            None => Vec::new(),
-        };
-        // An instruction names its program by index into the message's keys,
-        // then the loaded keys.
-        let keys = [transaction.message.static_account_keys(), &loaded].concat();
+        // An instruction names its program by index into the message's keys;
+        // no transaction the harness sends loads keys from a lookup table.
+        let keys = transaction.message.static_account_keys();
         let groups: Option<Vec<UiInnerInstructions>> = meta.inner_instructions.into();
         let mut inner = Vec::new();
         for group in groups.unwrap_or_default() {
@@ -98,7 +82,6 @@ impl Executed {
         let logs: Option<Vec<String>> = meta.log_messages.into();
         Ok(Self {
             transaction,
-            loaded,
             logs: logs.unwrap_or_default(),
             inner,
         })

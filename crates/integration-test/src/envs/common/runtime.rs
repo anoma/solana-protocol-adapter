@@ -4,17 +4,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anoma_pa_solana_client::{
-    adapter_settlement_lookup_keys, decode_pa_state, decode_verifier_entry, derive_pa_state_pda,
-    derive_verifier_entry_pda, encode_pa_state, initialize_ix,
+    decode_pa_state, decode_verifier_entry, derive_pa_state_pda, derive_verifier_entry_pda,
+    encode_pa_state, initialize_ix, transaction_message,
 };
 use anyhow::Context;
-use solana_address_lookup_table_interface::instruction::create_lookup_table;
-use solana_address_lookup_table_interface::state::AddressLookupTable;
 use solana_commitment_config::CommitmentConfig;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
-use solana_message::{AddressLookupTableAccount, Hash, VersionedMessage, v0};
+use solana_message::v1::TransactionConfig;
+use solana_message::{Hash, VersionedMessage, v0};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client_types::response::RpcKeyedAccount;
 use solana_signature::Signature;
@@ -117,19 +116,18 @@ pub(in crate::envs) fn client(surfnet: &Surfnet) -> Arc<RpcClient> {
     ))
 }
 
-/// Sends `instructions` as one v0 transaction compiled against `tables`,
-/// signed by `payer` and `signers`, and waits for it to be confirmed; returns
-/// its signature. A refused transaction fails with the runtime's simulation
-/// logs.
+/// Sends `instructions` as one transaction with the runtime's default
+/// budget, signed by `payer` and `signers`, and waits for it to be confirmed;
+/// returns its signature. A refused transaction fails with the runtime's
+/// simulation logs.
 pub(in crate::envs) async fn send_signed(
     rpc: &RpcClient,
     payer: &Keypair,
     signers: &[&Keypair],
     instructions: &[Instruction],
-    tables: &[AddressLookupTableAccount],
 ) -> anyhow::Result<Signature> {
     let blockhash = latest_blockhash(rpc).await?;
-    send_with_blockhash(rpc, payer, signers, instructions, tables, blockhash).await
+    send_with_blockhash(rpc, payer, signers, instructions, None, blockhash).await
 }
 
 /// The runtime's latest blockhash.
@@ -139,17 +137,27 @@ pub(in crate::envs) async fn latest_blockhash(rpc: &RpcClient) -> anyhow::Result
         .context("failed to fetch a blockhash")
 }
 
-/// `send_signed`, with the transaction built on `blockhash`.
+/// `send_signed`, with the transaction built on `blockhash`: a v1 message
+/// with the settings `config` (a settlement's and its upload's), or with
+/// none a v0 message, which the runtime gives its default budget.
 pub(in crate::envs) async fn send_with_blockhash(
     rpc: &RpcClient,
     payer: &Keypair,
     signers: &[&Keypair],
     instructions: &[Instruction],
-    tables: &[AddressLookupTableAccount],
+    config: Option<TransactionConfig>,
     blockhash: Hash,
 ) -> anyhow::Result<Signature> {
-    let message = v0::Message::try_compile(&payer.pubkey(), instructions, tables, blockhash)
-        .context("failed to compile the transaction")?;
+    let message = match config {
+        Some(config) => VersionedMessage::V1(
+            transaction_message(&payer.pubkey(), instructions, blockhash, config)
+                .context("failed to compile the transaction")?,
+        ),
+        None => VersionedMessage::V0(
+            v0::Message::try_compile(&payer.pubkey(), instructions, &[], blockhash)
+                .context("failed to compile the transaction")?,
+        ),
+    };
     // A signer that is also the payer signs once.
     let all_signers: Vec<&Keypair> = std::iter::once(payer)
         .chain(
@@ -159,7 +167,7 @@ pub(in crate::envs) async fn send_with_blockhash(
                 .filter(|signer| signer.pubkey() != payer.pubkey()),
         )
         .collect();
-    let transaction = VersionedTransaction::try_new(VersionedMessage::V0(message), &all_signers)
+    let transaction = VersionedTransaction::try_new(message, &all_signers)
         .context("failed to sign the transaction")?;
     // The client's error keeps the runtime's simulation, which a refused
     // settlement is decoded from.
@@ -320,7 +328,6 @@ pub(in crate::envs) async fn initialize(
             &router,
             selector,
         )],
-        &[],
     )
     .await
     .context("failed to initialize the protocol adapter")?;
@@ -341,61 +348,6 @@ pub(in crate::envs) async fn verifier_program(
     let decoded =
         decode_verifier_entry(&data).with_context(|| format!("the verifier entry {entry}"))?;
     Ok(Pubkey::new_from_array(decoded.verifier))
-}
-
-/// Creates the deployment's settlement lookup table with the adapter's part of
-/// it, and returns it once the runtime serves its keys.
-pub(in crate::envs) async fn create_settlement_lookup_table(
-    rpc: &RpcClient,
-    payer: &Keypair,
-    pa: Pubkey,
-    router: Pubkey,
-    selector: [u8; 4],
-    verifier: Pubkey,
-) -> anyhow::Result<AddressLookupTableAccount> {
-    let recent_slot = rpc.get_slot().await.context("failed to fetch the slot")?;
-    let (create, table) = create_lookup_table(payer.pubkey(), payer.pubkey(), recent_slot);
-    send_signed(rpc, payer, &[], &[create], &[])
-        .await
-        .context("failed to create the settlement lookup table")?;
-    let keys = adapter_settlement_lookup_keys(&pa, &router, selector, &verifier);
-    extend_lookup_table(rpc, payer, table, &keys).await?;
-    Ok(AddressLookupTableAccount {
-        key: table,
-        addresses: keys,
-    })
-}
-
-/// Adds `keys` to the lookup table `table`, whose authority is `payer`, and
-/// returns once the runtime serves them: a table's new keys are usable from
-/// the slot after the one that added them.
-pub(in crate::envs) async fn extend_lookup_table(
-    rpc: &RpcClient,
-    payer: &Keypair,
-    table: Pubkey,
-    keys: &[Pubkey],
-) -> anyhow::Result<()> {
-    let extend = solana_address_lookup_table_interface::instruction::extend_lookup_table(
-        table,
-        payer.pubkey(),
-        Some(payer.pubkey()),
-        keys.to_vec(),
-    );
-    send_signed(rpc, payer, &[], &[extend], &[])
-        .await
-        .with_context(|| format!("failed to extend the lookup table {table}"))?;
-    let extended_in = AddressLookupTable::deserialize(
-        &rpc.get_account_data(&table)
-            .await
-            .with_context(|| format!("the lookup table {table} does not exist"))?,
-    )
-    .context("failed to decode the lookup table")?
-    .meta
-    .last_extended_slot;
-    while rpc.get_slot().await.context("failed to fetch the slot")? <= extended_in {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

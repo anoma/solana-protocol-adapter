@@ -5,9 +5,9 @@ use anoma_pa_solana_client::settlement_input::{
     external_calls, settled_resources, settlement_input,
 };
 use anoma_pa_solana_client::{
-    PAStateAccount, PaError, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
-    deny_logic_refs_ix, derive_pa_state_pda, pause_ix, plan_settlement,
-    set_kind_table_commitment_ix, unpause_ix,
+    PAStateAccount, PaError, SETTLE_TRANSACTION_CONFIG, Settlement, SettlementRequest,
+    TXDATA_EXPIRY_SLOTS_DEFAULT, UPLOAD_TRANSACTION_CONFIG, decode_pa_state, deny_logic_refs_ix,
+    derive_pa_state_pda, pause_ix, plan_settlement, set_kind_table_commitment_ix, unpause_ix,
 };
 use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree;
 use anoma_pa_testkit::environment::{
@@ -18,7 +18,6 @@ use anoma_rm_risc0::Digest;
 use anyhow::Context;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
-use solana_message::AddressLookupTableAccount;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client_api::client_error::{Error as ClientError, ErrorKind};
 use solana_rpc_client_api::request::{RpcError, RpcResponseErrorData};
@@ -26,14 +25,12 @@ use solana_rpc_client_api::response::RpcSimulateTransactionResult;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
-use super::runtime::{
-    create_settlement_lookup_table, extend_lookup_table, latest_blockhash, send_signed,
-    send_with_blockhash, verifier_program,
-};
+use super::runtime::{latest_blockhash, send_signed, send_with_blockhash, verifier_program};
 use crate::executed::Executed;
 use crate::forwarders::Forwarders;
 
-/// The Solana protocol adapter, settling through transaction-data uploads.
+/// The Solana protocol adapter, settling each transaction in one v1
+/// transaction when it fits, through a transaction-data upload otherwise.
 pub struct ProtocolAdapter {
     pub rpc: Arc<RpcClient>,
     /// Pays for and signs every upload and settlement.
@@ -42,7 +39,6 @@ pub struct ProtocolAdapter {
     /// The verifier program the router's entry for the adapter's selector
     /// names.
     pub verifier_program: Pubkey,
-    pub lookup_table: AddressLookupTableAccount,
     pub commitment_tree: FrontierCommitmentTree,
     /// The forwarders the settled transactions call, which supply each
     /// call's accounts.
@@ -53,8 +49,7 @@ pub struct ProtocolAdapter {
 
 impl ProtocolAdapter {
     /// The initialized adapter `program`: the verifier its router and
-    /// selector name, a settlement lookup table `payer` creates for it, and
-    /// the commitment tree its state holds.
+    /// selector name, and the commitment tree its state holds.
     pub(in crate::envs) async fn new(
         rpc: Arc<RpcClient>,
         payer: Arc<Keypair>,
@@ -63,35 +58,17 @@ impl ProtocolAdapter {
         let state = read_state(&rpc, &program).await?;
         let router = Pubkey::new_from_array(state.verifier_router);
         let verifier_program = verifier_program(&rpc, router, state.proof_selector).await?;
-        let lookup_table = create_settlement_lookup_table(
-            &rpc,
-            &payer,
-            program,
-            router,
-            state.proof_selector,
-            verifier_program,
-        )
-        .await?;
         let adapter = Self {
             rpc,
             payer,
             program,
             verifier_program,
-            lookup_table,
             commitment_tree: crate::commitment_tree::from_state(&state)?,
             forwarders: Forwarders::default(),
             next_upload_id: 0,
         };
         adapter.ensure_latest_root(&state)?;
         Ok(adapter)
-    }
-
-    /// Adds `keys` to the settlement lookup table, once it serves them: a
-    /// forwarder's fixed accounts, as a deployment's table holds them.
-    pub async fn extend_lookup_table(&mut self, keys: Vec<Pubkey>) -> anyhow::Result<()> {
-        extend_lookup_table(&self.rpc, &self.payer, self.lookup_table.key, &keys).await?;
-        self.lookup_table.addresses.extend(keys);
-        Ok(())
     }
 
     /// The adapter's state account, as it is now.
@@ -110,9 +87,10 @@ impl ProtocolAdapter {
         Ok(())
     }
 
-    /// Submits `transaction` the way every submitter does (its data uploaded,
-    /// the settlement, the upload closed), and returns the settlement as the
-    /// runtime recorded it, or why the adapter refused it.
+    /// Submits `transaction` the way every submitter does (in one v1
+    /// transaction when it fits, otherwise its data uploaded, the settlement,
+    /// the upload closed), and returns the settlement as the runtime recorded
+    /// it, or why the adapter refused it.
     pub async fn submit(
         &mut self,
         transaction: Transaction,
@@ -150,40 +128,61 @@ impl ProtocolAdapter {
             consumed_roots: &resources.consumed_roots,
             created: &resources.created,
             call_segments,
+            preceding,
         })?;
-        let mut settle = preceding;
-        settle.extend(plan.settle);
 
         let (rpc, payer) = (&*self.rpc, &*self.payer);
-        send_with_blockhash(rpc, payer, &[], &[plan.init], &[], blockhash)
-            .await
-            .context("failed to create the transaction-data upload")?;
-        let settled = async {
-            // Each write names its offset, so the chunks land in any order.
-            futures::future::try_join_all(plan.writes.into_iter().enumerate().map(
-                |(i, write)| async move {
-                    send_with_blockhash(rpc, payer, &[], &[write], &[], blockhash)
-                        .await
-                        .with_context(|| format!("failed to write chunk {i} of the upload"))
-                },
-            ))
-            .await?;
-            send_with_blockhash(
-                rpc,
-                payer,
-                &[],
-                &settle,
-                std::slice::from_ref(&self.lookup_table),
-                blockhash,
-            )
-            .await
-        }
-        .await;
-        // The upload is closed whatever the settlement's outcome, so a refused
-        // settlement does not strand its rent.
-        send_with_blockhash(rpc, payer, &[], &[plan.close], &[], blockhash)
-            .await
-            .context("failed to close the transaction-data upload")?;
+        let settled = match plan.settlement {
+            Settlement::Inline { transaction } => {
+                send_with_blockhash(
+                    rpc,
+                    payer,
+                    &[],
+                    &transaction,
+                    Some(SETTLE_TRANSACTION_CONFIG),
+                    blockhash,
+                )
+                .await
+            }
+            Settlement::Upload {
+                init,
+                writes,
+                settle,
+                close,
+            } => {
+                let upload = Some(UPLOAD_TRANSACTION_CONFIG);
+                send_with_blockhash(rpc, payer, &[], &[init], upload, blockhash)
+                    .await
+                    .context("failed to create the transaction-data upload")?;
+                let settled = async {
+                    // Each write names its offset, so the chunks land in any order.
+                    futures::future::try_join_all(writes.into_iter().enumerate().map(
+                        |(i, write)| async move {
+                            send_with_blockhash(rpc, payer, &[], &[write], upload, blockhash)
+                                .await
+                                .with_context(|| format!("failed to write chunk {i} of the upload"))
+                        },
+                    ))
+                    .await?;
+                    send_with_blockhash(
+                        rpc,
+                        payer,
+                        &[],
+                        &settle,
+                        Some(SETTLE_TRANSACTION_CONFIG),
+                        blockhash,
+                    )
+                    .await
+                }
+                .await;
+                // The upload is closed whatever the settlement's outcome, so a
+                // refused settlement does not strand its rent.
+                send_with_blockhash(rpc, payer, &[], &[close], upload, blockhash)
+                    .await
+                    .context("failed to close the transaction-data upload")?;
+                settled
+            }
+        };
         let signature = match settled {
             Ok(signature) => signature,
             Err(error) => {
@@ -234,7 +233,7 @@ impl ProtocolAdapter {
     /// Sends `instruction`, which the adapter's owner signs: the payer, which
     /// owns the adapter.
     async fn as_owner(&self, instruction: Instruction, what: &str) -> anyhow::Result<()> {
-        send_signed(&self.rpc, &self.payer, &[], &[instruction], &[])
+        send_signed(&self.rpc, &self.payer, &[], &[instruction])
             .await
             .with_context(|| format!("failed to {what}"))?;
         Ok(())

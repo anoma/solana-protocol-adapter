@@ -2,10 +2,12 @@
 //! checks only the Solana adapter's harness makes. Every settlement also
 //! checks that the tree the harness keeps gives the root the adapter stores.
 
+use anoma_pa_solana_client::anchor_instruction_disc;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
-use anoma_pa_testkit::fixtures::trivial;
+use anoma_pa_testkit::fixtures::{passthrough, trivial};
 use anoma_pa_testkit::{execute_tx, prove_actions};
 use anyhow::Context;
+use solana_message::VersionedMessage;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
@@ -75,31 +77,6 @@ async fn a_call_to_a_program_no_forwarder_is_registered_for_fails_before_anythin
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_lookup_table_serves_the_keys_a_forwarder_adds() -> anyhow::Result<()> {
-    use solana_address_lookup_table_interface::state::AddressLookupTable;
-
-    let mut env = SolanaLocalEnv::setup_bare().await?;
-    let keys: Vec<_> = (0..3).map(|_| Pubkey::new_unique()).collect();
-    env.protocol_adapter
-        .extend_lookup_table(keys.clone())
-        .await?;
-
-    let table = env.protocol_adapter.lookup_table.key;
-    let data = env.protocol_adapter.rpc.get_account_data(&table).await?;
-    let stored = AddressLookupTable::deserialize(&data)?.addresses.to_vec();
-    anyhow::ensure!(
-        stored == env.protocol_adapter.lookup_table.addresses,
-        "the table stores {stored:?}, the harness compiles against {:?}",
-        env.protocol_adapter.lookup_table.addresses
-    );
-    anyhow::ensure!(
-        stored.ends_with(&keys),
-        "the table does not end with the added keys"
-    );
-    Ok(())
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn a_consumer_deploys_its_program_and_sends_its_setup() -> anyhow::Result<()> {
     use solana_keypair::Keypair;
     use solana_loader_v3_interface::state::UpgradeableLoaderState;
@@ -152,25 +129,87 @@ async fn a_consumer_deploys_its_program_and_sends_its_setup() -> anyhow::Result<
     Ok(())
 }
 
+/// The adapter instruction of `executed`, a settlement: its data, which
+/// opens with the instruction's discriminator.
+fn adapter_instruction<'a>(
+    executed: &'a anoma_pa_solana_integration_test::executed::Executed,
+    program: &Pubkey,
+) -> anyhow::Result<&'a [u8]> {
+    let message = &executed.transaction.message;
+    let keys = message.static_account_keys();
+    message
+        .instructions()
+        .iter()
+        .find(|ix| keys.get(usize::from(ix.program_id_index)) == Some(program))
+        .map(|ix| ix.data.as_slice())
+        .context("the settlement transaction has no adapter instruction")
+}
+
 #[tokio::test(flavor = "multi_thread")]
-async fn a_settlement_reads_back_with_the_keys_its_lookup_table_loaded() -> anyhow::Result<()> {
+async fn a_settlement_that_fits_one_transaction_settles_in_it() -> anyhow::Result<()> {
     let mut env = SolanaLocalEnv::setup_bare().await?;
     let actions = trivial::build_many(1, 93).context("failed to build trivial actions")?;
     let tx = prove_actions(&env, &actions).await?;
     let executed = env.protocol_adapter.settled(tx).await?;
 
-    let (pa_state, _) = anoma_pa_solana_client::derive_pa_state_pda(&env.protocol_adapter.program);
     anyhow::ensure!(
-        executed.loaded.contains(&pa_state)
-            && !executed
-                .transaction
-                .message
-                .static_account_keys()
-                .contains(&pa_state),
-        "the adapter state {pa_state} is not loaded from the settlement lookup table: loaded \
-         {:?}",
-        executed.loaded
+        matches!(executed.transaction.message, VersionedMessage::V1(_)),
+        "the settlement is not a v1 transaction"
     );
+    let data = adapter_instruction(&executed, &env.protocol_adapter.program)?;
+    anyhow::ensure!(
+        data[..8] == anchor_instruction_disc("settle"),
+        "a settlement that fits one transaction is not settled inline"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_settlement_too_large_for_one_transaction_settles_from_an_upload() -> anyhow::Result<()> {
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    // One pass-through action carrying a 4,800-byte application payload:
+    // large in bytes, light in compute.
+    let action = passthrough::build(
+        94,
+        vec![],
+        passthrough::Overrides {
+            application_payload: vec![vec![0x5a5a_5a5a; 1200]],
+            ..passthrough::Overrides::default()
+        },
+    )
+    .context("failed to build the pass-through action")?;
+    let tx = prove_actions(&env, &[action.witnesses]).await?;
+    let input = anoma_pa_solana_client::settlement_input::settlement_input(tx.clone().into_arm())?;
+    anyhow::ensure!(
+        input.len() > solana_message::v1::MAX_TRANSACTION_SIZE,
+        "the settlement input is {} bytes, which one transaction carries: the test needs a \
+         larger settlement",
+        input.len()
+    );
+    let executed = env.protocol_adapter.settled(tx).await?;
+
+    let data = adapter_instruction(&executed, &env.protocol_adapter.program)?;
+    anyhow::ensure!(
+        data[..8] == anchor_instruction_disc("settle_from_txdata"),
+        "a settlement too large for one transaction is not settled from an upload"
+    );
+    // The upload is closed after the settlement.
+    let upload_id = u64::from_le_bytes(data[8..16].try_into()?);
+    let (tx_data, _) = anoma_pa_solana_client::derive_tx_data_pda(
+        &env.protocol_adapter.program,
+        &env.protocol_adapter.payer.pubkey(),
+        upload_id,
+    );
+    let account = env
+        .protocol_adapter
+        .rpc
+        .get_account_with_commitment(
+            &tx_data,
+            solana_commitment_config::CommitmentConfig::confirmed(),
+        )
+        .await?
+        .value;
+    anyhow::ensure!(account.is_none(), "the upload {tx_data} is still open");
     Ok(())
 }
 
