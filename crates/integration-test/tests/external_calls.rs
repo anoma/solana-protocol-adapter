@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use anoma_pa_solana_client::events::PaEvent;
 use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};
+use anoma_pa_solana_client::forwarders::{CallAccounts, Forwarder, ForwarderError};
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
 use anoma_pa_solana_integration_test::executed::Executed;
-use anoma_pa_solana_integration_test::forwarders::{CallAccounts, Forwarder};
 use anoma_pa_solana_integration_test::test_forwarder::{
     RELAY_OK, log_ix, relay_input, write_input,
 };
@@ -43,7 +43,7 @@ impl Forwarder for Fixed {
         &'a self,
         _rpc: &'a RpcClient,
         calls: &'a [SolanaExternalCall],
-    ) -> BoxFuture<'a, anyhow::Result<CallAccounts>> {
+    ) -> BoxFuture<'a, Result<CallAccounts, ForwarderError>> {
         Box::pin(async move {
             Ok(CallAccounts {
                 segments: vec![self.segment.clone(); calls.len()],
@@ -226,7 +226,7 @@ async fn a_refusal_with_a_truncated_log_is_reported_not_named() -> anyhow::Resul
         anyhow::bail!("the harness decoded a refusal from a truncated log");
     };
     anyhow::ensure!(
-        format!("{error:#}").contains("truncated the settlement's log"),
+        format!("{error:#}").contains("the runtime truncated the log"),
         "the failure does not name the truncation: {error:#}"
     );
     Ok(())

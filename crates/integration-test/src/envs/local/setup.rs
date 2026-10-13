@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anoma_pa_solana_client::MOCK_SELECTOR;
 use anoma_pa_solana_client::derive_verifier_router_pdas;
+use anoma_pa_solana_client::submission::read_verifier_program;
 use anoma_pa_testkit::prover::LocalProver;
 use anyhow::Context;
 use solana_keypair::Keypair;
@@ -82,7 +83,7 @@ impl Environment {
         );
         runtime::deploy(&surfnet, mock_verifier, MOCK_VERIFIER_SO, payer.pubkey())?;
         runtime::deploy(&surfnet, pa, PROTOCOL_ADAPTER_SO, payer.pubkey())?;
-        let entry_verifier = runtime::verifier_program(&rpc, router, MOCK_SELECTOR).await?;
+        let entry_verifier = read_verifier_program(&rpc, &router, MOCK_SELECTOR).await?;
         anyhow::ensure!(
             entry_verifier == mock_verifier,
             "the mock verifier entry names {entry_verifier}, the mock verifier is {mock_verifier} \

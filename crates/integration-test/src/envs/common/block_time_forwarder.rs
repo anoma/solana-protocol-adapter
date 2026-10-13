@@ -12,7 +12,7 @@ use solana_instruction::AccountMeta;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
 use super::environment::Environment;
-use crate::forwarders::{CallAccounts, Forwarder};
+use anoma_pa_solana_client::forwarders::{CallAccounts, Forwarder, ForwarderError};
 
 /// The forwarder's build, at the local address `env/localnet.env` names
 /// `BLOCK_TIME_FORWARDER` (`dev.sh harness-programs`).
@@ -29,7 +29,7 @@ impl Forwarder for ClockReader {
         &'a self,
         _rpc: &'a RpcClient,
         calls: &'a [SolanaExternalCall],
-    ) -> BoxFuture<'a, anyhow::Result<CallAccounts>> {
+    ) -> BoxFuture<'a, Result<CallAccounts, ForwarderError>> {
         Box::pin(async move {
             Ok(CallAccounts {
                 segments: calls
