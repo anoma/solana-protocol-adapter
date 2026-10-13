@@ -23,7 +23,7 @@ e2e = [
 ]
 
 [dependencies]
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "ec540440c2ed1bb02017f814e9a239632bc83516", features = [
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "1a3435b8e6f5a754a71b13448949258b791fd9e5", features = [
   "arm",
 ] }
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "cf94169a4009d45123e6f2905a7c898f5a53e19f", default-features = false, features = [

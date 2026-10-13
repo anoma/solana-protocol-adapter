@@ -2,11 +2,11 @@ use std::sync::Arc;
 
 use anoma_pa_solana_client::events::PaEvent;
 use anoma_pa_solana_client::settlement_input::{
-    external_calls, settled_resources, settlement_input,
+    external_calls, settled_resources, settlement_input, unproven_settlement_input,
 };
 use anoma_pa_solana_client::{
     PAStateAccount, PaError, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
-    deny_logic_refs_ix, derive_pa_state_pda, pause_ix, plan_settlement,
+    deny_logic_refs_ix, derive_pa_state_pda, pause_ix, plan_settlement, plan_simulation,
     set_kind_table_commitment_ix, unpause_ix,
 };
 use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree;
@@ -16,13 +16,18 @@ use anoma_pa_testkit::environment::{
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_rm_risc0::Digest;
 use anyhow::Context;
+use solana_commitment_config::CommitmentConfig;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
+use solana_message::{Hash, VersionedMessage};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client_api::client_error::{Error as ClientError, ErrorKind};
 use solana_rpc_client_api::request::{RpcError, RpcResponseErrorData};
 use solana_rpc_client_api::response::RpcSimulateTransactionResult;
+use solana_rpc_client_types::config::RpcSimulateTransactionConfig;
+use solana_signature::Signature;
 use solana_signer::Signer;
+use solana_transaction::versioned::VersionedTransaction;
 use surfpool_sdk::Pubkey;
 
 use super::runtime::{latest_blockhash, send_planned, send_signed, verifier_program};
@@ -116,20 +121,22 @@ impl ProtocolAdapter {
         let input = settlement_input(tx)?;
         let upload_id = self.next_upload_id;
         self.next_upload_id += 1;
-        let plan = plan_settlement(SettlementRequest {
-            pa_program: self.program,
-            payer: self.payer.pubkey(),
+        let plan = plan_settlement(
+            SettlementRequest {
+                pa_program: self.program,
+                payer: self.payer.pubkey(),
+                input: &input,
+                state: &state,
+                verifier_program: self.verifier_program,
+                nullifiers: &resources.nullifiers,
+                consumed_roots: &resources.consumed_roots,
+                created: &resources.created,
+                call_segments,
+                preceding,
+            },
             upload_id,
-            expires_slot: slot + TXDATA_EXPIRY_SLOTS_DEFAULT,
-            input: &input,
-            state: &state,
-            verifier_program: self.verifier_program,
-            nullifiers: &resources.nullifiers,
-            consumed_roots: &resources.consumed_roots,
-            created: &resources.created,
-            call_segments,
-            preceding,
-        })?;
+            slot + TXDATA_EXPIRY_SLOTS_DEFAULT,
+        )?;
 
         let (rpc, payer) = (&*self.rpc, &*self.payer);
         let settled = match &plan.upload {
@@ -184,6 +191,88 @@ impl ProtocolAdapter {
     pub async fn settled(&mut self, transaction: Transaction) -> anyhow::Result<Executed> {
         self.submit(transaction).await?.map_err(|refusal| {
             anyhow::anyhow!("the protocol adapter refused the transaction: {refusal:?}")
+        })
+    }
+
+    /// Simulates settling `transaction` (pa-evm's `simulateExecute`) in the
+    /// runtime's simulation, which changes nothing and checks no signature,
+    /// skipping the RISC Zero proof's verification when
+    /// `skip_risc_zero_proof_verification`. An unproven transaction (its
+    /// aggregation proof empty) carries the adapter's proof selector instead.
+    /// Returns the compute units the simulation used when the transaction
+    /// would execute, otherwise the adapter's error.
+    pub async fn simulate(
+        &self,
+        transaction: Transaction,
+        skip_risc_zero_proof_verification: bool,
+    ) -> anyhow::Result<Result<u64, PaError>> {
+        let tx = transaction.into_arm();
+        let resources = settled_resources(&tx)?;
+        let calls = external_calls(&tx)?;
+        let (state, (preceding, call_segments)) =
+            futures::try_join!(self.state(), self.forwarders.accounts(&self.rpc, &calls))?;
+        let unproven = tx
+            .aggregation
+            .as_ref()
+            .is_some_and(|aggregation| aggregation.proof.is_empty());
+        let input = if unproven {
+            unproven_settlement_input(tx, state.proof_selector)?
+        } else {
+            settlement_input(tx)?
+        };
+        let simulation = plan_simulation(
+            SettlementRequest {
+                pa_program: self.program,
+                payer: self.payer.pubkey(),
+                input: &input,
+                state: &state,
+                verifier_program: self.verifier_program,
+                nullifiers: &resources.nullifiers,
+                consumed_roots: &resources.consumed_roots,
+                created: &resources.created,
+                call_segments,
+                preceding,
+            },
+            skip_risc_zero_proof_verification,
+        )?;
+        // The simulation takes the latest blockhash itself and checks no
+        // signature, so neither is filled in.
+        let message = simulation.message(&self.payer.pubkey(), Hash::default())?;
+        let unsigned = VersionedTransaction {
+            signatures: vec![
+                Signature::default();
+                usize::from(message.header.num_required_signatures)
+            ],
+            message: VersionedMessage::V1(message),
+        };
+        let simulated = self
+            .rpc
+            .simulate_transaction_with_config(
+                &unsigned,
+                RpcSimulateTransactionConfig {
+                    sig_verify: false,
+                    replace_recent_blockhash: true,
+                    commitment: Some(CommitmentConfig::confirmed()),
+                    ..RpcSimulateTransactionConfig::default()
+                },
+            )
+            .await
+            .context("failed to simulate the settlement")?
+            .value;
+        let logs = simulated.logs.unwrap_or_default();
+        let error = match first_failure(&logs) {
+            Some((failed, code)) if failed == self.program => PaError::from_code(code)
+                .with_context(|| format!("the adapter failed with unknown error {code}"))?,
+            _ => anyhow::bail!(
+                "the simulation did not end in an adapter error: {:?}, logs {logs:#?}",
+                simulated.err
+            ),
+        };
+        Ok(match error {
+            PaError::Simulated => Ok(simulated
+                .units_consumed
+                .context("the simulation reports no compute units")?),
+            error => Err(error),
         })
     }
 
@@ -288,13 +377,19 @@ fn refusal_in_logs(
     Ok(first_failure_refusal(logs, program, verifier))
 }
 
-/// The refusal the first failure line of a complete log names.
-fn first_failure_refusal(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Option<Refusal> {
+/// The program and custom error code the first failure line of a log names.
+fn first_failure(logs: &[String]) -> Option<(Pubkey, u32)> {
     let (failed, error) = logs.iter().find_map(|line| {
         let (failed, error) = line.strip_prefix("Program ")?.split_once(" failed: ")?;
         Some((failed.parse::<Pubkey>().ok()?, error))
     })?;
     let code = u32::from_str_radix(error.strip_prefix("custom program error: 0x")?, 16).ok()?;
+    Some((failed, code))
+}
+
+/// The refusal the first failure line of a complete log names.
+fn first_failure_refusal(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Option<Refusal> {
+    let (failed, code) = first_failure(logs)?;
     if failed == *verifier {
         return Some(Refusal::InvalidAggregationProof);
     }
@@ -358,7 +453,8 @@ fn refusal_for(error: PaError) -> Option<Refusal> {
         | PaError::ZeroRiscZeroVerifierSelectorNotAllowed
         | PaError::OwnableUnauthorizedAccount
         | PaError::OwnableInvalidOwner
-        | PaError::InvalidUpgradeBuffer => None,
+        | PaError::InvalidUpgradeBuffer
+        | PaError::Simulated => None,
     }
 }
 

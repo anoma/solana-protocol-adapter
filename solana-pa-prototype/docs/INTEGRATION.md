@@ -11,6 +11,14 @@ Call-level mechanics — instruction call sequences, account lists, PDA derivati
 
 Both paths verify the same things and emit the same events. Settlement is rejected while the deployment is paused.
 
+## Simulation
+
+**`simulate_execute(transaction_data: Vec<u8>, skip_risc_zero_proof_verification: bool)`** is pa-evm's `simulateExecute`. It takes `settle`'s accounts and runs `settle`'s code, then fails with `Simulated`, so nothing it did lands. A transaction that would not settle fails with the error `settle` would give, and a paused deployment refuses it.
+
+- **Skipping verification.** With `skip_risc_zero_proof_verification` set, the aggregation proof is not verified, but its first four bytes must still be this deployment's proof selector. An unproven transaction therefore carries the selector alone as its proof (anoma-pa-solana-client's `unproven_settlement_input`). The delta proof is verified either way.
+- **How to send it.** Send it to the RPC's `simulateTransaction`, with `sigVerify` off and `replaceRecentBlockhash` on. That changes nothing, needs no signature and costs nothing. The fee payer must exist with enough lamports for the rent of the accounts the settlement would create. The result's `unitsConsumed` is the compute the settlement used, the counterpart of `Simulated`'s `gasUsed` on EVM.
+- **Size limit.** A simulation must fit in one v1 transaction: there is no upload path for it.
+
 ## The transaction wire format
 
 There are two serialization layers; do not confuse them:
