@@ -124,12 +124,7 @@ describe("protocol-adapter (initialize)", () => {
     const { events } = await cpiEventsOf(sig);
     assert.deepEqual(
       events.map((e) => e.name),
-      [
-        "ownershipTransferredEvent",
-        "commitmentTreeRootAddedEvent",
-        "kindTableRootUpdatedEvent",
-        "initializedEvent",
-      ],
+      ["ownershipTransferredEvent", "commitmentTreeRootAddedEvent", "kindTableRootUpdatedEvent", "initializedEvent"],
       "initialize emits pa-evm's initializer events in order",
     );
     assert.equal(events[0].data.previousOwner.toBase58(), PublicKey.default.toBase58(), "from no owner");

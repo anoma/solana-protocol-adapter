@@ -83,10 +83,7 @@ describe("protocol-adapter (kind table root) @localnet", () => {
     assert.deepEqual(await stored(), rotated, "the new root is stored");
     const { events } = await cpiEventsOf(sig);
     const updated = events.find((e) => e.name === "kindTableRootUpdatedEvent");
-    assert.ok(
-      updated,
-      `a KindTableRootUpdatedEvent is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`,
-    );
+    assert.ok(updated, `a KindTableRootUpdatedEvent is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`);
     // pa-evm: `event KindTableRootUpdated(bytes32 kindTableRoot)`.
     assert.deepEqual(
       updated!.data,
