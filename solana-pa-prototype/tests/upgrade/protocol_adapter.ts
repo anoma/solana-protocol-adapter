@@ -91,8 +91,6 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
       .accountsPartial({ paState, authority: wallet })
       .rpc();
     await pauseAdapter(previous as any, wallet).rpc();
-    // Decoded through the previous build's IDL, which names the stored kind
-    // table `kindTableCommitment`.
     stateBefore = await (previous.account as any).paStateAccount.fetch(paState);
     assert.equal(stateBefore.nextIndex.toNumber(), createdCommitmentsOf(fixture).length, "the settlement appended");
   });

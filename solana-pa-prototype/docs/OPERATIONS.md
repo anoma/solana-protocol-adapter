@@ -133,7 +133,7 @@ The PA stores the Merkle root of a kind table, and settles a transaction proven 
 PA_KIND_TABLE_ROOT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # owner wallet
 ```
 
-The instruction rejects a zero root and emits `KindTableRootUpdatedEvent` with the new value, as pa-evm's `KindTableRootUpdated` does. From that slot on, transactions proven against the previous table are refused (`UnacceptedKindTableRoot`), unless it is the empty one, so provers must load the new table before it is installed. The generated Solana tables and their roots come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
+The instruction rejects a zero root and emits `KindTableRootUpdatedEvent` with the new value, as pa-evm's `KindTableRootUpdated` does. From that slot on, transactions proven against the previous table are refused (`UnacceptedKindTableRoot`), unless it is the empty one, so provers must load the new table before it is installed. The generated Solana tables and their roots come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/roots.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
 
 ## Pausing
 
