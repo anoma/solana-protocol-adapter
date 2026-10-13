@@ -19,6 +19,7 @@ use anoma_pa_testkit::fixtures::passthrough::{self, PASSTHROUGH_LOGIC_VK};
 use anoma_pa_testkit::prove_actions;
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_rm_risc0::utils::bytes_to_words;
+use anyhow::Context;
 use futures::future::BoxFuture;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
@@ -341,64 +342,30 @@ async fn the_action_executed_event_carries_its_resources_logic_refs() -> anyhow:
 }
 
 // The largest settlement of this suite (a relayed write, with an instruction
-// before it), sent as a v0 transaction through the settlement lookup table,
-// fits one packet, and every account the same for every such settlement is
-// looked up: the accounts two settlements share are the deployment's and the
-// forwarder's, the ones they do not (the upload, the nullifiers, the new
-// root's marker) are each settlement's own.
+// before it) settles in one v1 transaction: the instruction before it, then
+// the adapter's `settle` carrying the input.
 #[tokio::test(flavor = "multi_thread")]
-async fn the_largest_settlement_fits_one_packet_with_its_fixed_accounts_looked_up()
--> anyhow::Result<()> {
+async fn the_largest_settlement_settles_in_one_v1_transaction() -> anyhow::Result<()> {
     let mut s = setup().await?;
-    // As a deployment's table holds a forwarder's fixed accounts.
-    s.env
-        .protocol_adapter
-        .extend_lookup_table(vec![s.forwarder, s.account])
+    let tx = s
+        .prove_relayed_write(7, vec![log_ix(&s.forwarder, 1)])
         .await?;
+    let executed = s.env.protocol_adapter.settled(tx).await?;
 
-    let mut settled = Vec::new();
-    for seed in [7, 8] {
-        let tx = s
-            .prove_relayed_write(seed, vec![log_ix(&s.forwarder, 1)])
-            .await?;
-        let executed = s.env.protocol_adapter.settled(tx).await?;
-        let size = bincode::serialize(&executed.transaction)?.len();
-        let message = &executed.transaction.message;
-        println!(
-            "settlement {seed} as v0: {size} bytes, {} static keys, {} looked up",
-            message.static_account_keys().len(),
-            executed.loaded.len()
-        );
-        anyhow::ensure!(
-            size <= solana_packet::PACKET_DATA_SIZE,
-            "settlement {seed} is {size} bytes, more than one packet"
-        );
-        settled.push(executed);
-    }
-
-    let (first, second) = (&settled[0], &settled[1]);
-    let message = &first.transaction.message;
-    let statics = message.static_account_keys();
-    let invoked: Vec<Pubkey> = message
-        .instructions()
-        .iter()
-        .map(|ix| statics[usize::from(ix.program_id_index)])
-        .collect();
-    let signers = &statics[..usize::from(message.header().num_required_signatures)];
-    let in_second = |key: &Pubkey| {
-        second
-            .transaction
-            .message
-            .static_account_keys()
-            .contains(key)
-            || second.loaded.contains(key)
+    let solana_message::VersionedMessage::V1(message) = &executed.transaction.message else {
+        anyhow::bail!("the settlement is not a v1 transaction");
     };
-    for key in statics {
-        anyhow::ensure!(
-            !in_second(key) || invoked.contains(key) || signers.contains(key),
-            "{key}, an account of every such settlement, is static, not looked up: the \
-             settlement lookup table lacks it"
-        );
-    }
+    let size = anoma_pa_solana_client::transaction_size(message);
+    println!(
+        "the largest settlement: {size} bytes, {} accounts",
+        message.account_keys.len()
+    );
+    let data = executed
+        .instruction_data(&s.env.protocol_adapter.program)
+        .context("the settlement transaction has no adapter instruction")?;
+    anyhow::ensure!(
+        data[..8] == anoma_pa_solana_client::anchor_instruction_disc("settle"),
+        "the largest settlement is not settled inline in one transaction"
+    );
     Ok(())
 }

@@ -102,7 +102,7 @@ impl<P> Environment<P> {
         signers: &[&Keypair],
     ) -> anyhow::Result<Signature> {
         let adapter = &self.protocol_adapter;
-        runtime::send_signed(&adapter.rpc, &adapter.payer, signers, instructions, &[]).await
+        runtime::send_signed(&adapter.rpc, &adapter.payer, signers, instructions).await
     }
 
     /// The environment on `surfnet`, whose adapter `pa` is initialized, with

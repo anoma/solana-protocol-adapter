@@ -69,9 +69,9 @@ ensure_wallet
 ensure_node_modules
 load_program_ids localnet
 if [[ "$PHASE" == "test" ]]; then
-  echo "==> (1/3) Using prebuilt artifacts"
+  echo "==> (1/2) Using prebuilt artifacts"
 else
-  echo "==> (1/3) Building"
+  echo "==> (1/2) Building"
   build_programs_dev
 fi
 
@@ -89,21 +89,6 @@ check_required_fixture "$PA_TEST_MODE"
 echo "==> Type-checking scripts and tests"
 yarn run tsc --noEmit -p ./tsconfig.json
 
-echo "==> (2/3) Preparing validator genesis"
-
-# The settlement lookup table the validator starts with (see
-# tests/utils/genesis-settlement-table.ts); its keys depend on the test mode.
-# A validator serves a table's keys only once its root is past the slot that
-# last extended the table, slot 0 for this one; the validator is warped to
-# slot 1 so its root starts there, instead of about 32 slots after startup.
-GENESIS_ACCOUNT_DIR="${PROJECT_DIR}/.cache/genesis-accounts"
-mkdir -p "$GENESIS_ACCOUNT_DIR"
-ANCHOR_PROVIDER_URL="$CLUSTER_URL" ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
-  npx ts-node -P tsconfig.json tests/utils/genesis-settlement-table.ts "$GENESIS_ACCOUNT_DIR"
-settlement_table_file=("$GENESIS_ACCOUNT_DIR"/settlement-table-*.json)
-PA_SETTLEMENT_TABLE="$(basename "${settlement_table_file[0]}" .json)"
-PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE#settlement-table-}"
-
 trap 'stop_validator' EXIT
 
 # Run one spec file against the running validator.
@@ -111,7 +96,6 @@ run_spec() {
   local spec="$1"
   if ! ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
     ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
-    PA_SETTLEMENT_TABLE="$PA_SETTLEMENT_TABLE" \
     yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 "$spec"; then
     echo "❌ ${spec} failed (validator log: ${VALIDATOR_LOG})" >&2
     exit 1
@@ -119,13 +103,13 @@ run_spec() {
 }
 
 # Start a validator with the workspace programs (with $1, if given, at its
-# previous build) and the genesis settlement lookup table.
+# previous build).
 start_suite_validator() {
   workspace_program_args "$@"
-  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}" --warp-slot 1 --account "$PA_SETTLEMENT_TABLE" "${settlement_table_file[0]}"
+  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
 }
 
-echo "==> (3/3) Running ${#SUITE_SPECS[@]} spec file(s) on one validator, then ${#UPGRADE_SPECS[@]} upgrade-path file(s) on validators of their own"
+echo "==> (2/2) Running ${#SUITE_SPECS[@]} spec file(s) on one validator, then ${#UPGRADE_SPECS[@]} upgrade-path file(s) on validators of their own"
 if [[ ${#SUITE_SPECS[@]} -gt 0 ]]; then
   start_suite_validator
   for i in "${!SUITE_SPECS[@]}"; do

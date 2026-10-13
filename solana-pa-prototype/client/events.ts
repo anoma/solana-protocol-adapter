@@ -30,7 +30,7 @@ export function parseCpiEvents(tx: anchor.web3.VersionedTransactionResponse, emi
 
 /** The CPI events `emitter` emitted in the confirmed transaction `signature`. */
 export async function cpiEventsOfSignature(connection: Connection, emitter: anchor.Program<any>, signature: string) {
-  const tx = await connection.getTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 0 });
+  const tx = await connection.getTransaction(signature, { commitment: "confirmed", maxSupportedTransactionVersion: 1 });
   if (!tx) throw new Error(`transaction ${signature} is not fetchable at confirmed commitment`);
   return parseCpiEvents(tx, emitter);
 }

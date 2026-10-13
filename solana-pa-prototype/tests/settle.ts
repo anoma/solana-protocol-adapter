@@ -27,7 +27,7 @@ import {
 } from "./utils/adapterSuite";
 
 describe("settlement", () => {
-  const { funder, uploadTxData, uploadAndSettleV0, settleFixtureViaTxData } = useAdapterSuite();
+  const { funder, uploadTxData, uploadAndSettle, settleFixtureViaTxData } = useAdapterSuite();
 
   describe("protocol-adapter (Groth16 batch aggregation E2E)", () => {
     const tx = Buffer.from(fixture.tx_b64, "base64");
@@ -53,7 +53,7 @@ describe("settlement", () => {
         createdCommitments?: Buffer[];
       },
     ) {
-      return uploadAndSettleV0(
+      return uploadAndSettle(
         await funder.fresh(2),
         payload,
         buildSettleRemainingAccounts(options?.nullifierAccounts ?? remainingAccounts),

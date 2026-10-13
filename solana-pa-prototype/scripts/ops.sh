@@ -41,9 +41,6 @@ Commands:
   migrate-state          Bring PAState from the previous schema version to
                          this build's, once, right after the upgrade (owner
                          wallet).
-  lookup-table           Create the deployment's settlement lookup table, or
-                         extend the one in PA_LOOKUP_TABLE with any missing
-                         key. See scripts/lookup-table.ts.
   pause                  Pause settlement (owner-only; pa-evm's pause())
   unpause                Resume settlement (owner-only; pa-evm's unpause())
   status                 Show deployment status + wallet balance
@@ -669,11 +666,6 @@ cmd_migrate_state() {
   run_ts scripts/migrate-state.ts
 }
 
-cmd_lookup_table() {
-  require_pa_deployed
-  run_ts scripts/lookup-table.ts
-}
-
 cmd_pause() {
   require_pa_deployed
   run_ts scripts/pause-pa.ts pause
@@ -872,12 +864,6 @@ cmd_test() {
   # A local validator's deployment is disposable and owned by the local wallet.
   if [[ "$CLUSTER" != "localnet" ]]; then
     run_ts scripts/cluster-test-guard.ts "${pids[@]}"
-    # Settlements go through the deployment's own lookup table; without it the
-    # suite would create a table of its own on the cluster, and leave it.
-    if [[ -z "${PA_SETTLEMENT_TABLE:-}" ]]; then
-      echo "❌ Set PA_SETTLEMENT_TABLE to the deployment's settlement lookup table (its deployment record names it)." >&2
-      exit 1
-    fi
   fi
 
   # The run proves its own fixture set for the deployment: under a salt no
@@ -930,7 +916,6 @@ cmd_test() {
     PA_FIXTURE_DIR="$fixture_dir" \
     PA_FIXTURE_SALT="$salt" \
     PA_KIND_TABLE="$PA_KIND_TABLE" \
-    PA_SETTLEMENT_TABLE="${PA_SETTLEMENT_TABLE:-}" \
       yarn run ts-mocha --type-check -p ./tsconfig.json -t 0 --grep @localnet --invert "$spec"
   done
 
@@ -1076,7 +1061,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|init|set-kind-table|deny-logic-refs|migrate-state|lookup-table|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-table|deny-logic-refs|migrate-state|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster
