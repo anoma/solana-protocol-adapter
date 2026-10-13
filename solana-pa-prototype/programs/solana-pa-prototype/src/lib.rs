@@ -818,14 +818,14 @@ struct SettlementAccounts<'a, 'info> {
 }
 
 /// Shared settlement logic for settle, settle_from_txdata and
-/// simulate_execute, in
-/// pa-evm's `_execute` order. For each action: each consumed resource's
-/// nullifier is recorded, then its forwarder calls run and its payload events
-/// are emitted; each created resource's commitment is appended, then its calls
-/// run and its events are emitted; then the action's ActionExecuted. After
-/// the actions the proofs are verified, the produced root (if any) is
-/// recorded with CommitmentTreeRootAdded, and TransactionExecuted closes the
-/// settlement. The checks that need no state change (the instance's shape,
+/// simulate_execute, in pa-evm's `_execute` order. For each action: each
+/// consumed resource's nullifier is recorded, then its forwarder calls run and
+/// its payload events are emitted; each created resource's commitment is
+/// appended, then its calls run and its events are emitted; then the action's
+/// ActionExecuted. After the actions the proof's selector is checked, the
+/// proofs are verified (the RISC Zero proof unless skipped), the produced
+/// root (if any) is recorded with CommitmentTreeRootAdded, and
+/// TransactionExecuted closes the settlement. The checks that need no state change (the instance's shape,
 /// keys, kind table, denylist, duplicate nullifiers and consumed roots) run
 /// first: roots are checked against the tree as it stood before the
 /// transaction, as pa-evm's root set does not change until the end.
@@ -947,11 +947,9 @@ fn execute_settlement(
         events.emit(&executed)?;
     }
 
-    check_selector(&aggregation.proof, state.proof_selector)
-        .map_err(|e| -> anchor_lang::error::Error { e.into() })?;
+    check_selector(&aggregation.proof, state.proof_selector)?;
     if !skip_risc_zero_proof_verification {
-        let prepared = prepare_proof_for_verification(aggregation)
-            .map_err(|e| -> anchor_lang::error::Error { e.into() })?;
+        let prepared = prepare_proof_for_verification(aggregation)?;
 
         msg!("Verifying aggregated proof via verifier_router");
         let verifier = &accounts.verifier;
