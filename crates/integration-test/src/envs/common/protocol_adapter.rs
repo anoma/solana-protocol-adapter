@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use anoma_pa_solana_client::events::PaEvent;
 use anoma_pa_solana_client::settlement_input::{
-    SettledResources, external_calls, settled_resources, settlement_input,
-    unproven_settlement_input,
+    SettledResources, external_calls, settled_resources, settlement_input, simulation_input,
 };
 use anoma_pa_solana_client::{
     PAStateAccount, PaError, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
@@ -226,15 +225,7 @@ impl ProtocolAdapter {
         let calls = external_calls(&tx)?;
         let (state, (preceding, call_segments)) =
             futures::try_join!(self.state(), self.forwarders.accounts(&self.rpc, &calls))?;
-        let unproven = tx
-            .aggregation
-            .as_ref()
-            .is_some_and(|aggregation| aggregation.proof.is_empty());
-        let input = if unproven {
-            unproven_settlement_input(tx, state.proof_selector)?
-        } else {
-            settlement_input(tx)?
-        };
+        let input = simulation_input(tx, state.proof_selector)?;
         let simulation = plan_simulation(
             self.request(&input, &state, &resources, preceding, call_segments),
             skip_risc_zero_proof_verification,
