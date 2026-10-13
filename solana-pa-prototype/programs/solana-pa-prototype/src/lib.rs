@@ -103,7 +103,7 @@ pub mod upgrade;
 use arm_core::aggregation_instance::AggregationInstance;
 use arm_core::transaction::{Delta, Transaction};
 pub use error::PAError;
-use groth16::prepare_proof_for_verification;
+use groth16::{check_selector, prepare_proof_for_verification};
 use merkle::{append_to_tree, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, MAX_TREE_DEPTH};
 use state::*;
 pub use u256::U256;
@@ -947,16 +947,10 @@ fn execute_settlement(
         events.emit(&executed)?;
     }
 
-    if skip_risc_zero_proof_verification {
-        // pa-evm checks the proof's selector, its first four bytes, whether or
-        // not it verifies the proof.
-        let selector = aggregation.proof.get(..4).ok_or(PAError::InvalidProof)?;
-        require!(
-            selector == state.proof_selector,
-            PAError::RiscZeroVerifierSelectorMismatch
-        );
-    } else {
-        let prepared = prepare_proof_for_verification(aggregation, state.proof_selector)
+    check_selector(&aggregation.proof, state.proof_selector)
+        .map_err(|e| -> anchor_lang::error::Error { e.into() })?;
+    if !skip_risc_zero_proof_verification {
+        let prepared = prepare_proof_for_verification(aggregation)
             .map_err(|e| -> anchor_lang::error::Error { e.into() })?;
 
         msg!("Verifying aggregated proof via verifier_router");
