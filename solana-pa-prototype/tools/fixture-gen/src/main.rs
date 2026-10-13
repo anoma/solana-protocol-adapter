@@ -407,8 +407,8 @@ struct GenerateArgs {
     #[command(flatten)]
     prover: ProverArgs,
     /// Also write the final transaction's error variants to DIR:
-    /// wrong_root, no_aggregation, garbage_proof, corrupt_seal, zero_action,
-    /// foreign_kind_table and witness_delta.
+    /// wrong_root, no_aggregation, garbage_proof, wrong_selector, corrupt_seal,
+    /// zero_action, foreign_kind_table and witness_delta.
     #[arg(long, value_name = "DIR")]
     error_variants: Option<PathBuf>,
     /// Prove against this kind table instead of the committed empty one
@@ -1094,9 +1094,26 @@ fn generate_error_variant_fixtures(
     }
 
     {
+        // The fixture's own selector, so the adapter's selector check passes,
+        // followed by bytes that do not decode as a seal.
         let mut garbage = tx.clone();
-        require_aggregation_mut(&mut garbage)?.proof = vec![0xDE; 64];
+        require_aggregation_mut(&mut garbage)?.proof =
+            [seal_selector(tx)?.to_vec(), vec![0xDE; 60]].concat();
         write_variant("garbage_proof.json", &garbage)?;
+    }
+
+    {
+        // A well-formed seal under another selector than the fixture's (its
+        // first four bytes flipped): the adapter refuses it before it decodes
+        // or verifies the seal.
+        let mut wrong_selector = tx.clone();
+        let proof = &mut require_aggregation_mut(&mut wrong_selector)?.proof;
+        proof
+            .get_mut(..4)
+            .context("aggregation proof shorter than a selector")?
+            .iter_mut()
+            .for_each(|byte| *byte = !*byte);
+        write_variant("wrong_selector.json", &wrong_selector)?;
     }
 
     {

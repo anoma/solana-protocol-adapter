@@ -11,6 +11,14 @@ Call-level mechanics — instruction call sequences, account lists, PDA derivati
 
 Both paths verify the same things and emit the same events. Settlement is rejected while the deployment is paused.
 
+## Simulation
+
+**`simulate_execute(transaction_data: Vec<u8>, skip_risc_zero_proof_verification: bool)`** is pa-evm's `simulateExecute`. It takes `settle`'s accounts and runs `settle`'s code, then fails with `Simulated`, so nothing it did lands. A transaction that would not settle fails with the error `settle` would give, and a paused deployment refuses it.
+
+- **Skipping verification.** With `skip_risc_zero_proof_verification` set, the aggregation proof is not verified, but its first four bytes must still be this deployment's proof selector. An unproven transaction therefore carries the selector alone as its proof (anoma-pa-solana-client's `unproven_settlement_input`). The delta proof is verified either way.
+- **How to send it.** Send it to the RPC's `simulateTransaction`, with `sigVerify` off and `replaceRecentBlockhash` on. That changes nothing, needs no signature and costs nothing. The fee payer must exist with enough lamports for the rent of the accounts the settlement would create. The result's `unitsConsumed` is the compute the settlement used, the counterpart of `Simulated`'s `gasUsed` on EVM.
+- **Size limit.** A simulation must fit in one v1 transaction: there is no upload path for it.
+
 ## The transaction wire format
 
 There are two serialization layers; do not confuse them:
@@ -20,7 +28,7 @@ There are two serialization layers; do not confuse them:
 
 Borsh appears elsewhere in the PA (account state, event bodies, instruction arguments) but never for the transaction payload itself.
 
-Working examples: the `tests/fixtures/batch_groth16*.json` fixtures other than `batch_groth16_mismatch.json` carry complete settlement-ready transactions as base64 in their `tx_b64` field. The other fixtures (including `batch_groth16_mismatch.json`) are deliberately failing variants (missing aggregation, garbage proof, wrong root, forwarder output mismatch and failures) — useful as negative examples, not as templates.
+Working examples: the `tests/fixtures/batch_groth16*.json` fixtures other than `batch_groth16_mismatch.json` carry complete settlement-ready transactions as base64 in their `tx_b64` field. The other fixtures (including `batch_groth16_mismatch.json`) are deliberately failing variants (missing aggregation, garbage proof, a seal under another selector, wrong root, forwarder output mismatch and failures) — useful as negative examples, not as templates.
 
 A transaction must carry an aggregation (`aggregation` set, `actions` absent), and the 4-byte selector in `aggregation.proof`'s seal must equal the `proof_selector` this deployment pinned at initialization — see "Deployment parameters" below.
 

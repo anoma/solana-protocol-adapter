@@ -18,22 +18,23 @@ pub struct PreparedProof {
     pub journal_digest: [u8; 32],
 }
 
-/// Prepare proof data for verification.
-/// Extracts the seal, validates the selector, negates pi_a, computes the
-/// journal digest from the aggregation instance, and selects the image ID.
-pub fn prepare_proof_for_verification(
-    aggregation: &Aggregation,
-    expected_selector: [u8; 4],
-) -> Result<PreparedProof, PAError> {
-    let mut seal: Seal =
-        Seal::try_from_slice(&aggregation.proof).map_err(|_| PAError::InvalidProof)?;
-
-    // Validate proof selector matches what was configured at initialization.
-    // EVM PA validates selector before verification; wrong-selector proofs would fail
-    // at the verifier anyway, but this gives an explicit error message.
-    if seal.selector != expected_selector {
+/// pa-evm's `_checkSelector`: the proof's selector, its first four bytes,
+/// must be the one this deployment pinned at initialization. It is checked
+/// whether or not the proof is verified.
+pub fn check_selector(proof: &[u8], expected_selector: [u8; 4]) -> Result<(), PAError> {
+    let selector = proof.get(..4).ok_or(PAError::InvalidProof)?;
+    if selector != expected_selector {
         return Err(PAError::RiscZeroVerifierSelectorMismatch);
     }
+    Ok(())
+}
+
+/// Prepare proof data for verification.
+/// Extracts the seal, negates pi_a, computes the journal digest from the
+/// aggregation instance, and selects the image ID.
+pub fn prepare_proof_for_verification(aggregation: &Aggregation) -> Result<PreparedProof, PAError> {
+    let mut seal: Seal =
+        Seal::try_from_slice(&aggregation.proof).map_err(|_| PAError::InvalidProof)?;
 
     // The RISC Zero Groth16 verifier expects pi_a to be negated (on BN254 G1).
     seal.proof.pi_a = negate_g1(&seal.proof.pi_a)?;

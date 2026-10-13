@@ -1,5 +1,5 @@
 use crate::error::PAError;
-use crate::groth16::{negate_g1, prepare_proof_for_verification};
+use crate::groth16::{check_selector, negate_g1, prepare_proof_for_verification};
 use crate::tests::utils::{fake_aggregation_proof_bytes, minimal_instance, FAKE_SELECTOR};
 use arm_core::constants::BATCH_AGGREGATION_VK;
 use arm_core::transaction::Aggregation;
@@ -14,7 +14,7 @@ fn fake_aggregation() -> Aggregation {
 
 #[test]
 fn test_prepare_proof_accepts_batch_discriminant() {
-    let prepared = prepare_proof_for_verification(&fake_aggregation(), FAKE_SELECTOR).unwrap();
+    let prepared = prepare_proof_for_verification(&fake_aggregation()).unwrap();
     let expected: [u8; 32] = BATCH_AGGREGATION_VK.into();
     assert_eq!(prepared.image_id, expected);
 }
@@ -23,12 +23,12 @@ fn test_prepare_proof_accepts_batch_discriminant() {
 fn test_prepare_proof_invalid_bytes() {
     let mut aggregation = fake_aggregation();
     aggregation.proof = vec![0xFF, 0xFF, 0xFF];
-    assert!(prepare_proof_for_verification(&aggregation, FAKE_SELECTOR).is_err());
+    assert!(prepare_proof_for_verification(&aggregation).is_err());
 }
 
 #[test]
 fn test_selector_extraction_from_aggregation_proof() {
-    let prepared = prepare_proof_for_verification(&fake_aggregation(), FAKE_SELECTOR).unwrap();
+    let prepared = prepare_proof_for_verification(&fake_aggregation()).unwrap();
     assert_eq!(
         prepared.seal.selector, FAKE_SELECTOR,
         "Selector should be extracted correctly"
@@ -36,14 +36,25 @@ fn test_selector_extraction_from_aggregation_proof() {
 }
 
 #[test]
-fn test_prepare_proof_rejects_wrong_selector() {
-    let wrong_selector = [0x00, 0x00, 0x00, 0x00];
-    let result = prepare_proof_for_verification(&fake_aggregation(), wrong_selector);
-    match result {
-        Err(crate::error::PAError::RiscZeroVerifierSelectorMismatch) => {}
-        Err(other) => panic!("Expected RiscZeroVerifierSelectorMismatch, got {:?}", other),
-        Ok(_) => panic!("Expected error, got Ok"),
-    }
+fn the_selector_check_accepts_the_deployments_selector() {
+    assert!(check_selector(&fake_aggregation_proof_bytes(), FAKE_SELECTOR).is_ok());
+    // Only the first four bytes are read, as pa-evm's `proof[0:4]`.
+    assert!(check_selector(&FAKE_SELECTOR, FAKE_SELECTOR).is_ok());
+}
+
+#[test]
+fn the_selector_check_rejects_another_selector() {
+    let result = check_selector(&fake_aggregation_proof_bytes(), [0x00, 0x00, 0x00, 0x00]);
+    assert!(
+        matches!(result, Err(PAError::RiscZeroVerifierSelectorMismatch)),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn the_selector_check_rejects_a_proof_shorter_than_a_selector() {
+    let result = check_selector(&FAKE_SELECTOR[..3], FAKE_SELECTOR);
+    assert!(matches!(result, Err(PAError::InvalidProof)), "{result:?}");
 }
 
 /// The journal digest must be the sha256 of the instance's journal encoding,
@@ -51,11 +62,11 @@ fn test_prepare_proof_rejects_wrong_selector() {
 #[test]
 fn test_journal_digest_binds_instance() {
     let aggregation = fake_aggregation();
-    let prepared = prepare_proof_for_verification(&aggregation, FAKE_SELECTOR).unwrap();
+    let prepared = prepare_proof_for_verification(&aggregation).unwrap();
 
     let mut mutated = aggregation.clone();
     mutated.instance.actions[0].action_tree_root = arm_core::Digest::from_bytes([0xEE; 32]);
-    let prepared_mutated = prepare_proof_for_verification(&mutated, FAKE_SELECTOR).unwrap();
+    let prepared_mutated = prepare_proof_for_verification(&mutated).unwrap();
 
     assert_ne!(
         prepared.journal_digest, prepared_mutated.journal_digest,

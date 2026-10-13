@@ -152,6 +152,12 @@ pub enum PAError {
     // Upgrades
     #[msg("Buffer is not a loader buffer holding a program")]
     InvalidUpgradeBuffer,
+
+    // Simulation
+    /// pa-evm's `Simulated`: `simulate_execute` ends with it whenever the
+    /// transaction would execute, so nothing the simulation does lands.
+    #[msg("Simulated: the transaction executes")]
+    Simulated,
 }
 
 impl From<SolanaArmError> for PAError {

@@ -124,6 +124,17 @@ describe("settlement", () => {
       );
     });
 
+    it("rejects RiscZeroVerifierSelectorMismatch (a seal under another selector)", async () => {
+      const fx = await loadFixture("wrong_selector.json");
+      await assertFails(
+        settleViaTxData(Buffer.from(fx.tx_b64, "base64"), {
+          nullifierAccounts: deriveNullifierAccounts(fx.consumed_nullifiers_b64),
+          newRootMarker: DUMMY_ROOT_MARKER,
+        }),
+        { program, error: "RiscZeroVerifierSelectorMismatch" },
+      );
+    });
+
     it("accepts a valid Groth16 batch aggregation tx and creates root marker", async () => {
       // Guardrail: fixture should actually include a block-time-forwarder external call.
       // If not present, this test can pass without exercising the external call path.
