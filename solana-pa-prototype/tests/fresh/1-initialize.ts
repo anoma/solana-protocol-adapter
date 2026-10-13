@@ -8,7 +8,7 @@
  */
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { EMPTY_KIND_TABLE_COMMITMENT, SCHEMA_VERSION } from "../../client/constants";
+import { EMPTY_KIND_TABLE_ROOT, SCHEMA_VERSION } from "../../client/constants";
 import { initializeAdapter } from "../../client/instructions";
 import { deriveUpgradeAuthorityPda } from "../../client/pda";
 import { upgradeAuthority } from "../../client/upgrade";
@@ -108,9 +108,9 @@ describe("protocol-adapter (initialize)", () => {
       "the program's upgrade authority is its PDA, so only `upgrade` upgrades it",
     );
     assert.deepEqual(
-      Buffer.from(state.kindTableCommitment),
-      EMPTY_KIND_TABLE_COMMITMENT,
-      "initialize must store the empty kind table's commitment",
+      Buffer.from(state.kindTableRoot),
+      EMPTY_KIND_TABLE_ROOT,
+      "initialize must store the empty kind table's root",
     );
     assert.isFalse(state.paused, "the adapter starts unpaused");
     assert.equal(state.nextIndex.toNumber(), 0, "the tree starts empty");
@@ -118,7 +118,7 @@ describe("protocol-adapter (initialize)", () => {
     assert.deepEqual(Buffer.from(state.root as number[]), EMPTY_TREE_ROOT_INITIAL, "the root is the empty tree's");
     // pa-evm's initializer sets the owner (OwnershipTransferred from the zero
     // address), adds the empty tree's root (CommitmentTreeRootAdded) and
-    // installs the empty kind table (KindTableCommitmentUpdated), in that
+    // installs the empty kind table (KindTableRootUpdated), in that
     // order; OpenZeppelin's `initializer` then announces the version
     // (Initialized), here the state's schema version.
     const { events } = await cpiEventsOf(sig);
@@ -127,7 +127,7 @@ describe("protocol-adapter (initialize)", () => {
       [
         "ownershipTransferredEvent",
         "commitmentTreeRootAddedEvent",
-        "kindTableCommitmentUpdatedEvent",
+        "kindTableRootUpdatedEvent",
         "initializedEvent",
       ],
       "initialize emits pa-evm's initializer events in order",
@@ -135,7 +135,7 @@ describe("protocol-adapter (initialize)", () => {
     assert.equal(events[0].data.previousOwner.toBase58(), PublicKey.default.toBase58(), "from no owner");
     assert.equal(events[0].data.newOwner.toBase58(), provider.wallet.publicKey.toBase58(), "to the initial owner");
     assert.deepEqual(Buffer.from(events[1].data.root), EMPTY_TREE_ROOT_INITIAL, "the empty tree's root");
-    assert.deepEqual(Buffer.from(events[2].data.kindTableCommitment), EMPTY_KIND_TABLE_COMMITMENT);
+    assert.deepEqual(Buffer.from(events[2].data.kindTableRoot), EMPTY_KIND_TABLE_ROOT);
     assert.equal(events[3].data.version.toNumber(), SCHEMA_VERSION, "the state's schema version");
   });
 });

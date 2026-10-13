@@ -31,8 +31,8 @@ Commands:
                          their own upgrade (owner wallet) once their upgrade
                          authority is their PDA, else through the loader
   init                   Initialize PA state (idempotent)
-  set-kind-table         Replace the PA's kind-table commitment with
-                         PA_KIND_TABLE_COMMITMENT (owner wallet).
+  set-kind-table         Replace the PA's kind-table root with
+                         PA_KIND_TABLE_ROOT (owner wallet).
   deny-logic-refs        Add each PA_DENIED_LOGIC_REFS entry
                          (<hex>:<consumed|created>, comma-separated) to the
                          denylist for consumed or for created resources;
@@ -872,7 +872,7 @@ cmd_test() {
   # first loads it (tests/utils/fixtures.ts), so the run stops at the first
   # failure and proves only what its tests use.
   if [[ -z "${PA_KIND_TABLE:-}" || ! -f "$PA_KIND_TABLE" ]]; then
-    echo "❌ Set PA_KIND_TABLE to the kind table (JSON, as fixture-gen reads it) whose commitment the deployment stores;" >&2
+    echo "❌ Set PA_KIND_TABLE to the kind table (JSON, as fixture-gen reads it) whose root the deployment stores;" >&2
     echo "   the run proves its fixtures against it." >&2
     exit 1
   fi

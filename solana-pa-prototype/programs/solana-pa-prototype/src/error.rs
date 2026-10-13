@@ -77,13 +77,11 @@ pub enum PAError {
     // Aggregation instance binding errors
     #[msg("Aggregation instance compliance key does not match the compliance circuit VK")]
     ComplianceKeyMismatch,
-    /// pa-evm's `UnacceptedKindTableCommitment`.
-    #[msg(
-        "The transaction's kind-table commitment is neither the stored one nor the empty table's"
-    )]
-    UnacceptedKindTableCommitment,
-    #[msg("Zero kind-table commitment not allowed")]
-    ZeroKindTableCommitmentNotAllowed,
+    /// pa-evm's `UnacceptedKindTableRoot`.
+    #[msg("The transaction's kind-table root is neither the stored one nor the empty table's")]
+    UnacceptedKindTableRoot,
+    #[msg("Zero kind-table root not allowed")]
+    ZeroKindTableRootNotAllowed,
 
     // Protocol state errors
     #[msg("Unauthorized: the signer does not hold the authority this instruction requires")]

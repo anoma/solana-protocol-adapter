@@ -8,7 +8,7 @@ Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enter
 
 ## The owner
 
-The adapter has one owner, as pa-evm's (OpenZeppelin's OwnableUpgradeable): set by `initialize`, stored in the state account (`PAStateAccount.owner`), and the signer of every owner-only instruction (`upgrade`, `pause`, `unpause`, `update_expiry_config`, `set_kind_table_commitment`, `deny_logic_refs`, `migrate_state`, `transfer_ownership`, `renounce_ownership`; any other signer gets `OwnableUnauthorizedAccount`). `initialize` hands the program's upgrade authority from the deployer to the program's own PDA (seed `upgrade_authority`), so the loader accepts an upgrade only through the program's `upgrade`, for the owner, as a UUPS implementation authorizes its own upgrades. `initialize` announces the owner with `OwnershipTransferredEvent` from the zero key, as `OwnershipTransferred` is.
+The adapter has one owner, as pa-evm's (OpenZeppelin's OwnableUpgradeable): set by `initialize`, stored in the state account (`PAStateAccount.owner`), and the signer of every owner-only instruction (`upgrade`, `pause`, `unpause`, `update_expiry_config`, `set_kind_table_root`, `deny_logic_refs`, `migrate_state`, `transfer_ownership`, `renounce_ownership`; any other signer gets `OwnableUnauthorizedAccount`). `initialize` hands the program's upgrade authority from the deployer to the program's own PDA (seed `upgrade_authority`), so the loader accepts an upgrade only through the program's `upgrade`, for the owner, as a UUPS implementation authorizes its own upgrades. `initialize` announces the owner with `OwnershipTransferredEvent` from the zero key, as `OwnershipTransferred` is.
 
 `transfer_ownership(new_owner)` moves the ownership at once (the zero key is refused, `OwnableInvalidOwner`); `renounce_ownership` gives it up for good: the owner becomes the zero key, and no owner-only instruction, `upgrade` included, can run again. Both emit `OwnershipTransferredEvent`. They are made by hand: no repository command or script changes an authority or closes protocol accounts on a live cluster, and the only builders of those instructions in the repository (`tests/utils/localOnly.ts`) refuse any endpoint but a local validator. The owner constructs and signs the instruction from the IDL.
 
@@ -127,13 +127,13 @@ Each comma-separated entry names a logic ref and the denylist it goes on, as pa-
 
 ## The kind table
 
-The PA stores the sha256 commitment of a kind table, and settles a transaction proven against that table or against the empty one, as pa-evm's `_isKindTableCommitmentAccepted`: the empty table merges no kinds, so what balances under it balances under any table. A transaction proven against any other table is refused (`UnacceptedKindTableCommitment`) before its proofs are verified. `initialize` installs the empty table's commitment (`e3b0c442…`, fixture-gen's committed `kind_table.json`) and emits `KindTableCommitmentUpdatedEvent` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTableCommitment`:
+The PA stores the Merkle root of a kind table, and settles a transaction proven against that table or against the empty one, as pa-evm's `_isKindTableRootAccepted`: the empty table merges no kinds, so what balances under it balances under any table. A transaction proven against any other table is refused (`UnacceptedKindTableRoot`) before its proofs are verified. `initialize` installs the empty table's root (`cc1d2f83…`, the tree's padding leaf; fixture-gen's committed `kind_table.json` is that table) and emits `KindTableRootUpdatedEvent` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTableRoot`:
 
 ```sh
-PA_KIND_TABLE_COMMITMENT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # owner wallet
+PA_KIND_TABLE_ROOT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # owner wallet
 ```
 
-The instruction rejects a zero commitment and emits `KindTableCommitmentUpdatedEvent` with the new value, as pa-evm's `KindTableCommitmentUpdated` does. From that slot on, transactions proven against the previous table are refused (`UnacceptedKindTableCommitment`), unless it is the empty one, so provers must load the new table before it is installed. The generated Solana tables and their commitments come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
+The instruction rejects a zero root and emits `KindTableRootUpdatedEvent` with the new value, as pa-evm's `KindTableRootUpdated` does. From that slot on, transactions proven against the previous table are refused (`UnacceptedKindTableRoot`), unless it is the empty one, so provers must load the new table before it is installed. The generated Solana tables and their roots come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/commitments.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
 
 ## Pausing
 

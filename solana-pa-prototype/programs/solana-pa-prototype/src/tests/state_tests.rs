@@ -1,7 +1,7 @@
-use crate::state::{PAStateAccount, EMPTY_KIND_TABLE_COMMITMENT, SCHEMA_VERSION};
+use crate::state::{PAStateAccount, EMPTY_KIND_TABLE_ROOT, SCHEMA_VERSION};
 use crate::tests::utils::create_test_pa_state;
 use anchor_lang::prelude::*;
-use arm_core::compliance::hash_kind_table_entries;
+use arm_core::merkle_path::PADDING_LEAF;
 
 fn serialized(state: &PAStateAccount) -> Vec<u8> {
     let mut bytes = Vec::new();
@@ -47,11 +47,11 @@ fn trailing_bytes_still_deserialize() {
 }
 
 #[test]
-fn empty_kind_table_commitment_is_the_commitment_of_no_entries() {
+fn empty_kind_table_root_is_the_padding_leaf() {
     assert_eq!(
-        EMPTY_KIND_TABLE_COMMITMENT,
-        <[u8; 32]>::from(hash_kind_table_entries(&[])),
-        "the constant initialize stores must be the ARM's commitment of the empty kind table"
+        EMPTY_KIND_TABLE_ROOT,
+        <[u8; 32]>::from(PADDING_LEAF),
+        "the constant initialize stores must be the ARM's root of the empty kind table, its padding leaf"
     );
 }
 
@@ -102,7 +102,7 @@ fn migrate_reads_the_previous_layout_field_for_field() {
         next_index: 7,
         min_expiry_slots: 123,
         max_expiry_slots: 4567,
-        kind_table_commitment: [9; 32],
+        kind_table_root: [9; 32],
         denied_consumed_logic_refs: denied.clone(),
         denied_created_logic_refs: denied.clone(),
         ..create_test_pa_state()
@@ -129,17 +129,17 @@ fn migrate_reads_the_previous_layout_field_for_field() {
     );
 }
 
-/// pa-evm's `_isKindTableCommitmentAccepted`: a transaction is proven against
+/// pa-evm's `_isKindTableRootAccepted`: a transaction is proven against
 /// the stored kind table or against the empty one, which merges no kinds, so
 /// what balances under it also balances under the stored table.
 #[test]
 fn the_stored_and_the_empty_kind_table_are_accepted_and_no_other() {
     let stored = [7u8; 32];
     let state = PAStateAccount {
-        kind_table_commitment: stored,
+        kind_table_root: stored,
         ..create_test_pa_state()
     };
-    assert!(state.is_kind_table_commitment_accepted(&stored));
-    assert!(state.is_kind_table_commitment_accepted(&EMPTY_KIND_TABLE_COMMITMENT));
-    assert!(!state.is_kind_table_commitment_accepted(&[8u8; 32]));
+    assert!(state.is_kind_table_root_accepted(&stored));
+    assert!(state.is_kind_table_root_accepted(&EMPTY_KIND_TABLE_ROOT));
+    assert!(!state.is_kind_table_root_accepted(&[8u8; 32]));
 }

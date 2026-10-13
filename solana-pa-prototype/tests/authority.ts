@@ -9,7 +9,7 @@
  */
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { pauseAdapter, setKindTableCommitment, upgradeAdapter } from "../client/instructions";
+import { pauseAdapter, setKindTableRoot, upgradeAdapter } from "../client/instructions";
 import { BPF_LOADER_UPGRADEABLE } from "../client/pda";
 import { localTransferAdapterOwnership } from "./utils/localOnly";
 import { ADAPTER_SO } from "./utils/constants";
@@ -23,7 +23,7 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
   // adapter already holds, which leaves its configuration as it was found.
   let kindTable: number[];
   before(async () => {
-    kindTable = Array.from((await program.account.paStateAccount.fetch(paState)).kindTableCommitment);
+    kindTable = Array.from((await program.account.paStateAccount.fetch(paState)).kindTableRoot);
   });
 
   it("rejects pause from a signer that is not the owner", async () => {
@@ -62,15 +62,15 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
         [["ownershipTransferredEvent", wallet.toBase58(), successor.publicKey.toBase58()]],
       );
 
-      await assertFails(setKindTableCommitment(program, wallet, kindTable).rpc(), {
+      await assertFails(setKindTableRoot(program, wallet, kindTable).rpc(), {
         program,
         error: "OwnableUnauthorizedAccount",
         account: "authority",
       });
-      await setKindTableCommitment(program, successor.publicKey, kindTable).signers([successor]).rpc();
+      await setKindTableRoot(program, successor.publicKey, kindTable).signers([successor]).rpc();
 
       await localTransferAdapterOwnership(program, successor.publicKey, wallet).signers([successor]).rpc();
-      await setKindTableCommitment(program, wallet, kindTable).rpc();
+      await setKindTableRoot(program, wallet, kindTable).rpc();
     });
   });
 
@@ -114,7 +114,7 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
       await upgradeThroughProgram(program, ADAPTER_SO, "upgradedEvent", (buffer, spill) =>
         upgradeAdapter(program, wallet, buffer, spill),
       );
-      await setKindTableCommitment(program, wallet, kindTable).rpc();
+      await setKindTableRoot(program, wallet, kindTable).rpc();
     });
   });
 });

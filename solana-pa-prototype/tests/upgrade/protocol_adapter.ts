@@ -17,7 +17,7 @@ import {
   initializeAdapter,
   migrateState,
   pauseAdapter,
-  setKindTableCommitment,
+  setKindTableRoot,
   unpauseAdapter,
   upgradeAdapter,
 } from "../../client/instructions";
@@ -105,7 +105,7 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
   // layout lacks the second denylist's length, so it does not read as this
   // one, and nothing misreads the account.
   it("refuses an owner-only instruction before the state is migrated", () =>
-    assertFails(setKindTableCommitment(program, wallet, Array.from(stateBefore.kindTableCommitment)).rpc(), {
+    assertFails(setKindTableRoot(program, wallet, Array.from(stateBefore.kindTableRoot)).rpc(), {
       program,
       error: "AccountDidNotDeserialize",
       account: "pa_state",
@@ -173,6 +173,6 @@ describe("protocol-adapter (upgraded in place from schema 3)", () => {
     await upgradeThroughProgram(program, ADAPTER_SO, "upgradedEvent", (buffer, spill) =>
       upgradeAdapter(program, wallet, buffer, spill),
     );
-    await setKindTableCommitment(program, wallet, Array.from(stateBefore.kindTableCommitment)).rpc();
+    await setKindTableRoot(program, wallet, Array.from(stateBefore.kindTableRoot)).rpc();
   });
 });
