@@ -129,22 +129,6 @@ async fn a_consumer_deploys_its_program_and_sends_its_setup() -> anyhow::Result<
     Ok(())
 }
 
-/// The adapter instruction of `executed`, a settlement: its data, which
-/// opens with the instruction's discriminator.
-fn adapter_instruction<'a>(
-    executed: &'a anoma_pa_solana_integration_test::executed::Executed,
-    program: &Pubkey,
-) -> anyhow::Result<&'a [u8]> {
-    let message = &executed.transaction.message;
-    let keys = message.static_account_keys();
-    message
-        .instructions()
-        .iter()
-        .find(|ix| keys.get(usize::from(ix.program_id_index)) == Some(program))
-        .map(|ix| ix.data.as_slice())
-        .context("the settlement transaction has no adapter instruction")
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn a_settlement_that_fits_one_transaction_settles_in_it() -> anyhow::Result<()> {
     let mut env = SolanaLocalEnv::setup_bare().await?;
@@ -156,7 +140,9 @@ async fn a_settlement_that_fits_one_transaction_settles_in_it() -> anyhow::Resul
         matches!(executed.transaction.message, VersionedMessage::V1(_)),
         "the settlement is not a v1 transaction"
     );
-    let data = adapter_instruction(&executed, &env.protocol_adapter.program)?;
+    let data = executed
+        .instruction_data(&env.protocol_adapter.program)
+        .context("the settlement transaction has no adapter instruction")?;
     anyhow::ensure!(
         data[..8] == anchor_instruction_disc("settle"),
         "a settlement that fits one transaction is not settled inline"
@@ -188,7 +174,9 @@ async fn a_settlement_too_large_for_one_transaction_settles_from_an_upload() -> 
     );
     let executed = env.protocol_adapter.settled(tx).await?;
 
-    let data = adapter_instruction(&executed, &env.protocol_adapter.program)?;
+    let data = executed
+        .instruction_data(&env.protocol_adapter.program)
+        .context("the settlement transaction has no adapter instruction")?;
     anyhow::ensure!(
         data[..8] == anchor_instruction_disc("settle_from_txdata"),
         "a settlement too large for one transaction is not settled from an upload"

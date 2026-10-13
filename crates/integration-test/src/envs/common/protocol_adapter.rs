@@ -5,9 +5,9 @@ use anoma_pa_solana_client::settlement_input::{
     external_calls, settled_resources, settlement_input,
 };
 use anoma_pa_solana_client::{
-    PAStateAccount, PaError, SETTLE_TRANSACTION_CONFIG, Settlement, SettlementRequest,
-    TXDATA_EXPIRY_SLOTS_DEFAULT, UPLOAD_TRANSACTION_CONFIG, decode_pa_state, deny_logic_refs_ix,
-    derive_pa_state_pda, pause_ix, plan_settlement, set_kind_table_commitment_ix, unpause_ix,
+    PAStateAccount, PaError, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
+    deny_logic_refs_ix, derive_pa_state_pda, pause_ix, plan_settlement,
+    set_kind_table_commitment_ix, unpause_ix,
 };
 use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree;
 use anoma_pa_testkit::environment::{
@@ -25,7 +25,7 @@ use solana_rpc_client_api::response::RpcSimulateTransactionResult;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
-use super::runtime::{latest_blockhash, send_signed, send_with_blockhash, verifier_program};
+use super::runtime::{latest_blockhash, send_planned, send_signed, verifier_program};
 use crate::executed::Executed;
 use crate::forwarders::Forwarders;
 
@@ -132,52 +132,28 @@ impl ProtocolAdapter {
         })?;
 
         let (rpc, payer) = (&*self.rpc, &*self.payer);
-        let settled = match plan.settlement {
-            Settlement::Inline { transaction } => {
-                send_with_blockhash(
-                    rpc,
-                    payer,
-                    &[],
-                    &transaction,
-                    Some(SETTLE_TRANSACTION_CONFIG),
-                    blockhash,
-                )
-                .await
-            }
-            Settlement::Upload {
-                init,
-                writes,
-                settle,
-                close,
-            } => {
-                let upload = Some(UPLOAD_TRANSACTION_CONFIG);
-                send_with_blockhash(rpc, payer, &[], &[init], upload, blockhash)
+        let settled = match &plan.upload {
+            None => send_planned(rpc, payer, &plan.settle, blockhash).await,
+            Some(upload) => {
+                send_planned(rpc, payer, &upload.init, blockhash)
                     .await
                     .context("failed to create the transaction-data upload")?;
                 let settled = async {
                     // Each write names its offset, so the chunks land in any order.
-                    futures::future::try_join_all(writes.into_iter().enumerate().map(
+                    futures::future::try_join_all(upload.writes.iter().enumerate().map(
                         |(i, write)| async move {
-                            send_with_blockhash(rpc, payer, &[], &[write], upload, blockhash)
+                            send_planned(rpc, payer, write, blockhash)
                                 .await
                                 .with_context(|| format!("failed to write chunk {i} of the upload"))
                         },
                     ))
                     .await?;
-                    send_with_blockhash(
-                        rpc,
-                        payer,
-                        &[],
-                        &settle,
-                        Some(SETTLE_TRANSACTION_CONFIG),
-                        blockhash,
-                    )
-                    .await
+                    send_planned(rpc, payer, &plan.settle, blockhash).await
                 }
                 .await;
                 // The upload is closed whatever the settlement's outcome, so a
                 // refused settlement does not strand its rent.
-                send_with_blockhash(rpc, payer, &[], &[close], upload, blockhash)
+                send_planned(rpc, payer, &upload.close, blockhash)
                     .await
                     .context("failed to close the transaction-data upload")?;
                 settled

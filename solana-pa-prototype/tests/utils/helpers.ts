@@ -33,7 +33,6 @@ import {
   setTransactionMessageLoadedAccountsDataSizeLimit,
   signTransaction,
 } from "@solana/kit";
-import { MAX_COMPUTE_UNIT_LIMIT } from "../../client/instructions";
 import { assert } from "chai";
 import { execFileSync } from "child_process";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
@@ -314,7 +313,10 @@ export async function waitForSlotPast(
 }
 
 /** The heap frame settlement needs: bincode-deserializing an ARM transaction overruns the default 32 KiB. */
-const SETTLE_HEAP_FRAME_BYTES = 256 * 1024;
+export const SETTLE_HEAP_FRAME_BYTES = 256 * 1024;
+
+/** The compute limit a submitter's settlement transaction states (anoma-pa-solana-client's `SETTLE_COMPUTE_UNIT_LIMIT`). */
+const SETTLE_COMPUTE_UNIT_LIMIT = 500_000;
 
 /**
  * The account data a transaction may load: the runtime's maximum (64 MiB),
@@ -343,8 +345,8 @@ function kitInstruction(ix: TransactionInstruction): Instruction {
 
 /**
  * Send `instructions` as one v1 transaction (SIMD-0385), the shape every
- * submitter sends a settlement in: the full compute budget, the heap frame
- * settlement needs and the loaded-account-data limit in its header, paid by
+ * submitter sends a settlement in: the submitters' compute limit, the heap
+ * frame settlement needs and the loaded-account-data limit in its header, paid by
  * the wallet and signed by it and `signers`. web3.js 1.x cannot serialize a v1
  * message, so @solana/kit compiles and signs it; web3.js sends its bytes, so a
  * refused transaction throws SendTransactionError with the runtime's logs, as
@@ -365,7 +367,7 @@ export async function sendSettlementV1(
         { blockhash: blockhash as Blockhash, lastValidBlockHeight: BigInt(lastValidBlockHeight) },
         m,
       ),
-    (m) => setTransactionMessageComputeUnitLimit(MAX_COMPUTE_UNIT_LIMIT, m),
+    (m) => setTransactionMessageComputeUnitLimit(SETTLE_COMPUTE_UNIT_LIMIT, m),
     (m) => setTransactionMessageHeapSize(SETTLE_HEAP_FRAME_BYTES, m),
     (m) => setTransactionMessageLoadedAccountsDataSizeLimit(MAX_LOADED_ACCOUNTS_DATA_SIZE_BYTES, m),
     (m) => appendTransactionMessageInstructions(instructions.map(kitInstruction), m),

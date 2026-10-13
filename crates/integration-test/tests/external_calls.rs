@@ -360,15 +360,11 @@ async fn the_largest_settlement_settles_in_one_v1_transaction() -> anyhow::Resul
         "the largest settlement: {size} bytes, {} accounts",
         message.account_keys.len()
     );
-    let adapter = message
-        .instructions
-        .iter()
-        .find(|ix| {
-            message.account_keys[usize::from(ix.program_id_index)] == s.env.protocol_adapter.program
-        })
+    let data = executed
+        .instruction_data(&s.env.protocol_adapter.program)
         .context("the settlement transaction has no adapter instruction")?;
     anyhow::ensure!(
-        adapter.data[..8] == anoma_pa_solana_client::anchor_instruction_disc("settle"),
+        data[..8] == anoma_pa_solana_client::anchor_instruction_disc("settle"),
         "the largest settlement is not settled inline in one transaction"
     );
     Ok(())

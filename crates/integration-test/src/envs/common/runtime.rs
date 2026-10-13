@@ -4,16 +4,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anoma_pa_solana_client::{
-    decode_pa_state, decode_verifier_entry, derive_pa_state_pda, derive_verifier_entry_pda,
-    encode_pa_state, initialize_ix, transaction_message,
+    PlannedTransaction, decode_pa_state, decode_verifier_entry, derive_pa_state_pda,
+    derive_verifier_entry_pda, encode_pa_state, initialize_ix,
 };
 use anyhow::Context;
 use solana_commitment_config::CommitmentConfig;
 use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_loader_v3_interface::state::UpgradeableLoaderState;
-use solana_message::v1::TransactionConfig;
-use solana_message::{Hash, VersionedMessage, v0};
+use solana_message::{Hash, Message, VersionedMessage};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client_types::response::RpcKeyedAccount;
 use solana_signature::Signature;
@@ -127,7 +126,8 @@ pub(in crate::envs) async fn send_signed(
     instructions: &[Instruction],
 ) -> anyhow::Result<Signature> {
     let blockhash = latest_blockhash(rpc).await?;
-    send_with_blockhash(rpc, payer, signers, instructions, None, blockhash).await
+    let message = Message::new_with_blockhash(instructions, Some(&payer.pubkey()), &blockhash);
+    send_message(rpc, payer, signers, VersionedMessage::Legacy(message)).await
 }
 
 /// The runtime's latest blockhash.
@@ -137,27 +137,28 @@ pub(in crate::envs) async fn latest_blockhash(rpc: &RpcClient) -> anyhow::Result
         .context("failed to fetch a blockhash")
 }
 
-/// `send_signed`, with the transaction built on `blockhash`: a v1 message
-/// with the settings `config` (a settlement's and its upload's), or with
-/// none a v0 message, which the runtime gives its default budget.
-pub(in crate::envs) async fn send_with_blockhash(
+/// Sends one of a settlement's planned transactions, built on `blockhash` and
+/// signed by `payer`, as `send_signed` does.
+pub(in crate::envs) async fn send_planned(
+    rpc: &RpcClient,
+    payer: &Keypair,
+    transaction: &PlannedTransaction,
+    blockhash: Hash,
+) -> anyhow::Result<Signature> {
+    let message = transaction
+        .message(&payer.pubkey(), blockhash)
+        .context("failed to compile the transaction")?;
+    send_message(rpc, payer, &[], VersionedMessage::V1(message)).await
+}
+
+/// Signs `message` by `payer` and `signers`, sends it and waits for it to be
+/// confirmed.
+async fn send_message(
     rpc: &RpcClient,
     payer: &Keypair,
     signers: &[&Keypair],
-    instructions: &[Instruction],
-    config: Option<TransactionConfig>,
-    blockhash: Hash,
+    message: VersionedMessage,
 ) -> anyhow::Result<Signature> {
-    let message = match config {
-        Some(config) => VersionedMessage::V1(
-            transaction_message(&payer.pubkey(), instructions, blockhash, config)
-                .context("failed to compile the transaction")?,
-        ),
-        None => VersionedMessage::V0(
-            v0::Message::try_compile(&payer.pubkey(), instructions, &[], blockhash)
-                .context("failed to compile the transaction")?,
-        ),
-    };
     // A signer that is also the payer signs once.
     let all_signers: Vec<&Keypair> = std::iter::once(payer)
         .chain(

@@ -46,6 +46,7 @@ import {
   initTxData as initTxDataOf,
   makeFunder,
   sendSettlementV1,
+  SETTLE_HEAP_FRAME_BYTES,
   solanaCli,
   TxDataUpload,
   uploadTxData as uploadTxDataTo,
@@ -269,7 +270,7 @@ export async function upgradeThroughProgram(
 function settleBudget(heapFrame: boolean) {
   return [
     ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNIT_LIMIT }),
-    ...(heapFrame ? [ComputeBudgetProgram.requestHeapFrame({ bytes: 256 * 1024 })] : []),
+    ...(heapFrame ? [ComputeBudgetProgram.requestHeapFrame({ bytes: SETTLE_HEAP_FRAME_BYTES })] : []),
   ];
 }
 

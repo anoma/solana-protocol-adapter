@@ -50,8 +50,8 @@ impl Executed {
             .decode()
             .with_context(|| format!("failed to decode the transaction {signature}"))?;
 
-        // An instruction names its program by index into the message's keys;
-        // no transaction the harness sends loads keys from a lookup table.
+        // An instruction names its program by index into the message's keys,
+        // all of them in the message in the transactions the harness sends.
         let keys = transaction.message.static_account_keys();
         let groups: Option<Vec<UiInnerInstructions>> = meta.inner_instructions.into();
         let mut inner = Vec::new();
@@ -85,6 +85,18 @@ impl Executed {
             logs: logs.unwrap_or_default(),
             inner,
         })
+    }
+
+    /// The data of the transaction's first top-level instruction to
+    /// `program`.
+    pub fn instruction_data(&self, program: &Pubkey) -> Option<&[u8]> {
+        let message = &self.transaction.message;
+        let keys = message.static_account_keys();
+        message
+            .instructions()
+            .iter()
+            .find(|ix| keys.get(usize::from(ix.program_id_index)) == Some(program))
+            .map(|ix| ix.data.as_slice())
     }
 
     /// The instruction data of every event `program` emitted, in order: its
