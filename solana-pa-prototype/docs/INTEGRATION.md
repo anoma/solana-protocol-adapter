@@ -28,7 +28,7 @@ There are two serialization layers; do not confuse them:
 
 Borsh appears elsewhere in the PA (account state, event bodies, instruction arguments) but never for the transaction payload itself.
 
-Working examples: the `tests/fixtures/batch_groth16*.json` fixtures other than `batch_groth16_mismatch.json` carry complete settlement-ready transactions as base64 in their `tx_b64` field. The other fixtures (including `batch_groth16_mismatch.json`) are deliberately failing variants (missing aggregation, garbage proof, wrong root, forwarder output mismatch and failures) — useful as negative examples, not as templates.
+Working examples: the `tests/fixtures/batch_groth16*.json` fixtures other than `batch_groth16_mismatch.json` carry complete settlement-ready transactions as base64 in their `tx_b64` field. The other fixtures (including `batch_groth16_mismatch.json`) are deliberately failing variants (missing aggregation, garbage proof, a seal under another selector, wrong root, forwarder output mismatch and failures) — useful as negative examples, not as templates.
 
 A transaction must carry an aggregation (`aggregation` set, `actions` absent), and the 4-byte selector in `aggregation.proof`'s seal must equal the `proof_selector` this deployment pinned at initialization — see "Deployment parameters" below.
 
