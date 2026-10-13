@@ -2,12 +2,13 @@
 //! prover's kind table is process-wide and set once.
 
 use anoma_risc0_kind_tables::{SolanaCluster, table};
-use anoma_rm_risc0::compliance::{KindTableEntry, hash_kind_table_entries};
-use anoma_rm_risc0::constants::{init_kind_table_from_entries, kind_table_hash};
+use anoma_rm_risc0::compliance::KindTableEntry;
+use anoma_rm_risc0::constants::{init_kind_table_from_entries, kind_table_root};
+use anoma_rm_risc0::kind_table::KindTable;
 use anyhow::Context;
 
 /// Makes solana-devnet's kind table, as anoma/risc0-kind-tables records it,
-/// the prover's, and returns its commitment. Fails when the process's prover
+/// the prover's, and returns its root. Fails when the process's prover
 /// already holds another table.
 pub(super) fn load_devnet() -> anyhow::Result<[u8; 32]> {
     let entries: Vec<KindTableEntry> = table::staging::table(SolanaCluster::Devnet)
@@ -16,9 +17,11 @@ pub(super) fn load_devnet() -> anyhow::Result<[u8; 32]> {
         .iter()
         .map(KindTableEntry::from)
         .collect();
-    let devnet = hash_kind_table_entries(&entries);
+    let devnet = KindTable::from_entries(entries.clone())
+        .context("solana-devnet's kind table is invalid")?
+        .root();
     init_kind_table_from_entries(entries).context("failed to load the kind table")?;
-    let loaded = *kind_table_hash().context("no kind table loaded")?;
+    let loaded = kind_table_root().context("no kind table loaded")?;
     anyhow::ensure!(
         loaded == devnet,
         "the prover already holds the kind table {loaded}, not solana-devnet's {devnet}"

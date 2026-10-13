@@ -7,7 +7,7 @@ use anoma_pa_solana_client::settlement_input::{
 use anoma_pa_solana_client::{
     PAStateAccount, PaError, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
     deny_logic_refs_ix, derive_pa_state_pda, pause_ix, plan_settlement, plan_simulation,
-    set_kind_table_commitment_ix, unpause_ix,
+    set_kind_table_root_ix, unpause_ix,
 };
 use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree;
 use anoma_pa_testkit::environment::{
@@ -322,10 +322,9 @@ impl CoreProtocolAdapter for ProtocolAdapter {
         Ok(Digest::from_bytes(self.state().await?.root))
     }
 
-    async fn set_kind_table_commitment(&mut self, commitment: Digest) -> anyhow::Result<()> {
-        let ix =
-            set_kind_table_commitment_ix(&self.program, &self.payer.pubkey(), commitment.into());
-        self.as_owner(ix, "set the kind-table commitment").await
+    async fn set_kind_table_root(&mut self, root: Digest) -> anyhow::Result<()> {
+        let ix = set_kind_table_root_ix(&self.program, &self.payer.pubkey(), root.into());
+        self.as_owner(ix, "set the kind-table root").await
     }
 
     async fn pause(&mut self) -> anyhow::Result<()> {
@@ -404,7 +403,7 @@ fn refusal_for(error: PaError) -> Option<Refusal> {
     match error {
         PaError::EnforcedPause => Some(Refusal::Paused),
         PaError::ResourceWithDeniedLogicRef => Some(Refusal::DeniedLogicRef),
-        PaError::UnacceptedKindTableCommitment => Some(Refusal::UnacceptedKindTableCommitment),
+        PaError::UnacceptedKindTableRoot => Some(Refusal::UnacceptedKindTableRoot),
         PaError::NonExistingRoot => Some(Refusal::UnknownRoot),
         PaError::PreExistingNullifier => Some(Refusal::NullifierSpent),
         PaError::ForwarderCallOutputMismatch => Some(Refusal::ExternalCallOutputMismatch),
@@ -433,7 +432,7 @@ fn refusal_for(error: PaError) -> Option<Refusal> {
         | PaError::InvalidDeltaProof
         | PaError::PointNotOnCurve
         | PaError::ExpectedDeltaProof
-        | PaError::ZeroKindTableCommitmentNotAllowed
+        | PaError::ZeroKindTableRootNotAllowed
         | PaError::Unauthorized
         | PaError::ExpectedPause
         | PaError::RiscZeroVerifierPaused

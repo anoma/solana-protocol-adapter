@@ -1210,7 +1210,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.6.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=18f6db061ba2c6850de88e06cb69b0a421eee728#18f6db061ba2c6850de88e06cb69b0a421eee728"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=f9f4a1df862586802135161c850aab554d2bf8e2#f9f4a1df862586802135161c850aab554d2bf8e2"
 dependencies = [
  "anoma-rm-risc0",
  "bincode",
@@ -1257,8 +1257,8 @@ dependencies = [
 
 [[package]]
 name = "anoma-pa-testkit"
-version = "1.0.0-rc.1"
-source = "git+https://github.com/anoma/pa-testkit?rev=cf94169a4009d45123e6f2905a7c898f5a53e19f#cf94169a4009d45123e6f2905a7c898f5a53e19f"
+version = "1.0.0-rc.2"
+source = "git+https://github.com/anoma/pa-testkit?rev=03eba033e6adbfbe53d816e1f773df9aedee874a#03eba033e6adbfbe53d816e1f773df9aedee874a"
 dependencies = [
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",
@@ -1278,8 +1278,8 @@ dependencies = [
 
 [[package]]
 name = "anoma-risc0-kind-tables"
-version = "1.0.0-rc.4"
-source = "git+https://github.com/anoma/risc0-kind-tables?rev=919c7787259eca02b8cedb079a639ad31e04ae51#919c7787259eca02b8cedb079a639ad31e04ae51"
+version = "1.0.0-rc.5"
+source = "git+https://github.com/anoma/risc0-kind-tables?rev=e890d437731b67b786cd5695562fe6d425df05ba#e890d437731b67b786cd5695562fe6d425df05ba"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -1297,9 +1297,9 @@ dependencies = [
 
 [[package]]
 name = "anoma-rm-core"
-version = "2.0.0-rc.6"
+version = "2.0.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4efb9c303e7b2a719ea02ae7eca7a324c9ee346010cb4b4dabf426f6201495a4"
+checksum = "67e1bcd869cc28ff97bfd0524d8ec212a271e5dd579000c85bb6089788a8fe49"
 dependencies = [
  "bincode",
  "bytemuck",
@@ -1311,9 +1311,9 @@ dependencies = [
 
 [[package]]
 name = "anoma-rm-risc0"
-version = "2.0.0-rc.6"
+version = "2.0.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1bf8d3a9aaf7bcad5dc0174f7a1a202aeae67eb90befd4933e3d69bfd47aa3af"
+checksum = "c714707d0ab67af288c34aa053a7c660629812b7dc89c29428ed13a9f3ffb8de"
 dependencies = [
  "alloy-primitives",
  "alloy-sol-types",
@@ -1334,9 +1334,9 @@ dependencies = [
 
 [[package]]
 name = "anoma-rm-risc0-gadgets"
-version = "2.0.0-rc.6"
+version = "2.0.0-rc.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e17348b09e2e9289809e6289c2d8d35533869468dc2aa21c401b5e4d67f56f3"
+checksum = "2d4607cb984ae146f0c41a5264c7b4aea09ff787dbc4f9461940fb3ef7d78d4a"
 dependencies = [
  "aes-gcm",
  "alloy-primitives",
@@ -14270,7 +14270,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.5",
  "static_assertions",
 ]
 
