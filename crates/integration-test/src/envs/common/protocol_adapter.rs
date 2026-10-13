@@ -2,7 +2,8 @@ use std::sync::Arc;
 
 use anoma_pa_solana_client::events::PaEvent;
 use anoma_pa_solana_client::settlement_input::{
-    external_calls, settled_resources, settlement_input, unproven_settlement_input,
+    SettledResources, external_calls, settled_resources, settlement_input,
+    unproven_settlement_input,
 };
 use anoma_pa_solana_client::{
     PAStateAccount, PaError, SettlementRequest, TXDATA_EXPIRY_SLOTS_DEFAULT, decode_pa_state,
@@ -17,7 +18,7 @@ use anoma_pa_testkit::transaction::Transaction;
 use anoma_rm_risc0::Digest;
 use anyhow::Context;
 use solana_commitment_config::CommitmentConfig;
-use solana_instruction::Instruction;
+use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
 use solana_message::{Hash, VersionedMessage};
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -122,18 +123,7 @@ impl ProtocolAdapter {
         let upload_id = self.next_upload_id;
         self.next_upload_id += 1;
         let plan = plan_settlement(
-            SettlementRequest {
-                pa_program: self.program,
-                payer: self.payer.pubkey(),
-                input: &input,
-                state: &state,
-                verifier_program: self.verifier_program,
-                nullifiers: &resources.nullifiers,
-                consumed_roots: &resources.consumed_roots,
-                created: &resources.created,
-                call_segments,
-                preceding,
-            },
+            self.request(&input, &state, &resources, preceding, call_segments),
             upload_id,
             slot + TXDATA_EXPIRY_SLOTS_DEFAULT,
         )?;
@@ -194,6 +184,31 @@ impl ProtocolAdapter {
         })
     }
 
+    /// The request to settle `input`, touching `resources`, from the adapter's
+    /// `state`, with the forwarders' `preceding` instructions and
+    /// `call_segments`; the payer pays.
+    fn request<'a>(
+        &self,
+        input: &'a [u8],
+        state: &'a PAStateAccount,
+        resources: &'a SettledResources,
+        preceding: Vec<Instruction>,
+        call_segments: Vec<Vec<AccountMeta>>,
+    ) -> SettlementRequest<'a> {
+        SettlementRequest {
+            pa_program: self.program,
+            payer: self.payer.pubkey(),
+            input,
+            state,
+            verifier_program: self.verifier_program,
+            nullifiers: &resources.nullifiers,
+            consumed_roots: &resources.consumed_roots,
+            created: &resources.created,
+            call_segments,
+            preceding,
+        }
+    }
+
     /// Simulates settling `transaction` (pa-evm's `simulateExecute`) in the
     /// runtime's simulation, which changes nothing and checks no signature,
     /// skipping the RISC Zero proof's verification when
@@ -221,18 +236,7 @@ impl ProtocolAdapter {
             settlement_input(tx)?
         };
         let simulation = plan_simulation(
-            SettlementRequest {
-                pa_program: self.program,
-                payer: self.payer.pubkey(),
-                input: &input,
-                state: &state,
-                verifier_program: self.verifier_program,
-                nullifiers: &resources.nullifiers,
-                consumed_roots: &resources.consumed_roots,
-                created: &resources.created,
-                call_segments,
-                preceding,
-            },
+            self.request(&input, &state, &resources, preceding, call_segments),
             skip_risc_zero_proof_verification,
         )?;
         // The simulation takes the latest blockhash itself and checks no
@@ -260,7 +264,7 @@ impl ProtocolAdapter {
             .context("failed to simulate the settlement")?
             .value;
         let logs = simulated.logs.unwrap_or_default();
-        let error = match first_failure(&logs) {
+        let error = match first_failure(&logs)? {
             Some((failed, code)) if failed == self.program => PaError::from_code(code)
                 .with_context(|| format!("the adapter failed with unknown error {code}"))?,
             _ => anyhow::bail!(
@@ -356,47 +360,50 @@ impl CoreProtocolAdapter for ProtocolAdapter {
     }
 }
 
-/// Why the adapter `program` refused a settlement, from the runtime's log of
-/// it: the deepest failure, which the runtime logs first as the program that
-/// failed and the custom error it returned (a line no program can write: a
-/// program's own lines start `Program log: `). Any custom error of the
-/// `verifier` refuses the aggregation proof; an error of the adapter's own is
-/// the refusal its `PaError` is. `None` for any other failure. A log the
-/// runtime truncated is an error: past its limit the runtime drops lines, the
-/// deepest failure's among them, while a shorter later one can still fit, so
-/// the first failure line left may carry another program's code.
+/// The refusal a settlement's log names, from the failure that ended it:
+/// any custom error of the `verifier` refuses the aggregation proof; an error
+/// of the adapter's own is the refusal its `PaError` is. `None` for any other
+/// failure.
 fn refusal_in_logs(
     logs: &[String],
     program: &Pubkey,
     verifier: &Pubkey,
 ) -> anyhow::Result<Option<Refusal>> {
+    let Some((failed, code)) = first_failure(logs)? else {
+        return Ok(None);
+    };
+    Ok(if failed == *verifier {
+        Some(Refusal::InvalidAggregationProof)
+    } else if failed == *program {
+        PaError::from_code(code).and_then(refusal_for)
+    } else {
+        None
+    })
+}
+
+/// The program and custom error code of the failure that ended a
+/// transaction: the deepest failure, which the runtime logs first as the
+/// program that failed and the custom error it returned (a line no program
+/// can write: a program's own lines start `Program log: `). A log the runtime
+/// truncated is an error: past its limit the runtime drops lines, the deepest
+/// failure's among them, while a shorter later one can still fit, so the
+/// first failure line left may carry another program's code.
+fn first_failure(logs: &[String]) -> anyhow::Result<Option<(Pubkey, u32)>> {
     anyhow::ensure!(
         !logs.iter().any(|line| line == "Log truncated"),
         "the runtime truncated the settlement's log, so the log does not say which program failed"
     );
-    Ok(first_failure_refusal(logs, program, verifier))
-}
-
-/// The program and custom error code the first failure line of a log names.
-fn first_failure(logs: &[String]) -> Option<(Pubkey, u32)> {
-    let (failed, error) = logs.iter().find_map(|line| {
-        let (failed, error) = line.strip_prefix("Program ")?.split_once(" failed: ")?;
-        Some((failed.parse::<Pubkey>().ok()?, error))
-    })?;
-    let code = u32::from_str_radix(error.strip_prefix("custom program error: 0x")?, 16).ok()?;
-    Some((failed, code))
-}
-
-/// The refusal the first failure line of a complete log names.
-fn first_failure_refusal(logs: &[String], program: &Pubkey, verifier: &Pubkey) -> Option<Refusal> {
-    let (failed, code) = first_failure(logs)?;
-    if failed == *verifier {
-        return Some(Refusal::InvalidAggregationProof);
-    }
-    if failed != *program {
-        return None;
-    }
-    refusal_for(PaError::from_code(code)?)
+    Ok(logs
+        .iter()
+        .find_map(|line| {
+            let (failed, error) = line.strip_prefix("Program ")?.split_once(" failed: ")?;
+            Some((failed.parse::<Pubkey>().ok()?, error))
+        })
+        .and_then(|(failed, error)| {
+            let code =
+                u32::from_str_radix(error.strip_prefix("custom program error: 0x")?, 16).ok()?;
+            Some((failed, code))
+        }))
 }
 
 /// The refusal the adapter's `error` is, if it is one of the protocol's. The
