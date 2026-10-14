@@ -1209,8 +1209,8 @@ dependencies = [
 
 [[package]]
 name = "anoma-pa-solana-client"
-version = "0.6.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=c94f08a3e0d8d791cce3f5352734f3ca1dd0b2da#c94f08a3e0d8d791cce3f5352734f3ca1dd0b2da"
+version = "0.7.0"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?tag=bindings%2Fv0.7.0#dacef67977ca71a9b6bfb7d37b46db85abc38561"
 dependencies = [
  "anoma-rm-risc0",
  "bincode",
@@ -1230,7 +1230,7 @@ dependencies = [
 
 [[package]]
 name = "anoma-pa-solana-integration-test"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anoma-pa-solana-client",
  "anoma-pa-testkit",
@@ -1283,8 +1283,8 @@ dependencies = [
 
 [[package]]
 name = "anoma-risc0-kind-tables"
-version = "1.0.0-rc.5"
-source = "git+https://github.com/anoma/risc0-kind-tables?rev=007263b7c63ef9d339f0c4ff8db82cc53a93383d#007263b7c63ef9d339f0c4ff8db82cc53a93383d"
+version = "1.0.0-rc.6"
+source = "git+https://github.com/anoma/risc0-kind-tables?tag=v1.0.0-rc.6#70020623aff0455ebbdc7ad68929e66e226678be"
 dependencies = [
  "alloy",
  "alloy-chains",
