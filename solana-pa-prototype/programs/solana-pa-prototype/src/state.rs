@@ -11,10 +11,6 @@ use arm_core::Digest;
 #[constant]
 pub const SCHEMA_VERSION: u8 = 4;
 
-/// The schema version `migrate_state` migrates from.
-#[constant]
-pub const PREVIOUS_SCHEMA_VERSION: u8 = 3;
-
 /// The root of the empty kind table, under which every resource kind is
 /// derived via hash-to-curve: the table every deployment starts on, as
 /// pa-evm's `EMPTY_KIND_TABLE_ROOT`. A Merkle tree without entries has its
@@ -33,11 +29,11 @@ pub struct PAStateAccount {
     /// every layout: a later binary that changes the layout reads this byte
     /// through an unchecked account to decide whether it may migrate. Every
     /// instruction that reads this account — all but `initialize`, which
-    /// creates it, `migrate_state`, which requires the previous version, and
-    /// the development-only `dev_set_schema_version` — refuses an account
-    /// whose version is not `SCHEMA_VERSION`. A layout change bumps the
-    /// constant and may add, remove or reorder the other fields:
-    /// `migrate_state` parses the previous layout explicitly.
+    /// creates it, and the development-only `dev_set_schema_version` —
+    /// refuses an account whose version is not `SCHEMA_VERSION`. A layout
+    /// change bumps the constant and may add, remove or reorder the other
+    /// fields: the release that makes it ships a migration that parses the
+    /// previous layout explicitly.
     pub schema_version: u8,
     pub bump: u8,
     /// The adapter's owner, as OpenZeppelin's `OwnableUpgradeable` stores
@@ -196,53 +192,6 @@ impl PAStateAccount {
             max_expiry_slots: MAX_EXPIRY_SLOTS,
             denied_consumed_logic_refs: Vec::new(),
             denied_created_logic_refs: Vec::new(),
-        }
-    }
-}
-
-/// The state account in schema version 3 (`PREVIOUS_SCHEMA_VERSION`), which
-/// `migrate_state` reads: this layout with one denylist, which refused a
-/// resource carrying a denied logic ref whether consumed or created.
-/// Deserialized from the account's bytes after the discriminator.
-#[derive(AnchorDeserialize)]
-pub struct PreviousPAState {
-    pub schema_version: u8,
-    pub bump: u8,
-    pub owner: Pubkey,
-    pub verifier_router: Pubkey,
-    pub proof_selector: [u8; 4],
-    pub kind_table_root: [u8; 32],
-    pub paused: bool,
-    pub root: [u8; 32],
-    pub next_index: u64,
-    pub current_depth: u8,
-    pub frontier: Vec<[u8; 32]>,
-    pub min_expiry_slots: u64,
-    pub max_expiry_slots: u64,
-    pub denied_logic_refs: Vec<[u8; 32]>,
-}
-
-impl PreviousPAState {
-    /// This layout with the previous fields. A logic ref the previous
-    /// denylist held goes on both denylists, so the migration refuses what
-    /// the previous build refused.
-    pub fn migrate(self) -> PAStateAccount {
-        PAStateAccount {
-            schema_version: SCHEMA_VERSION,
-            bump: self.bump,
-            owner: self.owner,
-            verifier_router: self.verifier_router,
-            proof_selector: self.proof_selector,
-            kind_table_root: self.kind_table_root,
-            paused: self.paused,
-            root: self.root,
-            next_index: self.next_index,
-            current_depth: self.current_depth,
-            frontier: self.frontier,
-            min_expiry_slots: self.min_expiry_slots,
-            max_expiry_slots: self.max_expiry_slots,
-            denied_consumed_logic_refs: self.denied_logic_refs.clone(),
-            denied_created_logic_refs: self.denied_logic_refs,
         }
     }
 }

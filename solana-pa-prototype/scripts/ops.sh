@@ -38,9 +38,6 @@ Commands:
                          denylist for consumed or for created resources;
                          created alone deprecates, both deny. Cannot be
                          undone (owner wallet).
-  migrate-state          Bring PAState from the previous schema version to
-                         this build's, once, right after the upgrade (owner
-                         wallet).
   pause                  Pause settlement (owner-only; pa-evm's pause())
   unpause                Resume settlement (owner-only; pa-evm's unpause())
   status                 Show deployment status + wallet balance
@@ -668,11 +665,6 @@ cmd_deny_logic_refs() {
   run_ts scripts/deny-logic-refs.ts
 }
 
-cmd_migrate_state() {
-  prepare_pa_script
-  run_ts scripts/migrate-state.ts
-}
-
 cmd_pause() {
   prepare_pa_script
   run_ts scripts/pause-pa.ts pause
@@ -1069,7 +1061,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|init|set-kind-table|deny-logic-refs|migrate-state|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-table|deny-logic-refs|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

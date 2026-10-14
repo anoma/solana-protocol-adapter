@@ -495,59 +495,6 @@ pub mod protocol_adapter {
         Ok(())
     }
 
-    /// Bring a state account in the previous schema version, which held one
-    /// denylist for consumed and created resources alike, to this one. Each
-    /// logic ref it held goes on both denylists and is announced on each
-    /// with `LogicRefDeniedEvent`, as `deny_logic_refs` would, and then the
-    /// new version with `InitializedEvent`. The
-    /// counterpart of the call pa-evm's owner passes to `upgradeToAndCall`:
-    /// run once by the owner, after the in-place upgrade and before any other
-    /// instruction, which all refuse the previous version. It parses the
-    /// previous layout rather than reinterpreting its bytes, and the owner
-    /// pays for the account's growth.
-    pub fn migrate_state(ctx: Context<MigrateState>) -> Result<()> {
-        let info = ctx.accounts.pa_state.to_account_info();
-        require_keys_eq!(*info.owner, crate::ID, PAError::NotPreviousSchema);
-        let state = {
-            let data = info.try_borrow_data()?;
-            let body = data
-                .strip_prefix(PAStateAccount::DISCRIMINATOR)
-                .ok_or(PAError::NotPreviousSchema)?;
-            require!(
-                body.first() == Some(&PREVIOUS_SCHEMA_VERSION),
-                PAError::NotPreviousSchema
-            );
-            PreviousPAState::deserialize(&mut &body[..])
-                .map_err(|_| PAError::NotPreviousSchema)?
-                .migrate()
-        };
-        require_keys_eq!(
-            ctx.accounts.authority.key(),
-            state.owner,
-            PAError::OwnableUnauthorizedAccount
-        );
-        resize_account(
-            &info,
-            PAStateAccount::space(state.depth(), state.denied_count()),
-            &ctx.accounts.authority.to_account_info(),
-            &ctx.accounts.system_program.to_account_info(),
-        )?;
-        state.try_serialize(&mut &mut info.try_borrow_mut_data()?[..])?;
-        for consumed in [true, false] {
-            for &logic_ref in state.denied_logic_refs(consumed) {
-                emit_cpi!(LogicRefDeniedEvent {
-                    logic_ref,
-                    consumed
-                });
-            }
-        }
-        // As OpenZeppelin's `reinitializer(n)`, once the body ran.
-        emit_cpi!(InitializedEvent {
-            version: SCHEMA_VERSION.into(),
-        });
-        Ok(())
-    }
-
     /// Move the ownership to `new_owner`. Mirrors OwnableUpgradeable's
     /// `transferOwnership`: owner only, effective at once, the zero key
     /// refused (`OwnableInvalidOwner`), announced with
@@ -1112,24 +1059,6 @@ pub struct UpgradeProgram<'info> {
 
 #[event_cpi]
 #[derive(Accounts)]
-pub struct MigrateState<'info> {
-    /// The owner the previous layout stores, which pays for the account's
-    /// growth; the handler checks it, since the typed account cannot read the
-    /// previous layout.
-    #[account(mut)]
-    pub authority: Signer<'info>,
-
-    /// CHECK: The seeds pin the address; the handler requires this program
-    /// as owner and the previous schema's layout, which the typed account
-    /// cannot read.
-    #[account(mut, seeds = [PA_STATE_SEED], bump)]
-    pub pa_state: UncheckedAccount<'info>,
-
-    pub system_program: Program<'info, System>,
-}
-
-#[event_cpi]
-#[derive(Accounts)]
 pub struct DenyLogicRefs<'info> {
     #[account(
         mut,
@@ -1459,8 +1388,7 @@ pub struct OwnershipTransferredEvent {
 }
 
 /// Mirrors OpenZeppelin Initializable: `event Initialized(uint64 version);`.
-/// `initialize` announces the state's schema version, and `migrate_state`
-/// the version it brings the state to, as a `reinitializer(n)` would.
+/// `initialize` announces the state's schema version.
 #[event]
 pub struct InitializedEvent {
     pub version: u64,

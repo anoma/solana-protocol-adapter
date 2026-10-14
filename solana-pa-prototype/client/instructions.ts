@@ -69,11 +69,6 @@ export function denyLogicRefs(program: Program<ProtocolAdapter>, authority: Publ
     .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
 }
 
-/** `migrate_state` by the owner: the state account in the previous schema version, brought to this one. */
-export function migrateState(program: Program<ProtocolAdapter>, authority: PublicKey) {
-  return program.methods.migrateState().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
-}
-
 /** `pause` by the owner: settlement stops until `unpause`. */
 export function pauseAdapter(program: Program<ProtocolAdapter>, authority: PublicKey) {
   return program.methods.pause().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });

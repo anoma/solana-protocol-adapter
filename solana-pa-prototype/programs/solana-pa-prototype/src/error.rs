@@ -121,8 +121,6 @@ pub enum PAError {
     // State layout
     #[msg("PAState schema version is not the one this program binary reads; migrate the account first")]
     UnsupportedStateSchema,
-    #[msg("PAState is not a state account in the previous schema version")]
-    NotPreviousSchema,
 
     // Logic-ref denylist
     #[msg("Zero logic ref not allowed")]
