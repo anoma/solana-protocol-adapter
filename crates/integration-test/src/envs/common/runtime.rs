@@ -4,8 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anoma_pa_solana_client::{
-    PlannedTransaction, decode_pa_state, decode_verifier_entry, derive_pa_state_pda,
-    derive_verifier_entry_pda, encode_pa_state, initialize_ix,
+    PlannedTransaction, decode_pa_state, derive_pa_state_pda, encode_pa_state, initialize_ix,
 };
 use anyhow::Context;
 use solana_commitment_config::CommitmentConfig;
@@ -333,22 +332,6 @@ pub(in crate::envs) async fn initialize(
     .await
     .context("failed to initialize the protocol adapter")?;
     Ok(())
-}
-
-/// The verifier program the router's entry for `selector` names.
-pub(in crate::envs) async fn verifier_program(
-    rpc: &RpcClient,
-    router: Pubkey,
-    selector: [u8; 4],
-) -> anyhow::Result<Pubkey> {
-    let entry = derive_verifier_entry_pda(&router, selector);
-    let data = rpc
-        .get_account_data(&entry)
-        .await
-        .with_context(|| format!("the router has no verifier entry {entry}"))?;
-    let decoded =
-        decode_verifier_entry(&data).with_context(|| format!("the verifier entry {entry}"))?;
-    Ok(Pubkey::new_from_array(decoded.verifier))
 }
 
 #[cfg(test)]

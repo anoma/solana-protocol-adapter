@@ -1210,7 +1210,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.6.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=f9f4a1df862586802135161c850aab554d2bf8e2#f9f4a1df862586802135161c850aab554d2bf8e2"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=dc949c1783ced6258c20d1ea4d4d76e08d26ee0f#dc949c1783ced6258c20d1ea4d4d76e08d26ee0f"
 dependencies = [
  "anoma-rm-risc0",
  "bincode",
@@ -1220,7 +1220,12 @@ dependencies = [
  "solana-instruction 3.4.1",
  "solana-message 4.4.1",
  "solana-pubkey 3.0.0",
+ "solana-rpc-client",
+ "solana-rpc-client-api",
  "solana-sdk-ids 3.1.0",
+ "solana-signature",
+ "solana-transaction 4.1.6",
+ "solana-transaction-error 3.3.2",
 ]
 
 [[package]]
