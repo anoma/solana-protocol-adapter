@@ -494,6 +494,20 @@ build_dev_idls() {
   done
 }
 
+# The production IDLs and TypeScript types alone, without the SBF compile:
+# what the operator scripts compile against. target/deploy keeps the artifact
+# already there, such as the deterministic build a --prebuilt upgrade ships.
+build_release_idls() {
+  local name
+  load_workspace_programs
+  require_cmd anchor
+  echo "    Generating the production IDLs and types..."
+  mkdir -p target/idl target/types
+  for name in "${PROGRAM_NAMES[@]}"; do
+    anchor idl build -p "$name" -o "target/idl/${name}.json" -t "target/types/${name}.ts"
+  done
+}
+
 # The production build: plain `anchor build` of the cluster programs, none of
 # their dev features. Each program with dev features gets its production IDL
 # checked against its development IDL, so this stays a self-checking command

@@ -439,7 +439,8 @@ build_for_deploy() {
       exit 1
     fi
     # Deploy the artifacts already in target/deploy/ — the path for shipping
-    # a solana-verify deterministic build, which a rebuild here would clobber.
+    # a solana-verify deterministic build, which a rebuild here would clobber —
+    # with the production IDLs and types the upgrade's script imports.
     local t so
     for t in $(resolve_targets "$TARGET"); do
       so="target/deploy/${PROGRAM_BY_TARGET[$t]}.so"
@@ -450,6 +451,7 @@ build_for_deploy() {
       fi
     done
     echo "    Deploying prebuilt artifacts from target/deploy/ (no build)."
+    build_release_idls
     return 0
   fi
 
@@ -568,6 +570,7 @@ cmd_deploy() {
   targets="$(resolve_targets "$TARGET")"
 
   require_cmd anchor
+  ensure_node_modules
   require_cmd npx
 
   if [[ " $targets " == *" pa "* ]]; then
@@ -613,6 +616,7 @@ cmd_upgrade() {
   targets="$(resolve_targets "$TARGET")"
 
   require_cmd anchor
+  ensure_node_modules
 
   # Verify target programs are already deployed
   for t in $targets; do
@@ -637,42 +641,45 @@ cmd_upgrade() {
   done
 }
 
-# The adapter operations below run a TS script against the deployed PA.
-require_pa_deployed() {
+# The adapter operations below run a TS script against the deployed PA, which
+# compiles against the node modules and the production IDLs and types.
+prepare_pa_script() {
   require_cmd npx
   local pid
   pid="$(get_program_id "protocol_adapter")"
   require_deployed "$pid" "PA" "deploy pa"
+  ensure_node_modules
+  build_release_idls
 }
 
 cmd_init() {
   require_init_params
-  require_pa_deployed
+  prepare_pa_script
   init_pa
 }
 
 cmd_set_kind_table() {
-  require_pa_deployed
+  prepare_pa_script
   run_ts scripts/set-kind-table.ts
 }
 
 cmd_deny_logic_refs() {
-  require_pa_deployed
+  prepare_pa_script
   run_ts scripts/deny-logic-refs.ts
 }
 
 cmd_migrate_state() {
-  require_pa_deployed
+  prepare_pa_script
   run_ts scripts/migrate-state.ts
 }
 
 cmd_pause() {
-  require_pa_deployed
+  prepare_pa_script
   run_ts scripts/pause-pa.ts pause
 }
 
 cmd_unpause() {
-  require_pa_deployed
+  prepare_pa_script
   run_ts scripts/pause-pa.ts unpause
 }
 
@@ -818,6 +825,7 @@ cmd_verify_build() {
 # (client/programMetadata.ts).
 cmd_idl_publish() {
   require_cmd npx
+  ensure_node_modules
 
   local targets t
   targets="$(resolve_targets "$TARGET")"

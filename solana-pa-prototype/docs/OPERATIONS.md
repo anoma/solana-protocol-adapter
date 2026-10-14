@@ -85,7 +85,7 @@ This build's migration is `migrate_state`, from schema version 3, which held one
 ./scripts/dev.sh migrate-state --cluster <c>      # owner wallet
 ```
 
-This build also reads a forwarder's output as the `Vec<u8>` its `forward_call` returns, Borsh-encoded, where the previous build read the raw return data, so neither build settles a call to a forwarder built for the other. Upgrade the deployment's forwarders to builds that return a `Vec<u8>` together with the adapter, and keep settlement paused (`pause`) from the first upgrade to the last.
+This build also reads a forwarder's output as the `Vec<u8>` its `forward_call` returns, Borsh-encoded, where the previous build read the raw return data, so neither build settles a call to a forwarder built for the other. Upgrade the deployment's forwarders to builds that return a `Vec<u8>` together with the adapter, and keep settlement paused (`pause`) from the first upgrade to the last. Pause from a checkout of the release the deployment runs: this release's scripts read the state account in the layout `migrate_state` writes, which the deployed account has only after the migration.
 
 This covers the state account only. A change to the commitment tree itself (hash, arity, leaf encoding) or to the marker PDA seeds invalidates the existing tree and marker addresses, and no in-place migration recovers that: it is a fresh deployment plus a bulk copy of roots and nullifiers.
 
