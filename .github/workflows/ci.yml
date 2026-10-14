@@ -91,7 +91,7 @@ jobs:
 
   # The integration-test harness (crates/integration-test, its own
   # workspace): its format check, clippy and local tests on surfpool. Its e2e
-  # cases need devnet and a prover (ops.sh harness-test --e2e).
+  # cases need a prover (ops.sh harness-test --e2e).
   harness:
     name: Harness
     runs-on: ubuntu-latest
