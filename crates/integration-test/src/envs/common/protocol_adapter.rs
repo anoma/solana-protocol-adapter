@@ -357,7 +357,6 @@ fn refusal_for(error: PaError) -> Option<Refusal> {
         | PaError::MarkerUnexpectedData
         | PaError::PreExistingRoot
         | PaError::UnsupportedStateSchema
-        | PaError::NotPreviousSchema
         | PaError::ZeroLogicRefNotAllowed
         | PaError::LogicRefAlreadyDenied
         | PaError::ZeroRiscZeroVerifierRouterNotAllowed

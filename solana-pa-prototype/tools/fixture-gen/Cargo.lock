@@ -420,7 +420,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.6.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=dc949c1783ced6258c20d1ea4d4d76e08d26ee0f#dc949c1783ced6258c20d1ea4d4d76e08d26ee0f"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=c94f08a3e0d8d791cce3f5352734f3ca1dd0b2da#c94f08a3e0d8d791cce3f5352734f3ca1dd0b2da"
 dependencies = [
  "anoma-rm-risc0",
  "bincode",
@@ -4094,7 +4094,7 @@ dependencies = [
 
 [[package]]
 name = "protocol-adapter"
-version = "2.0.0-rc.5"
+version = "2.0.0-rc.6"
 dependencies = [
  "anchor-lang",
  "anoma-rm-core",

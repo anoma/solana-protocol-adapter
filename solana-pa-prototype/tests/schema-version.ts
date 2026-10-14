@@ -5,7 +5,7 @@
 import * as anchor from "@anchor-lang/core";
 import { AccountMeta, PublicKey, Keypair } from "@solana/web3.js";
 import { assert } from "chai";
-import { denyLogicRefs, migrateState, setKindTableRoot, upgradeAdapter } from "../client/instructions";
+import { denyLogicRefs, setKindTableRoot, upgradeAdapter } from "../client/instructions";
 import {
   localCloseMarkersBatch,
   localRenounceAdapterOwnership,
@@ -207,9 +207,5 @@ describe("protocol-adapter (dev_set_schema_version tooling) @localnet", () => {
         await assertFails(c.run(), { program, error: "UnsupportedStateSchema" });
       });
     }
-
-    // migrate_state reads only the previous schema version's layout.
-    it("migrate_state refuses a version other than the previous one", () =>
-      assertFails(migrateState(program, provider.wallet.publicKey).rpc(), { program, error: "NotPreviousSchema" }));
   });
 });
