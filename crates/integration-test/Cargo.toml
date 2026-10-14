@@ -1,7 +1,7 @@
 [package]
 name = "anoma-pa-solana-integration-test"
 description = "Integration and e2e tests for the Anoma Solana protocol adapter: pa-testkit's environments on a surfpool runtime."
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/anoma/solana-protocol-adapter"
@@ -23,13 +23,13 @@ e2e = [
 ]
 
 [dependencies]
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "c94f08a3e0d8d791cce3f5352734f3ca1dd0b2da", features = [
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", tag = "bindings/v0.7.0", features = [
   "rpc",
 ] }
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "88974462f5ab996c350eeca16639457120cf7dd5", default-features = false, features = [
   "fixtures",
 ] }
-anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", rev = "007263b7c63ef9d339f0c4ff8db82cc53a93383d", features = [
+anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", tag = "v1.0.0-rc.6", features = [
   "arm",
 ], optional = true }
 anoma-rm-risc0 = { version = "=2.0.0-rc.7", default-features = false, features = ["transaction"] }

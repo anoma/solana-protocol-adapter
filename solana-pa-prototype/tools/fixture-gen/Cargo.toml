@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 # Merkle paths over the adapter's tree, as integrators derive them.
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "c94f08a3e0d8d791cce3f5352734f3ca1dd0b2da", default-features = false, features = ["arm"] }
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", tag = "bindings/v0.7.0", default-features = false, features = ["arm"] }
 arm = { package = "anoma-rm-risc0", version = "=2.0.0-rc.7", default-features = false, features = ["aggregation", "prove"] }
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
@@ -27,7 +27,7 @@ serde_json = "1.0"
 block-time-forwarder = { path = "../../programs/block-time-forwarder", default-features = false, features = ["no-entrypoint"] }
 test-forwarder = { path = "../../programs/test-forwarder", default-features = false, features = ["no-entrypoint"] }
 solana-pa = { package = "protocol-adapter", path = "../../programs/solana-pa-prototype", default-features = false, features = ["no-entrypoint"] }
-heliax-ap-orchestrator-sdk = { git = "https://github.com/anoma/anomapay-workers-queue.git", rev = "5cda5181ccff13e9b8204d3a8aa52ab50303aac1" }
+heliax-ap-orchestrator-sdk = "0.18.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 # Concurrent proof dispatch through the queue (try_join!, try_join_all).
 futures = "0.3"
