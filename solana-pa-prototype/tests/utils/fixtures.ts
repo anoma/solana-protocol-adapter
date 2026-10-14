@@ -15,7 +15,9 @@ const MODE = process.env.PA_TEST_MODE ?? "real";
 if (MODE !== "real" && MODE !== "mock") {
   throw new Error(`PA_TEST_MODE must be "real" or "mock", got "${MODE}"`);
 }
-const FIXTURE_DIR = path.resolve(process.env.PA_FIXTURE_DIR || path.join("tests", "fixtures", MODE === "mock" ? "mock" : ""));
+const FIXTURE_DIR = path.resolve(
+  process.env.PA_FIXTURE_DIR || path.join("tests", "fixtures", MODE === "mock" ? "mock" : ""),
+);
 
 export type Fixture = {
   format: string;
@@ -49,7 +51,6 @@ export async function loadFixture<T = Fixture>(filename: string): Promise<T> {
   }
   return readJson<T>(file);
 }
-
 
 // The proof of each fixture a cluster run has started: a second test that
 // loads the fixture waits for it rather than proving it again alongside.
