@@ -79,8 +79,9 @@ Commands:
   harness-lint           The integration-test harness's format check, and
                          clippy with its e2e feature, warnings denied
   harness-test [--e2e]   The integration-test harness's tests on its local
-                         runtime; with --e2e, its e2e cases on a fork of
-                         devnet (DEVNET_RPC_URL), proven by the queue
+                         runtime; with --e2e, its e2e cases with real proofs,
+                         on its local runtime (E2E_RUNTIME=devnet: on a fork
+                         of devnet, DEVNET_RPC_URL), proven by the queue
                          (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN) or locally
                          (E2E_PROVER=local)
   validator              Start the local test validator (RISC0 verifier stack
@@ -995,8 +996,9 @@ case "$COMMAND" in
   harness-test)
     require_cmd cargo
     if [[ "$E2E" == "true" ]]; then
-      # The e2e cases (the harness reads DEVNET_RPC_URL, E2E_PROVER, and
-      # QUEUE_BASE_URL and QUEUE_AUTH_TOKEN for the queue) one at a time, like
+      # The e2e cases (the harness reads E2E_RUNTIME, with DEVNET_RPC_URL for
+      # devnet, E2E_PROVER, and QUEUE_BASE_URL and QUEUE_AUTH_TOKEN for the
+      # queue) one at a time, like
       # pa-evm's, in release mode, since risc0 proves far faster optimized.
       RUST_TEST_THREADS=1 cargo test --release --manifest-path "${HARNESS_DIR}/Cargo.toml" --features e2e e2e_test
     else

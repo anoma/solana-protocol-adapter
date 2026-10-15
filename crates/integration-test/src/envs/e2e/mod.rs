@@ -2,12 +2,14 @@ mod config;
 mod kind_table;
 mod setup;
 
+pub use config::{E2eConfig, E2eRuntime, QueueConfig};
+
 use anoma_pa_testkit::prover::{QueueProver, Risc0Prover};
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_pa_testkit::witness::ActionWitnesses;
 
-/// End-to-end environment: a surfpool runtime forking devnet, settling on the
-/// adapter devnet runs with the state devnet holds, with real proofs.
+/// End-to-end environment: real proofs, verified by devnet's Groth16 verifier,
+/// on a runtime of its own or on a fork of devnet (`E2eRuntime`).
 pub type Environment = super::common::environment::Environment<Prover>;
 
 /// Where the e2e environment's real proofs come from (`E2eConfig`).

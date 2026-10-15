@@ -1,7 +1,7 @@
 [package]
 name = "anoma-pa-solana-integration-test"
 description = "Integration and e2e tests for the Anoma Solana protocol adapter: pa-testkit's environments on a surfpool runtime."
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/anoma/solana-protocol-adapter"
