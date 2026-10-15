@@ -1,99 +1,57 @@
-import * as anchor from "@coral-xyz/anchor";
-import { Program } from "@coral-xyz/anchor";
-import { PublicKey } from "@solana/web3.js";
+import * as anchor from "@anchor-lang/core";
+import { confirmedProvider } from "../client/provider";
+import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { PA_STATE_SEED } from "../tests/utils/constants";
-
-const BPF_LOADER_UPGRADEABLE = new PublicKey(
-  "BPFLoaderUpgradeab1e11111111111111111111111"
-);
-
-// `initialize` pins the router and selector this deployment will trust for
-// the lifetime of the PAState account. There is no safe default: guessing
-// wrong installs the wrong verifier. Both must be supplied explicitly.
-function requireVerifierRouter(): PublicKey {
-  const raw = process.env.PA_VERIFIER_ROUTER;
-  if (!raw) {
-    console.error(
-      "❌ Missing PA_VERIFIER_ROUTER: the RISC0 verifier router program ID " +
-        "this deployment must trust, as a base58 pubkey.\n" +
-        "   This script will not guess a default — initializing against the " +
-        "wrong router installs the wrong verifier."
-    );
-    process.exit(1);
-  }
-  try {
-    return new PublicKey(raw);
-  } catch {
-    console.error(`❌ PA_VERIFIER_ROUTER is not a valid pubkey: "${raw}"`);
-    process.exit(1);
-  }
-}
-
-function requireProofSelector(): number[] {
-  const raw = process.env.PA_PROOF_SELECTOR;
-  if (!raw) {
-    console.error(
-      "❌ Missing PA_PROOF_SELECTOR: the 4-byte Groth16 verifier selector " +
-        "(hex, e.g. 0xdeadbeef) registered with the verifier router for the " +
-        "circuit this deployment must accept.\n" +
-        "   This script will not guess a default — initializing with the " +
-        "wrong selector installs the wrong verifier."
-    );
-    process.exit(1);
-  }
-  const hex = raw.replace(/^0x/, "");
-  if (hex.length !== 8) {
-    console.error(
-      `❌ PA_PROOF_SELECTOR must be 8 hex chars (4 bytes), got "${raw}"`
-    );
-    process.exit(1);
-  }
-  return Array.from(Buffer.from(hex, "hex"));
-}
+import { initializeAdapter } from "../client/instructions";
+import { derivePaStatePda } from "../client/pda";
+import { requireHexBytes, requirePubkey } from "./cli-utils";
 
 async function main() {
-  const provider = anchor.AnchorProvider.env();
+  const provider = confirmedProvider();
   anchor.setProvider(provider);
 
   const program = anchor.workspace.ProtocolAdapter as Program<ProtocolAdapter>;
 
-  const verifierRouter = requireVerifierRouter();
-  const proofSelector = requireProofSelector();
-
-  const [paState] = PublicKey.findProgramAddressSync(
-    [PA_STATE_SEED],
-    program.programId
+  // `initialize` sets the owner and pins the router and selector this
+  // deployment will trust for the lifetime of the PAState account. There is
+  // no safe default: guessing wrong hands the adapter to the wrong key or
+  // installs the wrong verifier. All three must be supplied explicitly. The
+  // signer, the program's upgrade authority, hands that authority to the
+  // program. The adapter starts on the empty kind table; set-kind-table
+  // installs another.
+  const owner = requirePubkey(
+    "PA_OWNER",
+    "the adapter's initial owner, who alone pauses, upgrades and configures it, as a base58 pubkey.\n" +
+      "   This script will not guess a default — initializing with the wrong owner hands the adapter to that key.",
   );
-  const [programData] = PublicKey.findProgramAddressSync(
-    [program.programId.toBuffer()],
-    BPF_LOADER_UPGRADEABLE
+  const verifierRouter = requirePubkey(
+    "PA_VERIFIER_ROUTER",
+    "the RISC0 verifier router program ID this deployment must trust, as a base58 pubkey.\n" +
+      "   This script will not guess a default — initializing against the wrong router installs the wrong verifier.",
+  );
+  const proofSelector = requireHexBytes(
+    "PA_PROOF_SELECTOR",
+    4,
+    "the 4-byte Groth16 verifier selector (hex, e.g. 0xdeadbeef) registered with the verifier router " +
+      "for the circuit this deployment must accept.\n" +
+      "   This script will not guess a default — initializing with the wrong selector installs the wrong verifier.",
   );
 
-  // Idempotent: skip if PAState already exists
-  try {
-    await program.account.paStateAccount.fetch(paState);
+  const [paState] = derivePaStatePda(program.programId);
+
+  // Idempotent: skip if PAState already exists.
+  if (await program.account.paStateAccount.fetchNullable(paState)) {
     console.log("PAState already initialized, skipping.");
     return;
-  } catch {
-    // Not initialized yet — proceed
   }
 
   console.log("Initializing PA...");
   console.log(`  PAState PDA: ${paState.toBase58()}`);
+  console.log(`  Owner: ${owner.toBase58()}`);
   console.log(`  Verifier router: ${verifierRouter.toBase58()}`);
   console.log(`  Proof selector: 0x${Buffer.from(proofSelector).toString("hex")}`);
 
-  await program.methods
-    .initialize(verifierRouter, proofSelector)
-    .accountsPartial({
-      paState,
-      payer: provider.wallet.publicKey,
-      systemProgram: anchor.web3.SystemProgram.programId,
-      program: program.programId,
-      programData,
-    })
-    .rpc();
+  await initializeAdapter(program, provider.wallet.publicKey, owner, verifierRouter, proofSelector).rpc();
 
   console.log("✅ PA initialized");
 }

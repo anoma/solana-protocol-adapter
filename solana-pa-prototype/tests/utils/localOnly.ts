@@ -1,0 +1,146 @@
+/**
+ * The only builders in this repository for instructions that change an
+ * authority or close protocol accounts for good: the adapter's
+ * `transfer_ownership`, `renounce_ownership` and dev-build
+ * `close_markers_batch` (settlement replay protection), the loader's
+ * `SetAuthority` and the Program Metadata program's `SetAuthority` on a
+ * canonical IDL account. They exist
+ * for the tests and refuse any RPC endpoint that is not this machine's, so no
+ * repository code can do any of this on devnet or mainnet; there, it is done
+ * by hand (docs/OPERATIONS.md).
+ */
+import { Program } from "@anchor-lang/core";
+import { address } from "@solana/kit";
+import { Connection, PublicKey, TransactionInstruction } from "@solana/web3.js";
+import { ProtocolAdapter } from "../../target/types/protocol_adapter";
+import { BPF_LOADER_UPGRADEABLE, deriveProgramDataPda, derivePaStatePda } from "../../client/pda";
+import { canonicalIdlAccount, programMetadataClient } from "../../client/programMetadata";
+
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
+const BATCH_SIZE = 20;
+
+/** `items` split, in order, into runs of at most `size`. */
+function chunks<T>(items: readonly T[], size: number): T[][] {
+  const runs: T[][] = [];
+  for (let i = 0; i < items.length; i += size) runs.push(items.slice(i, i + size));
+  return runs;
+}
+
+/** Throw unless `connection` talks to a validator on this machine. */
+export function assertLocalValidator(connection: Connection): void {
+  const host = new URL(connection.rpcEndpoint).hostname;
+  if (!LOOPBACK_HOSTS.has(host)) {
+    throw new Error(
+      `authority and closing instructions are built only against a local validator, not ${host}: ` +
+        "on devnet and mainnet they are made by hand",
+    );
+  }
+}
+
+/** The loader's `SetAuthority`: `programId`'s upgrade authority moves from `current` (a signer) to `newAuthority`. */
+export function localSetUpgradeAuthorityIx(
+  connection: Connection,
+  programId: PublicKey,
+  current: PublicKey,
+  newAuthority: PublicKey,
+): TransactionInstruction {
+  assertLocalValidator(connection);
+  return new TransactionInstruction({
+    programId: BPF_LOADER_UPGRADEABLE,
+    keys: [
+      { pubkey: deriveProgramDataPda(programId), isSigner: false, isWritable: true },
+      { pubkey: current, isSigner: true, isWritable: false },
+      { pubkey: newAuthority, isSigner: false, isWritable: false },
+    ],
+    // UpgradeableLoaderInstruction::SetAuthority, a u32 little-endian variant index.
+    data: Buffer.from([4, 0, 0, 0]),
+  });
+}
+
+/**
+ * The Program Metadata program's `SetAuthority` on `program`'s canonical IDL
+ * account: `newAuthority` becomes its explicit authority, signed by the
+ * program's upgrade authority, the keypair file `walletPath`.
+ */
+export async function localSetIdlAuthority(
+  rpcUrl: string,
+  walletPath: string,
+  program: PublicKey,
+  newAuthority: PublicKey,
+): Promise<void> {
+  assertLocalValidator(new Connection(rpcUrl));
+  const client = await programMetadataClient(rpcUrl, walletPath);
+  const programAddress = address(program.toBase58());
+  const { metadata, programData } = await canonicalIdlAccount(client, programAddress);
+  await client.programMetadata.instructions
+    .setAuthority({
+      account: metadata,
+      authority: client.identity,
+      program: programAddress,
+      programData,
+      newAuthority: address(newAuthority.toBase58()),
+    })
+    .sendTransaction();
+}
+
+/** The adapter's `transfer_ownership` by its owner `authority`, to `newOwner`. */
+export function localTransferAdapterOwnership(
+  program: Program<ProtocolAdapter>,
+  authority: PublicKey,
+  newOwner: PublicKey,
+) {
+  assertLocalValidator(program.provider.connection);
+  return program.methods
+    .transferOwnership(newOwner)
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/** The adapter's `renounce_ownership` by its owner `authority`: no owner-only instruction can run again. */
+export function localRenounceAdapterOwnership(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  assertLocalValidator(program.provider.connection);
+  return program.methods
+    .renounceOwnership()
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
+}
+
+/**
+ * `close_markers_batch` by `authority` over `markers`; only on a paused
+ * adapter built with the `dev-teardown` feature. The method is looked up
+ * untyped: naming it in a type would make this module fail to compile
+ * against production types, preempting the actionable error thrown when the
+ * program was built without the feature.
+ */
+export function localCloseMarkersBatch(program: Program<ProtocolAdapter>, authority: PublicKey, markers: PublicKey[]) {
+  assertLocalValidator(program.provider.connection);
+  const method = (program.methods as Record<string, unknown>).closeMarkersBatch;
+  if (typeof method !== "function") {
+    throw new Error(
+      "Instruction 'close_markers_batch' is not present in the program's IDL (target/idl/protocol_adapter.json): " +
+        "the program was built without the 'dev-teardown' feature.",
+    );
+  }
+  return (method as () => ReturnType<Program<ProtocolAdapter>["methods"][keyof Program<ProtocolAdapter>["methods"]]>)()
+    .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority })
+    .remainingAccounts(markers.map((pubkey) => ({ pubkey, isWritable: true, isSigner: false })));
+}
+
+/**
+ * Close every marker account (the zero-byte nullifier and root markers) the
+ * adapter owns, in batches, as `authority`: the provider wallet, which must
+ * be the adapter's owner, on a paused adapter. Returns how many
+ * were closed.
+ */
+export async function localCloseAllMarkers(program: Program<ProtocolAdapter>, authority: PublicKey): Promise<number> {
+  assertLocalValidator(program.provider.connection);
+  const markers = await program.provider.connection.getProgramAccounts(program.programId, {
+    filters: [{ dataSize: 0 }],
+  });
+  for (const batch of chunks(markers, BATCH_SIZE)) {
+    await localCloseMarkersBatch(
+      program,
+      authority,
+      batch.map(({ pubkey }) => pubkey),
+    ).rpc();
+  }
+  return markers.length;
+}

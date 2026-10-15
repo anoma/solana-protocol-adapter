@@ -7,14 +7,17 @@
 //! This demonstrates the forwarder pattern for the Protocol Adapter:
 //! - PA CPIs to this forwarder with logic_ref and input
 //! - Forwarder executes its logic (time comparison)
-//! - Forwarder returns output via set_return_data
+//! - Forwarder returns its output, a `Vec<u8>`, which Anchor sets as return data
 //! - PA reads return data and verifies against expected_output
 
 use anchor_lang::prelude::*;
-use anchor_lang::solana_program::program::set_return_data;
 
-declare_id!("3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf");
+// The address comes from env/<cluster>.env, which the build scripts export.
+declare_id!(Pubkey::from_str_const(env!(
+    "BLOCK_TIME_FORWARDER_PROGRAM_ID"
+)));
 
+#[constant]
 pub const RESULT_LT: u8 = 0; // expected < current
 pub const RESULT_EQ: u8 = 1; // expected == current
 pub const RESULT_GT: u8 = 2; // expected > current
@@ -23,13 +26,13 @@ pub const RESULT_GT: u8 = 2; // expected > current
 pub mod block_time_forwarder {
     use super::*;
 
-    /// Sets return data to a single byte: LT(0), EQ(1), or GT(2) comparing the
-    /// expected unix timestamp (`input` as i64 LE) against the current clock.
+    /// Returns a single byte: LT(0), EQ(1), or GT(2) comparing the expected
+    /// unix timestamp (`input` as i64 LE) against the current clock.
     pub fn forward_call(
         ctx: Context<ForwardCall>,
         _logic_ref: [u8; 32],
         input: Vec<u8>,
-    ) -> Result<()> {
+    ) -> Result<Vec<u8>> {
         if input.len() != 8 {
             return Err(ErrorCode::InvalidInput.into());
         }
@@ -44,8 +47,7 @@ pub mod block_time_forwarder {
             std::cmp::Ordering::Equal => RESULT_EQ,
         };
 
-        set_return_data(&[result]);
-        Ok(())
+        Ok(vec![result])
     }
 }
 
