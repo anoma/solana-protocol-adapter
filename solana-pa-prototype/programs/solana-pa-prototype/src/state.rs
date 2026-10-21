@@ -13,10 +13,10 @@ pub const SCHEMA_VERSION: u8 = 4;
 
 /// The root of the empty kind table, under which every resource kind is
 /// derived via hash-to-curve: the table every deployment starts on, as
-/// pa-evm's `EMPTY_KIND_TABLE_ROOT`. A Merkle tree without entries has its
+/// pa-evm's `EMPTY_KIND_TREE_ROOT`. A Merkle tree without entries has its
 /// padding leaf as its root, `sha256("EMPTY")`.
 #[constant]
-pub const EMPTY_KIND_TABLE_ROOT: [u8; 32] =
+pub const EMPTY_KIND_TREE_ROOT: [u8; 32] =
     hex_literal::hex!("cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06");
 
 /// Protocol Adapter state — commitment tree frontier with variable depth (1-32).
@@ -48,12 +48,12 @@ pub struct PAStateAccount {
     /// Expected proof selector (4 bytes), set at initialization.
     /// Validated before sending proofs to the verifier router.
     pub proof_selector: [u8; 4],
-    /// The stored kind-table root: the empty table's at initialization,
-    /// replaced by `set_kind_table_root`. The aggregation circuit binds
+    /// The stored kind tree root: the empty table's at initialization,
+    /// replaced by `set_kind_tree_root`. The aggregation circuit binds
     /// each transaction to one kind table, by the Merkle root of its entries;
     /// a transaction settles when that is this table or the empty one
-    /// (`is_kind_table_root_accepted`), as in pa-evm.
-    pub kind_table_root: [u8; 32],
+    /// (`is_kind_tree_root_accepted`), as in pa-evm.
+    pub kind_tree_root: [u8; 32],
     /// Whether settlement is paused, as pa-evm's `paused()`: `pause` sets it
     /// and `unpause` clears it, both owner-only.
     pub paused: bool,
@@ -95,11 +95,11 @@ impl PAStateAccount {
 
     /// Whether a transaction proven against the kind table with root `root`
     /// settles: the stored one or the empty one, as pa-evm's
-    /// `_isKindTableRootAccepted`. The empty table merges no kinds, so
+    /// `_isKindTreeRootAccepted`. The empty table merges no kinds, so
     /// a transaction that balances under it also balances under the stored
     /// table.
-    pub fn is_kind_table_root_accepted(&self, root: &[u8; 32]) -> bool {
-        *root == self.kind_table_root || *root == EMPTY_KIND_TABLE_ROOT
+    pub fn is_kind_tree_root_accepted(&self, root: &[u8; 32]) -> bool {
+        *root == self.kind_tree_root || *root == EMPTY_KIND_TREE_ROOT
     }
 
     /// Whether the denylist for consumed resources (`consumed`) or the one
@@ -182,7 +182,7 @@ impl PAStateAccount {
             owner,
             verifier_router,
             proof_selector,
-            kind_table_root: EMPTY_KIND_TABLE_ROOT,
+            kind_tree_root: EMPTY_KIND_TREE_ROOT,
             paused: false,
             root: EMPTY_TREE_ROOT_INITIAL.into(),
             next_index: 0,

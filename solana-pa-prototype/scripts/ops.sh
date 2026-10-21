@@ -31,8 +31,8 @@ Commands:
                          their own upgrade (owner wallet) once their upgrade
                          authority is their PDA, else through the loader
   init                   Initialize PA state (idempotent)
-  set-kind-table         Replace the PA's kind-table root with
-                         PA_KIND_TABLE_ROOT (owner wallet).
+  set-kind-table         Replace the PA's kind tree root with
+                         PA_KIND_TREE_ROOT (owner wallet).
   deny-logic-refs        Add each PA_DENIED_LOGIC_REFS entry
                          (<hex>:<consumed|created>, comma-separated) to the
                          denylist for consumed or for created resources;

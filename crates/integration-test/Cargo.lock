@@ -1210,7 +1210,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.7.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?tag=bindings%2Fv0.7.0#dacef67977ca71a9b6bfb7d37b46db85abc38561"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=eb280141b64a017f165331a8bb4ba572a02113b2#eb280141b64a017f165331a8bb4ba572a02113b2"
 dependencies = [
  "anoma-rm-risc0",
  "bincode",
@@ -1263,7 +1263,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-testkit"
 version = "1.0.0-rc.2"
-source = "git+https://github.com/anoma/pa-testkit?rev=88974462f5ab996c350eeca16639457120cf7dd5#88974462f5ab996c350eeca16639457120cf7dd5"
+source = "git+https://github.com/anoma/pa-testkit?rev=fd6a7becc1f8a5a43c3fa78ee7c36adec73fc50a#fd6a7becc1f8a5a43c3fa78ee7c36adec73fc50a"
 dependencies = [
  "anoma-rm-risc0",
  "anoma-rm-risc0-gadgets",

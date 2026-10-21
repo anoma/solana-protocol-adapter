@@ -55,7 +55,7 @@ impl Environment {
                 // The tests prove against devnet's kind table, which the
                 // adapter must store.
                 let loaded = super::kind_table::load_devnet()?;
-                let stored = env.protocol_adapter.state().await?.kind_table_root;
+                let stored = env.protocol_adapter.state().await?.kind_tree_root;
                 anyhow::ensure!(
                     stored == loaded,
                     "the protocol adapter stores the kind table {}, the tests prove against {}",

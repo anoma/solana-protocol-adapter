@@ -1,4 +1,4 @@
-use crate::state::{PAStateAccount, EMPTY_KIND_TABLE_ROOT, SCHEMA_VERSION};
+use crate::state::{PAStateAccount, EMPTY_KIND_TREE_ROOT, SCHEMA_VERSION};
 use crate::tests::utils::create_test_pa_state;
 use anchor_lang::prelude::*;
 use arm_core::merkle_path::PADDING_LEAF;
@@ -47,9 +47,9 @@ fn trailing_bytes_still_deserialize() {
 }
 
 #[test]
-fn empty_kind_table_root_is_the_padding_leaf() {
+fn empty_kind_tree_root_is_the_padding_leaf() {
     assert_eq!(
-        EMPTY_KIND_TABLE_ROOT,
+        EMPTY_KIND_TREE_ROOT,
         <[u8; 32]>::from(PADDING_LEAF),
         "the constant initialize stores must be the ARM's root of the empty kind table, its padding leaf"
     );
@@ -88,17 +88,17 @@ fn each_side_is_checked_against_its_own_denylist() {
     assert!(!state.is_logic_ref_denied(&created_only, true));
 }
 
-/// pa-evm's `_isKindTableRootAccepted`: a transaction is proven against
+/// pa-evm's `_isKindTreeRootAccepted`: a transaction is proven against
 /// the stored kind table or against the empty one, which merges no kinds, so
 /// what balances under it also balances under the stored table.
 #[test]
 fn the_stored_and_the_empty_kind_table_are_accepted_and_no_other() {
     let stored = [7u8; 32];
     let state = PAStateAccount {
-        kind_table_root: stored,
+        kind_tree_root: stored,
         ..create_test_pa_state()
     };
-    assert!(state.is_kind_table_root_accepted(&stored));
-    assert!(state.is_kind_table_root_accepted(&EMPTY_KIND_TABLE_ROOT));
-    assert!(!state.is_kind_table_root_accepted(&[8u8; 32]));
+    assert!(state.is_kind_tree_root_accepted(&stored));
+    assert!(state.is_kind_tree_root_accepted(&EMPTY_KIND_TREE_ROOT));
+    assert!(!state.is_kind_tree_root_accepted(&[8u8; 32]));
 }

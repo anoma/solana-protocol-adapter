@@ -291,7 +291,7 @@ PYEOF
     echo "  upgrade [${DEPLOY_TARGETS}|all]   Rebuild + deploy over existing programs"
     echo "  init                   Initialize PA state (idempotent; needs PA_OWNER,"
     echo "                         PA_VERIFIER_ROUTER and PA_PROOF_SELECTOR)"
-    echo "  set-kind-table         Replace the PA's kind-table root (PA_KIND_TABLE_ROOT)"
+    echo "  set-kind-table         Replace the PA's kind tree root (PA_KIND_TREE_ROOT)"
     echo "  deny-logic-refs        Add logic refs to the consumed or created denylist (PA_DENIED_LOGIC_REFS)"
     echo "  idl-publish            Publish the production IDL on chain"
     echo "  verify-build           Deterministic solana-verify build of the PA; with"

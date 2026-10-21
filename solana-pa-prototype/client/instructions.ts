@@ -79,9 +79,9 @@ export function unpauseAdapter(program: Program<ProtocolAdapter>, authority: Pub
   return program.methods.unpause().accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
 }
 
-/** `set_kind_table_root` by the owner. */
-export function setKindTableRoot(program: Program<ProtocolAdapter>, authority: PublicKey, root: number[]) {
+/** `set_kind_tree_root` by the owner. */
+export function setKindTreeRoot(program: Program<ProtocolAdapter>, authority: PublicKey, root: number[]) {
   return program.methods
-    .setKindTableRoot(root)
+    .setKindTreeRoot(root)
     .accountsPartial({ paState: derivePaStatePda(program.programId)[0], authority });
 }

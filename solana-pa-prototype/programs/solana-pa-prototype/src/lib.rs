@@ -122,7 +122,7 @@ pub mod protocol_adapter {
     /// unconditionally, so transactions built against the initial tree stay
     /// valid without a genesis marker. Like pa-evm's initializer, it sets the
     /// owner, starts on the empty kind table, and announces both;
-    /// `set_kind_table_root` installs any other table.
+    /// `set_kind_tree_root` installs any other table.
     pub fn initialize<'info>(
         ctx: Context<'info, Initialize<'info>>,
         initial_owner: Pubkey,
@@ -175,8 +175,8 @@ pub mod protocol_adapter {
         emit_cpi!(CommitmentTreeRootAddedEvent {
             root: EMPTY_TREE_ROOT_INITIAL.into(),
         });
-        emit_cpi!(KindTableRootUpdatedEvent {
-            kind_table_root: EMPTY_KIND_TABLE_ROOT,
+        emit_cpi!(KindTreeRootUpdatedEvent {
+            kind_tree_root: EMPTY_KIND_TREE_ROOT,
         });
         // OpenZeppelin's `initializer` announces the version once the body ran.
         emit_cpi!(InitializedEvent {
@@ -437,22 +437,20 @@ pub mod protocol_adapter {
         )
     }
 
-    /// Replace the kind-table root every settled aggregation instance
-    /// must carry. Mirrors pa-evm's `setKindTableRoot`: authority only,
-    /// zero rejected, the change emitted. A table changes whenever a token or
-    /// a circuit version is listed, and transactions proven against the
-    /// previous table are rejected from this point on.
-    pub fn set_kind_table_root(
-        ctx: Context<OwnerOnly>,
-        new_kind_table_root: [u8; 32],
-    ) -> Result<()> {
+    /// Replace the stored kind tree root: from then on a transaction settles
+    /// when proven against this table or against the empty one. Mirrors
+    /// pa-evm's `setKindTreeRoot`: authority only, zero rejected, the change
+    /// emitted. A table changes whenever a token or a circuit version is
+    /// listed, and transactions proven against the previous table are
+    /// rejected from this point on.
+    pub fn set_kind_tree_root(ctx: Context<OwnerOnly>, new_kind_tree_root: [u8; 32]) -> Result<()> {
         require!(
-            new_kind_table_root != [0u8; 32],
-            PAError::ZeroKindTableRootNotAllowed
+            new_kind_tree_root != [0u8; 32],
+            PAError::ZeroKindTreeRootNotAllowed
         );
-        ctx.accounts.pa_state.kind_table_root = new_kind_table_root;
-        emit_cpi!(KindTableRootUpdatedEvent {
-            kind_table_root: new_kind_table_root,
+        ctx.accounts.pa_state.kind_tree_root = new_kind_tree_root;
+        emit_cpi!(KindTreeRootUpdatedEvent {
+            kind_tree_root: new_kind_tree_root,
         });
         Ok(())
     }
@@ -814,8 +812,8 @@ fn execute_settlement(
         PAError::ComplianceKeyMismatch
     );
     require!(
-        state.is_kind_table_root_accepted(&instance.kind_table_root.into()),
-        PAError::UnacceptedKindTableRoot
+        state.is_kind_tree_root_accepted(&instance.kind_table_root.into()),
+        PAError::UnacceptedKindTreeRoot
     );
     // pa-evm refuses every consumed resource whose logic ref is on the
     // denylist for consumed resources, and every created one whose logic ref
@@ -1360,10 +1358,10 @@ pub struct ApplicationPayloadEvent {
     pub blob: Vec<u8>,
 }
 
-/// Mirrors pa-evm: `event KindTableRootUpdated(bytes32 indexed kindTableRoot);`
+/// Mirrors pa-evm: `event KindTreeRootUpdated(bytes32 indexed kindTreeRoot);`
 #[event]
-pub struct KindTableRootUpdatedEvent {
-    pub kind_table_root: [u8; 32],
+pub struct KindTreeRootUpdatedEvent {
+    pub kind_tree_root: [u8; 32],
 }
 
 /// Mirrors OpenZeppelin Pausable: `event Paused(address account);`
