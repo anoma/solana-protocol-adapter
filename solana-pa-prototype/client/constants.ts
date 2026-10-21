@@ -33,7 +33,7 @@ export const ROOT_SEED = idlBytes(paIdl, "ROOT_SEED");
 export const SCHEMA_VERSION = idlNumber(paIdl, "SCHEMA_VERSION");
 /** Seed of a program's upgrade authority PDA, through which only the program upgrades itself. */
 export const UPGRADE_AUTHORITY_SEED = idlBytes(paIdl, "UPGRADE_AUTHORITY_SEED");
-export const EMPTY_KIND_TABLE_ROOT = idlBytes(paIdl, "EMPTY_KIND_TABLE_ROOT");
+export const EMPTY_KIND_TREE_ROOT = idlBytes(paIdl, "EMPTY_KIND_TREE_ROOT");
 export const MIN_ALLOWED_EXPIRY = idlNumber(paIdl, "MIN_ALLOWED_EXPIRY");
 export const SEVEN_DAYS_SLOTS = idlNumber(paIdl, "SEVEN_DAYS_SLOTS");
 
