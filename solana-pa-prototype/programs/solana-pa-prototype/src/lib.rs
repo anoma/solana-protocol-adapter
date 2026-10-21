@@ -437,11 +437,12 @@ pub mod protocol_adapter {
         )
     }
 
-    /// Replace the kind tree root every settled aggregation instance
-    /// must carry. Mirrors pa-evm's `setKindTreeRoot`: authority only,
-    /// zero rejected, the change emitted. A table changes whenever a token or
-    /// a circuit version is listed, and transactions proven against the
-    /// previous table are rejected from this point on.
+    /// Replace the stored kind tree root: from then on a transaction settles
+    /// when proven against this table or against the empty one. Mirrors
+    /// pa-evm's `setKindTreeRoot`: authority only, zero rejected, the change
+    /// emitted. A table changes whenever a token or a circuit version is
+    /// listed, and transactions proven against the previous table are
+    /// rejected from this point on.
     pub fn set_kind_tree_root(ctx: Context<OwnerOnly>, new_kind_tree_root: [u8; 32]) -> Result<()> {
         require!(
             new_kind_tree_root != [0u8; 32],

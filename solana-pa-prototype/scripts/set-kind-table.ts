@@ -14,7 +14,7 @@ async function main() {
   const kindTreeRoot = requireHexBytes(
     "PA_KIND_TREE_ROOT",
     32,
-    "the Merkle root (hex, 32 bytes) of the kind table every settled aggregation instance must carry from now on.\n" +
+    "the Merkle root (hex, 32 bytes) of the kind table a settled transaction must be proven against from now on, besides the empty one.\n" +
       "   Transactions proven against the previous table are rejected once this is installed.",
   );
 

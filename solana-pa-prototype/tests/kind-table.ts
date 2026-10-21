@@ -84,7 +84,7 @@ describe("protocol-adapter (kind tree root) @localnet", () => {
     const { events } = await cpiEventsOf(sig);
     const updated = events.find((e) => e.name === "kindTreeRootUpdatedEvent");
     assert.ok(updated, `a KindTreeRootUpdatedEvent is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`);
-    // pa-evm: `event KindTreeRootUpdated(bytes32 kindTreeRoot)`.
+    // pa-evm: `event KindTreeRootUpdated(bytes32 indexed kindTreeRoot)`.
     assert.deepEqual(
       updated!.data,
       { kindTreeRoot: rotated },
