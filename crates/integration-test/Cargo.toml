@@ -23,10 +23,10 @@ e2e = [
 ]
 
 [dependencies]
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", tag = "bindings/v0.7.0", features = [
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "97ae9f6918cd5348e88a6e41cd14d654ffb6966c", features = [
   "rpc",
 ] }
-anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "88974462f5ab996c350eeca16639457120cf7dd5", default-features = false, features = [
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "c1340615f35fd8afbe1497025210449e4d1d78a1", default-features = false, features = [
   "fixtures",
 ] }
 anoma-risc0-kind-tables = { git = "https://github.com/anoma/risc0-kind-tables", tag = "v1.0.0-rc.6", features = [

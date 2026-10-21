@@ -18,7 +18,7 @@ pub(super) fn load_devnet() -> anyhow::Result<[u8; 32]> {
         .map(KindTableEntry::from)
         .collect();
     let devnet = table::staging::root(SolanaCluster::Devnet)
-        .context("no kind table root is recorded for solana-devnet")?;
+        .context("no kind tree root is recorded for solana-devnet")?;
     init_kind_table_from_entries(entries).context("failed to load the kind table")?;
     let loaded = kind_table_root().context("no kind table loaded")?;
     anyhow::ensure!(

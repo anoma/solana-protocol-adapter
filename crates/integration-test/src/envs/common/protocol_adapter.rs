@@ -8,7 +8,7 @@ use anoma_pa_solana_client::submission::{
 };
 use anoma_pa_solana_client::{
     PAStateAccount, PaError, TXDATA_EXPIRY_SLOTS_DEFAULT, deny_logic_refs_ix, pause_ix,
-    set_kind_table_root_ix, unpause_ix,
+    set_kind_tree_root_ix, unpause_ix,
 };
 use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree;
 use anoma_pa_testkit::environment::{
@@ -266,9 +266,9 @@ impl CoreProtocolAdapter for ProtocolAdapter {
         Ok(Digest::from_bytes(self.state().await?.root))
     }
 
-    async fn set_kind_table_root(&mut self, root: Digest) -> anyhow::Result<()> {
-        let ix = set_kind_table_root_ix(&self.program, &self.payer.pubkey(), root.into());
-        self.as_owner(ix, "set the kind-table root").await
+    async fn set_kind_tree_root(&mut self, root: Digest) -> anyhow::Result<()> {
+        let ix = set_kind_tree_root_ix(&self.program, &self.payer.pubkey(), root.into());
+        self.as_owner(ix, "set the kind tree root").await
     }
 
     async fn pause(&mut self) -> anyhow::Result<()> {
@@ -317,7 +317,7 @@ fn refusal_for(error: PaError) -> Option<Refusal> {
     match error {
         PaError::EnforcedPause => Some(Refusal::Paused),
         PaError::ResourceWithDeniedLogicRef => Some(Refusal::DeniedLogicRef),
-        PaError::UnacceptedKindTableRoot => Some(Refusal::UnacceptedKindTableRoot),
+        PaError::UnacceptedKindTreeRoot => Some(Refusal::UnacceptedKindTreeRoot),
         PaError::NonExistingRoot => Some(Refusal::UnknownRoot),
         PaError::PreExistingNullifier => Some(Refusal::NullifierSpent),
         PaError::ForwarderCallOutputMismatch => Some(Refusal::ExternalCallOutputMismatch),
@@ -346,7 +346,7 @@ fn refusal_for(error: PaError) -> Option<Refusal> {
         | PaError::InvalidDeltaProof
         | PaError::PointNotOnCurve
         | PaError::ExpectedDeltaProof
-        | PaError::ZeroKindTableRootNotAllowed
+        | PaError::ZeroKindTreeRootNotAllowed
         | PaError::Unauthorized
         | PaError::ExpectedPause
         | PaError::RiscZeroVerifierPaused
