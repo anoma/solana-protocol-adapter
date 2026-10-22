@@ -1,28 +1,10 @@
-use crate::external_calls::{
-    build_forwarder_instruction_data, encode_external_call, extract_external_calls,
-    FORWARD_CALL_DISCRIMINATOR,
-};
-use crate::state::{PAStateAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
-use crate::tests::utils::{create_minimal_transaction, create_transaction_with_external_payload};
-use crate::types::{OutputMode, SolanaExternalCall};
-use arm_core::compliance::ComplianceInstance;
+use crate::state::{PAStateAccount, TxDataAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
+use crate::tests::utils::create_minimal_transaction;
 use arm_core::transaction::Transaction;
 use arm_core::Digest;
 
 mod fixture_tests {
     use super::*;
-
-    #[test]
-    fn test_compliance_instance_size() {
-        // 5 Digests (5 × 32 = 160) + 2 × [u32; 8] (2 × 32 = 64) = 224 bytes
-        let instance = ComplianceInstance::default();
-        let serialized = bincode::serialize(&instance).unwrap();
-        assert_eq!(
-            serialized.len(),
-            224,
-            "ComplianceInstance bincode size must be fixed at 224 bytes"
-        );
-    }
 
     #[test]
     fn test_digest_bincode_layout() {
@@ -48,57 +30,28 @@ mod fixture_tests {
     }
 }
 
-mod integration_tests {
-    use super::*;
-
-    #[test]
-    fn test_external_call_transaction_structure() {
-        use block_time_forwarder::RESULT_LT;
-
-        let forwarder_program_id = [0x11; 32];
-        let expected_time: i64 = 0; // Unix epoch - far in past
-        let call = SolanaExternalCall {
-            program_id: forwarder_program_id,
-            instruction_data: expected_time.to_le_bytes().to_vec(),
-            expected_output: vec![RESULT_LT],
-            output_mode: OutputMode::ReturnData,
-            num_accounts: 2,
-        };
-
-        let blob = encode_external_call(&call);
-        let tx = create_transaction_with_external_payload(vec![blob]);
-
-        let extracted = extract_external_calls(&tx).unwrap();
-        assert_eq!(extracted.len(), 1, "Should have 1 external call");
-
-        let (logic_ref, extracted_call) = &extracted[0];
-        assert_eq!(extracted_call.program_id, forwarder_program_id);
-        assert_eq!(
-            extracted_call.instruction_data,
-            expected_time.to_le_bytes().to_vec()
-        );
-        assert_eq!(extracted_call.expected_output, vec![RESULT_LT]);
-
-        let logic_ref_bytes = logic_ref.to_bytes();
-        let ix_data =
-            build_forwarder_instruction_data(&logic_ref_bytes, &extracted_call.instruction_data);
-
-        // discriminator (8) + logic_ref (32) + len (4) + data (8) = 52 bytes
-        assert_eq!(ix_data.len(), 52);
-        assert_eq!(&ix_data[0..8], &FORWARD_CALL_DISCRIMINATOR);
-    }
-}
-
 mod governance_tests {
     use super::*;
 
     #[test]
     fn test_pa_state_account_space_calculation() {
-        assert_eq!(PAStateAccount::INITIAL_SPACE, 204);
-        assert_eq!(PAStateAccount::MAX_SPACE, 1196);
-        assert_eq!(PAStateAccount::space_for_depth(1), 204);
-        assert_eq!(PAStateAccount::space_for_depth(2), 236);
-        assert_eq!(PAStateAccount::space_for_depth(32), 1196);
+        // Schema version 4: the 32-byte owner after the bump, and the two
+        // denylists' 4-byte lengths after the fields.
+        assert_eq!(PAStateAccount::INITIAL_SPACE, 212);
+        assert_eq!(PAStateAccount::MAX_SPACE, 1204);
+        assert_eq!(PAStateAccount::space(1, 0), 212);
+        assert_eq!(PAStateAccount::space(2, 0), 244);
+        assert_eq!(PAStateAccount::space(32, 0), 1204);
+        // Each denylist entry adds its 32 bytes.
+        assert_eq!(PAStateAccount::space(1, 2), 212 + 64);
+    }
+
+    #[test]
+    fn test_tx_data_account_space_calculation() {
+        // discriminator(8) + bump(1) + authority(32) + refund(32) +
+        // written_len(4) + expires_slot(8) + payload length prefix(4)
+        assert_eq!(TxDataAccount::space(0), 89);
+        assert_eq!(TxDataAccount::space(1000), 1089);
     }
 }
 
@@ -113,5 +66,22 @@ mod txdata_expiry_bounds_tests {
 
         assert_eq!(min_expires, u64::MAX);
         assert_eq!(max_expires, u64::MAX);
+    }
+}
+
+mod settle_order_tests {
+    use crate::settle::action_resources;
+    use crate::tests::utils::instance_with_consumed_and_created_payloads;
+
+    /// The settlement visits an action's consumed resources before its
+    /// created ones, as pa-evm's `_processAction` does: nullifiers, forwarder
+    /// calls and payload events follow that order.
+    #[test]
+    fn action_resources_visits_consumed_before_created() {
+        let instance = instance_with_consumed_and_created_payloads(vec![], vec![]);
+        let roles: Vec<bool> = action_resources(&instance.actions[0])
+            .map(|resource| resource.is_consumed)
+            .collect();
+        assert_eq!(roles, vec![true, false]);
     }
 }

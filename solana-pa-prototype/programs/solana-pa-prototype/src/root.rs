@@ -9,12 +9,13 @@
 //! against any historical root, not just the current one.
 
 use crate::error::PAError;
-use crate::merkle::PADDING_LEAF;
 use crate::state::PAStateAccount;
 use anchor_lang::prelude::*;
+use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
 
 /// Seeds prefix for root marker PDA derivation.
+#[constant]
 pub const ROOT_SEED: &[u8] = b"root";
 
 /// Derive the PDA address for a root marker.
@@ -32,7 +33,7 @@ pub fn derive_root_pda(
 ///
 /// # Errors
 /// * `PAError::RootPdaMismatch` - Provided marker doesn't match expected PDA
-/// * `PAError::RootMarkerAlreadyExists` - Marker already recorded (repeated root)
+/// * `PAError::PreExistingRoot` - Marker already recorded (repeated root)
 /// * `PAError::MarkerUnexpectedOwner` - Placeholder at the PDA is owned by
 ///   something other than the system program
 /// * `PAError::MarkerUnexpectedData` - Placeholder at the PDA holds data
@@ -50,12 +51,12 @@ pub fn create_root_marker<'info>(
     // Verify the provided account matches expected PDA
     require_keys_eq!(expected_key, *marker.key, PAError::RootPdaMismatch);
 
-    // A repeated produced root is unreachable in normal operation: every
-    // settlement appends at least one commitment and next_index strictly
-    // increases. Reaching this means a hash collision or a tree-accounting bug,
-    // both of which must surface rather than pass quietly.
+    // A repeated produced root is unreachable in normal operation: a root is
+    // recorded only by a settlement that appends commitments, and next_index
+    // strictly increases. Reaching this means a hash collision or a
+    // tree-accounting bug, both of which must surface rather than pass quietly.
     if marker.owner == program_id {
-        return err!(PAError::RootMarkerAlreadyExists);
+        return err!(PAError::PreExistingRoot);
     }
 
     let signer_seeds: &[&[u8]] = &[
@@ -97,7 +98,7 @@ pub fn is_root_valid(
     }
 
     // Check for root marker PDA in remaining_accounts
-    let (expected_pda, _bump) = derive_root_pda(program_id, pa_state_key, &root.to_bytes());
+    let (expected_pda, _bump) = derive_root_pda(program_id, pa_state_key, &(*root).into());
 
     remaining_accounts
         .iter()

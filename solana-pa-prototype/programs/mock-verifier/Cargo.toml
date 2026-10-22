@@ -12,12 +12,24 @@ name = "mock_verifier"
 default = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
-no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build"]
+anchor-debug = []
+custom-heap = []
+custom-panic = []
 
 [dependencies]
 anchor-lang = { workspace = true }
-# hash_claim and the Proof type — reusing the real verifier's claim-digest
-# computation guarantees the mock can never drift from it.
-groth_16_verifier = { git = "https://github.com/risc0/risc0-solana.git", tag = "v3.0.0", features = ["no-entrypoint"] }
+# RISC Zero's claim hashing (tagged structs, SystemState, ExitCode). The
+# ReceiptClaim type itself lives in risc0-zkvm, which always links the
+# Groth16 prover/verifier, whose functions overflow the SBF stack frame; the
+# claim digest is composed here from these parts and checked against
+# risc0-zkvm's ReceiptClaim in the host tests.
+risc0-binfmt = { version = "3.0.5", default-features = false }
+risc0-zkp = { version = "3.0.5", default-features = false }
+
+[dev-dependencies]
+risc0-zkvm = { version = "3.0.6", default-features = false }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }
