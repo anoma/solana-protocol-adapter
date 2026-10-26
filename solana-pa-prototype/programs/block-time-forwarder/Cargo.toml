@@ -3,6 +3,7 @@ name = "block-time-forwarder"
 version = "0.1.0"
 description = "Example forwarder program for time comparison"
 edition = "2021"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "lib"]

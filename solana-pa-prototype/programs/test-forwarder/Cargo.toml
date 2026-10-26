@@ -3,6 +3,7 @@ name = "test-forwarder"
 version = "0.1.0"
 description = "Test forwarder program for integration test error paths"
 edition = "2021"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "lib"]
