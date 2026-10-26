@@ -3,6 +3,7 @@ name = "mock-verifier"
 version = "0.1.0"
 description = "LOCALNET-ONLY mock proof verifier for integration tests"
 edition = "2021"
+publish = false
 
 [lib]
 crate-type = ["cdylib", "lib"]
