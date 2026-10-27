@@ -2,7 +2,7 @@
  * What the loader records about a deployed program: its upgrade authority,
  * and the identity of its code, the executable hash (sha256 of the code with
  * trailing zero bytes removed, as `solana-verify get-executable-hash` and
- * `get-program-hash` compute it and as the programs' `UpgradedEvent`
+ * `get-program-hash` compute it and as the programs' `Upgraded` event
  * announces it).
  */
 import { createHash } from "crypto";

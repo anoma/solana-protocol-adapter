@@ -82,8 +82,8 @@ describe("protocol-adapter (kind tree root) @localnet", () => {
     const sig = await setKindTreeRoot(program, provider.wallet.publicKey, rotated).rpc();
     assert.deepEqual(await stored(), rotated, "the new root is stored");
     const { events } = await cpiEventsOf(sig);
-    const updated = events.find((e) => e.name === "kindTreeRootUpdatedEvent");
-    assert.ok(updated, `a KindTreeRootUpdatedEvent is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`);
+    const updated = events.find((e) => e.name === "kindTreeRootUpdated");
+    assert.ok(updated, `a KindTreeRootUpdated event is emitted; got ${events.map((e) => e.name).join(", ") || "none"}`);
     // pa-evm: `event KindTreeRootUpdated(bytes32 indexed kindTreeRoot)`.
     assert.deepEqual(
       updated!.data,

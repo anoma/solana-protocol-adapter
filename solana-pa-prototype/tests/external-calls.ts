@@ -71,7 +71,7 @@ describe("protocol-adapter (External call outputs and error paths)", () => {
       ],
       { createdCommitments: createdCommitmentsOf(fixture) },
     );
-    const [call] = (await cpiEventsOf(sig)).events.filter((e) => e.name === "forwarderCallExecutedEvent");
+    const [call] = (await cpiEventsOf(sig)).events.filter((e) => e.name === "forwarderCallExecuted");
     assert.equal(call.data.untrustedForwarder.toBase58(), testForwarderId.toBase58());
     assert.lengthOf(call.data.output, 0, "the event carries the empty output");
   });

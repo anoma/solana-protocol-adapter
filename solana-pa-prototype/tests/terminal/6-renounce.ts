@@ -23,7 +23,7 @@ describe("renounced adapter ownership", () => {
     const { events } = await cpiEventsOf(sig);
     assert.deepEqual(
       events.map((e) => [e.name, e.data.previousOwner.toBase58(), e.data.newOwner.toBase58()]),
-      [["ownershipTransferredEvent", wallet.toBase58(), PublicKey.default.toBase58()]],
+      [["ownershipTransferred", wallet.toBase58(), PublicKey.default.toBase58()]],
     );
     assert.equal((await program.account.paStateAccount.fetch(paState)).owner.toBase58(), PublicKey.default.toBase58());
 

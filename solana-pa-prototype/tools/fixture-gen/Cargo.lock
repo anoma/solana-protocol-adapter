@@ -4107,6 +4107,7 @@ dependencies = [
  "borsh",
  "hex-literal 1.1.0",
  "serde",
+ "sha2-const-stable",
  "solana-sha256-hasher",
 ]
 

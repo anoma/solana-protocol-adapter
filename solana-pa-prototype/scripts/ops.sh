@@ -69,7 +69,8 @@ Commands:
   clippy                 Lint every program, and each one with dev features
                          again with them enabled
   unit-test              The Rust unit tests (cargo test --workspace) at the
-                         local addresses
+                         local addresses, then the adapter's event signature
+                         test, which needs its idl-build feature
   verify-build [--cluster <c>]
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
@@ -1005,6 +1006,7 @@ case "$COMMAND" in
   unit-test)
     require_cmd cargo
     cargo test --workspace
+    cargo test -p protocol-adapter --features idl-build --test event_signature
     ;;
   verify-build)
     if [[ -n "$CLUSTER" ]]; then

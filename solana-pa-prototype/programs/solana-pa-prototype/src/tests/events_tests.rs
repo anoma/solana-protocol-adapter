@@ -1,5 +1,5 @@
 use crate::events::event_instruction_data;
-use crate::TransactionExecutedEvent;
+use crate::TransactionExecuted;
 use anchor_lang::Discriminator;
 
 /// The self-CPI instruction data is Anchor's 8-byte event tag, then the event's
@@ -7,7 +7,7 @@ use anchor_lang::Discriminator;
 /// `emit_cpi!` builds, so any consumer written against Anchor's layout decodes it.
 #[test]
 fn event_instruction_data_is_tag_then_discriminator_then_borsh() {
-    let event = TransactionExecutedEvent {
+    let event = TransactionExecuted {
         transaction_id: [7u8; 32],
     };
     let data = event_instruction_data(&event).unwrap();
@@ -17,7 +17,7 @@ fn event_instruction_data_is_tag_then_discriminator_then_borsh() {
         &data[..8],
         &[0xe4, 0x45, 0xa5, 0x2e, 0x51, 0xcb, 0x9a, 0x1d]
     );
-    assert_eq!(&data[8..16], TransactionExecutedEvent::DISCRIMINATOR);
+    assert_eq!(&data[8..16], TransactionExecuted::DISCRIMINATOR);
     // Borsh body: the 32 transaction-id bytes.
     assert_eq!(&data[16..48], &[7u8; 32]);
     assert_eq!(data.len(), 48);
@@ -28,7 +28,7 @@ fn event_instruction_data_is_tag_then_discriminator_then_borsh() {
 #[test]
 fn event_instruction_data_is_tag_then_anchor_event_data_for_a_blob_event() {
     use anchor_lang::Event;
-    let event = crate::ResourcePayloadEvent {
+    let event = crate::ResourcePayload {
         tag: [9u8; 32],
         index: crate::U256::from(2usize),
         blob: (0..=200u8).collect(),

@@ -72,7 +72,7 @@ describe("protocol-adapter (logic-ref denylists)", () => {
       { consumed: [...before.consumed, denied], created: [...before.created, denied, deprecated] },
       "the denied logic ref is on both denylists, the deprecated one on the one for created resources only",
     );
-    const events = (await cpiEventsOf(sig)).events.filter((e) => e.name === "logicRefDeniedEvent");
+    const events = (await cpiEventsOf(sig)).events.filter((e) => e.name === "logicRefDenied");
     assert.deepEqual(
       events.map((e) => ({ logicRef: Array.from(e.data.logicRef), consumed: e.data.consumed })),
       entries,
@@ -110,7 +110,7 @@ describe("protocol-adapter (logic-ref denylists)", () => {
 
     before(async () => {
       const sig = await settleUnsettledFixture("batch_groth16_denylist.json");
-      const [action] = (await cpiEventsOf(sig)).events.filter((e) => e.name === "actionExecutedEvent");
+      const [action] = (await cpiEventsOf(sig)).events.filter((e) => e.name === "actionExecuted");
       passthrough = Array.from(action.data.consumedLogicRefs[0]);
       await settleFixture("batch_groth16_consume_only.json");
     });

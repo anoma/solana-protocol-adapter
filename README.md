@@ -192,7 +192,7 @@ cd solana-pa-prototype
 ./scripts/dev.sh anchor-test tests/settle.ts
 ```
 
-The test **"accepts a valid Groth16 batch aggregation tx and creates root marker"** settles `batch_groth16.json`, whose one created resource carries a block-time-forwarder call. The forwarder logs nothing itself; the adapter emits `ForwarderCallExecutedEvent { untrusted_forwarder, input, output }` for the call, with `output = [0]`, and fails the settlement with `ForwarderCallOutputMismatch` if the returned byte differs from the proof's (the test "reverts on unexpected forwarder call output" settles `batch_groth16_mismatch.json` to show it).
+The test **"accepts a valid Groth16 batch aggregation tx and creates root marker"** settles `batch_groth16.json`, whose one created resource carries a block-time-forwarder call. The forwarder logs nothing itself; the adapter emits `ForwarderCallExecuted { untrusted_forwarder, input, output }` for the call, with `output = [0]`, and fails the settlement with `ForwarderCallOutputMismatch` if the returned byte differs from the proof's (the test "reverts on unexpected forwarder call output" settles `batch_groth16_mismatch.json` to show it).
 
 ### Step 2: See Verification Fail
 
@@ -203,10 +203,10 @@ The test **"rejects a tampered tx (proof binding)"** settles the fixture with on
 A settlement (`settle`, or `settle_from_txdata` after a TxData upload) runs in pa-evm's order:
 
 1. **Checks** — the transaction carries an aggregation and a delta proof, the compliance key matches, the kind table is the stored or the empty one, no resource's logic ref is on the denylist for its side, no nullifier repeats, and every consumed root is a known root.
-2. **Per action**, first its consumed resources (create each nullifier's marker PDA, which refuses a spent nullifier; run the resource's forwarder calls; emit its payload events), then its created resources (append each commitment to the tree; run its calls; emit its events), then `ActionExecutedEvent`.
+2. **Per action**, first its consumed resources (create each nullifier's marker PDA, which refuses a spent nullifier; run the resource's forwarder calls; emit its payload events), then its created resources (append each commitment to the tree; run its calls; emit its events), then `ActionExecuted`.
 3. **Proof verification** — a CPI to the RISC0 verifier router, which routes the seal to the verifier registered for its selector; then the delta proof.
-4. **Root** — if the transaction created commitments, the new root's marker PDA is recorded and `CommitmentTreeRootAddedEvent` emitted.
-5. `TransactionExecutedEvent`.
+4. **Root** — if the transaction created commitments, the new root's marker PDA is recorded and `CommitmentTreeRootAdded` emitted.
+5. `TransactionExecuted`.
 
 ### How the Forwarder Works
 

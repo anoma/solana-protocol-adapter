@@ -8,9 +8,9 @@ Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enter
 
 ## The owner
 
-The adapter has one owner, as pa-evm's (OpenZeppelin's OwnableUpgradeable): set by `initialize`, stored in the state account (`PAStateAccount.owner`), and the signer of every owner-only instruction (`upgrade`, `pause`, `unpause`, `update_expiry_config`, `set_kind_tree_root`, `deny_logic_refs`, `transfer_ownership`, `renounce_ownership`; any other signer gets `OwnableUnauthorizedAccount`). `initialize` hands the program's upgrade authority from the deployer to the program's own PDA (seed `upgrade_authority`), so the loader accepts an upgrade only through the program's `upgrade`, for the owner, as a UUPS implementation authorizes its own upgrades. `initialize` announces the owner with `OwnershipTransferredEvent` from the zero key, as `OwnershipTransferred` is.
+The adapter has one owner, as pa-evm's (OpenZeppelin's OwnableUpgradeable): set by `initialize`, stored in the state account (`PAStateAccount.owner`), and the signer of every owner-only instruction (`upgrade`, `pause`, `unpause`, `update_expiry_config`, `set_kind_tree_root`, `deny_logic_refs`, `transfer_ownership`, `renounce_ownership`; any other signer gets `OwnableUnauthorizedAccount`). `initialize` hands the program's upgrade authority from the deployer to the program's own PDA (seed `upgrade_authority`), so the loader accepts an upgrade only through the program's `upgrade`, for the owner, as a UUPS implementation authorizes its own upgrades. `initialize` announces the owner with `OwnershipTransferred` from the zero key, as OpenZeppelin's Ownable does.
 
-`transfer_ownership(new_owner)` moves the ownership at once (the zero key is refused, `OwnableInvalidOwner`); `renounce_ownership` gives it up for good: the owner becomes the zero key, and no owner-only instruction, `upgrade` included, can run again. Both emit `OwnershipTransferredEvent`. They are made by hand: no repository command or script changes an authority or closes protocol accounts on a live cluster, and the only builders of those instructions in the repository (`tests/utils/localOnly.ts`) refuse any endpoint but a local validator. The owner constructs and signs the instruction from the IDL.
+`transfer_ownership(new_owner)` moves the ownership at once (the zero key is refused, `OwnableInvalidOwner`); `renounce_ownership` gives it up for good: the owner becomes the zero key, and no owner-only instruction, `upgrade` included, can run again. Both emit `OwnershipTransferred`. They are made by hand: no repository command or script changes an authority or closes protocol accounts on a live cluster, and the only builders of those instructions in the repository (`tests/utils/localOnly.ts`) refuse any endpoint but a local validator. The owner constructs and signs the instruction from the IDL.
 
 
 The owner can replace the program binary, which means it could deploy code that undoes a stop: a stop is only as permanent as the ownership's custody. Current key custody per cluster lives in the deployment record (`docs/DEVNET_DEPLOYMENT.md` for devnet), which is updated after every operation.
@@ -66,7 +66,7 @@ The first write, which creates the account, is signed by the program's upgrade a
 
 After a first deployment, update `docs/DEVNET_DEPLOYMENT.md` (or the equivalent record for the cluster) with the program IDs, wallet, router, selector, and date.
 
-To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster <c>`, with the owner's wallet. It writes the new binary to a loader buffer the owner holds and calls the program's `upgrade` with it, which hands the buffer to the program's PDA and upgrades through the loader, announcing `UpgradedEvent` with the new code's executable hash (sha256 of the code without trailing zero bytes, what `solana-verify get-program-hash` reports); the command checks that the program then runs that code. While the wallet still holds the upgrade authority (before `initialize`), it upgrades through the loader directly. Upgrading replaces the binary in place; it does not touch PAState, markers, or the initialization parameters. The new code runs from the next slot.
+To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster <c>`, with the owner's wallet. It writes the new binary to a loader buffer the owner holds and calls the program's `upgrade` with it, which hands the buffer to the program's PDA and upgrades through the loader, announcing `Upgraded` with the new code's executable hash (sha256 of the code without trailing zero bytes, what `solana-verify get-program-hash` reports); the command checks that the program then runs that code. While the wallet still holds the upgrade authority (before `initialize`), it upgrades through the loader directly. Upgrading replaces the binary in place; it does not touch PAState, markers, or the initialization parameters. The new code runs from the next slot.
 
 ### Upgrades that change the state layout
 
@@ -116,17 +116,17 @@ PA_DENIED_LOGIC_REFS=<hex, 32 bytes>:created ./scripts/dev.sh deny-logic-refs --
 PA_DENIED_LOGIC_REFS=<hex, 32 bytes>:consumed,<hex, 32 bytes>:created ./scripts/dev.sh deny-logic-refs --cluster <c>   # deny
 ```
 
-Each comma-separated entry names a logic ref and the denylist it goes on, as pa-evm's `(logicRef, consumed)` pairs. The zero ref and a ref already on its denylist are rejected, and then no entry of that call is added; an entry cannot be removed. The denylists are part of the state account (`denied_consumed_logic_refs`, `denied_created_logic_refs`), which grows by 32 bytes per entry at the owner's expense, and each entry emits `LogicRefDeniedEvent`.
+Each comma-separated entry names a logic ref and the denylist it goes on, as pa-evm's `(logicRef, consumed)` pairs. The zero ref and a ref already on its denylist are rejected, and then no entry of that call is added; an entry cannot be removed. The denylists are part of the state account (`denied_consumed_logic_refs`, `denied_created_logic_refs`), which grows by 32 bytes per entry at the owner's expense, and each entry emits `LogicRefDenied`.
 
 ## The kind table
 
-The PA stores the Merkle root of a kind table, and settles a transaction proven against that table or against the empty one, as pa-evm's `_isKindTreeRootAccepted`: the empty table merges no kinds, so what balances under it balances under any table. A transaction proven against any other table is refused (`UnacceptedKindTreeRoot`) before its proofs are verified. `initialize` installs the empty table's root (`cc1d2f83…`, the tree's padding leaf; fixture-gen's committed `kind_table.json` is that table) and emits `KindTreeRootUpdatedEvent` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTreeRoot`:
+The PA stores the Merkle root of a kind table, and settles a transaction proven against that table or against the empty one, as pa-evm's `_isKindTreeRootAccepted`: the empty table merges no kinds, so what balances under it balances under any table. A transaction proven against any other table is refused (`UnacceptedKindTreeRoot`) before its proofs are verified. `initialize` installs the empty table's root (`cc1d2f83…`, the tree's padding leaf; fixture-gen's committed `kind_table.json` is that table) and emits `KindTreeRootUpdated` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTreeRoot`:
 
 ```sh
 PA_KIND_TREE_ROOT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # owner wallet
 ```
 
-The instruction rejects a zero root and emits `KindTreeRootUpdatedEvent` with the new value, as pa-evm's `KindTreeRootUpdated` does. From that slot on, transactions proven against the previous table are refused (`UnacceptedKindTreeRoot`), unless it is the empty one, so provers must load the new table before it is installed. The generated Solana tables and their roots come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/roots.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
+The instruction rejects a zero root and emits `KindTreeRootUpdated` with the new value, as pa-evm's `setKindTreeRoot` does. From that slot on, transactions proven against the previous table are refused (`UnacceptedKindTreeRoot`), unless it is the empty one, so provers must load the new table before it is installed. The generated Solana tables and their roots come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/roots.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
 
 ## Pausing
 
@@ -137,7 +137,7 @@ A pause halts settlement, as pa-evm's owner does with `pause()`: for a suspected
 ./scripts/dev.sh unpause --cluster devnet   # owner wallet
 ```
 
-Both are owner-only. `pause` is refused while already paused (`EnforcedPause`) and `unpause` while not paused (`ExpectedPause`), as OpenZeppelin's Pausable refuses them; each emits `PausedEvent` / `UnpausedEvent` with the signer, as `Paused(account)` / `Unpaused(account)` do. The commands are idempotent: they do nothing when the adapter is already in the requested state.
+Both are owner-only. `pause` is refused while already paused (`EnforcedPause`) and `unpause` while not paused (`ExpectedPause`), as OpenZeppelin's Pausable refuses them; each emits `Paused` / `Unpaused` with the signer, as `Paused(account)` / `Unpaused(account)` do. The commands are idempotent: they do nothing when the adapter is already in the requested state.
 
 What pauses: `settle` and `settle_from_txdata` reject every transaction with `EnforcedPause`. Those are the only two instructions gated on the flag, as `execute` is pa-evm's only `whenNotPaused` function.
 

@@ -1595,7 +1595,9 @@ dependencies = [
  "hex-literal 1.1.0",
  "proptest",
  "serde",
+ "serde_json",
  "sha2 0.11.0",
+ "sha2-const-stable",
  "solana-bn254",
  "solana-sha256-hasher",
 ]

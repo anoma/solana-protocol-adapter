@@ -252,7 +252,7 @@ export async function upgradeThroughProgram(
 
   const { tx, events } = await cpiEventsOf(await upgrade(buffer, spill).rpc(), target);
   assert.deepEqual(
-    events.map((e) => [e.name, Buffer.from(e.data.executableHash).toString("hex")]),
+    events.map((e) => [e.name, Buffer.from(e.data.implementationHash).toString("hex")]),
     [[event, expected.toString("hex")]],
     "upgrade announces the buffer's executable hash",
   );
