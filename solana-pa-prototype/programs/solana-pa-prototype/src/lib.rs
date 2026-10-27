@@ -1337,7 +1337,7 @@ pub struct DevSetSchemaVersion<'info> {
 // followed by its field types.
 
 /// Mirrors pa-evm: `event ResourcePayload(bytes32 indexed tag, uint256 index,
-/// bytes blob);`. Signature: `ResourcePayload([u8;32],u256,bytes)`.
+/// bytes blob);`.
 #[event(discriminator = &event_discriminator("ResourcePayload([u8;32],u256,bytes)"))]
 #[derive(Debug)]
 pub struct ResourcePayload {
@@ -1347,7 +1347,7 @@ pub struct ResourcePayload {
 }
 
 /// Mirrors pa-evm: `event DiscoveryPayload(bytes32 indexed tag, uint256
-/// index, bytes blob);`. Signature: `DiscoveryPayload([u8;32],u256,bytes)`.
+/// index, bytes blob);`.
 #[event(discriminator = &event_discriminator("DiscoveryPayload([u8;32],u256,bytes)"))]
 #[derive(Debug)]
 pub struct DiscoveryPayload {
@@ -1357,7 +1357,7 @@ pub struct DiscoveryPayload {
 }
 
 /// Mirrors pa-evm: `event ExternalPayload(bytes32 indexed tag, uint256 index,
-/// bytes blob);`. Signature: `ExternalPayload([u8;32],u256,bytes)`.
+/// bytes blob);`.
 #[event(discriminator = &event_discriminator("ExternalPayload([u8;32],u256,bytes)"))]
 #[derive(Debug)]
 pub struct ExternalPayload {
@@ -1367,7 +1367,7 @@ pub struct ExternalPayload {
 }
 
 /// Mirrors pa-evm: `event ApplicationPayload(bytes32 indexed tag, uint256
-/// index, bytes blob);`. Signature: `ApplicationPayload([u8;32],u256,bytes)`.
+/// index, bytes blob);`.
 #[event(discriminator = &event_discriminator("ApplicationPayload([u8;32],u256,bytes)"))]
 #[derive(Debug)]
 pub struct ApplicationPayload {
@@ -1377,7 +1377,6 @@ pub struct ApplicationPayload {
 }
 
 /// Mirrors pa-evm: `event KindTreeRootUpdated(bytes32 indexed kindTreeRoot);`.
-/// Signature: `KindTreeRootUpdated([u8;32])`.
 #[event(discriminator = &event_discriminator("KindTreeRootUpdated([u8;32])"))]
 #[derive(Debug)]
 pub struct KindTreeRootUpdated {
@@ -1385,7 +1384,6 @@ pub struct KindTreeRootUpdated {
 }
 
 /// Mirrors OpenZeppelin Pausable: `event Paused(address account);`.
-/// Signature: `Paused(pubkey)`.
 #[event(discriminator = &event_discriminator("Paused(pubkey)"))]
 #[derive(Debug)]
 pub struct Paused {
@@ -1393,7 +1391,6 @@ pub struct Paused {
 }
 
 /// Mirrors OpenZeppelin Pausable: `event Unpaused(address account);`.
-/// Signature: `Unpaused(pubkey)`.
 #[event(discriminator = &event_discriminator("Unpaused(pubkey)"))]
 #[derive(Debug)]
 pub struct Unpaused {
@@ -1403,7 +1400,6 @@ pub struct Unpaused {
 /// Mirrors OpenZeppelin Ownable: `event OwnershipTransferred(address indexed
 /// previousOwner, address indexed newOwner);`. The zero key stands for no
 /// owner: the previous owner when `initialize` sets the first one, the new owner when `renounce_ownership` gives it up.
-/// Signature: `OwnershipTransferred(pubkey,pubkey)`.
 #[event(discriminator = &event_discriminator("OwnershipTransferred(pubkey,pubkey)"))]
 #[derive(Debug)]
 pub struct OwnershipTransferred {
@@ -1413,7 +1409,6 @@ pub struct OwnershipTransferred {
 
 /// Mirrors OpenZeppelin Initializable: `event Initialized(uint64 version);`.
 /// `initialize` announces the state's schema version.
-/// Signature: `Initialized(u64)`.
 #[event(discriminator = &event_discriminator("Initialized(u64)"))]
 #[derive(Debug)]
 pub struct Initialized {
@@ -1424,7 +1419,7 @@ pub struct Initialized {
 /// Solana program keeps its address across upgrades, so the new code is
 /// named by its executable hash: sha256 of the code without trailing zero
 /// bytes, which `solana-verify get-program-hash` reports for the deployed
-/// program. Signature: `Upgraded([u8;32])`.
+/// program.
 #[event(discriminator = &event_discriminator("Upgraded([u8;32])"))]
 #[derive(Debug)]
 pub struct Upgraded {
@@ -1433,7 +1428,7 @@ pub struct Upgraded {
 
 /// Mirrors pa-evm: `event CommitmentTreeRootAdded(bytes32 root);`: the
 /// empty tree's root at initialization, then the root each settlement that
-/// appends commitments produces. Signature: `CommitmentTreeRootAdded([u8;32])`.
+/// appends commitments produces.
 #[event(discriminator = &event_discriminator("CommitmentTreeRootAdded([u8;32])"))]
 #[derive(Debug)]
 pub struct CommitmentTreeRootAdded {
@@ -1450,7 +1445,7 @@ pub struct DeniedLogicRef {
 }
 
 /// Mirrors pa-evm: `event LogicRefDenied(bytes32 indexed logicRef, bool
-/// consumed);`. Signature: `LogicRefDenied([u8;32],bool)`.
+/// consumed);`.
 #[event(discriminator = &event_discriminator("LogicRefDenied([u8;32],bool)"))]
 #[derive(Debug)]
 pub struct LogicRefDenied {
@@ -1461,8 +1456,7 @@ pub struct LogicRefDenied {
 /// Mirrors pa-evm: `event ActionExecuted(bytes32 actionTreeRoot,
 /// bytes32[] nullifiers, bytes32[] consumedLogicRefs, bytes32[] commitments,
 /// bytes32[] createdLogicRefs);`. The commitments are appended to the tree in
-/// the order listed, action after action. Signature:
-/// `ActionExecuted([u8;32],vec<[u8;32]>,vec<[u8;32]>,vec<[u8;32]>,vec<[u8;32]>)`.
+/// the order listed, action after action.
 #[event(discriminator = &event_discriminator(
     "ActionExecuted([u8;32],vec<[u8;32]>,vec<[u8;32]>,vec<[u8;32]>,vec<[u8;32]>)"
 ))]
@@ -1478,7 +1472,7 @@ pub struct ActionExecuted {
 /// Mirrors pa-evm: `event TransactionExecuted(bytes32 indexed transactionId);`,
 /// the Keccak-256 hash of the concatenated action tree roots: the message the
 /// delta proof signs, unique per transaction and known to the sender before
-/// submission. Signature: `TransactionExecuted([u8;32])`.
+/// submission.
 #[event(discriminator = &event_discriminator("TransactionExecuted([u8;32])"))]
 #[derive(Debug)]
 pub struct TransactionExecuted {
@@ -1486,8 +1480,7 @@ pub struct TransactionExecuted {
 }
 
 /// Mirrors pa-evm: `event ForwarderCallExecuted(address indexed
-/// untrustedForwarder, bytes input, bytes output);`. Signature:
-/// `ForwarderCallExecuted(pubkey,bytes,bytes)`.
+/// untrustedForwarder, bytes input, bytes output);`.
 #[event(discriminator = &event_discriminator("ForwarderCallExecuted(pubkey,bytes,bytes)"))]
 #[derive(Debug)]
 pub struct ForwarderCallExecuted {

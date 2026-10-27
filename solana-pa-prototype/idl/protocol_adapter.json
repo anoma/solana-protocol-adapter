@@ -1892,8 +1892,7 @@
         "Mirrors pa-evm: `event ActionExecuted(bytes32 actionTreeRoot,",
         "bytes32[] nullifiers, bytes32[] consumedLogicRefs, bytes32[] commitments,",
         "bytes32[] createdLogicRefs);`. The commitments are appended to the tree in",
-        "the order listed, action after action. Signature:",
-        "`ActionExecuted([u8;32],vec<[u8;32]>,vec<[u8;32]>,vec<[u8;32]>,vec<[u8;32]>)`."
+        "the order listed, action after action."
       ],
       "type": {
         "kind": "struct",
@@ -1958,7 +1957,7 @@
       "name": "ApplicationPayload",
       "docs": [
         "Mirrors pa-evm: `event ApplicationPayload(bytes32 indexed tag, uint256",
-        "index, bytes blob);`. Signature: `ApplicationPayload([u8;32],u256,bytes)`."
+        "index, bytes blob);`."
       ],
       "type": {
         "kind": "struct",
@@ -1992,7 +1991,7 @@
       "docs": [
         "Mirrors pa-evm: `event CommitmentTreeRootAdded(bytes32 root);`: the",
         "empty tree's root at initialization, then the root each settlement that",
-        "appends commitments produces. Signature: `CommitmentTreeRootAdded([u8;32])`."
+        "appends commitments produces."
       ],
       "type": {
         "kind": "struct",
@@ -2039,7 +2038,7 @@
       "name": "DiscoveryPayload",
       "docs": [
         "Mirrors pa-evm: `event DiscoveryPayload(bytes32 indexed tag, uint256",
-        "index, bytes blob);`. Signature: `DiscoveryPayload([u8;32],u256,bytes)`."
+        "index, bytes blob);`."
       ],
       "type": {
         "kind": "struct",
@@ -2072,7 +2071,7 @@
       "name": "ExternalPayload",
       "docs": [
         "Mirrors pa-evm: `event ExternalPayload(bytes32 indexed tag, uint256 index,",
-        "bytes blob);`. Signature: `ExternalPayload([u8;32],u256,bytes)`."
+        "bytes blob);`."
       ],
       "type": {
         "kind": "struct",
@@ -2105,8 +2104,7 @@
       "name": "ForwarderCallExecuted",
       "docs": [
         "Mirrors pa-evm: `event ForwarderCallExecuted(address indexed",
-        "untrustedForwarder, bytes input, bytes output);`. Signature:",
-        "`ForwarderCallExecuted(pubkey,bytes,bytes)`."
+        "untrustedForwarder, bytes input, bytes output);`."
       ],
       "type": {
         "kind": "struct",
@@ -2130,8 +2128,7 @@
       "name": "Initialized",
       "docs": [
         "Mirrors OpenZeppelin Initializable: `event Initialized(uint64 version);`.",
-        "`initialize` announces the state's schema version.",
-        "Signature: `Initialized(u64)`."
+        "`initialize` announces the state's schema version."
       ],
       "type": {
         "kind": "struct",
@@ -2146,8 +2143,7 @@
     {
       "name": "KindTreeRootUpdated",
       "docs": [
-        "Mirrors pa-evm: `event KindTreeRootUpdated(bytes32 indexed kindTreeRoot);`.",
-        "Signature: `KindTreeRootUpdated([u8;32])`."
+        "Mirrors pa-evm: `event KindTreeRootUpdated(bytes32 indexed kindTreeRoot);`."
       ],
       "type": {
         "kind": "struct",
@@ -2168,7 +2164,7 @@
       "name": "LogicRefDenied",
       "docs": [
         "Mirrors pa-evm: `event LogicRefDenied(bytes32 indexed logicRef, bool",
-        "consumed);`. Signature: `LogicRefDenied([u8;32],bool)`."
+        "consumed);`."
       ],
       "type": {
         "kind": "struct",
@@ -2194,8 +2190,7 @@
       "docs": [
         "Mirrors OpenZeppelin Ownable: `event OwnershipTransferred(address indexed",
         "previousOwner, address indexed newOwner);`. The zero key stands for no",
-        "owner: the previous owner when `initialize` sets the first one, the new owner when `renounce_ownership` gives it up.",
-        "Signature: `OwnershipTransferred(pubkey,pubkey)`."
+        "owner: the previous owner when `initialize` sets the first one, the new owner when `renounce_ownership` gives it up."
       ],
       "type": {
         "kind": "struct",
@@ -2379,8 +2374,7 @@
     {
       "name": "Paused",
       "docs": [
-        "Mirrors OpenZeppelin Pausable: `event Paused(address account);`.",
-        "Signature: `Paused(pubkey)`."
+        "Mirrors OpenZeppelin Pausable: `event Paused(address account);`."
       ],
       "type": {
         "kind": "struct",
@@ -2396,7 +2390,7 @@
       "name": "ResourcePayload",
       "docs": [
         "Mirrors pa-evm: `event ResourcePayload(bytes32 indexed tag, uint256 index,",
-        "bytes blob);`. Signature: `ResourcePayload([u8;32],u256,bytes)`."
+        "bytes blob);`."
       ],
       "type": {
         "kind": "struct",
@@ -2431,7 +2425,7 @@
         "Mirrors pa-evm: `event TransactionExecuted(bytes32 indexed transactionId);`,",
         "the Keccak-256 hash of the concatenated action tree roots: the message the",
         "delta proof signs, unique per transaction and known to the sender before",
-        "submission. Signature: `TransactionExecuted([u8;32])`."
+        "submission."
       ],
       "type": {
         "kind": "struct",
@@ -2502,8 +2496,7 @@
     {
       "name": "Unpaused",
       "docs": [
-        "Mirrors OpenZeppelin Pausable: `event Unpaused(address account);`.",
-        "Signature: `Unpaused(pubkey)`."
+        "Mirrors OpenZeppelin Pausable: `event Unpaused(address account);`."
       ],
       "type": {
         "kind": "struct",
@@ -2522,7 +2515,7 @@
         "Solana program keeps its address across upgrades, so the new code is",
         "named by its executable hash: sha256 of the code without trailing zero",
         "bytes, which `solana-verify get-program-hash` reports for the deployed",
-        "program. Signature: `Upgraded([u8;32])`."
+        "program."
       ],
       "type": {
         "kind": "struct",
