@@ -629,7 +629,7 @@
       ],
       "args": [
         {
-          "name": "_upload_id",
+          "name": "upload_id",
           "type": "u64"
         }
       ]
@@ -908,7 +908,7 @@
           "type": "u64"
         },
         {
-          "name": "_authority",
+          "name": "authority",
           "type": "pubkey"
         }
       ]
@@ -1145,7 +1145,7 @@
       ],
       "args": [
         {
-          "name": "_upload_id",
+          "name": "upload_id",
           "type": "u64"
         },
         {

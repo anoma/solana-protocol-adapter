@@ -68,5 +68,9 @@ serde_json = "1.0"
 name = "event_signature"
 required-features = ["idl-build"]
 
+[[test]]
+name = "idl_seeds"
+required-features = ["idl-build"]
+
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(target_os, values("solana"))'] }

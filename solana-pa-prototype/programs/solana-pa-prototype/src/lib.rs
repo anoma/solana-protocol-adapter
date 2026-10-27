@@ -243,7 +243,7 @@ pub mod protocol_adapter {
     /// Write a chunk to TxData.
     pub fn txdata_write(
         ctx: Context<TxDataWrite>,
-        _upload_id: u64,
+        upload_id: u64,
         offset: u32,
         data: Vec<u8>,
     ) -> Result<()> {
@@ -254,7 +254,12 @@ pub mod protocol_adapter {
 
         txdata.write_chunk(offset, &data)?;
 
-        msg!("TxData write: {} bytes at offset {}", data.len(), offset);
+        msg!(
+            "TxData write: upload_id={}, {} bytes at offset {}",
+            upload_id,
+            data.len(),
+            offset
+        );
         Ok(())
     }
 
@@ -297,7 +302,7 @@ pub mod protocol_adapter {
     pub fn txdata_close_expired(
         ctx: Context<TxDataCloseExpired>,
         upload_id: u64,
-        _authority: Pubkey,
+        authority: Pubkey,
     ) -> Result<()> {
         let clock = Clock::get()?;
         let txdata = &ctx.accounts.tx_data;
@@ -305,8 +310,9 @@ pub mod protocol_adapter {
         require!(clock.slot > txdata.expires_slot, PAError::TxDataNotExpired);
 
         msg!(
-            "Expired TxData closed: upload_id={}, expires_slot={}, current_slot={}",
+            "Expired TxData closed: upload_id={}, authority={}, expires_slot={}, current_slot={}",
             upload_id,
+            authority,
             txdata.expires_slot,
             clock.slot
         );
@@ -352,7 +358,7 @@ pub mod protocol_adapter {
     /// Execute settlement from a TxData account.
     pub fn settle_from_txdata<'info>(
         ctx: Context<'info, SettleFromTxData<'info>>,
-        _upload_id: u64,
+        upload_id: u64,
     ) -> Result<()> {
         require!(!ctx.accounts.pa_state.paused, PAError::EnforcedPause);
 
@@ -391,7 +397,7 @@ pub mod protocol_adapter {
             false,
         )?;
 
-        msg!("Settlement from TxData complete");
+        msg!("Settlement from TxData complete: upload_id={}", upload_id);
         Ok(())
     }
 
