@@ -211,6 +211,13 @@ jobs:
             solana-pa-prototype/target/idl
             solana-pa-prototype/target/types
 
+      # After the upload: the check regenerates target/idl and target/types as
+      # the production IDLs, where the artifacts above hold the development
+      # ones the tests run against.
+      - name: Check the committed IDL
+        working-directory: ./solana-pa-prototype
+        run: ./scripts/ops.sh idl-check
+
   # Anchor integration tests, once per proof mode: real Groth16 fixtures
   # against the devnet-cloned verifier, and mock fixtures against the
   # localnet mock verifier. No Rust toolchain needed — the programs come
