@@ -4096,7 +4096,7 @@ dependencies = [
 
 [[package]]
 name = "protocol-adapter"
-version = "2.0.0-rc.6"
+version = "2.0.0-rc.7"
 dependencies = [
  "anchor-lang",
  "anoma-rm-core",
@@ -4107,6 +4107,7 @@ dependencies = [
  "borsh",
  "hex-literal 1.1.0",
  "serde",
+ "sha2-const-stable",
  "solana-sha256-hasher",
 ]
 

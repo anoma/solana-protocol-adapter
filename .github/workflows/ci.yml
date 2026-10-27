@@ -201,6 +201,10 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: ./scripts/anchor-test.sh build
 
+      - name: Check the committed IDL
+        working-directory: ./solana-pa-prototype
+        run: ./scripts/ops.sh idl-check
+
       - name: Upload program artifacts
         uses: actions/upload-artifact@v7
         with:

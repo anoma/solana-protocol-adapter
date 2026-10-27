@@ -2,9 +2,20 @@
 
 Live state is always what `./scripts/dev.sh status --cluster devnet` reports; this file records what was deployed, by whom, and when. Update it after every deploy, upgrade, pause, unpause, or teardown.
 
-**Record last verified:** 2026-10-22
+**Record last verified:** 2026-10-27
 
-## V2 deployment (current, since 2026-10-01)
+## V2 fresh deployment (addresses since 2026-10-27, not yet deployed)
+
+A deployment from scratch under new program IDs, for the clients generated from the programs' IDLs; the 2026-10-01 deployment below stays on devnet, unused. `env/devnet.env` names its addresses, and the operator's uncommitted `env/devnet.keys.env` names the program keypair, kept outside the repository.
+
+| Program | ID | State |
+|---|---|---|
+| Protocol Adapter | `2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx` | not yet deployed |
+| Block Time Forwarder | `3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf` | the 2026-10-01 deployment's (stateless) |
+
+The SPL token forwarder this adapter serves, `34kd782wMwzkdwGFS5jfGGdTAz8zbaxVczQHs3E8oKF4`, is recorded in anoma/anomapay-spl-token-forwarder's `docs/DEVNET_DEPLOYMENT.md`.
+
+## V2 deployment of 2026-10-01 (unused since 2026-10-27)
 
 Deployed 2026-10-01 from `anthony/devnet-v2-redeploy` (production builds under new program IDs, since the previous adapter is final), by the operator wallet `5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9`. Since 2026-10-03 that wallet is the stored owner of both programs, and each program's upgrade authority is its own PDA (seed `upgrade_authority`): the adapter's `5D4ACkUCDEYx9wHWyzjmyU8Awjc8JK8sQAuzzC5ny8C6`, the forwarder's `2z6EPiBxM5Pfubmrouj8qSCZJrSveuDEbe2xvNbVzgvd`. Upgrades go through each program's owner-only `upgrade` (`dev.sh upgrade`).
 
@@ -41,7 +52,7 @@ The SPL token forwarder this adapter serves, `BsfuXpxw8oCmZXnYijyQkUYNcCnuskFZbY
 - **PAState PDA:** `9E8AZkYW1RN11iDJGQ2CQgqwGCaamqV4v5nZmhfqdPLn`
 - **Settlement lookup table:** `CKAMrsJSf1SDgsmaM7hsKEwmi2efQsoCAuMNf4msGRSW`, **closed 2026-10-01** with the two other tables built for this adapter, `CfXoXXWdbo5M9G7uX4NKzFEAWKtYVPY2t8tusJaU2SZW` and `FgS7Qa2Jk1P7zwaBVmyVPXT9TGf7Nz8cEsMxZmijdxMm` (closes `MvvTjse5tCwCYdHNjzUa8ymdBu8hpm1G6Ce3JMxbhVdTroNaMiBnBtn7K4jDjRvvpfGBkThhnyrtJW8hWEWmQHT`, `3izYUN3B9KMHN7ZR6SGGeP2aGp81gUxFDP6Ps1iK9ZNsaXLjZmQFFYnDfCZ63BbbCvbGbzUby2vNW6FYevjrCoSY`, `4e1bV3btdwDEXxbwz8C4pZXGLiVrWfof3Q4zDnsD97WLP3reYRBk3geKWvjkm7jMT9oEx6d7kkEdDMFNe6XURjF2`). Created 2026-09-16 by the operator wallet, which remains its authority; signature `YkjCunBAEpBx3cRaifSaDZQTxX92Gv4SmgscF9XKhCg22nzFqruBuN5famsFe6tVwKXqBGyVDoeVVjjW84fFz2L`; 13 keys, the set `settlementLookupKeys` derived when it was created; it has since been extended with the forwarder's per-mint escrow authority and ATA for the test mint. The current derivation instead has a single escrow authority, a 14th fixed key, so the table needs that key once the forwarder's escrow is migrated). Shipped as `SETTLE_LOOKUP_TABLE` in anoma-pa-solana-client. Extended 2026-09-18 with the test mint's escrow authority and ATA (15 keys, signature `2PTom38dd941fSVrvTxYee1FHPy8ZP418qsNf57SVyf3rETU8PiAQQei6vsJqwuV4xCuwbkEu8Mr8EaA1i9kP7uC`). A second table, `7a5iMQcToZrRzBkx92tKjseznZt8bYvbdBiHttNb7LXJ`, was created by mistake the same day (the command was run without `PA_LOOKUP_TABLE`); it was deactivated and closed the same day, rent returned to the operator wallet. Extended 2026-10-01 with the single escrow authority and its test-mint ATA (17 keys, `UzWLVXjxuyNMAp7qZfCHF2FHYdrGANqSnFwB58iVAgQ1ym7JNjoeiCWCEoVGpWUH83hoU4c8wRHbytBiSXaYT5L`); the per-mint escrow keys stay in it unused.
 - **Operator wallet:** `5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9` (`scripts/devnet-wallet.json`); this adapter has no owner.
-- **Indexing:** anoma-envio's Solana project indexed this program from slot 495845894 until it moved to the current deployment.
+- **Indexing:** anoma-envio's Solana project indexed this program from slot 495845894 until it moved to the 2026-10-01 deployment.
 
 ## Verifier infrastructure (pinned at initialize)
 

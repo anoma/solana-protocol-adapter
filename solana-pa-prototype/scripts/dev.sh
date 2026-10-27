@@ -93,7 +93,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-table|deny-logic-refs|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs)
+  deploy|upgrade|init|set-kind-table|deny-logic-refs|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs|idl-write|idl-check)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -265,6 +265,8 @@ PYEOF
     echo "  harness-programs [--check]"
     echo "               Write the integration-test harness's program binaries (the"
     echo "               deterministic builds); --check fails when they are not"
+    echo "  idl-write    Write the PA's production IDL to idl/protocol_adapter.json"
+    echo "  idl-check    Fail when that file is not a fresh production build's IDL"
     echo "  harness-lint The integration-test harness's format check and clippy"
     echo "  harness-test [--e2e]"
     echo "               The integration-test harness's tests; with --e2e, its e2e cases"

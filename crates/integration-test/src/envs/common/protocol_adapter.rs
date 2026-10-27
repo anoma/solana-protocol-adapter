@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anoma_pa_solana_client::events::PaEvent;
 use anoma_pa_solana_client::forwarders::Forwarders;
 use anoma_pa_solana_client::submission::{
     Failure, SimulationOutcome, Submission, read_adapter_state, read_verifier_program,
@@ -27,7 +26,7 @@ use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
 use super::runtime::{latest_blockhash, send_planned, send_signed};
-use crate::executed::Executed;
+use crate::executed::{Executed, PaEvent};
 
 /// The Solana protocol adapter, settling each transaction in one v1
 /// transaction when it fits, through a transaction-data upload otherwise.
@@ -371,21 +370,29 @@ fn refusal_for(error: PaError) -> Option<Refusal> {
 /// A settlement's event as pa-testkit's: the adapter's settlement events,
 /// which mirror pa-evm's. An owner's event is no settlement's.
 fn settlement_event(event: PaEvent) -> anyhow::Result<Event> {
-    let payload = |kind, p: anoma_pa_solana_client::events::PayloadEvent| {
-        u32::try_from(p.index).map(|index| Event::Payload {
+    let payload = |kind, tag, index: protocol_adapter::U256, blob| {
+        let (low, high) = index.0.split_at(size_of::<u32>());
+        anyhow::ensure!(
+            high.iter().all(|byte| *byte == 0),
+            "a payload's index {:02x?} (little-endian) exceeds u32",
+            index.0
+        );
+        Ok(Event::Payload {
             kind,
-            tag: Digest::from_bytes(p.tag),
-            index,
-            blob: p.blob,
+            tag: Digest::from_bytes(tag),
+            index: u32::from_le_bytes(low.try_into()?),
+            blob,
         })
     };
     let digests = |values: Vec<[u8; 32]>| values.into_iter().map(Digest::from_bytes).collect();
     Ok(match event {
         PaEvent::ForwarderCallExecuted(_) => Event::ForwarderCallExecuted,
-        PaEvent::ResourcePayload(p) => payload(PayloadKind::Resource, p)?,
-        PaEvent::DiscoveryPayload(p) => payload(PayloadKind::Discovery, p)?,
-        PaEvent::ExternalPayload(p) => payload(PayloadKind::External, p)?,
-        PaEvent::ApplicationPayload(p) => payload(PayloadKind::Application, p)?,
+        PaEvent::ResourcePayload(p) => payload(PayloadKind::Resource, p.tag, p.index, p.blob)?,
+        PaEvent::DiscoveryPayload(p) => payload(PayloadKind::Discovery, p.tag, p.index, p.blob)?,
+        PaEvent::ExternalPayload(p) => payload(PayloadKind::External, p.tag, p.index, p.blob)?,
+        PaEvent::ApplicationPayload(p) => {
+            payload(PayloadKind::Application, p.tag, p.index, p.blob)?
+        }
         PaEvent::ActionExecuted(action) => Event::ActionExecuted {
             action_tree_root: Digest::from_bytes(action.action_tree_root),
             nullifiers: digests(action.nullifiers),
@@ -460,5 +467,40 @@ mod tests {
             failure(ADAPTER, code),
         ];
         assert_eq!(refusal(&logs), None);
+    }
+
+    #[test]
+    fn a_payload_event_is_pa_testkits_payload_at_its_index() {
+        let event = settlement_event(PaEvent::ExternalPayload(
+            protocol_adapter::ExternalPayload {
+                tag: [9; 32],
+                index: protocol_adapter::U256::from(3),
+                blob: vec![1, 2],
+            },
+        ))
+        .unwrap();
+        assert!(
+            matches!(
+                &event,
+                Event::Payload { kind: PayloadKind::External, index: 3, blob, .. } if blob == &[1, 2]
+            ),
+            "an ExternalPayload at index 3 became {event:?}"
+        );
+    }
+
+    #[test]
+    fn a_payload_index_past_u32_is_refused() {
+        let mut index = [0; 32];
+        index[size_of::<u32>()] = 1;
+        let err = settlement_event(PaEvent::ResourcePayload(
+            protocol_adapter::ResourcePayload {
+                tag: [9; 32],
+                index: protocol_adapter::U256(index),
+                blob: vec![],
+            },
+        ))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("exceeds u32"), "index 2^32: {err}");
     }
 }

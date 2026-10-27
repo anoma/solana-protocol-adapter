@@ -59,7 +59,7 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
     // resource carries an event-emitted payload.
     assert.deepEqual(
       events.map((e) => e.name),
-      ["forwarderCallExecutedEvent", "actionExecutedEvent", "commitmentTreeRootAddedEvent", "transactionExecutedEvent"],
+      ["forwarderCallExecuted", "actionExecuted", "commitmentTreeRootAdded", "transactionExecuted"],
       "the settlement's events follow pa-evm's order",
     );
     assert.deepEqual(
@@ -91,8 +91,8 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
       "TransactionExecuted carries the keccak of the action tree roots",
     );
 
-    const fwdEvents = events.filter((e) => e.name === "forwarderCallExecutedEvent");
-    assert.isAtLeast(fwdEvents.length, 1, "Should emit forwarderCallExecutedEvent");
+    const fwdEvents = events.filter((e) => e.name === "forwarderCallExecuted");
+    assert.isAtLeast(fwdEvents.length, 1, "Should emit forwarderCallExecuted events");
     assert.ok(
       fwdEvents[0].data.untrustedForwarder.equals(blockTimeForwarderId),
       `forwarder should be ${blockTimeForwarderId}`,
@@ -196,12 +196,12 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
       "the consumed resource's nullifier is recorded",
     );
     const { events } = await cpiEventsOf(sig);
-    const [action] = events.filter((e) => e.name === "actionExecutedEvent");
+    const [action] = events.filter((e) => e.name === "actionExecuted");
     assert.lengthOf(action.data.nullifiers, 1, "the action consumes one resource");
     assert.lengthOf(action.data.commitments, 0, "and creates none");
     assert.notInclude(
       events.map((e) => e.name),
-      "commitmentTreeRootAddedEvent",
+      "commitmentTreeRootAdded",
       "no root is added, as pa-evm adds none when a transaction creates nothing",
     );
   });

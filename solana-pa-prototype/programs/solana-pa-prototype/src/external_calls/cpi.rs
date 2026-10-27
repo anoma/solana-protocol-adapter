@@ -47,7 +47,7 @@ fn execute_forwarder_call(
     logic_ref: &arm_core::Digest,
     call: SolanaExternalCall,
     segment: &[AccountInfo<'_>],
-) -> Result<crate::ForwarderCallExecutedEvent, PAError> {
+) -> Result<crate::ForwarderCallExecuted, PAError> {
     invoke_forwarder(&(*logic_ref).into(), &call.instruction_data, segment)?;
 
     let forwarder = *segment[0].key;
@@ -55,7 +55,7 @@ fn execute_forwarder_call(
 
     super::verify_output(&call.expected_output, &actual_output)?;
 
-    Ok(crate::ForwarderCallExecutedEvent {
+    Ok(crate::ForwarderCallExecuted {
         untrusted_forwarder: forwarder,
         input: call.instruction_data,
         output: actual_output,
@@ -86,7 +86,7 @@ impl<'a, 'info> ForwarderSegments<'a, 'info> {
         &mut self,
         logic_ref: &arm_core::Digest,
         app_data: &arm_core::logic_instance::AppData,
-    ) -> Result<Vec<crate::ForwarderCallExecutedEvent>, PAError> {
+    ) -> Result<Vec<crate::ForwarderCallExecuted>, PAError> {
         let calls = super::decode_external_calls(app_data)?;
         let mut events = Vec::with_capacity(calls.len());
         for call in calls {

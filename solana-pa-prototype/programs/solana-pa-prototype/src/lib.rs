@@ -85,7 +85,7 @@ fn allocate_from(pos: usize, floor: usize, layout: std::alloc::Layout) -> Option
 }
 
 pub mod error;
-mod events;
+pub mod events;
 pub mod external_calls;
 pub mod groth16;
 pub mod marker;
@@ -103,6 +103,7 @@ pub mod upgrade;
 use arm_core::aggregation_instance::AggregationInstance;
 use arm_core::transaction::{Delta, Transaction};
 pub use error::PAError;
+use events::event_discriminator;
 use groth16::{check_selector, prepare_proof_for_verification};
 use merkle::{append_to_tree, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, MAX_TREE_DEPTH};
 use state::*;
@@ -168,18 +169,18 @@ pub mod protocol_adapter {
         // pa-evm's initializer sets the owner (OwnableUpgradeable's
         // `OwnershipTransferred` from the zero address), adds the empty
         // tree's root, then installs the empty kind table.
-        emit_cpi!(OwnershipTransferredEvent {
+        emit_cpi!(OwnershipTransferred {
             previous_owner: Pubkey::default(),
             new_owner: initial_owner,
         });
-        emit_cpi!(CommitmentTreeRootAddedEvent {
+        emit_cpi!(CommitmentTreeRootAdded {
             root: EMPTY_TREE_ROOT_INITIAL.into(),
         });
-        emit_cpi!(KindTreeRootUpdatedEvent {
+        emit_cpi!(KindTreeRootUpdated {
             kind_tree_root: EMPTY_KIND_TREE_ROOT,
         });
         // OpenZeppelin's `initializer` announces the version once the body ran.
-        emit_cpi!(InitializedEvent {
+        emit_cpi!(Initialized {
             version: SCHEMA_VERSION.into(),
         });
 
@@ -395,7 +396,7 @@ pub mod protocol_adapter {
     }
 
     /// Pause settlement. Mirrors pa-evm's `pause()`: owner-only, refused
-    /// while already paused (`EnforcedPause`), announced with `PausedEvent`.
+    /// while already paused (`EnforcedPause`), announced with `Paused`.
     /// While paused, `settle`, `settle_from_txdata` and `simulate_execute`
     /// refuse every transaction; nothing else is gated.
     ///
@@ -408,19 +409,19 @@ pub mod protocol_adapter {
         let state = &mut ctx.accounts.pa_state;
         require!(!state.paused, PAError::EnforcedPause);
         state.paused = true;
-        emit_cpi!(PausedEvent {
+        emit_cpi!(Paused {
             account: ctx.accounts.authority.key(),
         });
         Ok(())
     }
 
     /// Resume settlement. Mirrors pa-evm's `unpause()`: owner-only, refused
-    /// while not paused (`ExpectedPause`), announced with `UnpausedEvent`.
+    /// while not paused (`ExpectedPause`), announced with `Unpaused`.
     pub fn unpause(ctx: Context<OwnerOnly>) -> Result<()> {
         let state = &mut ctx.accounts.pa_state;
         require!(state.paused, PAError::ExpectedPause);
         state.paused = false;
-        emit_cpi!(UnpausedEvent {
+        emit_cpi!(Unpaused {
             account: ctx.accounts.authority.key(),
         });
         Ok(())
@@ -449,7 +450,7 @@ pub mod protocol_adapter {
             PAError::ZeroKindTreeRootNotAllowed
         );
         ctx.accounts.pa_state.kind_tree_root = new_kind_tree_root;
-        emit_cpi!(KindTreeRootUpdatedEvent {
+        emit_cpi!(KindTreeRootUpdated {
             kind_tree_root: new_kind_tree_root,
         });
         Ok(())
@@ -459,7 +460,7 @@ pub mod protocol_adapter {
     /// resources (`consumed`) or to the one for created resources. Mirrors
     /// pa-evm's `denyLogicRefs`: owner-only, the zero ref and a ref already on
     /// its denylist are rejected, no entry is ever removed, and each addition
-    /// emits `LogicRefDeniedEvent`. A ref on the created side only is
+    /// emits `LogicRefDenied`. A ref on the created side only is
     /// deprecated: transactions still consume its resources. A ref on both is
     /// denied. The owner pays for the entries.
     pub fn deny_logic_refs(
@@ -485,7 +486,7 @@ pub mod protocol_adapter {
                 PAError::LogicRefAlreadyDenied
             );
             denylist.push(logic_ref);
-            emit_cpi!(LogicRefDeniedEvent {
+            emit_cpi!(LogicRefDenied {
                 logic_ref,
                 consumed
             });
@@ -496,11 +497,11 @@ pub mod protocol_adapter {
     /// Move the ownership to `new_owner`. Mirrors OwnableUpgradeable's
     /// `transferOwnership`: owner only, effective at once, the zero key
     /// refused (`OwnableInvalidOwner`), announced with
-    /// `OwnershipTransferredEvent`.
+    /// `OwnershipTransferred`.
     pub fn transfer_ownership(ctx: Context<OwnerOnly>, new_owner: Pubkey) -> Result<()> {
         require!(new_owner != Pubkey::default(), PAError::OwnableInvalidOwner);
         let previous_owner = std::mem::replace(&mut ctx.accounts.pa_state.owner, new_owner);
-        emit_cpi!(OwnershipTransferredEvent {
+        emit_cpi!(OwnershipTransferred {
             previous_owner,
             new_owner,
         });
@@ -512,7 +513,7 @@ pub mod protocol_adapter {
     /// no owner-only instruction, `upgrade` included, can run again.
     pub fn renounce_ownership(ctx: Context<OwnerOnly>) -> Result<()> {
         let previous_owner = std::mem::take(&mut ctx.accounts.pa_state.owner);
-        emit_cpi!(OwnershipTransferredEvent {
+        emit_cpi!(OwnershipTransferred {
             previous_owner,
             new_owner: Pubkey::default(),
         });
@@ -521,7 +522,7 @@ pub mod protocol_adapter {
 
     /// Replace this program's code with the code in `buffer`. Mirrors the
     /// UUPS `upgradeToAndCall` pa-evm's owner calls: owner only
-    /// (`_authorizeUpgrade`), announced with `UpgradedEvent`, which names the
+    /// (`_authorizeUpgrade`), announced with `Upgraded`, which names the
     /// new code by its executable hash as ERC1967's `Upgraded` names the new
     /// implementation. The buffer's authority must be the owner, who wrote
     /// it; the program hands it to its upgrade authority PDA, which signs the
@@ -531,9 +532,11 @@ pub mod protocol_adapter {
     pub fn upgrade(ctx: Context<UpgradeProgram>) -> Result<()> {
         // The event first: the self-invocation that carries it must run this
         // code, which the loader replaces below.
-        let executable_hash = upgrade::executable_hash(&ctx.accounts.buffer.try_borrow_data()?)
+        let implementation_hash = upgrade::executable_hash(&ctx.accounts.buffer.try_borrow_data()?)
             .ok_or(PAError::InvalidUpgradeBuffer)?;
-        emit_cpi!(UpgradedEvent { executable_hash });
+        emit_cpi!(Upgraded {
+            implementation_hash
+        });
         upgrade::upgrade_program(
             &crate::ID,
             ctx.bumps.upgrade_authority,
@@ -850,7 +853,7 @@ fn execute_settlement(
     let ml = marker_lamports(&Rent::get()?);
 
     for action in &instance.actions {
-        let mut executed = ActionExecutedEvent {
+        let mut executed = ActionExecuted {
             action_tree_root: action.action_tree_root.into(),
             nullifiers: Vec::with_capacity(action.consumed_publics.len()),
             consumed_logic_refs: Vec::with_capacity(action.consumed_publics.len()),
@@ -937,10 +940,10 @@ fn execute_settlement(
             &accounts.system_program,
             ml,
         )?;
-        events.emit(&CommitmentTreeRootAddedEvent { root: new_root })?;
+        events.emit(&CommitmentTreeRootAdded { root: new_root })?;
     }
 
-    events.emit(&TransactionExecutedEvent {
+    events.emit(&TransactionExecuted {
         transaction_id: arm_solana::delta::compute_delta_msg_hash(
             &arm_solana::delta::collect_roots(instance),
         ),
@@ -1327,68 +1330,88 @@ pub struct DevSetSchemaVersion<'info> {
     pub authority: Signer<'info>,
 }
 
-// Four separate event structs with identical fields: each produces a distinct Anchor
-// discriminator (sha256 of the struct name), enabling indexers to filter by payload
-// category at the log-parsing level without decoding the event body.
-#[event]
-pub struct ResourcePayloadEvent {
+// Four separate event structs with identical fields: each has its own name and
+// so its own discriminator, enabling indexers to filter by payload category at
+// the log-parsing level without decoding the event body. Every event's
+// discriminator is `events::event_discriminator` of its signature, the name
+// followed by its field types.
+
+/// Mirrors pa-evm: `event ResourcePayload(bytes32 indexed tag, uint256 index,
+/// bytes blob);`.
+#[event(discriminator = &event_discriminator("ResourcePayload([u8;32],u256,bytes)"))]
+#[derive(Debug)]
+pub struct ResourcePayload {
     pub tag: [u8; 32],
     pub index: U256,
     pub blob: Vec<u8>,
 }
 
-#[event]
-pub struct DiscoveryPayloadEvent {
+/// Mirrors pa-evm: `event DiscoveryPayload(bytes32 indexed tag, uint256
+/// index, bytes blob);`.
+#[event(discriminator = &event_discriminator("DiscoveryPayload([u8;32],u256,bytes)"))]
+#[derive(Debug)]
+pub struct DiscoveryPayload {
     pub tag: [u8; 32],
     pub index: U256,
     pub blob: Vec<u8>,
 }
 
-#[event]
-pub struct ExternalPayloadEvent {
+/// Mirrors pa-evm: `event ExternalPayload(bytes32 indexed tag, uint256 index,
+/// bytes blob);`.
+#[event(discriminator = &event_discriminator("ExternalPayload([u8;32],u256,bytes)"))]
+#[derive(Debug)]
+pub struct ExternalPayload {
     pub tag: [u8; 32],
     pub index: U256,
     pub blob: Vec<u8>,
 }
 
-#[event]
-pub struct ApplicationPayloadEvent {
+/// Mirrors pa-evm: `event ApplicationPayload(bytes32 indexed tag, uint256
+/// index, bytes blob);`.
+#[event(discriminator = &event_discriminator("ApplicationPayload([u8;32],u256,bytes)"))]
+#[derive(Debug)]
+pub struct ApplicationPayload {
     pub tag: [u8; 32],
     pub index: U256,
     pub blob: Vec<u8>,
 }
 
-/// Mirrors pa-evm: `event KindTreeRootUpdated(bytes32 indexed kindTreeRoot);`
-#[event]
-pub struct KindTreeRootUpdatedEvent {
+/// Mirrors pa-evm: `event KindTreeRootUpdated(bytes32 indexed kindTreeRoot);`.
+#[event(discriminator = &event_discriminator("KindTreeRootUpdated([u8;32])"))]
+#[derive(Debug)]
+pub struct KindTreeRootUpdated {
     pub kind_tree_root: [u8; 32],
 }
 
-/// Mirrors OpenZeppelin Pausable: `event Paused(address account);`
-#[event]
-pub struct PausedEvent {
+/// Mirrors OpenZeppelin Pausable: `event Paused(address account);`.
+#[event(discriminator = &event_discriminator("Paused(pubkey)"))]
+#[derive(Debug)]
+pub struct Paused {
     pub account: Pubkey,
 }
 
-/// Mirrors OpenZeppelin Pausable: `event Unpaused(address account);`
-#[event]
-pub struct UnpausedEvent {
+/// Mirrors OpenZeppelin Pausable: `event Unpaused(address account);`.
+#[event(discriminator = &event_discriminator("Unpaused(pubkey)"))]
+#[derive(Debug)]
+pub struct Unpaused {
     pub account: Pubkey,
 }
 
 /// Mirrors OpenZeppelin Ownable: `event OwnershipTransferred(address indexed
 /// previousOwner, address indexed newOwner);`. The zero key stands for no
 /// owner: the previous owner when `initialize` sets the first one, the new owner when `renounce_ownership` gives it up.
-#[event]
-pub struct OwnershipTransferredEvent {
+#[event(discriminator = &event_discriminator("OwnershipTransferred(pubkey,pubkey)"))]
+#[derive(Debug)]
+pub struct OwnershipTransferred {
     pub previous_owner: Pubkey,
     pub new_owner: Pubkey,
 }
 
 /// Mirrors OpenZeppelin Initializable: `event Initialized(uint64 version);`.
 /// `initialize` announces the state's schema version.
-#[event]
-pub struct InitializedEvent {
+#[event(discriminator = &event_discriminator("Initialized(u64)"))]
+#[derive(Debug)]
+pub struct Initialized {
     pub version: u64,
 }
 
@@ -1397,16 +1420,18 @@ pub struct InitializedEvent {
 /// named by its executable hash: sha256 of the code without trailing zero
 /// bytes, which `solana-verify get-program-hash` reports for the deployed
 /// program.
-#[event]
-pub struct UpgradedEvent {
-    pub executable_hash: [u8; 32],
+#[event(discriminator = &event_discriminator("Upgraded([u8;32])"))]
+#[derive(Debug)]
+pub struct Upgraded {
+    pub implementation_hash: [u8; 32],
 }
 
 /// Mirrors pa-evm: `event CommitmentTreeRootAdded(bytes32 root);`: the
 /// empty tree's root at initialization, then the root each settlement that
 /// appends commitments produces.
-#[event]
-pub struct CommitmentTreeRootAddedEvent {
+#[event(discriminator = &event_discriminator("CommitmentTreeRootAdded([u8;32])"))]
+#[derive(Debug)]
+pub struct CommitmentTreeRootAdded {
     pub root: [u8; 32],
 }
 
@@ -1420,9 +1445,10 @@ pub struct DeniedLogicRef {
 }
 
 /// Mirrors pa-evm: `event LogicRefDenied(bytes32 indexed logicRef, bool
-/// consumed);`
-#[event]
-pub struct LogicRefDeniedEvent {
+/// consumed);`.
+#[event(discriminator = &event_discriminator("LogicRefDenied([u8;32],bool)"))]
+#[derive(Debug)]
+pub struct LogicRefDenied {
     pub logic_ref: [u8; 32],
     pub consumed: bool,
 }
@@ -1431,8 +1457,11 @@ pub struct LogicRefDeniedEvent {
 /// bytes32[] nullifiers, bytes32[] consumedLogicRefs, bytes32[] commitments,
 /// bytes32[] createdLogicRefs);`. The commitments are appended to the tree in
 /// the order listed, action after action.
-#[event]
-pub struct ActionExecutedEvent {
+#[event(discriminator = &event_discriminator(
+    "ActionExecuted([u8;32],vec<[u8;32]>,vec<[u8;32]>,vec<[u8;32]>,vec<[u8;32]>)"
+))]
+#[derive(Debug)]
+pub struct ActionExecuted {
     pub action_tree_root: [u8; 32],
     pub nullifiers: Vec<[u8; 32]>,
     pub consumed_logic_refs: Vec<[u8; 32]>,
@@ -1444,14 +1473,17 @@ pub struct ActionExecutedEvent {
 /// the Keccak-256 hash of the concatenated action tree roots: the message the
 /// delta proof signs, unique per transaction and known to the sender before
 /// submission.
-#[event]
-pub struct TransactionExecutedEvent {
+#[event(discriminator = &event_discriminator("TransactionExecuted([u8;32])"))]
+#[derive(Debug)]
+pub struct TransactionExecuted {
     pub transaction_id: [u8; 32],
 }
 
-/// Matches EVM PA's ForwarderCallExecuted event.
-#[event]
-pub struct ForwarderCallExecutedEvent {
+/// Mirrors pa-evm: `event ForwarderCallExecuted(address indexed
+/// untrustedForwarder, bytes input, bytes output);`.
+#[event(discriminator = &event_discriminator("ForwarderCallExecuted(pubkey,bytes,bytes)"))]
+#[derive(Debug)]
+pub struct ForwarderCallExecuted {
     pub untrusted_forwarder: Pubkey,
     pub input: Vec<u8>,
     pub output: Vec<u8>,
@@ -1492,9 +1524,9 @@ fn emit_app_data_events(
         };
     }
 
-    emit_payloads!(app_data.resource_payload, ResourcePayloadEvent);
-    emit_payloads!(app_data.discovery_payload, DiscoveryPayloadEvent);
-    emit_payloads!(app_data.external_payload, ExternalPayloadEvent);
-    emit_payloads!(app_data.application_payload, ApplicationPayloadEvent);
+    emit_payloads!(app_data.resource_payload, ResourcePayload);
+    emit_payloads!(app_data.discovery_payload, DiscoveryPayload);
+    emit_payloads!(app_data.external_payload, ExternalPayload);
+    emit_payloads!(app_data.application_payload, ApplicationPayload);
     Ok(())
 }

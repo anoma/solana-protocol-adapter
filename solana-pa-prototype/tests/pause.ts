@@ -60,7 +60,7 @@ describe("protocol-adapter (pause) @localnet", () => {
   it("pauses and announces it", async () => {
     const sig = await pauseAdapter(program, owner).rpc();
     assert.isTrue(await paused());
-    assert.deepEqual(await eventsOf(sig), [["pausedEvent", owner.toBase58()]]);
+    assert.deepEqual(await eventsOf(sig), [["paused", owner.toBase58()]]);
   });
 
   it("rejects pause while paused", () =>
@@ -89,7 +89,7 @@ describe("protocol-adapter (pause) @localnet", () => {
   it("unpauses, announces it, and settles again", async () => {
     const sig = await unpauseAdapter(program, owner).rpc();
     assert.isFalse(await paused());
-    assert.deepEqual(await eventsOf(sig), [["unpausedEvent", owner.toBase58()]]);
+    assert.deepEqual(await eventsOf(sig), [["unpaused", owner.toBase58()]]);
     await settleUnsettledFixture("batch_groth16_unpaused.json");
   });
 });

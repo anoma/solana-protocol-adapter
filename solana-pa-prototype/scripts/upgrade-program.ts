@@ -53,9 +53,9 @@ async function main() {
   const signature = await upgradeAdapter(program, wallet, buffer, wallet).rpc({ commitment: "confirmed" });
 
   const events = await cpiEventsOfSignature(provider.connection, program, signature);
-  const upgraded = events.find((e) => e.name === "upgradedEvent");
-  if (!upgraded) throw new Error(`transaction ${signature} landed without upgradedEvent`);
-  const announced = Buffer.from(upgraded.data.executableHash as number[]);
+  const upgraded = events.find((e) => e.name === "upgraded");
+  if (!upgraded) throw new Error(`transaction ${signature} landed without an Upgraded event`);
+  const announced = Buffer.from(upgraded.data.implementationHash as number[]);
   const deployed = await deployedExecutableHash(provider.connection, program.programId);
   if (!announced.equals(expected) || !deployed.equals(expected)) {
     throw new Error(

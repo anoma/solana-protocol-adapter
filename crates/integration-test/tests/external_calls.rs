@@ -6,12 +6,11 @@
 
 use std::sync::Arc;
 
-use anoma_pa_solana_client::events::PaEvent;
 use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};
 use anoma_pa_solana_client::forwarders::{CallAccountsFuture, Forwarder};
 use anoma_pa_solana_client::settlement::CallAccounts;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
-use anoma_pa_solana_integration_test::executed::Executed;
+use anoma_pa_solana_integration_test::executed::{Executed, PaEvent};
 use anoma_pa_solana_integration_test::test_forwarder::{
     RELAY_OK, log_ix, relay_input, write_input,
 };

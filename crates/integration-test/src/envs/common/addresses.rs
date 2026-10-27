@@ -32,7 +32,7 @@ mod tests {
             program_id(LOCALNET, "PROTOCOL_ADAPTER")
                 .unwrap()
                 .to_string(),
-            "5zeqkB3kc9fd1RvaXB2GeMB53Jgf98QJtaFK38e6tTsc"
+            "2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx"
         );
         assert_eq!(
             program_id(LOCALNET, "MOCK_VERIFIER").unwrap().to_string(),

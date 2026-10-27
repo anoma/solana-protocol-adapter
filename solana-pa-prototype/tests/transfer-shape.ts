@@ -78,14 +78,14 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
         "64-instruction trace limit",
     );
 
-    const actionEvents = events.filter((e) => e.name === "actionExecutedEvent");
-    assert.equal(actionEvents.length, 3, "one actionExecutedEvent per action");
+    const actionEvents = events.filter((e) => e.name === "actionExecuted");
+    assert.equal(actionEvents.length, 3, "one actionExecuted event per action");
     for (const ev of actionEvents) {
       assert.lengthOf(ev.data.nullifiers, 1, "each action consumes one resource");
       assert.lengthOf(ev.data.commitments, 1, "and creates one");
     }
 
-    const txEvents = events.filter((e) => e.name === "transactionExecutedEvent");
+    const txEvents = events.filter((e) => e.name === "transactionExecuted");
     assert.equal(txEvents.length, 1);
     assert.deepEqual(
       Buffer.from(txEvents[0].data.transactionId),
@@ -96,8 +96,8 @@ describe("protocol-adapter (Multi-action transfer-shape settlement)", () => {
     // Each created resource carries one resource payload (512 words) and one
     // discovery payload (192 words) with deletion criterion "never", so both
     // are emitted with index 0 under the created resource's commitment tag.
-    const resourceEvents = events.filter((e) => e.name === "resourcePayloadEvent");
-    const discoveryEvents = events.filter((e) => e.name === "discoveryPayloadEvent");
+    const resourceEvents = events.filter((e) => e.name === "resourcePayload");
+    const discoveryEvents = events.filter((e) => e.name === "discoveryPayload");
     assert.equal(resourceEvents.length, 3, "one resource payload event per created resource");
     assert.equal(discoveryEvents.length, 3, "one discovery payload event per created resource");
     const createdTags = actionEvents.flatMap((e) => e.data.commitments);

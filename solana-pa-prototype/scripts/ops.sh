@@ -62,10 +62,15 @@ Commands:
   build-release          Build the production binaries, no deploy (verifies
                          each production IDL is its development IDL minus
                          the declared dev-only instructions)
+  idl-write              Write the PA's production IDL to idl/protocol_adapter.json,
+                         the IDL every release tag holds
+  idl-check              Fail when idl/protocol_adapter.json is not the IDL a
+                         fresh production build produces
   clippy                 Lint every program, and each one with dev features
                          again with them enabled
   unit-test              The Rust unit tests (cargo test --workspace) at the
-                         local addresses
+                         local addresses, then the adapter's event signature
+                         test, which needs its idl-build feature
   verify-build [--cluster <c>]
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
@@ -95,7 +100,7 @@ Commands:
 
 Flags:
   --cluster <c>    Target cluster (required except test/unit-test/build-dev/build-release/
-                   clippy/validator/validator-deploy/harness-programs/harness-lint/
+                   idl-write/idl-check/clippy/validator/validator-deploy/harness-programs/harness-lint/
                    harness-test; optional for verify-build). Program addresses
                    come from env/localnet.env and, for another cluster,
                    env/<cluster>.env on top; a
@@ -781,6 +786,29 @@ cmd_harness_programs() {
   return "$failed"
 }
 
+# The PA's production IDL as committed: the file the release tags hold and the
+# clients and the indexer copy from them. `anchor idl build -o` writes the IDL
+# alone to its destination, leaving target/idl and target/types as they were.
+COMMITTED_IDL="idl/protocol_adapter.json"
+
+cmd_idl_write() {
+  anchor idl build -p protocol_adapter -o "$COMMITTED_IDL"
+  echo "Wrote ${COMMITTED_IDL}"
+}
+
+# Fail when the committed IDL is not, byte for byte, a fresh production build's.
+cmd_idl_check() {
+  local fresh
+  fresh="$(mktemp --suffix .json)"
+  trap "rm -f '${fresh}'" EXIT
+  anchor idl build -p protocol_adapter -o "$fresh"
+  if ! cmp "$fresh" "$COMMITTED_IDL"; then
+    echo "❌ ${COMMITTED_IDL} differs from the release IDL: run ./scripts/dev.sh idl-write" >&2
+    return 1
+  fi
+  echo "✅ ${COMMITTED_IDL} is the release IDL"
+}
+
 # Deterministic (verifiable) build of the PA via solana-verify's pinned
 # Docker image; with a cluster, also compares against the deployed program's
 # hash. The resulting target/deploy/protocol_adapter.so is the artifact that
@@ -964,6 +992,14 @@ case "$COMMAND" in
     require_cmd node
     build_programs_release
     ;;
+  idl-write)
+    require_cmd anchor
+    cmd_idl_write
+    ;;
+  idl-check)
+    require_cmd anchor
+    cmd_idl_check
+    ;;
   clippy)
     require_cmd cargo
     require_cmd node
@@ -972,6 +1008,7 @@ case "$COMMAND" in
   unit-test)
     require_cmd cargo
     cargo test --workspace
+    cargo test -p protocol-adapter --features idl-build --test event_signature
     ;;
   verify-build)
     if [[ -n "$CLUSTER" ]]; then

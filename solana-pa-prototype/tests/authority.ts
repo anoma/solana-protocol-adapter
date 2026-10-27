@@ -59,7 +59,7 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
       const { events } = await cpiEventsOf(sig);
       assert.deepEqual(
         events.map((e) => [e.name, e.data.previousOwner.toBase58(), e.data.newOwner.toBase58()]),
-        [["ownershipTransferredEvent", wallet.toBase58(), successor.publicKey.toBase58()]],
+        [["ownershipTransferred", wallet.toBase58(), successor.publicKey.toBase58()]],
       );
 
       await assertFails(setKindTreeRoot(program, wallet, kindTable).rpc(), {
@@ -111,7 +111,7 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
     // suite upgrades to the build it already runs, which leaves the
     // deployment as it was.
     it("replaces the code with the owner's buffer, announces its executable hash, and runs it from the next slot", async () => {
-      await upgradeThroughProgram(program, ADAPTER_SO, "upgradedEvent", (buffer, spill) =>
+      await upgradeThroughProgram(program, ADAPTER_SO, "upgraded", (buffer, spill) =>
         upgradeAdapter(program, wallet, buffer, spill),
       );
       await setKindTreeRoot(program, wallet, kindTable).rpc();
