@@ -70,7 +70,7 @@ Commands:
                          again with them enabled
   unit-test              The Rust unit tests (cargo test --workspace) at the
                          local addresses, then the adapter's event signature
-                         test, which needs its idl-build feature
+                         and IDL seed tests, which need its idl-build feature
   verify-build [--cluster <c>]
                          Deterministic solana-verify Docker build of the PA;
                          with a cluster, compares against the deployed hash
@@ -1009,6 +1009,7 @@ case "$COMMAND" in
     require_cmd cargo
     cargo test --workspace
     cargo test -p protocol-adapter --features idl-build --test event_signature
+    cargo test -p protocol-adapter --features idl-build --test idl_seeds
     ;;
   verify-build)
     if [[ -n "$CLUSTER" ]]; then

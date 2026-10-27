@@ -2,7 +2,7 @@
   "address": "2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx",
   "metadata": {
     "name": "protocol_adapter",
-    "version": "2.0.0-rc.7",
+    "version": "2.0.0-rc.8",
     "spec": "0.1.0",
     "description": "Solana Protocol Adapter for Anoma Resource Machine"
   },
@@ -629,7 +629,7 @@
       ],
       "args": [
         {
-          "name": "_upload_id",
+          "name": "upload_id",
           "type": "u64"
         }
       ]
@@ -908,7 +908,7 @@
           "type": "u64"
         },
         {
-          "name": "_authority",
+          "name": "authority",
           "type": "pubkey"
         }
       ]
@@ -1145,7 +1145,7 @@
       ],
       "args": [
         {
-          "name": "_upload_id",
+          "name": "upload_id",
           "type": "u64"
         },
         {
