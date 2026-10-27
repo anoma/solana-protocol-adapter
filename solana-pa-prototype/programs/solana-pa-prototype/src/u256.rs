@@ -6,7 +6,7 @@
 // Borsh's own derives: Anchor's would also give the type an `IdlBuild` as a
 // struct of 32 bytes, in place of the alias below.
 #[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct U256([u8; 32]);
+pub struct U256(pub [u8; 32]);
 
 impl From<usize> for U256 {
     fn from(value: usize) -> Self {

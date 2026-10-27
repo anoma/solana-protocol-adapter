@@ -1339,6 +1339,7 @@ pub struct DevSetSchemaVersion<'info> {
 /// Mirrors pa-evm: `event ResourcePayload(bytes32 indexed tag, uint256 index,
 /// bytes blob);`. Signature: `ResourcePayload([u8;32],u256,bytes)`.
 #[event(discriminator = &event_discriminator("ResourcePayload([u8;32],u256,bytes)"))]
+#[derive(Debug)]
 pub struct ResourcePayload {
     pub tag: [u8; 32],
     pub index: U256,
@@ -1348,6 +1349,7 @@ pub struct ResourcePayload {
 /// Mirrors pa-evm: `event DiscoveryPayload(bytes32 indexed tag, uint256
 /// index, bytes blob);`. Signature: `DiscoveryPayload([u8;32],u256,bytes)`.
 #[event(discriminator = &event_discriminator("DiscoveryPayload([u8;32],u256,bytes)"))]
+#[derive(Debug)]
 pub struct DiscoveryPayload {
     pub tag: [u8; 32],
     pub index: U256,
@@ -1357,6 +1359,7 @@ pub struct DiscoveryPayload {
 /// Mirrors pa-evm: `event ExternalPayload(bytes32 indexed tag, uint256 index,
 /// bytes blob);`. Signature: `ExternalPayload([u8;32],u256,bytes)`.
 #[event(discriminator = &event_discriminator("ExternalPayload([u8;32],u256,bytes)"))]
+#[derive(Debug)]
 pub struct ExternalPayload {
     pub tag: [u8; 32],
     pub index: U256,
@@ -1366,6 +1369,7 @@ pub struct ExternalPayload {
 /// Mirrors pa-evm: `event ApplicationPayload(bytes32 indexed tag, uint256
 /// index, bytes blob);`. Signature: `ApplicationPayload([u8;32],u256,bytes)`.
 #[event(discriminator = &event_discriminator("ApplicationPayload([u8;32],u256,bytes)"))]
+#[derive(Debug)]
 pub struct ApplicationPayload {
     pub tag: [u8; 32],
     pub index: U256,
@@ -1375,6 +1379,7 @@ pub struct ApplicationPayload {
 /// Mirrors pa-evm: `event KindTreeRootUpdated(bytes32 indexed kindTreeRoot);`.
 /// Signature: `KindTreeRootUpdated([u8;32])`.
 #[event(discriminator = &event_discriminator("KindTreeRootUpdated([u8;32])"))]
+#[derive(Debug)]
 pub struct KindTreeRootUpdated {
     pub kind_tree_root: [u8; 32],
 }
@@ -1382,6 +1387,7 @@ pub struct KindTreeRootUpdated {
 /// Mirrors OpenZeppelin Pausable: `event Paused(address account);`.
 /// Signature: `Paused(pubkey)`.
 #[event(discriminator = &event_discriminator("Paused(pubkey)"))]
+#[derive(Debug)]
 pub struct Paused {
     pub account: Pubkey,
 }
@@ -1389,6 +1395,7 @@ pub struct Paused {
 /// Mirrors OpenZeppelin Pausable: `event Unpaused(address account);`.
 /// Signature: `Unpaused(pubkey)`.
 #[event(discriminator = &event_discriminator("Unpaused(pubkey)"))]
+#[derive(Debug)]
 pub struct Unpaused {
     pub account: Pubkey,
 }
@@ -1398,6 +1405,7 @@ pub struct Unpaused {
 /// owner: the previous owner when `initialize` sets the first one, the new owner when `renounce_ownership` gives it up.
 /// Signature: `OwnershipTransferred(pubkey,pubkey)`.
 #[event(discriminator = &event_discriminator("OwnershipTransferred(pubkey,pubkey)"))]
+#[derive(Debug)]
 pub struct OwnershipTransferred {
     pub previous_owner: Pubkey,
     pub new_owner: Pubkey,
@@ -1407,6 +1415,7 @@ pub struct OwnershipTransferred {
 /// `initialize` announces the state's schema version.
 /// Signature: `Initialized(u64)`.
 #[event(discriminator = &event_discriminator("Initialized(u64)"))]
+#[derive(Debug)]
 pub struct Initialized {
     pub version: u64,
 }
@@ -1417,6 +1426,7 @@ pub struct Initialized {
 /// bytes, which `solana-verify get-program-hash` reports for the deployed
 /// program. Signature: `Upgraded([u8;32])`.
 #[event(discriminator = &event_discriminator("Upgraded([u8;32])"))]
+#[derive(Debug)]
 pub struct Upgraded {
     pub implementation_hash: [u8; 32],
 }
@@ -1425,6 +1435,7 @@ pub struct Upgraded {
 /// empty tree's root at initialization, then the root each settlement that
 /// appends commitments produces. Signature: `CommitmentTreeRootAdded([u8;32])`.
 #[event(discriminator = &event_discriminator("CommitmentTreeRootAdded([u8;32])"))]
+#[derive(Debug)]
 pub struct CommitmentTreeRootAdded {
     pub root: [u8; 32],
 }
@@ -1441,6 +1452,7 @@ pub struct DeniedLogicRef {
 /// Mirrors pa-evm: `event LogicRefDenied(bytes32 indexed logicRef, bool
 /// consumed);`. Signature: `LogicRefDenied([u8;32],bool)`.
 #[event(discriminator = &event_discriminator("LogicRefDenied([u8;32],bool)"))]
+#[derive(Debug)]
 pub struct LogicRefDenied {
     pub logic_ref: [u8; 32],
     pub consumed: bool,
@@ -1454,6 +1466,7 @@ pub struct LogicRefDenied {
 #[event(discriminator = &event_discriminator(
     "ActionExecuted([u8;32],vec<[u8;32]>,vec<[u8;32]>,vec<[u8;32]>,vec<[u8;32]>)"
 ))]
+#[derive(Debug)]
 pub struct ActionExecuted {
     pub action_tree_root: [u8; 32],
     pub nullifiers: Vec<[u8; 32]>,
@@ -1467,6 +1480,7 @@ pub struct ActionExecuted {
 /// delta proof signs, unique per transaction and known to the sender before
 /// submission. Signature: `TransactionExecuted([u8;32])`.
 #[event(discriminator = &event_discriminator("TransactionExecuted([u8;32])"))]
+#[derive(Debug)]
 pub struct TransactionExecuted {
     pub transaction_id: [u8; 32],
 }
@@ -1475,6 +1489,7 @@ pub struct TransactionExecuted {
 /// untrustedForwarder, bytes input, bytes output);`. Signature:
 /// `ForwarderCallExecuted(pubkey,bytes,bytes)`.
 #[event(discriminator = &event_discriminator("ForwarderCallExecuted(pubkey,bytes,bytes)"))]
+#[derive(Debug)]
 pub struct ForwarderCallExecuted {
     pub untrusted_forwarder: Pubkey,
     pub input: Vec<u8>,

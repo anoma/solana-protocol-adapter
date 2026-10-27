@@ -23,6 +23,13 @@ e2e = [
 ]
 
 [dependencies]
+# The adapter's event types and discriminators, and the Anchor traits that
+# carry them. The adapter crate reads its address at build time
+# (PROTOCOL_ADAPTER_PROGRAM_ID).
+anchor-lang = { git = "https://github.com/otter-sec/anchor", rev = "2c9747a2d31bd5e94745cee6c083577f3e6675c0" }
+protocol-adapter = { path = "../../solana-pa-prototype/programs/solana-pa-prototype", default-features = false, features = [
+  "no-entrypoint",
+] }
 anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "7ed4f3ee29ec4f8840fd20599e28f2e50a79fb37", features = [
   "rpc",
 ] }
