@@ -1,5 +1,5 @@
 {
-  "address": "5zeqkB3kc9fd1RvaXB2GeMB53Jgf98QJtaFK38e6tTsc",
+  "address": "2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx",
   "metadata": {
     "name": "protocol_adapter",
     "version": "2.0.0-rc.6",
@@ -146,7 +146,7 @@
             "the authority to `upgrade_authority`."
           ],
           "writable": true,
-          "address": "G9k1mNUxzMcZaCc3yH4MY1nmYpaChE54YbbaArrJA3wa"
+          "address": "EjAoZUfxd6rNcM2S2cV1CiPwVTKR7Eg8fPmSSH6RB3UU"
         },
         {
           "name": "upgrade_authority",
@@ -1316,7 +1316,7 @@
             "address pins it."
           ],
           "writable": true,
-          "address": "G9k1mNUxzMcZaCc3yH4MY1nmYpaChE54YbbaArrJA3wa"
+          "address": "EjAoZUfxd6rNcM2S2cV1CiPwVTKR7Eg8fPmSSH6RB3UU"
         },
         {
           "name": "upgraded_program",
@@ -1324,7 +1324,7 @@
             "the address pins it."
           ],
           "writable": true,
-          "address": "5zeqkB3kc9fd1RvaXB2GeMB53Jgf98QJtaFK38e6tTsc"
+          "address": "2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx"
         },
         {
           "name": "buffer",
