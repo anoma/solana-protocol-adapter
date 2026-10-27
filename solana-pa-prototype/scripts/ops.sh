@@ -787,12 +787,12 @@ cmd_harness_programs() {
 }
 
 # The PA's production IDL as committed: the file the release tags hold and the
-# clients and the indexer copy from them.
+# clients and the indexer copy from them. `anchor idl build -o` writes the IDL
+# alone to its destination, leaving target/idl and target/types as they were.
 COMMITTED_IDL="idl/protocol_adapter.json"
 
 cmd_idl_write() {
-  mkdir -p "$(dirname "$COMMITTED_IDL")"
-  build_release_idl protocol_adapter "$COMMITTED_IDL"
+  anchor idl build -p protocol_adapter -o "$COMMITTED_IDL"
   echo "Wrote ${COMMITTED_IDL}"
 }
 
@@ -801,7 +801,7 @@ cmd_idl_check() {
   local fresh
   fresh="$(mktemp --suffix .json)"
   trap "rm -f '${fresh}'" EXIT
-  build_release_idl protocol_adapter "$fresh"
+  anchor idl build -p protocol_adapter -o "$fresh"
   if ! cmp "$fresh" "$COMMITTED_IDL"; then
     echo "❌ ${COMMITTED_IDL} differs from the release IDL: run ./scripts/dev.sh idl-write" >&2
     return 1
@@ -993,9 +993,11 @@ case "$COMMAND" in
     build_programs_release
     ;;
   idl-write)
+    require_cmd anchor
     cmd_idl_write
     ;;
   idl-check)
+    require_cmd anchor
     cmd_idl_check
     ;;
   clippy)

@@ -61,13 +61,8 @@ pub const fn event_discriminator(signature: &str) -> [u8; 8] {
         .update(b"event:")
         .update(signature.as_bytes())
         .finalize();
-    let mut discriminator = [0u8; 8];
-    let mut i = 0;
-    while i < discriminator.len() {
-        discriminator[i] = hash[i];
-        i += 1;
-    }
-    discriminator
+    let [a, b, c, d, e, f, g, h, ..] = hash;
+    [a, b, c, d, e, f, g, h]
 }
 
 /// The signature of `event` in `idl`: its name, then the types of its fields
@@ -78,17 +73,17 @@ pub const fn event_discriminator(signature: &str) -> [u8; 8] {
 #[cfg(feature = "idl-build")]
 pub fn idl_event_signature(idl: &anchor_lang::idl::types::Idl, event: &str) -> String {
     use anchor_lang::idl::types::{
-        IdlArrayLen, IdlDefinedFields, IdlType, IdlTypeDef, IdlTypeDefTy,
+        Idl, IdlArrayLen, IdlDefinedFields, IdlType, IdlTypeDef, IdlTypeDefTy,
     };
 
-    fn type_def<'a>(idl: &'a anchor_lang::idl::types::Idl, name: &str) -> &'a IdlTypeDef {
+    fn type_def<'a>(idl: &'a Idl, name: &str) -> &'a IdlTypeDef {
         idl.types
             .iter()
             .find(|t| t.name == name)
             .unwrap_or_else(|| panic!("the IDL defines no type {name}"))
     }
 
-    fn struct_sig(idl: &anchor_lang::idl::types::Idl, event: &str, def: &IdlTypeDef) -> String {
+    fn struct_sig(idl: &Idl, event: &str, def: &IdlTypeDef) -> String {
         let types: Vec<String> = match &def.ty {
             IdlTypeDefTy::Struct { fields: None } => Vec::new(),
             IdlTypeDefTy::Struct {
@@ -112,7 +107,7 @@ pub fn idl_event_signature(idl: &anchor_lang::idl::types::Idl, event: &str) -> S
         format!("{}({})", def.name, types.join(","))
     }
 
-    fn ty(idl: &anchor_lang::idl::types::Idl, event: &str, field: &str, t: &IdlType) -> String {
+    fn ty(idl: &Idl, event: &str, field: &str, t: &IdlType) -> String {
         let uncovered = || -> ! {
             panic!(
                 "event {event}: field {field} has type {t:?}, which the signature spelling does not cover"

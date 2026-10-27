@@ -500,14 +500,6 @@ build_release_idls() {
   done
 }
 
-# <name>'s production IDL alone, written to <idl_path> (no TypeScript types),
-# leaving target/idl and target/types as they were.
-build_release_idl() {
-  local name="$1" idl_path="$2"
-  require_cmd anchor
-  anchor idl build -p "$name" -o "$idl_path"
-}
-
 # The production build: plain `anchor build` of the cluster programs, none of
 # their dev features. Each program with dev features gets its production IDL
 # checked against its development IDL, so this stays a self-checking command
