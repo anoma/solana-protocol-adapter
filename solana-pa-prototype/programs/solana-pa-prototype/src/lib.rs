@@ -310,12 +310,13 @@ pub mod protocol_adapter {
         require!(clock.slot > txdata.expires_slot, PAError::TxDataNotExpired);
 
         msg!(
-            "Expired TxData closed: upload_id={}, authority={}, expires_slot={}, current_slot={}",
+            "Expired TxData closed: upload_id={}, expires_slot={}, current_slot={}",
             upload_id,
-            authority,
             txdata.expires_slot,
             clock.slot
         );
+        // `{}` on a Pubkey links base58 encoding into the program (about 11 KiB); the log syscall does not.
+        authority.log();
         Ok(())
     }
 
