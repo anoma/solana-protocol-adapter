@@ -790,9 +790,8 @@ cmd_harness_programs() {
 COMMITTED_IDL="idl/protocol_adapter.json"
 
 cmd_idl_write() {
-  build_release_idls
   mkdir -p "$(dirname "$COMMITTED_IDL")"
-  cp target/idl/protocol_adapter.json "$COMMITTED_IDL"
+  build_release_idl protocol_adapter "$COMMITTED_IDL"
   echo "Wrote ${COMMITTED_IDL}"
 }
 
@@ -800,9 +799,8 @@ cmd_idl_write() {
 cmd_idl_check() {
   local fresh
   fresh="$(mktemp --suffix .json)"
-  trap 'rm -f "$fresh"; trap - RETURN' RETURN
-  build_release_idls
-  cp target/idl/protocol_adapter.json "$fresh"
+  trap "rm -f '${fresh}'" EXIT
+  build_release_idl protocol_adapter "$fresh"
   if ! cmp "$fresh" "$COMMITTED_IDL"; then
     echo "❌ ${COMMITTED_IDL} differs from the release IDL: run ./scripts/dev.sh idl-write" >&2
     return 1
