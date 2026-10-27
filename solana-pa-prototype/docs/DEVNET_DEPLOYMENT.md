@@ -2,7 +2,7 @@
 
 Live state is always what `./scripts/dev.sh status --cluster devnet` reports; this file records what was deployed, by whom, and when. Update it after every deploy, upgrade, pause, unpause, or teardown.
 
-**Record last verified:** 2026-10-22
+**Record last verified:** 2026-10-27
 
 ## V2 fresh deployment (addresses since 2026-10-27, not yet deployed)
 
