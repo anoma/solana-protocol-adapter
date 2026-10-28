@@ -114,7 +114,8 @@ describe("protocol-adapter (initialize)", () => {
     );
     assert.isFalse(state.paused, "the adapter starts unpaused");
     assert.equal(state.nextIndex.toNumber(), 0, "the tree starts empty");
-    assert.equal(state.currentDepth, 1, "the tree starts at depth 1");
+    assert.equal(state.currentDepth, 0, "the tree starts at depth 0, as pa-evm's");
+    assert.deepEqual(state.frontier, [], "the empty tree has no left siblings");
     assert.deepEqual(Buffer.from(state.root as number[]), EMPTY_TREE_ROOT_INITIAL, "the root is the empty tree's");
     // pa-evm's initializer sets the owner (OwnershipTransferred from the zero
     // address), adds the empty tree's root (CommitmentTreeRootAdded) and

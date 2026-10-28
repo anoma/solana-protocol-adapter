@@ -43,7 +43,10 @@ fn test_padding_leaf_matches_arm_risc0() {
 fn test_empty_tree_root_is_padding_based() {
     let state = create_test_pa_state();
     assert_eq!(state.next_index, 0);
-    assert_eq!(state.current_depth, 1, "test state should start at depth 1");
+    assert_eq!(
+        state.current_depth, 0,
+        "the empty tree has depth 0, as pa-evm's"
+    );
     let root = state.root_digest();
     assert_ne!(
         root,
@@ -52,6 +55,104 @@ fn test_empty_tree_root_is_padding_based() {
     );
     assert_eq!(root, EMPTY_TREE_ROOT_INITIAL);
     assert_eq!(root, PADDING_LEAF);
+}
+
+/// pa-evm V2's `MerkleTree` (`contracts/src/libs/MerkleTree.sol` on `next`):
+/// `setup`, `push` and `currentRoot`, line for line.
+struct EvmMerkleTree {
+    leaf_count: u64,
+    left_siblings: Vec<Digest>,
+}
+
+impl EvmMerkleTree {
+    fn setup() -> Self {
+        Self {
+            leaf_count: 0,
+            left_siblings: Vec::new(),
+        }
+    }
+
+    fn depth(&self) -> usize {
+        self.left_siblings.len()
+    }
+
+    fn push(&mut self, leaf: Digest) {
+        let leaf_index = self.leaf_count;
+        self.leaf_count += 1;
+        let mut node = leaf;
+        let mut level = 0;
+        let mut node_index = leaf_index;
+        while node_index & 1 == 1 {
+            node = hash_two(&self.left_siblings[level], &node);
+            level += 1;
+            node_index >>= 1;
+        }
+        if level == self.depth() {
+            self.left_siblings.push(node);
+        } else {
+            self.left_siblings[level] = node;
+        }
+    }
+
+    fn current_root(&self) -> Digest {
+        let mut node_index = self.leaf_count;
+        let mut empty_subtree_root = PADDING_LEAF;
+        let mut node = empty_subtree_root;
+        for level in 0..self.depth() {
+            node = if node_index & 1 == 1 {
+                hash_two(&self.left_siblings[level], &node)
+            } else {
+                hash_two(&node, &empty_subtree_root)
+            };
+            empty_subtree_root = hash_two(&empty_subtree_root, &empty_subtree_root);
+            node_index >>= 1;
+        }
+        node
+    }
+}
+
+/// The commitment tree is pa-evm V2's after every push, starting from the
+/// empty tree: the same depth, capacity, left siblings (what
+/// `commitmentTreeLeftSiblings` returns) and root.
+#[test]
+fn tree_matches_evm_merkle_tree_from_empty_through_every_push() {
+    let mut state = create_test_pa_state();
+    let mut evm = EvmMerkleTree::setup();
+    for leaf_count in 0..=70u64 {
+        let frontier: Vec<Digest> = (0..state.frontier.len())
+            .map(|level| state.get_frontier(level))
+            .collect();
+        assert_eq!(
+            state.next_index, evm.leaf_count,
+            "leaf count after {leaf_count} pushes"
+        );
+        assert_eq!(
+            state.depth(),
+            evm.depth(),
+            "depth after {leaf_count} pushes"
+        );
+        assert_eq!(
+            state.capacity(),
+            1u64 << evm.depth(),
+            "capacity after {leaf_count} pushes"
+        );
+        assert_eq!(
+            frontier, evm.left_siblings,
+            "left siblings after {leaf_count} pushes"
+        );
+        assert_eq!(
+            state.root_digest(),
+            evm.current_root(),
+            "root after {leaf_count} pushes"
+        );
+
+        let leaf = hash_two(
+            &Digest::from_bytes([0xab; 32]),
+            &Digest::from_bytes(leaf_count.to_le_bytes().repeat(4).try_into().unwrap()),
+        );
+        append_to_tree(&mut state, leaf).unwrap();
+        evm.push(leaf);
+    }
 }
 
 #[test]
