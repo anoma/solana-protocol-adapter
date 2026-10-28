@@ -829,10 +829,12 @@ fn execute_settlement(
 
     let ml = marker_lamports(&Rent::get()?);
 
-    // The roots found historical so far. The root set does not change during
-    // the settlement, so each root is checked once; a check may derive a
-    // marker PDA (~1500 CU).
-    let mut historical_roots: Vec<arm_core::Digest> = Vec::new();
+    let mut historical_roots = root::HistoricalRoots::new(
+        state.root,
+        pa_state_key,
+        accounts.remaining,
+        nullifier_count,
+    );
 
     for action in &instance.actions {
         let executed = settle::process_action(action, |resource| {
@@ -846,19 +848,7 @@ fn execute_settlement(
                     commitment_tree_root,
                     ..
                 } => {
-                    if !historical_roots.contains(commitment_tree_root) {
-                        require!(
-                            root::is_root_valid(
-                                &state.root,
-                                &crate::ID,
-                                pa_state_key,
-                                commitment_tree_root,
-                                accounts.remaining,
-                            ),
-                            PAError::NonExistingRoot
-                        );
-                        historical_roots.push(*commitment_tree_root);
-                    }
+                    historical_roots.require_historical(commitment_tree_root)?;
                     let marker = nullifier_markers
                         .next()
                         .ok_or(PAError::InvalidTransactionData)?;

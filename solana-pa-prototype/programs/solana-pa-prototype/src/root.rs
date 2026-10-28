@@ -17,7 +17,9 @@ use arm_core::Digest;
 #[constant]
 pub const ROOT_SEED: &[u8] = b"root";
 
-/// Derive the PDA address for a root marker.
+/// Derive the PDA address for a root marker. The derivation costs about
+/// 1500 CU, which is why a settlement checks each root once
+/// (`HistoricalRoots`).
 pub fn derive_root_pda(
     program_id: &Pubkey,
     pa_state: &Pubkey,
@@ -102,4 +104,58 @@ pub fn is_root_valid(
     remaining_accounts
         .iter()
         .any(|acc| acc.key == &expected_pda && acc.owner == program_id)
+}
+
+/// A settlement's check that the roots its consumed resources reference are
+/// historical, against the root set as it stood before the transaction: the
+/// set does not change until every action ran, as pa-evm's. Each root is
+/// checked once (see `derive_root_pda`).
+pub struct HistoricalRoots<'a, 'info> {
+    latest_root: [u8; 32],
+    pa_state_key: &'a Pubkey,
+    remaining_accounts: &'a [AccountInfo<'info>],
+    accepted: Vec<Digest>,
+}
+
+impl<'a, 'info> HistoricalRoots<'a, 'info> {
+    /// The check against the tree whose latest root is `latest_root`, its
+    /// markers among `remaining_accounts`, for a settlement consuming
+    /// `nullifier_count` resources, so at most that many roots.
+    pub fn new(
+        latest_root: [u8; 32],
+        pa_state_key: &'a Pubkey,
+        remaining_accounts: &'a [AccountInfo<'info>],
+        nullifier_count: usize,
+    ) -> Self {
+        Self {
+            latest_root,
+            pa_state_key,
+            remaining_accounts,
+            // The bump allocator never frees memory, so growing would waste
+            // heap.
+            accepted: Vec::with_capacity(nullifier_count),
+        }
+    }
+
+    /// Requires `root` to be historical, as pa-evm's
+    /// `_isCommitmentTreeRootHistorical` check.
+    ///
+    /// # Errors
+    /// * `PAError::NonExistingRoot` - `root` is not valid (`is_root_valid`)
+    pub fn require_historical(&mut self, root: &Digest) -> Result<()> {
+        if !self.accepted.contains(root) {
+            require!(
+                is_root_valid(
+                    &self.latest_root,
+                    &crate::ID,
+                    self.pa_state_key,
+                    root,
+                    self.remaining_accounts,
+                ),
+                PAError::NonExistingRoot
+            );
+            self.accepted.push(*root);
+        }
+        Ok(())
+    }
 }
