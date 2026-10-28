@@ -107,7 +107,7 @@ use arm_core::transaction::{Delta, Transaction};
 pub use error::PAError;
 use events::event_discriminator;
 use groth16::{check_selector, prepare_proof_for_verification};
-use merkle::{required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, MAX_TREE_DEPTH};
+use merkle::{required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, FULL_TREE_DEPTH};
 use state::*;
 pub use u256::U256;
 
@@ -645,8 +645,8 @@ fn maybe_grow_account<'info>(
     let final_next_index = state.next_index.saturating_add(num_commitments as u64);
     let required_depth = required_depth_for_leaves(final_next_index);
 
-    // Cap at MAX_TREE_DEPTH (merkle::push errors if exceeded)
-    let target_depth = required_depth.min(MAX_TREE_DEPTH);
+    // merkle::push refuses more leaves than the deepest tree holds.
+    let target_depth = required_depth.min(FULL_TREE_DEPTH);
 
     if target_depth <= state.depth() {
         return Ok(());
@@ -829,9 +829,6 @@ fn execute_settlement(
 
     let ml = marker_lamports(&Rent::get()?);
 
-    // The latest root before the transaction: pa-evm adds the transaction's
-    // root to its root set only after every action.
-    let latest_root = state.root;
     // The roots found historical so far. The root set does not change during
     // the settlement, so each root is checked once; a check may derive a
     // marker PDA (~1500 CU).
@@ -852,7 +849,7 @@ fn execute_settlement(
                     if !historical_roots.contains(commitment_tree_root) {
                         require!(
                             root::is_root_valid(
-                                &latest_root,
+                                &state.root,
                                 &crate::ID,
                                 pa_state_key,
                                 commitment_tree_root,

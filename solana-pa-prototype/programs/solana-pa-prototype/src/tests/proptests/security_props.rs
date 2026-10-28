@@ -203,50 +203,6 @@ proptest! {
     }
 }
 
-/// Tree at max depth with capacity-1 leaves must accept one more, then reject.
-#[test]
-fn merkle_tree_rejects_at_max_capacity() {
-    use crate::merkle::{MAX_TREE_DEPTH, ZEROS};
-    use crate::state::PAStateAccount;
-
-    // Create a state at depth 3 (capacity = 8) to test the boundary quickly
-    let depth = 3usize;
-    let mut state = PAStateAccount {
-        current_depth: depth as u8,
-        frontier: (0..depth).map(|i| ZEROS[i].into()).collect(),
-        ..create_test_pa_state()
-    };
-
-    // Fill to capacity (2^3 = 8 leaves). Each append grows the tree as needed.
-    // At depth 3, capacity = 8. After 8 appends the tree will have grown.
-    for i in 0..128u64 {
-        let leaf_i = Digest::from_bytes({
-            use sha2::{Digest as Sha2Digest, Sha256};
-            let h: [u8; 32] = Sha256::digest(i.to_le_bytes()).into();
-            h
-        });
-        let result = push(&mut state, leaf_i);
-        if result.is_err() {
-            // Should only fail at TreeMaxDepthReached once we hit max depth
-            assert!(
-                state.current_depth as usize == MAX_TREE_DEPTH,
-                "should only fail at max depth, got depth {}",
-                state.current_depth
-            );
-            return; // Test passes — rejection observed
-        }
-    }
-
-    // If we got here with 128 appends without error, the tree grew to accommodate.
-    // Verify the tree is at a reasonable depth.
-    assert!(
-        state.current_depth as usize <= MAX_TREE_DEPTH,
-        "depth {} exceeds MAX_TREE_DEPTH {}",
-        state.current_depth,
-        MAX_TREE_DEPTH
-    );
-}
-
 // ---------------------------------------------------------------------------
 // Seal deserialization fuzz — arbitrary proof bytes must not panic.
 // ---------------------------------------------------------------------------

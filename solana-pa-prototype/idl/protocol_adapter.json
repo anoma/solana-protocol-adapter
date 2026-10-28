@@ -1812,7 +1812,7 @@
     {
       "code": 6034,
       "name": "TreeMaxDepthReached",
-      "msg": "Tree has reached maximum depth (32 levels)"
+      "msg": "Commitment tree is full (2^32 leaves)"
     },
     {
       "code": 6035,
@@ -2209,7 +2209,7 @@
     {
       "name": "PAStateAccount",
       "docs": [
-        "Protocol Adapter state — commitment tree frontier with variable depth (0-32).",
+        "Protocol Adapter state — commitment tree frontier with variable depth (0-33).",
         "Nullifiers and historical roots are stored as separate PDA marker accounts."
       ],
       "type": {
@@ -2313,7 +2313,7 @@
           {
             "name": "current_depth",
             "docs": [
-              "Tree depth (0-32). Capacity = 2^current_depth."
+              "Tree depth (0-33). Capacity = 2^current_depth."
             ],
             "type": "u8"
           },

@@ -100,7 +100,7 @@ pub enum PAError {
     InvalidVerifierEntry,
 
     // Merkle tree errors
-    #[msg("Tree has reached maximum depth (32 levels)")]
+    #[msg("Commitment tree is full (2^32 leaves)")]
     TreeMaxDepthReached,
 
     // Close errors

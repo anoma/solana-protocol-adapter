@@ -1,7 +1,7 @@
 //! On-chain account definitions.
 //! Named "state" to avoid conflict with Anchor's internal "accounts" module.
 
-use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, MAX_TREE_DEPTH};
+use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, FULL_TREE_DEPTH, INITIAL_TREE_DEPTH};
 use anchor_lang::prelude::*;
 use arm_core::Digest;
 
@@ -18,7 +18,7 @@ pub const SCHEMA_VERSION: u8 = 4;
 pub const EMPTY_KIND_TREE_ROOT: [u8; 32] =
     hex_literal::hex!("cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06");
 
-/// Protocol Adapter state — commitment tree frontier with variable depth (0-32).
+/// Protocol Adapter state — commitment tree frontier with variable depth (0-33).
 /// Nullifiers and historical roots are stored as separate PDA marker accounts.
 #[account]
 #[derive(InitSpace)]
@@ -62,10 +62,10 @@ pub struct PAStateAccount {
     /// as pa-evm's `latestCommitmentTreeRoot`.
     pub root: [u8; 32],
     pub next_index: u64,
-    /// Tree depth (0-32). Capacity = 2^current_depth.
+    /// Tree depth (0-33). Capacity = 2^current_depth.
     pub current_depth: u8,
     /// Filled subtree hashes at each level. Grows via realloc when tree expands.
-    #[max_len(MAX_TREE_DEPTH)]
+    #[max_len(FULL_TREE_DEPTH)]
     pub frontier: Vec<[u8; 32]>,
     pub min_expiry_slots: u64,
     pub max_expiry_slots: u64,
@@ -91,7 +91,7 @@ impl PAStateAccount {
     /// the denylists. Every other field has a fixed size, so the account
     /// grows only with the frontier and the denylists.
     pub const fn space(depth: usize, denied: usize) -> usize {
-        Self::MAX_SPACE - size_of::<[u8; 32]>() * (MAX_TREE_DEPTH - depth)
+        Self::MAX_SPACE - size_of::<[u8; 32]>() * (FULL_TREE_DEPTH - depth)
             + size_of::<[u8; 32]>() * denied
     }
 
@@ -141,25 +141,14 @@ impl PAStateAccount {
         self.current_depth as usize
     }
 
-    pub fn root_digest(&self) -> Digest {
-        Digest::from_bytes(self.root)
-    }
-
     pub fn capacity(&self) -> u64 {
         1u64 << self.current_depth
     }
 
-    pub fn can_grow(&self) -> bool {
-        (self.current_depth as usize) < MAX_TREE_DEPTH
-    }
-
-    /// Returns the new level index. Caller must check `can_grow()` first.
-    pub fn grow(&mut self) -> usize {
-        debug_assert!(self.can_grow(), "caller must check can_grow()");
-        let new_level = self.current_depth as usize;
-        self.frontier.push([0u8; 32]); // Will be filled by caller
+    /// Adds a level to the tree, its left sibling for the caller to set.
+    pub fn grow(&mut self) {
+        self.frontier.push([0u8; 32]);
         self.current_depth += 1;
-        new_level
     }
 
     pub fn get_frontier(&self, level: usize) -> Digest {

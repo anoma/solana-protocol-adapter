@@ -13,15 +13,18 @@ use crate::state::PAStateAccount;
 /// `MerkleTree.setup`; the tree grows by one level each time a leaf fills it.
 pub const INITIAL_TREE_DEPTH: usize = 0;
 
-/// Maximum tree depth for the commitment tree.
-/// Supports up to 2^32 = 4,294,967,296 leaves.
+/// The commitment tree holds at most 2^`MAX_TREE_DEPTH` = 4,294,967,296
+/// leaves.
 pub const MAX_TREE_DEPTH: usize = 32;
 
-/// Precomputed zero hashes at each level of the tree.
+/// The depth of the tree of 2^`MAX_TREE_DEPTH` leaves, the deepest: the leaf
+/// that fills the depth-`MAX_TREE_DEPTH` tree grows it, as at every depth.
+pub const FULL_TREE_DEPTH: usize = MAX_TREE_DEPTH + 1;
+
+/// Precomputed zero hashes at each level of the deepest tree.
 /// zeros[0] = PADDING_LEAF, zeros[i] = hash(zeros[i-1], zeros[i-1]).
 /// Precomputed to avoid ~200k CU cost of on-chain hash computation.
-/// All 32 levels are needed even for variable-depth trees (for root computation).
-pub const ZEROS: [Digest; MAX_TREE_DEPTH] = [
+pub const ZEROS: [Digest; FULL_TREE_DEPTH] = [
     // Level 0: cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06
     Digest::new([
         0x832f1dcc, 0x7adb4584, 0xf91d43ec, 0x1f878aee, 0x5eaae740, 0x56c04f06, 0xc6f83e63,
@@ -182,6 +185,11 @@ pub const ZEROS: [Digest; MAX_TREE_DEPTH] = [
         0x2f104f25, 0xdbb5a0d2, 0x4a702639, 0xa759f5c4, 0x5408f667, 0x2d7b15fc, 0x3d85d5e5,
         0x6a97b8a9,
     ]),
+    // Level 32: 7e70786b1d52fc0412d75203ef2ac22de13d9596ace8a5a1ed5324c3ed7f31c3
+    Digest::new([
+        0x6b78707e, 0x04fc521d, 0x0352d712, 0x2dc22aef, 0x96953de1, 0xa1a5e8ac, 0xc32453ed,
+        0xc3317fed,
+    ]),
 ];
 
 /// Root of the empty tree = ZEROS[0] = PADDING_LEAF, pa-evm's `SHA256.EMPTY_HASH`.
@@ -199,20 +207,13 @@ pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
 
 /// Add a leaf to the commitment tree, as pa-evm V2's `MerkleTree.push`: one
 /// left-sibling write, the root of the subtree the leaf completes, and no root
-/// computation (`current_root` computes it).
+/// computation (`current_root` computes it). A leaf that fills the tree grows
+/// it by one level, its completed root the left sibling there.
 ///
-/// A leaf that fills the tree below `MAX_TREE_DEPTH` grows it by one level,
-/// its completed root the left sibling there. pa-evm grows a full depth-32
-/// tree too; the account cannot hold a 33rd level, so the next push is
-/// refused, but the root of the depth-33 tree, the full tree's root padded
-/// with the empty depth-32 subtree, is kept in `state.root`, where
-/// `current_root` reads it.
+/// Refused once the tree holds 2^`MAX_TREE_DEPTH` leaves, before any mutation.
 pub fn push(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
-    // The tree is full only at maximum depth with every slot used: below the
-    // maximum, filling a level grows immediately and doubles capacity, so
-    // next_index < capacity always holds afterwards. Reject before any mutation.
     require!(
-        state.next_index < state.capacity(),
+        state.next_index < 1 << MAX_TREE_DEPTH,
         PAError::TreeMaxDepthReached
     );
 
@@ -228,26 +229,18 @@ pub fn push(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
         node_index >>= 1;
     }
 
-    if level < state.depth() {
-        state.set_frontier(level, node);
-    } else if state.can_grow() {
-        let new_level = state.grow();
-        state.set_frontier(new_level, node);
-    } else {
-        state.root = hash_two(&node, &hash_two(&ZEROS[31], &ZEROS[31])).into();
+    if level == state.depth() {
+        state.grow();
     }
+    state.set_frontier(level, node);
     Ok(())
 }
 
 /// The root of the commitment tree, as pa-evm V2's `MerkleTree.currentRoot`.
 ///
 /// A tree with exactly 2^d leaves has depth d+1, so its root includes one
-/// level of padding, as pa-evm's. Only a tree full at `MAX_TREE_DEPTH` holds
-/// `capacity` leaves; its depth-33 root is the one `push` stored.
+/// level of padding, as pa-evm's.
 pub fn current_root(state: &PAStateAccount) -> Digest {
-    if state.next_index == state.capacity() {
-        return state.root_digest();
-    }
     let mut node_index = state.next_index;
     let mut node = ZEROS[0];
     for (level, empty_subtree_root) in ZEROS.iter().enumerate().take(state.depth()) {

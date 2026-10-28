@@ -13,10 +13,11 @@ function hashTwo(left: Buffer, right: Buffer): Buffer {
 }
 
 // ZEROS[0] = PADDING_LEAF; ZEROS[i] = hash(ZEROS[i-1], ZEROS[i-1]) — the
-// zero-subtree hashes from merkle.rs, derived rather than copied.
+// zero-subtree hashes from merkle.rs, up to the deepest tree's
+// (MAX_TREE_DEPTH + 1 levels), derived rather than copied.
 const ZEROS: Buffer[] = (() => {
   const zeros: Buffer[] = [EMPTY_TREE_ROOT_INITIAL];
-  for (let i = 1; i < MAX_TREE_DEPTH; i++) {
+  for (let i = 1; i <= MAX_TREE_DEPTH; i++) {
     zeros.push(hashTwo(zeros[i - 1], zeros[i - 1]));
   }
   return zeros;
@@ -31,11 +32,10 @@ type TreeState = {
 function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
   let nextIndex = BigInt(state.nextIndex.toString());
   const frontier: Buffer[] = state.frontier.map((f) => Buffer.from(f));
-  let fullRoot: Buffer | null = null;
 
   for (const leaf of leaves) {
-    if (nextIndex >= 1n << BigInt(frontier.length)) {
-      throw new Error("tree over capacity in root prediction");
+    if (nextIndex >= 1n << BigInt(MAX_TREE_DEPTH)) {
+      throw new Error("the commitment tree is full (2^32 leaves)");
     }
     let nodeIndex = nextIndex;
     nextIndex += 1n;
@@ -47,16 +47,10 @@ function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
       level += 1;
       nodeIndex >>= 1n;
     }
-    if (level < frontier.length) {
-      frontier[level] = node;
-    } else if (frontier.length < MAX_TREE_DEPTH) {
-      frontier.push(node);
-    } else {
-      fullRoot = hashTwo(node, hashTwo(ZEROS[MAX_TREE_DEPTH - 1], ZEROS[MAX_TREE_DEPTH - 1]));
-    }
+    // A leaf that fills the tree grows it by one level.
+    frontier[level] = node;
   }
 
-  if (fullRoot !== null) return fullRoot;
   let nodeIndex = nextIndex;
   let node: Buffer = ZEROS[0];
   for (let level = 0; level < frontier.length; level++) {
