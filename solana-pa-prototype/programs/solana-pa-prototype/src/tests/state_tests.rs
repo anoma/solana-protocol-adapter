@@ -90,7 +90,7 @@ fn each_side_is_checked_against_its_own_denylist() {
 
 /// pa-evm's `_isKindTreeRootAccepted`: a transaction is proven against
 /// the stored kind tree or against the empty one, which merges no kinds, so
-/// what balances under it also balances under the stored table.
+/// what balances under it also balances under the stored tree.
 #[test]
 fn the_stored_and_the_empty_kind_tree_are_accepted_and_no_other() {
     let stored = [7u8; 32];

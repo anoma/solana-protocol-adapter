@@ -105,40 +105,6 @@ mod settle_order_tests {
         }
     }
 
-    /// pa-evm `next`'s `_processAction` (`contracts/src/ProtocolAdapter.sol`),
-    /// line for line: the resources it visits, as (consumed, tag), and its
-    /// `ActionExecuted`.
-    fn evm_process_action(action: &ActionAggregated) -> (Vec<(bool, Digest)>, ActionExecuted) {
-        let resources = &action.resource_instances;
-        let consumed_count = resources.iter().filter(|r| r.is_consumed()).count();
-        let mut nullifiers = vec![[0u8; 32]; consumed_count];
-        let mut consumed_logic_refs = vec![[0u8; 32]; consumed_count];
-        let mut commitments = vec![[0u8; 32]; resources.len() - consumed_count];
-        let mut created_logic_refs = vec![[0u8; 32]; resources.len() - consumed_count];
-        let (mut consumed_index, mut created_index) = (0, 0);
-        let mut visited = Vec::new();
-        for resource in resources {
-            visited.push((resource.is_consumed(), resource.tag()));
-            if resource.is_consumed() {
-                nullifiers[consumed_index] = resource.tag().into();
-                consumed_logic_refs[consumed_index] = resource.logic_ref().into();
-                consumed_index += 1;
-            } else {
-                commitments[created_index] = resource.tag().into();
-                created_logic_refs[created_index] = resource.logic_ref().into();
-                created_index += 1;
-            }
-        }
-        let executed = ActionExecuted {
-            action_tree_root: action.action_tree_root.into(),
-            nullifiers,
-            consumed_logic_refs,
-            commitments,
-            created_logic_refs,
-        };
-        (visited, executed)
-    }
-
     /// The settlement takes an action's resources in the order of its list,
     /// as pa-evm's `_processAction`: each resource's checks, nullifier or
     /// commitment, forwarder calls and payload events run when
@@ -147,7 +113,6 @@ mod settle_order_tests {
     #[test]
     fn process_action_visits_the_resources_in_list_order_as_pa_evm() {
         let action = interleaved_action();
-        let (evm_visited, evm_executed) = evm_process_action(&action);
 
         let mut visited = Vec::new();
         let executed = process_action(&action, |resource| {
@@ -156,14 +121,28 @@ mod settle_order_tests {
         })
         .unwrap();
 
+        let tag = |byte: u8| Digest::from_bytes([byte; 32]);
         assert_eq!(
-            visited, evm_visited,
-            "resources visited, as (consumed, tag), against pa-evm's loop"
+            visited,
+            vec![
+                (false, tag(1)),
+                (true, tag(2)),
+                (false, tag(3)),
+                (true, tag(4))
+            ],
+            "resources visited, as (consumed, tag), in list order"
         );
+        let expected = ActionExecuted {
+            action_tree_root: [5u8; 32],
+            nullifiers: vec![[2u8; 32], [4u8; 32]],
+            consumed_logic_refs: vec![[102u8; 32], [104u8; 32]],
+            commitments: vec![[1u8; 32], [3u8; 32]],
+            created_logic_refs: vec![[101u8; 32], [103u8; 32]],
+        };
         assert_eq!(
             borsh::to_vec(&executed).unwrap(),
-            borsh::to_vec(&evm_executed).unwrap(),
-            "ActionExecuted: {executed:?}, pa-evm's: {evm_executed:?}"
+            borsh::to_vec(&expected).unwrap(),
+            "ActionExecuted: {executed:?}, expected {expected:?}"
         );
     }
 
