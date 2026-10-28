@@ -32,7 +32,7 @@ use surfpool_sdk::Pubkey;
 /// devnet's, from the copy the repository commits.
 const VERIFIER_ROUTER: &str = "BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg";
 /// The kind tree root the owner sets before the settlement, which settles
-/// under the empty kind table, accepted with any stored root.
+/// under the empty kind tree, accepted with any stored root.
 const KIND_TREE_ROOT: [u8; 32] = [0x4b; 32];
 /// The logic refs the owner denies, one for consumed resources and one for
 /// created ones.
@@ -303,7 +303,7 @@ async fn every_read_answers_what_the_adapter_was_set_up_with() -> anyhow::Result
     println!("empty_kind_tree_root: {empty_kind_tree_root}");
     anyhow::ensure!(
         empty_kind_tree_root == padding,
-        "empty_kind_tree_root() is {empty_kind_tree_root}, the root of the empty kind table \
+        "empty_kind_tree_root() is {empty_kind_tree_root}, the root of the empty kind tree \
          is arm's padding leaf {padding}"
     );
 

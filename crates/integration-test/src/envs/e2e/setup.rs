@@ -59,7 +59,7 @@ impl Environment {
                 // The suite makes the owner's calls as the payer, so on the
                 // fork the payer owns the adapter.
                 env.take_ownership(owner).await?;
-                env.ensure_devnet_kind_table().await?;
+                env.ensure_devnet_kind_tree().await?;
                 Ok(env)
             }
             E2eRuntime::Cluster { rpc_url, payer } => {
@@ -78,20 +78,20 @@ impl Environment {
                     .context("failed to fetch the cluster's genesis hash")?;
                 ensure_devnet(&genesis_hash)?;
                 let env = Self::assemble(None, rpc, Arc::new(payer), pa, prover).await?;
-                env.ensure_devnet_kind_table().await?;
+                env.ensure_devnet_kind_tree().await?;
                 Ok(env)
             }
         }
     }
 
-    /// Makes solana-devnet's kind table the prover's, and checks that the
-    /// adapter stores its root: the tests prove against devnet's kind table.
-    async fn ensure_devnet_kind_table(&self) -> anyhow::Result<()> {
-        let loaded = super::kind_table::load_devnet()?;
+    /// Makes solana-devnet's kind tree the prover's, and checks that the
+    /// adapter stores its root: the tests prove against devnet's kind tree.
+    async fn ensure_devnet_kind_tree(&self) -> anyhow::Result<()> {
+        let loaded = super::kind_tree::load_devnet()?;
         let stored = self.protocol_adapter.state().await?.kind_tree_root;
         anyhow::ensure!(
             stored == loaded,
-            "the protocol adapter stores the kind table {}, the tests prove against {}",
+            "the protocol adapter stores the kind tree root {}, the tests prove against {}",
             anoma_rm_risc0::Digest::from_bytes(stored),
             anoma_rm_risc0::Digest::from_bytes(loaded)
         );

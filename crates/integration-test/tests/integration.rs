@@ -29,6 +29,7 @@ mod e2e_test {
 async fn a_call_to_a_program_no_forwarder_is_registered_for_fails_before_anything_is_sent()
 -> anyhow::Result<()> {
     use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};
+    use anoma_rm_risc0::aggregation_instance::AggregationResourceInstance;
     use anoma_rm_risc0::logic_instance::ExpirableBlob;
 
     let mut env = SolanaLocalEnv::setup_bare().await?;
@@ -42,15 +43,18 @@ async fn a_call_to_a_program_no_forwarder_is_registered_for_fails_before_anythin
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
     };
-    tx.as_arm_mut()
+    let AggregationResourceInstance::Created { app_data, .. } = &mut tx
+        .as_arm_mut()
         .aggregation
         .as_mut()
         .context("the transaction is aggregated")?
         .instance
         .actions[0]
-        .created_publics[0]
-        .app_data
-        .external_payload = vec![ExpirableBlob {
+        .resource_instances[1]
+    else {
+        anyhow::bail!("the trivial action's second resource is not its created one");
+    };
+    app_data.external_payload = vec![ExpirableBlob {
         blob: anoma_rm_risc0::utils::bytes_to_words(&call.encode()),
         deletion_criterion: 0,
     }];
