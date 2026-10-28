@@ -2,7 +2,7 @@
 //! run in the runtime's simulation, ending in `Simulated` when the
 //! transaction would execute and in the adapter's error otherwise.
 
-use anoma_pa_solana_client::PaError;
+use anoma_pa_solana_client::generated::protocol_adapter::error::ProtocolAdapterError;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
 use anoma_pa_testkit::environment::ProtocolAdapter as _;
 use anoma_pa_testkit::fixtures::trivial;
@@ -72,7 +72,7 @@ async fn an_unproven_transaction_simulated_with_its_proof_verified_has_an_invali
     let simulated = env.protocol_adapter.simulate(tx, false).await?;
 
     anyhow::ensure!(
-        simulated == Err(PaError::InvalidProof),
+        simulated == Err(ProtocolAdapterError::InvalidProof),
         "the unproven transaction's simulation ends with {simulated:?}, not InvalidProof"
     );
     Ok(())
@@ -88,7 +88,7 @@ async fn a_settled_transaction_simulated_again_fails_as_its_settlement_would() -
     for skip in [false, true] {
         let simulated = env.protocol_adapter.simulate(tx.clone(), skip).await?;
         anyhow::ensure!(
-            simulated == Err(PaError::PreExistingNullifier),
+            simulated == Err(ProtocolAdapterError::PreExistingNullifier),
             "the settled transaction's simulation (skip {skip}) ends with {simulated:?}, not \
              PreExistingNullifier"
         );
@@ -105,7 +105,7 @@ async fn a_paused_adapter_refuses_a_simulation() -> anyhow::Result<()> {
     let simulated = env.protocol_adapter.simulate(tx, true).await?;
 
     anyhow::ensure!(
-        simulated == Err(PaError::EnforcedPause),
+        simulated == Err(ProtocolAdapterError::EnforcedPause),
         "the paused adapter's simulation ends with {simulated:?}, not EnforcedPause"
     );
     Ok(())

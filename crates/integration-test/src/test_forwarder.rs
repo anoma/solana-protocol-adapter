@@ -3,9 +3,19 @@
 //! settlement's external call gives it, and the instructions a test sends it
 //! directly.
 
-use anoma_pa_solana_client::anchor_instruction_disc;
+use anchor_lang::InstructionData;
 use solana_instruction::Instruction;
 use surfpool_sdk::Pubkey;
+
+/// The test forwarder's bindings, generated from its production IDL
+/// (`idls/test_forwarder.json`, which `dev.sh idl-check` checks against a
+/// fresh build). The generated code reads `anchor_lang` from its parent, as
+/// Anchor's prelude names it.
+mod generated {
+    use anchor_lang::prelude::*;
+
+    declare_program!(test_forwarder);
+}
 
 /// The `forward_call` mode that relays the call to the program its first
 /// remaining account names, handing it the rest: a program the adapter
@@ -34,12 +44,11 @@ pub fn write_input(bytes: &[u8]) -> Vec<u8> {
 /// instruction of its own: it logs `lines` lines of 100 bytes, which fill a
 /// transaction's program-log budget for the instructions after it.
 pub fn log_ix(program: &Pubkey, lines: u8) -> Instruction {
-    let input = [MODE_LOG, lines];
-    let mut data = anchor_instruction_disc("forward_call").to_vec();
-    data.extend_from_slice(&[0; 32]);
-    data.extend_from_slice(&(input.len() as u32).to_le_bytes());
-    data.extend_from_slice(&input);
-    Instruction::new_with_bytes(*program, &data, vec![])
+    let call = generated::test_forwarder::client::args::ForwardCall {
+        _logic_ref: [0; 32],
+        input: vec![MODE_LOG, lines],
+    };
+    Instruction::new_with_bytes(*program, &call.data(), vec![])
 }
 
 #[cfg(test)]

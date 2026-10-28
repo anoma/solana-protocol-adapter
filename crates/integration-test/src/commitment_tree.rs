@@ -1,6 +1,6 @@
 //! The adapter's commitment tree as pa-testkit's `FrontierCommitmentTree`.
 
-use anoma_pa_solana_client::PAStateAccount;
+use anoma_pa_solana_client::generated::protocol_adapter::accounts::PAStateAccount;
 use anoma_pa_testkit::commitment_tree::{FrontierCommitmentTree, depth_at};
 use anoma_rm_risc0::Digest;
 use anyhow::Context;

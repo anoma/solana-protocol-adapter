@@ -62,10 +62,12 @@ Commands:
   build-release          Build the production binaries, no deploy (verifies
                          each production IDL is its development IDL minus
                          the declared dev-only instructions)
-  idl-write              Write the PA's production IDL to idl/protocol_adapter.json,
-                         the IDL every release tag holds
-  idl-check              Fail when idl/protocol_adapter.json is not the IDL a
-                         fresh production build produces
+  idl-write              Write the committed IDLs: the PA's production IDL to
+                         idl/protocol_adapter.json, the IDL every release tag
+                         holds, and the test forwarder's to the harness's
+                         idls/test_forwarder.json
+  idl-check              Fail when a committed IDL is not the IDL a fresh
+                         production build produces
   clippy                 Lint every program, and each one with dev features
                          again with them enabled
   unit-test              The Rust unit tests (cargo test --workspace) at the
@@ -84,11 +86,15 @@ Commands:
   harness-lint           The integration-test harness's format check, and
                          clippy with its e2e feature, warnings denied
   harness-test [--e2e]   The integration-test harness's tests on its local
-                         runtime; with --e2e, its e2e cases with real proofs,
-                         on its local runtime (E2E_RUNTIME=devnet: on a fork
-                         of devnet, DEVNET_RPC_URL), proven by the queue
+                         runtime, and its e2e environment's unit tests; with
+                         --e2e, its e2e cases with real proofs, on its local
+                         runtime (E2E_RUNTIME=devnet: on a fork of devnet,
+                         DEVNET_RPC_URL), proven by the queue
                          (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN) or locally
-                         (E2E_PROVER=local)
+                         (E2E_PROVER=local). The suite refuses
+                         E2E_RUNTIME=cluster, which runs only a consumer's
+                         explicit settlement e2e tests (the forwarder's
+                         wrap/transfer/unwrap)
   validator              Start the local test validator (RISC0 verifier stack
                          and Program Metadata program copied from devnet,
                          marker fixtures preloaded)
@@ -786,27 +792,39 @@ cmd_harness_programs() {
   return "$failed"
 }
 
-# The PA's production IDL as committed: the file the release tags hold and the
-# clients and the indexer copy from them. `anchor idl build -o` writes the IDL
-# alone to its destination, leaving target/idl and target/types as they were.
-COMMITTED_IDL="idl/protocol_adapter.json"
+# The production IDLs as committed, by program: the PA's, the file the release
+# tags hold and the clients and the indexer copy from them, and the test
+# forwarder's, which the integration-test harness generates its bindings from.
+# `anchor idl build -o` writes the IDL alone to its destination, leaving
+# target/idl and target/types as they were.
+declare -A COMMITTED_IDLS=(
+  [protocol_adapter]="idl/protocol_adapter.json"
+  [test_forwarder]="${HARNESS_DIR}/idls/test_forwarder.json"
+)
 
 cmd_idl_write() {
-  anchor idl build -p protocol_adapter -o "$COMMITTED_IDL"
-  echo "Wrote ${COMMITTED_IDL}"
+  local program
+  for program in "${!COMMITTED_IDLS[@]}"; do
+    anchor idl build -p "$program" -o "${COMMITTED_IDLS[$program]}"
+    echo "Wrote ${COMMITTED_IDLS[$program]}"
+  done
 }
 
-# Fail when the committed IDL is not, byte for byte, a fresh production build's.
+# Fail when a committed IDL is not, byte for byte, a fresh production build's.
 cmd_idl_check() {
-  local fresh
+  local fresh program failed=0
   fresh="$(mktemp --suffix .json)"
   trap "rm -f '${fresh}'" EXIT
-  anchor idl build -p protocol_adapter -o "$fresh"
-  if ! cmp "$fresh" "$COMMITTED_IDL"; then
-    echo "❌ ${COMMITTED_IDL} differs from the release IDL: run ./scripts/dev.sh idl-write" >&2
-    return 1
-  fi
-  echo "✅ ${COMMITTED_IDL} is the release IDL"
+  for program in "${!COMMITTED_IDLS[@]}"; do
+    anchor idl build -p "$program" -o "$fresh"
+    if cmp "$fresh" "${COMMITTED_IDLS[$program]}"; then
+      echo "✅ ${COMMITTED_IDLS[$program]} is the release IDL"
+    else
+      echo "❌ ${COMMITTED_IDLS[$program]} differs from the release IDL: run ./scripts/dev.sh idl-write" >&2
+      failed=1
+    fi
+  done
+  return "$failed"
 }
 
 # Deterministic (verifiable) build of the PA via solana-verify's pinned
@@ -1035,12 +1053,14 @@ case "$COMMAND" in
     require_cmd cargo
     if [[ "$E2E" == "true" ]]; then
       # The e2e cases (the harness reads E2E_RUNTIME, with DEVNET_RPC_URL for
-      # devnet, E2E_PROVER, and QUEUE_BASE_URL and QUEUE_AUTH_TOKEN for the
-      # queue) one at a time, like
+      # devnet, refusing cluster; E2E_PROVER; and QUEUE_BASE_URL and
+      # QUEUE_AUTH_TOKEN for the queue) one at a time, like
       # pa-evm's, in release mode, since risc0 proves far faster optimized.
       RUST_TEST_THREADS=1 cargo test --release --manifest-path "${HARNESS_DIR}/Cargo.toml" --features e2e e2e_test
     else
       cargo test --manifest-path "${HARNESS_DIR}/Cargo.toml"
+      # The e2e environment's unit tests (its config), which prove nothing.
+      cargo test --manifest-path "${HARNESS_DIR}/Cargo.toml" --features e2e --lib envs::e2e::
     fi
     ;;
   refresh-devnet-programs)

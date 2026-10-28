@@ -1,7 +1,7 @@
 [package]
 name = "anoma-pa-solana-integration-test"
-description = "Integration and e2e tests for the Anoma Solana protocol adapter: pa-testkit's environments on a surfpool runtime."
-version = "0.3.0"
+description = "Integration and e2e tests for the Anoma Solana protocol adapter: pa-testkit's environments on a surfpool runtime or, for e2e settlements, on a cluster itself."
+version = "0.4.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/anoma/solana-protocol-adapter"
@@ -20,17 +20,15 @@ e2e = [
   "anoma-pa-testkit/prove",
   "dep:anoma-risc0-kind-tables",
   "dep:dotenvy",
+  "dep:solana-cluster-type",
+  "dep:url",
 ]
 
 [dependencies]
-# The adapter's event types and discriminators, and the Anchor traits that
-# carry them. The adapter crate reads its address at build time
-# (PROTOCOL_ADAPTER_PROGRAM_ID).
+# The Anchor traits of the client's generated types (their discriminators,
+# account encodings): the client's Anchor commit.
 anchor-lang = { git = "https://github.com/otter-sec/anchor", rev = "2c9747a2d31bd5e94745cee6c083577f3e6675c0" }
-protocol-adapter = { path = "../../solana-pa-prototype/programs/solana-pa-prototype", default-features = false, features = [
-  "no-entrypoint",
-] }
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "7ed4f3ee29ec4f8840fd20599e28f2e50a79fb37", features = [
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", tag = "bindings/v0.8.0", features = [
   "rpc",
 ] }
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "fd6a7becc1f8a5a43c3fa78ee7c36adec73fc50a", default-features = false, features = [
@@ -46,6 +44,9 @@ bs58 = "0.5"
 dotenvy = { version = "0.15", optional = true }
 futures = "0.3"
 serde_json = "1.0"
+# The genesis hashes of the clusters, which name the cluster an e2e runtime
+# reaches.
+solana-cluster-type = { version = "3", optional = true }
 solana-commitment-config = "3.1"
 solana-instruction = "3"
 solana-keypair = "3.1"
@@ -59,9 +60,23 @@ solana-signature = "3"
 solana-signer = "3"
 solana-transaction = "4"
 solana-transaction-status-client-types = "4"
+# The token programs a live cluster is sent the payer's instructions of.
+spl-associated-token-account-interface = "2"
+spl-token-2022-interface = "2"
+spl-token-interface = "2"
 surfpool-sdk = "=1.6.0"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
+# The host of an e2e runtime's RPC endpoint, which must not be a public one.
+url = { version = "2", optional = true }
 
 [dev-dependencies]
 solana-system-interface = { version = "3.2", features = ["bincode"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# The cfgs `declare_program!`'s output tests: the Solana target, and the
+# `idl-build` feature of a program crate, which this crate is not.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(target_os, values("solana"))',
+  'cfg(feature, values("idl-build"))',
+] }

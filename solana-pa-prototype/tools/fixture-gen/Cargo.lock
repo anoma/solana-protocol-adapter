@@ -419,13 +419,15 @@ dependencies = [
 
 [[package]]
 name = "anoma-pa-solana-client"
-version = "0.7.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=7ed4f3ee29ec4f8840fd20599e28f2e50a79fb37#7ed4f3ee29ec4f8840fd20599e28f2e50a79fb37"
+version = "0.8.0"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?tag=bindings%2Fv0.8.0#8cc3c3a7fb54c9926b8e1ea9b280a99457f679aa"
 dependencies = [
  "anoma-rm-risc0",
  "bincode",
+ "heck",
  "risc0-zkvm",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
 ]
 

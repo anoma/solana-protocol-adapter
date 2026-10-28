@@ -4,8 +4,9 @@
 //! `dev.sh refresh-devnet-programs`), a verifier registered under the router,
 //! and the adapter, initialized against that verifier.
 
-use anoma_pa_solana_client::accounts::decode_verifier_entry;
+use anchor_lang::AccountDeserialize;
 use anoma_pa_solana_client::derive_verifier_router_pdas;
+use anoma_pa_solana_client::generated::verifier_router::accounts::VerifierEntry;
 use anoma_pa_solana_client::submission::read_verifier_program;
 use anyhow::Context;
 use solana_keypair::Keypair;
@@ -75,7 +76,7 @@ pub(in crate::envs) async fn deploy(
     payer: &Keypair,
     verifier: Verifier,
 ) -> anyhow::Result<Pubkey> {
-    let rpc = runtime::client(surfnet);
+    let rpc = runtime::client(surfnet.rpc_url().to_string());
     let router: Pubkey = VERIFIER_ROUTER.parse().expect("a base58 address");
     runtime::deploy(surfnet, router, VERIFIER_ROUTER_SO, payer.pubkey())?;
     let program_metadata: Pubkey = PROGRAM_METADATA.parse().expect("a base58 address");
@@ -106,7 +107,7 @@ pub(in crate::envs) async fn deploy(
         .get_account_data(&entry)
         .await
         .with_context(|| format!("failed to read the verifier entry {entry}"))?;
-    let selector = decode_verifier_entry(&entry_data)
+    let selector = VerifierEntry::try_deserialize(&mut &*entry_data)
         .with_context(|| format!("{entry} is not a verifier entry"))?
         .selector;
     anyhow::ensure!(
