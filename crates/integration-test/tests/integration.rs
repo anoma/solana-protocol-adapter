@@ -5,7 +5,9 @@
 use anchor_lang::Discriminator;
 use anoma_pa_solana_client::generated::protocol_adapter::client::args;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
+use anoma_pa_testkit::environment::Refusal;
 use anoma_pa_testkit::fixtures::{ordered, passthrough, trivial};
+use anoma_pa_testkit::witness::AppData;
 use anoma_pa_testkit::{execute_tx, prove_actions};
 use anyhow::Context;
 use solana_message::VersionedMessage;
@@ -317,8 +319,6 @@ async fn a_taken_adapter_obeys_its_new_owner() -> anyhow::Result<()> {
 // does), so the adapter is what stands in its way.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_transaction_repeating_a_nullifier_is_refused_as_spent() -> anyhow::Result<()> {
-    use anoma_pa_testkit::environment::Refusal;
-
     let mut env = SolanaLocalEnv::setup_bare().await?;
     let action = || {
         trivial::build(57, trivial::Overrides::default())
@@ -340,7 +340,7 @@ async fn a_transaction_repeating_a_nullifier_is_refused_as_spent() -> anyhow::Re
 async fn refusal_of_two_consumed_naming_an_unknown_root(
     first: ordered::Logic,
     second: ordered::Logic,
-) -> anyhow::Result<Option<anoma_pa_testkit::environment::Refusal>> {
+) -> anyhow::Result<Option<Refusal>> {
     use anoma_pa_testkit::environment::{DeniedLogicRef, ProtocolAdapter as _};
     use anoma_rm_risc0::Digest;
     use anoma_rm_risc0::constants::PADDING_LOGIC_VK;
@@ -375,9 +375,6 @@ async fn refusal_of_two_consumed_naming_an_unknown_root(
 #[tokio::test(flavor = "multi_thread")]
 async fn an_unknown_root_is_refused_before_a_later_resources_denied_logic_ref() -> anyhow::Result<()>
 {
-    use anoma_pa_testkit::environment::Refusal;
-    use anoma_pa_testkit::witness::AppData;
-
     let refusal = refusal_of_two_consumed_naming_an_unknown_root(
         ordered::Logic::Passthrough(AppData::default()),
         ordered::Logic::Trivial,
@@ -395,9 +392,6 @@ async fn an_unknown_root_is_refused_before_a_later_resources_denied_logic_ref() 
 // pa-evm checks before the root.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_denied_logic_ref_is_refused_before_its_resources_unknown_root() -> anyhow::Result<()> {
-    use anoma_pa_testkit::environment::Refusal;
-    use anoma_pa_testkit::witness::AppData;
-
     let refusal = refusal_of_two_consumed_naming_an_unknown_root(
         ordered::Logic::Trivial,
         ordered::Logic::Passthrough(AppData::default()),

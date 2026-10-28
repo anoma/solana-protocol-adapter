@@ -71,29 +71,23 @@ async fn ensure_the_replay_is_the_adapters_tree(
 ) -> anyhow::Result<()> {
     let chain = env.protocol_adapter.state().await?;
     let replay = CommitmentTreeState::over(leaves)?;
-    anyhow::ensure!(
-        (
-            chain.next_index,
-            chain.current_depth,
-            &chain.frontier,
-            chain.root
-        ) == (
-            replay.next_index,
-            replay.current_depth,
-            &replay.frontier,
-            replay.root
-        ),
-        "after {} leaves the adapter holds the tree (count {}, depth {}, frontier {:02x?}, root \
-         {:02x?}), the client replays (count {}, depth {}, frontier {:02x?}, root {:02x?})",
-        leaves.len(),
+    let held = (
         chain.next_index,
         chain.current_depth,
-        chain.frontier,
+        &chain.frontier,
         chain.root,
+    );
+    let replayed = (
         replay.next_index,
         replay.current_depth,
-        replay.frontier,
-        replay.root
+        &replay.frontier,
+        replay.root,
+    );
+    anyhow::ensure!(
+        held == replayed,
+        "after {} leaves the adapter holds the tree (count, depth, frontier, root) {held:02x?}, \
+         the client replays {replayed:02x?}",
+        leaves.len()
     );
     Ok(())
 }

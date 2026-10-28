@@ -764,8 +764,6 @@ struct SettlementAccounts<'a, 'info> {
 /// (unless skipped); if any commitment was added the tree's root is computed
 /// and recorded with CommitmentTreeRootAdded, and TransactionExecuted closes
 /// the settlement.
-/// Roots are checked against the root set as it stood before the
-/// transaction, as pa-evm's does not change until the end.
 fn execute_settlement(
     state: &mut PAStateAccount,
     tx: &Transaction,
@@ -818,7 +816,7 @@ fn execute_settlement(
     let mut forwarder_segments =
         external_calls::ForwarderSegments::new(accounts.remaining, nullifier_count)?;
 
-    let created_count = settle::commitment_count(instance);
+    let created_count = settle::resource_count(instance) - nullifier_count;
     maybe_grow_account(
         &accounts.pa_state,
         state,

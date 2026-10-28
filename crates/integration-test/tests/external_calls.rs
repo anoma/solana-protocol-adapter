@@ -102,18 +102,16 @@ async fn setup() -> anyhow::Result<Setup> {
 }
 
 impl Setup {
-    /// Proves a pass-through action, with nonces from `seed`, that calls the
-    /// test forwarder with `input`, expecting `expected`, and has the
-    /// forwarder's calls take `segment` after the forwarder, with `preceding`
-    /// before the settlement.
-    async fn prove_call(
+    /// The call of the test forwarder with `input`, expecting `expected`,
+    /// having the forwarder's calls take `segment` after the forwarder, with
+    /// `preceding` before the settlement.
+    fn register_call(
         &mut self,
-        seed: u8,
         segment: Vec<AccountMeta>,
         preceding: Vec<Instruction>,
         input: Vec<u8>,
         expected: &[u8],
-    ) -> anyhow::Result<Transaction> {
+    ) -> anyhow::Result<SolanaExternalCall> {
         let segment: Vec<AccountMeta> =
             std::iter::once(AccountMeta::new_readonly(self.forwarder, false))
                 .chain(segment)
@@ -129,6 +127,20 @@ impl Setup {
             .protocol_adapter
             .forwarders
             .register(self.forwarder, Arc::new(Fixed { segment, preceding }));
+        Ok(call)
+    }
+
+    /// Proves a pass-through action, with nonces from `seed`, that makes the
+    /// `register_call` call.
+    async fn prove_call(
+        &mut self,
+        seed: u8,
+        segment: Vec<AccountMeta>,
+        preceding: Vec<Instruction>,
+        input: Vec<u8>,
+        expected: &[u8],
+    ) -> anyhow::Result<Transaction> {
+        let call = self.register_call(segment, preceding, input, expected)?;
         let action = passthrough::build(
             seed,
             vec![bytes_to_words(&call.encode())],
@@ -341,20 +353,7 @@ async fn the_adapters_events_survive_a_truncated_log() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn an_actions_resources_settle_in_their_list_order() -> anyhow::Result<()> {
     let mut s = setup().await?;
-    s.env.protocol_adapter.forwarders.register(
-        s.forwarder,
-        Arc::new(Fixed {
-            segment: vec![AccountMeta::new_readonly(s.forwarder, false)],
-            preceding: vec![],
-        }),
-    );
-    let call = SolanaExternalCall {
-        program_id: s.forwarder.to_bytes(),
-        instruction_data: vec![MODE_EMPTY],
-        expected_output: vec![],
-        output_mode: OutputMode::ReturnData,
-        num_accounts: 1,
-    };
+    let call = s.register_call(vec![], vec![], vec![MODE_EMPTY], &[])?;
     // Each resource makes one call and keeps one blob, its own.
     let resource = |consumed: bool, blob: u32| ResourceSpec {
         consumed,

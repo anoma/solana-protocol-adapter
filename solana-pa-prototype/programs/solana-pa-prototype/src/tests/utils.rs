@@ -82,6 +82,27 @@ use arm_core::logic_instance::AppData;
 use arm_core::transaction::{Aggregation, Delta, Transaction};
 use arm_core::Digest;
 
+/// A consumed resource with nullifier `[tag; 32]` and logic ref
+/// `[tag + 100; 32]`, anchored to the initial tree root.
+pub fn consumed(tag: u8) -> AggregationResourceInstance {
+    AggregationResourceInstance::Consumed {
+        nullifier: Digest::from_bytes([tag; 32]),
+        logic_ref: Digest::from_bytes([tag + 100; 32]),
+        commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
+        app_data: AppData::default(),
+    }
+}
+
+/// A created resource with commitment `[tag; 32]` and logic ref
+/// `[tag + 100; 32]`.
+pub fn created(tag: u8) -> AggregationResourceInstance {
+    AggregationResourceInstance::Created {
+        commitment: Digest::from_bytes([tag; 32]),
+        logic_ref: Digest::from_bytes([tag + 100; 32]),
+        app_data: AppData::default(),
+    }
+}
+
 /// One action with one consumed and one created resource, anchored to the
 /// initial tree root and pinned to the compliance VK and empty kind tree.
 pub fn minimal_instance() -> AggregationInstance {
@@ -89,19 +110,7 @@ pub fn minimal_instance() -> AggregationInstance {
         compliance_vk: arm_core::constants::COMPLIANCE_VK,
         kind_tree_root: Digest::from_bytes(EMPTY_KIND_TREE_ROOT),
         actions: vec![ActionAggregated {
-            resource_instances: vec![
-                AggregationResourceInstance::Consumed {
-                    nullifier: Digest::from_bytes([1u8; 32]),
-                    logic_ref: Digest::from_bytes([3u8; 32]),
-                    commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
-                    app_data: AppData::default(),
-                },
-                AggregationResourceInstance::Created {
-                    commitment: Digest::from_bytes([2u8; 32]),
-                    logic_ref: Digest::from_bytes([4u8; 32]),
-                    app_data: AppData::default(),
-                },
-            ],
+            resource_instances: vec![consumed(1), created(2)],
             delta_x: [0u32; 8],
             delta_y: [0u32; 8],
             action_tree_root: Digest::from_bytes([5u8; 32]),

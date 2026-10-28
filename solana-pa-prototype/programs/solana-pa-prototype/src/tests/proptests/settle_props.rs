@@ -1,5 +1,5 @@
 use super::strategies::arb_action;
-use crate::settle::{commitment_count, nullifier_count};
+use crate::settle::{nullifier_count, resource_count};
 use crate::tests::utils::minimal_instance;
 use arm_core::aggregation_instance::AggregationInstance;
 use proptest::prelude::*;
@@ -21,7 +21,7 @@ proptest! {
 
         prop_assert_eq!(nullifier_count(&instance), consumed,
             "one nullifier marker per consumed resource, across all actions");
-        prop_assert_eq!(commitment_count(&instance), created,
-            "one commitment per created resource, across all actions");
+        prop_assert_eq!(resource_count(&instance), consumed + created,
+            "every consumed and created resource, across all actions");
     }
 }

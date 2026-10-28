@@ -20,6 +20,27 @@ use proptest::prelude::*;
 /// Overwrites one instance field with the given digest (or tampers with it).
 type InstanceMutation = fn(&mut AggregationInstance, Digest);
 
+/// Resource `index` of the instance's first action, as its tag (nullifier or
+/// commitment), its logic ref and, when consumed, its commitment tree root.
+fn resource_fields(
+    instance: &mut AggregationInstance,
+    index: usize,
+) -> (&mut Digest, &mut Digest, Option<&mut Digest>) {
+    match &mut instance.actions[0].resource_instances[index] {
+        AggregationResourceInstance::Consumed {
+            nullifier,
+            logic_ref,
+            commitment_tree_root,
+            ..
+        } => (nullifier, logic_ref, Some(commitment_tree_root)),
+        AggregationResourceInstance::Created {
+            commitment,
+            logic_ref,
+            ..
+        } => (commitment, logic_ref, None),
+    }
+}
+
 /// Mutating any field the settlement acts on changes the journal digest.
 /// The app-data case is the H-001 core regression: a tampered transaction
 /// cannot keep its Groth16 proof valid.
@@ -27,48 +48,12 @@ type InstanceMutation = fn(&mut AggregationInstance, Digest);
 fn every_instance_field_mutation_changes_journal_digest() {
     let replacement = Digest::from_bytes([0xEE; 32]);
     let mutations: [(&str, InstanceMutation); 11] = [
-        ("nullifier", |i, d| {
-            match &mut i.actions[0].resource_instances[0] {
-                AggregationResourceInstance::Consumed { nullifier, .. } => *nullifier = d,
-                AggregationResourceInstance::Created { .. } => {
-                    unreachable!("resource 0 is consumed")
-                }
-            }
-        }),
-        ("commitment", |i, d| {
-            match &mut i.actions[0].resource_instances[1] {
-                AggregationResourceInstance::Created { commitment, .. } => *commitment = d,
-                AggregationResourceInstance::Consumed { .. } => {
-                    unreachable!("resource 1 is created")
-                }
-            }
-        }),
-        ("consumed logic ref", |i, d| {
-            match &mut i.actions[0].resource_instances[0] {
-                AggregationResourceInstance::Consumed { logic_ref, .. } => *logic_ref = d,
-                AggregationResourceInstance::Created { .. } => {
-                    unreachable!("resource 0 is consumed")
-                }
-            }
-        }),
-        ("created logic ref", |i, d| {
-            match &mut i.actions[0].resource_instances[1] {
-                AggregationResourceInstance::Created { logic_ref, .. } => *logic_ref = d,
-                AggregationResourceInstance::Consumed { .. } => {
-                    unreachable!("resource 1 is created")
-                }
-            }
-        }),
+        ("nullifier", |i, d| *resource_fields(i, 0).0 = d),
+        ("commitment", |i, d| *resource_fields(i, 1).0 = d),
+        ("consumed logic ref", |i, d| *resource_fields(i, 0).1 = d),
+        ("created logic ref", |i, d| *resource_fields(i, 1).1 = d),
         ("commitment tree root", |i, d| {
-            match &mut i.actions[0].resource_instances[0] {
-                AggregationResourceInstance::Consumed {
-                    commitment_tree_root,
-                    ..
-                } => *commitment_tree_root = d,
-                AggregationResourceInstance::Created { .. } => {
-                    unreachable!("resource 0 is consumed")
-                }
-            }
+            *resource_fields(i, 0).2.expect("resource 0 is consumed") = d
         }),
         ("resource order", |i, _| {
             i.actions[0].resource_instances.swap(0, 1)

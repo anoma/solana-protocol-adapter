@@ -22,9 +22,13 @@ pub fn nullifier_count(instance: &AggregationInstance) -> usize {
     resources(instance).filter(|r| r.is_consumed()).count()
 }
 
-/// The number of created resources: the commitments a settlement appends.
-pub fn commitment_count(instance: &AggregationInstance) -> usize {
-    resources(instance).filter(|r| !r.is_consumed()).count()
+/// The number of resources a settlement consumes or creates.
+pub fn resource_count(instance: &AggregationInstance) -> usize {
+    instance
+        .actions
+        .iter()
+        .map(|a| a.resource_instances.len())
+        .sum()
 }
 
 /// pa-evm's `_processAction`: runs `process_resource` on each of the
@@ -52,24 +56,13 @@ pub fn process_action(
     };
     for resource in &action.resource_instances {
         process_resource(resource)?;
-        match resource {
-            AggregationResourceInstance::Consumed {
-                nullifier,
-                logic_ref,
-                ..
-            } => {
-                executed.nullifiers.push((*nullifier).into());
-                executed.consumed_logic_refs.push((*logic_ref).into());
-            }
-            AggregationResourceInstance::Created {
-                commitment,
-                logic_ref,
-                ..
-            } => {
-                executed.commitments.push((*commitment).into());
-                executed.created_logic_refs.push((*logic_ref).into());
-            }
-        }
+        let (tags, logic_refs) = if resource.is_consumed() {
+            (&mut executed.nullifiers, &mut executed.consumed_logic_refs)
+        } else {
+            (&mut executed.commitments, &mut executed.created_logic_refs)
+        };
+        tags.push(resource.tag().into());
+        logic_refs.push(resource.logic_ref().into());
     }
     Ok(executed)
 }

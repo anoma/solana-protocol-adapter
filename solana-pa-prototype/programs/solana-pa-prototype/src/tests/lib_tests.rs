@@ -74,27 +74,10 @@ mod txdata_expiry_bounds_tests {
 mod settle_order_tests {
     use crate::error::PAError;
     use crate::settle::process_action;
+    use crate::tests::utils::{consumed, created};
     use crate::ActionExecuted;
     use arm_core::aggregation_instance::{ActionAggregated, AggregationResourceInstance};
-    use arm_core::logic_instance::AppData;
     use arm_core::Digest;
-
-    fn consumed(tag: u8) -> AggregationResourceInstance {
-        AggregationResourceInstance::Consumed {
-            nullifier: Digest::from_bytes([tag; 32]),
-            logic_ref: Digest::from_bytes([tag + 100; 32]),
-            commitment_tree_root: Digest::from_bytes([0xCC; 32]),
-            app_data: AppData::default(),
-        }
-    }
-
-    fn created(tag: u8) -> AggregationResourceInstance {
-        AggregationResourceInstance::Created {
-            commitment: Digest::from_bytes([tag; 32]),
-            logic_ref: Digest::from_bytes([tag + 100; 32]),
-            app_data: AppData::default(),
-        }
-    }
 
     /// An action whose list interleaves the kinds: created, consumed, created,
     /// consumed.
