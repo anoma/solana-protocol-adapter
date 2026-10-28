@@ -70,18 +70,128 @@ mod txdata_expiry_bounds_tests {
 }
 
 mod settle_order_tests {
-    use crate::settle::action_resources;
-    use crate::tests::utils::instance_with_consumed_and_created_payloads;
+    use crate::error::PAError;
+    use crate::settle::process_action;
+    use crate::ActionExecuted;
+    use arm_core::aggregation_instance::{ActionAggregated, AggregationResourceInstance};
+    use arm_core::logic_instance::AppData;
+    use arm_core::Digest;
 
-    /// The settlement visits an action's consumed resources before its
-    /// created ones, as pa-evm's `_processAction` does: nullifiers, forwarder
-    /// calls and payload events follow that order.
+    fn consumed(tag: u8) -> AggregationResourceInstance {
+        AggregationResourceInstance::Consumed {
+            nullifier: Digest::from_bytes([tag; 32]),
+            logic_ref: Digest::from_bytes([tag + 100; 32]),
+            commitment_tree_root: Digest::from_bytes([0xCC; 32]),
+            app_data: AppData::default(),
+        }
+    }
+
+    fn created(tag: u8) -> AggregationResourceInstance {
+        AggregationResourceInstance::Created {
+            commitment: Digest::from_bytes([tag; 32]),
+            logic_ref: Digest::from_bytes([tag + 100; 32]),
+            app_data: AppData::default(),
+        }
+    }
+
+    /// An action whose list interleaves the kinds: created, consumed, created,
+    /// consumed.
+    fn interleaved_action() -> ActionAggregated {
+        ActionAggregated {
+            resource_instances: vec![created(1), consumed(2), created(3), consumed(4)],
+            delta_x: [0u32; 8],
+            delta_y: [0u32; 8],
+            action_tree_root: Digest::from_bytes([5u8; 32]),
+        }
+    }
+
+    /// pa-evm `next`'s `_processAction` (`contracts/src/ProtocolAdapter.sol`),
+    /// line for line: the resources it visits, as (consumed, tag), and its
+    /// `ActionExecuted`.
+    fn evm_process_action(action: &ActionAggregated) -> (Vec<(bool, Digest)>, ActionExecuted) {
+        let resources = &action.resource_instances;
+        let consumed_count = resources.iter().filter(|r| r.is_consumed()).count();
+        let mut nullifiers = vec![[0u8; 32]; consumed_count];
+        let mut consumed_logic_refs = vec![[0u8; 32]; consumed_count];
+        let mut commitments = vec![[0u8; 32]; resources.len() - consumed_count];
+        let mut created_logic_refs = vec![[0u8; 32]; resources.len() - consumed_count];
+        let (mut consumed_index, mut created_index) = (0, 0);
+        let mut visited = Vec::new();
+        for resource in resources {
+            visited.push((resource.is_consumed(), resource.tag()));
+            if resource.is_consumed() {
+                nullifiers[consumed_index] = resource.tag().into();
+                consumed_logic_refs[consumed_index] = resource.logic_ref().into();
+                consumed_index += 1;
+            } else {
+                commitments[created_index] = resource.tag().into();
+                created_logic_refs[created_index] = resource.logic_ref().into();
+                created_index += 1;
+            }
+        }
+        let executed = ActionExecuted {
+            action_tree_root: action.action_tree_root.into(),
+            nullifiers,
+            consumed_logic_refs,
+            commitments,
+            created_logic_refs,
+        };
+        (visited, executed)
+    }
+
+    /// The settlement takes an action's resources in the order of its list,
+    /// as pa-evm's `_processAction`: each resource's checks, nullifier or
+    /// commitment, forwarder calls and payload events run when
+    /// `process_action` visits it, so they follow that order, and
+    /// ActionExecuted holds each kind in list order.
     #[test]
-    fn action_resources_visits_consumed_before_created() {
-        let instance = instance_with_consumed_and_created_payloads(vec![], vec![]);
-        let roles: Vec<bool> = action_resources(&instance.actions[0])
-            .map(|resource| resource.is_consumed)
-            .collect();
-        assert_eq!(roles, vec![true, false]);
+    fn process_action_visits_the_resources_in_list_order_as_pa_evm() {
+        let action = interleaved_action();
+        let (evm_visited, evm_executed) = evm_process_action(&action);
+
+        let mut visited = Vec::new();
+        let executed = process_action(&action, |resource| {
+            visited.push((resource.is_consumed(), resource.tag()));
+            Ok(())
+        })
+        .unwrap();
+
+        assert_eq!(
+            visited, evm_visited,
+            "resources visited, as (consumed, tag), against pa-evm's loop"
+        );
+        assert_eq!(
+            borsh::to_vec(&executed).unwrap(),
+            borsh::to_vec(&evm_executed).unwrap(),
+            "ActionExecuted: {executed:?}, pa-evm's: {evm_executed:?}"
+        );
+    }
+
+    /// A resource that fails its checks aborts the action where it stands, as
+    /// pa-evm's revert inside the loop: the resources before it were
+    /// processed, none after it is.
+    #[test]
+    fn process_action_stops_at_the_first_failing_resource() {
+        let action = interleaved_action();
+        let failing = action.resource_instances[2].tag();
+
+        let mut visited = Vec::new();
+        let result = process_action(&action, |resource| {
+            visited.push(resource.tag());
+            if resource.tag() == failing {
+                return Err(PAError::NonExistingRoot.into());
+            }
+            Ok(())
+        });
+
+        assert!(result.is_err(), "the failing resource fails the action");
+        assert_eq!(
+            visited,
+            action.resource_instances[..3]
+                .iter()
+                .map(AggregationResourceInstance::tag)
+                .collect::<Vec<_>>(),
+            "the resources up to the failing one are visited, in list order"
+        );
     }
 }

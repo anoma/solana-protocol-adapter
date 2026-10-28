@@ -202,10 +202,10 @@ The test **"rejects a tampered tx (proof binding)"** settles the fixture with on
 
 A settlement (`settle`, or `settle_from_txdata` after a TxData upload) runs in pa-evm's order:
 
-1. **Checks** — the transaction carries an aggregation and a delta proof, the compliance key matches, the kind table is the stored or the empty one, no resource's logic ref is on the denylist for its side, no nullifier repeats, and every consumed root is a known root.
-2. **Per action**, first its consumed resources (create each nullifier's marker PDA, which refuses a spent nullifier; run the resource's forwarder calls; emit its payload events), then its created resources (append each commitment to the tree; run its calls; emit its events), then `ActionExecuted`.
+1. **Checks** — the transaction carries an aggregation and a delta proof, the compliance VK matches, and the kind tree is the stored or the empty one.
+2. **Per action**, pa-evm's `_processAction`: each resource in the order of the action's `resource_instances` is checked against the denylist for its kind; a consumed one's root must be a known root and its nullifier's marker PDA is created, which refuses a spent nullifier; a created one's commitment is added to the tree; then the resource's forwarder calls run and its payload events are emitted. Then `ActionExecuted`.
 3. **Proof verification** — a CPI to the RISC0 verifier router, which routes the seal to the verifier registered for its selector; then the delta proof.
-4. **Root** — if the transaction created commitments, the new root's marker PDA is recorded and `CommitmentTreeRootAdded` emitted.
+4. **Root** — if the transaction created commitments, the tree's root is computed, its marker PDA is recorded and `CommitmentTreeRootAdded` emitted.
 5. `TransactionExecuted`.
 
 ### How the Forwarder Works

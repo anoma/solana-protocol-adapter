@@ -21,7 +21,7 @@ fn test_is_root_valid_current_root() {
     let root = Digest::from_bytes([0xAA; 32]);
 
     assert!(is_root_valid(
-        &state,
+        &state.root,
         &program_id,
         &pa_state_key,
         &root,
@@ -36,7 +36,7 @@ fn test_is_root_valid_padding_leaf() {
     let pa_state_key = Pubkey::new_unique();
 
     assert!(is_root_valid(
-        &state,
+        &state.root,
         &program_id,
         &pa_state_key,
         &PADDING_LEAF,
@@ -52,7 +52,7 @@ fn test_is_root_valid_non_current_without_marker() {
     let old_root = Digest::from_bytes([0xBB; 32]);
 
     assert!(!is_root_valid(
-        &state,
+        &state.root,
         &program_id,
         &pa_state_key,
         &old_root,
@@ -74,7 +74,7 @@ fn test_is_root_valid_with_historical_marker() {
 
     assert!(
         is_root_valid(
-            &state,
+            &state.root,
             &program_id,
             &pa_state_key,
             &Digest::from_bytes(old_root),
@@ -99,7 +99,7 @@ fn test_is_root_valid_marker_wrong_owner() {
 
     assert!(
         !is_root_valid(
-            &state,
+            &state.root,
             &program_id,
             &pa_state_key,
             &Digest::from_bytes(old_root),
@@ -179,7 +179,7 @@ fn test_is_root_valid_marker_wrong_key() {
 
     assert!(
         !is_root_valid(
-            &state,
+            &state.root,
             &program_id,
             &pa_state_key,
             &Digest::from_bytes(old_root),
@@ -268,7 +268,7 @@ fn test_empty_tree_root_valid_without_marker_after_tree_advances() {
     );
     assert!(
         is_root_valid(
-            &state,
+            &state.root,
             &program_id,
             &pa_state_key,
             &EMPTY_TREE_ROOT_INITIAL,

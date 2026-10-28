@@ -1,7 +1,9 @@
 use super::strategies::arb_digest;
 use crate::merkle::{current_root, push};
 use crate::tests::utils::{create_test_pa_state, minimal_instance};
-use arm_core::aggregation_instance::{ActionAggregated, AggregationInstance};
+use arm_core::aggregation_instance::{
+    ActionAggregated, AggregationInstance, AggregationResourceInstance,
+};
 use arm_core::logic_instance::ExpirableBlob;
 use arm_core::Digest;
 use arm_solana::journal::aggregation_journal_digest;
@@ -24,38 +26,70 @@ type InstanceMutation = fn(&mut AggregationInstance, Digest);
 #[test]
 fn every_instance_field_mutation_changes_journal_digest() {
     let replacement = Digest::from_bytes([0xEE; 32]);
-    let mutations: [(&str, InstanceMutation); 10] = [
+    let mutations: [(&str, InstanceMutation); 11] = [
         ("nullifier", |i, d| {
-            i.actions[0].consumed_publics[0].resource_nullifier = d
+            match &mut i.actions[0].resource_instances[0] {
+                AggregationResourceInstance::Consumed { nullifier, .. } => *nullifier = d,
+                AggregationResourceInstance::Created { .. } => {
+                    unreachable!("resource 0 is consumed")
+                }
+            }
         }),
         ("commitment", |i, d| {
-            i.actions[0].created_publics[0].resource_commitment = d
+            match &mut i.actions[0].resource_instances[1] {
+                AggregationResourceInstance::Created { commitment, .. } => *commitment = d,
+                AggregationResourceInstance::Consumed { .. } => {
+                    unreachable!("resource 1 is created")
+                }
+            }
         }),
         ("consumed logic ref", |i, d| {
-            i.actions[0].consumed_publics[0].resource_logic_ref = d
+            match &mut i.actions[0].resource_instances[0] {
+                AggregationResourceInstance::Consumed { logic_ref, .. } => *logic_ref = d,
+                AggregationResourceInstance::Created { .. } => {
+                    unreachable!("resource 0 is consumed")
+                }
+            }
         }),
         ("created logic ref", |i, d| {
-            i.actions[0].created_publics[0].resource_logic_ref = d
+            match &mut i.actions[0].resource_instances[1] {
+                AggregationResourceInstance::Created { logic_ref, .. } => *logic_ref = d,
+                AggregationResourceInstance::Consumed { .. } => {
+                    unreachable!("resource 1 is created")
+                }
+            }
         }),
         ("commitment tree root", |i, d| {
-            i.actions[0].consumed_publics[0].commitment_tree_root = d
+            match &mut i.actions[0].resource_instances[0] {
+                AggregationResourceInstance::Consumed {
+                    commitment_tree_root,
+                    ..
+                } => *commitment_tree_root = d,
+                AggregationResourceInstance::Created { .. } => {
+                    unreachable!("resource 0 is consumed")
+                }
+            }
+        }),
+        ("resource order", |i, _| {
+            i.actions[0].resource_instances.swap(0, 1)
         }),
         ("action tree root", |i, d| i.actions[0].action_tree_root = d),
-        ("compliance key", |i, d| i.compliance_key = d),
-        ("kind table root", |i, d| i.kind_table_root = d),
+        ("compliance VK", |i, d| i.compliance_vk = d),
+        ("kind tree root", |i, d| i.kind_tree_root = d),
         ("app data", |i, _| {
-            i.actions[0].consumed_publics[0]
-                .app_data
-                .resource_payload
-                .push(ExpirableBlob {
-                    blob: vec![0xEE],
-                    deletion_criterion: 0,
-                })
+            match &mut i.actions[0].resource_instances[0] {
+                AggregationResourceInstance::Consumed { app_data, .. }
+                | AggregationResourceInstance::Created { app_data, .. } => {
+                    app_data.resource_payload.push(ExpirableBlob {
+                        blob: vec![0xEE],
+                        deletion_criterion: 0,
+                    })
+                }
+            }
         }),
         ("extra action", |i, d| {
             i.actions.push(ActionAggregated {
-                consumed_publics: vec![],
-                created_publics: vec![],
+                resource_instances: vec![],
                 delta_x: [0u32; 8],
                 delta_y: [0u32; 8],
                 action_tree_root: d,

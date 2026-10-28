@@ -102,7 +102,7 @@ pub mod types;
 mod u256;
 pub mod upgrade;
 
-use arm_core::aggregation_instance::AggregationInstance;
+use arm_core::aggregation_instance::AggregationResourceInstance;
 use arm_core::transaction::{Delta, Transaction};
 pub use error::PAError;
 use events::event_discriminator;
@@ -124,8 +124,8 @@ pub mod protocol_adapter {
     /// empty-tree root equals `PADDING_LEAF`, which `is_root_valid` accepts
     /// unconditionally, so transactions built against the initial tree stay
     /// valid without a genesis marker. Like pa-evm's initializer, it sets the
-    /// owner, starts on the empty kind table, and announces both;
-    /// `set_kind_tree_root` installs any other table.
+    /// owner, starts on the empty kind tree, and announces both;
+    /// `set_kind_tree_root` installs any other kind tree.
     pub fn initialize<'info>(
         ctx: Context<'info, Initialize<'info>>,
         initial_owner: Pubkey,
@@ -170,7 +170,7 @@ pub mod protocol_adapter {
 
         // pa-evm's initializer sets the owner (OwnableUpgradeable's
         // `OwnershipTransferred` from the zero address), adds the empty
-        // tree's root, then installs the empty kind table.
+        // tree's root, then installs the empty kind tree.
         emit_cpi!(OwnershipTransferred {
             previous_owner: Pubkey::default(),
             new_owner: initial_owner,
@@ -448,10 +448,10 @@ pub mod protocol_adapter {
     }
 
     /// Replace the stored kind tree root: from then on a transaction settles
-    /// when proven against this table or against the empty one. Mirrors
+    /// when proven against this kind tree or against the empty one. Mirrors
     /// pa-evm's `setKindTreeRoot`: authority only, zero rejected, the change
-    /// emitted. A table changes whenever a token or a circuit version is
-    /// listed, and transactions proven against the previous table are
+    /// emitted. A kind tree changes whenever a token or a circuit version is
+    /// listed, and transactions proven against the previous kind tree are
     /// rejected from this point on.
     pub fn set_kind_tree_root(ctx: Context<OwnerOnly>, new_kind_tree_root: [u8; 32]) -> Result<()> {
         require!(
@@ -732,28 +732,6 @@ fn settle_inline<'info>(
     )
 }
 
-/// Require every root consumed by the instance to be one the adapter accepts.
-///
-/// Takes `state` by shared reference on purpose: validation must not be able to
-/// mutate adapter state. `execute_settlement` holds `&mut PAStateAccount` for its
-/// whole body, so without this narrowing the compiler would permit a mutation here
-/// and the ordering would rest on what happens to be written rather than on what
-/// is allowed.
-fn validate_consumed_roots(
-    instance: &AggregationInstance,
-    state: &PAStateAccount,
-    pa_state_key: &Pubkey,
-    remaining_accounts: &[AccountInfo],
-) -> Result<()> {
-    for root in &settle::unique_consumed_roots(instance) {
-        require!(
-            root::is_root_valid(state, &crate::ID, pa_state_key, root, remaining_accounts),
-            PAError::NonExistingRoot
-        );
-    }
-    Ok(())
-}
-
 /// The accounts a settlement acts on.
 ///
 /// `remaining` layout:
@@ -775,17 +753,18 @@ struct SettlementAccounts<'a, 'info> {
 }
 
 /// Shared settlement logic for settle, settle_from_txdata and
-/// simulate_execute, in pa-evm's `_execute` order. For each action: each
-/// consumed resource's nullifier is recorded, then its forwarder calls run and
-/// its payload events are emitted; each created resource's commitment is
-/// appended, then its calls run and its events are emitted; then the action's
+/// simulate_execute, in pa-evm's `execute` order. For each action, pa-evm's
+/// `_processAction`: each resource, in the order of the action's
+/// `resource_instances`, is checked against the denylist for its kind; a
+/// consumed one's root is checked to be historical and its nullifier is
+/// recorded, a created one's commitment is added to the tree; then its
+/// forwarder calls run and its payload events are emitted; then the action's
 /// ActionExecuted. After the actions the proof's selector is checked, the
-/// proofs are verified (the RISC Zero proof unless skipped), the produced
-/// root (if any) is recorded with CommitmentTreeRootAdded, and
-/// TransactionExecuted closes the settlement. The checks that need no state change (the instance's shape,
-/// keys, kind table, denylist, duplicate nullifiers and consumed roots) run
-/// first: roots are checked against the tree as it stood before the
-/// transaction, as pa-evm's root set does not change until the end.
+/// proofs are verified (the RISC Zero proof unless skipped), if any
+/// commitment was added the tree's root is computed and recorded with
+/// CommitmentTreeRootAdded, and TransactionExecuted closes the settlement.
+/// Roots are checked against the root set as it stood before the
+/// transaction, as pa-evm's does not change until the end.
 fn execute_settlement(
     state: &mut PAStateAccount,
     tx: &Transaction,
@@ -817,28 +796,16 @@ fn execute_settlement(
     );
 
     // The aggregation guest verifies compliance proofs against whatever
-    // compliance key the prover supplied; pinning it here is what ties the
+    // compliance VK the prover supplied; pinning it here is what ties the
     // settlement to *the* compliance circuit.
     require!(
-        instance.compliance_key == arm_core::constants::COMPLIANCE_VK,
+        instance.compliance_vk == arm_core::constants::COMPLIANCE_VK,
         PAError::ComplianceKeyMismatch
     );
     require!(
-        state.is_kind_tree_root_accepted(&instance.kind_table_root.into()),
+        state.is_kind_tree_root_accepted(&instance.kind_tree_root.into()),
         PAError::UnacceptedKindTreeRoot
     );
-    // pa-evm refuses every consumed resource whose logic ref is on the
-    // denylist for consumed resources, and every created one whose logic ref
-    // is on the denylist for created resources.
-    for action in &instance.actions {
-        for resource in settle::action_resources(action) {
-            require!(
-                !state.is_logic_ref_denied(&resource.logic_ref.into(), resource.is_consumed),
-                PAError::ResourceWithDeniedLogicRef
-            );
-        }
-    }
-    validate_consumed_roots(instance, state, pa_state_key, accounts.remaining)?;
 
     let nullifier_count = settle::nullifier_count(instance);
     let mut nullifier_markers = accounts
@@ -861,45 +828,66 @@ fn execute_settlement(
 
     let ml = marker_lamports(&Rent::get()?);
 
+    // The latest root before the transaction: pa-evm adds the transaction's
+    // root to its root set only after every action.
+    let latest_root = state.root;
+    // The roots found historical so far. The root set does not change during
+    // the settlement, so each root is checked once; a check may derive a
+    // marker PDA (~1500 CU).
+    let mut historical_roots: Vec<arm_core::Digest> = Vec::new();
+
     for action in &instance.actions {
-        let mut executed = ActionExecuted {
-            action_tree_root: action.action_tree_root.into(),
-            nullifiers: Vec::with_capacity(action.consumed_publics.len()),
-            consumed_logic_refs: Vec::with_capacity(action.consumed_publics.len()),
-            commitments: Vec::with_capacity(action.created_publics.len()),
-            created_logic_refs: Vec::with_capacity(action.created_publics.len()),
-        };
-        for resource in settle::action_resources(action) {
-            if resource.is_consumed {
-                let marker = nullifier_markers
-                    .next()
-                    .ok_or(PAError::InvalidTransactionData)?;
-                nullifier::check_and_create_nullifier_marker(
-                    &crate::ID,
-                    pa_state_key,
-                    &resource.tag.into(),
-                    &accounts.payer,
-                    marker,
-                    &accounts.system_program,
-                    ml,
-                )?;
-                executed.nullifiers.push(resource.tag.into());
-                executed.consumed_logic_refs.push(resource.logic_ref.into());
-            } else {
-                merkle::push(state, resource.tag)?;
-                executed.commitments.push(resource.tag.into());
-                executed.created_logic_refs.push(resource.logic_ref.into());
+        let executed = settle::process_action(action, |resource| {
+            require!(
+                !state.is_logic_ref_denied(&resource.logic_ref().into(), resource.is_consumed()),
+                PAError::ResourceWithDeniedLogicRef
+            );
+            match resource {
+                AggregationResourceInstance::Consumed {
+                    nullifier,
+                    commitment_tree_root,
+                    ..
+                } => {
+                    if !historical_roots.contains(commitment_tree_root) {
+                        require!(
+                            root::is_root_valid(
+                                &latest_root,
+                                &crate::ID,
+                                pa_state_key,
+                                commitment_tree_root,
+                                accounts.remaining,
+                            ),
+                            PAError::NonExistingRoot
+                        );
+                        historical_roots.push(*commitment_tree_root);
+                    }
+                    let marker = nullifier_markers
+                        .next()
+                        .ok_or(PAError::InvalidTransactionData)?;
+                    nullifier::check_and_create_nullifier_marker(
+                        &crate::ID,
+                        pa_state_key,
+                        &(*nullifier).into(),
+                        &accounts.payer,
+                        marker,
+                        &accounts.system_program,
+                        ml,
+                    )?;
+                }
+                AggregationResourceInstance::Created { commitment, .. } => {
+                    merkle::push(state, *commitment)?;
+                }
             }
 
             #[cfg(not(test))]
             for event in forwarder_segments
-                .execute(&resource.logic_ref, resource.app_data)
+                .execute(&resource.logic_ref(), resource.app_data())
                 .map_err(anchor_lang::error::Error::from)?
             {
                 events.emit(&event)?;
             }
-            emit_app_data_events(events, &resource.tag, resource.app_data)?;
-        }
+            emit_app_data_events(events, &resource.tag(), resource.app_data())
+        })?;
 
         events.emit(&executed)?;
     }

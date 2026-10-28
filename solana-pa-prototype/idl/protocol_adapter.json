@@ -2,7 +2,7 @@
   "address": "2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx",
   "metadata": {
     "name": "protocol_adapter",
-    "version": "2.0.0-rc.9",
+    "version": "2.0.0-rc.10",
     "spec": "0.1.0",
     "description": "Solana Protocol Adapter for Anoma Resource Machine"
   },
@@ -94,8 +94,8 @@
         "empty-tree root equals `PADDING_LEAF`, which `is_root_valid` accepts",
         "unconditionally, so transactions built against the initial tree stay",
         "valid without a genesis marker. Like pa-evm's initializer, it sets the",
-        "owner, starts on the empty kind table, and announces both;",
-        "`set_kind_tree_root` installs any other table."
+        "owner, starts on the empty kind tree, and announces both;",
+        "`set_kind_tree_root` installs any other kind tree."
       ],
       "discriminator": [
         175,
@@ -379,10 +379,10 @@
       "name": "set_kind_tree_root",
       "docs": [
         "Replace the stored kind tree root: from then on a transaction settles",
-        "when proven against this table or against the empty one. Mirrors",
+        "when proven against this kind tree or against the empty one. Mirrors",
         "pa-evm's `setKindTreeRoot`: authority only, zero rejected, the change",
-        "emitted. A table changes whenever a token or a circuit version is",
-        "listed, and transactions proven against the previous table are",
+        "emitted. A kind tree changes whenever a token or a circuit version is",
+        "listed, and transactions proven against the previous kind tree are",
         "rejected from this point on."
       ],
       "discriminator": [
@@ -2270,10 +2270,10 @@
           {
             "name": "kind_tree_root",
             "docs": [
-              "The stored kind tree root: the empty table's at initialization,",
+              "The stored kind tree root: the empty kind tree's at initialization,",
               "replaced by `set_kind_tree_root`. The aggregation circuit binds",
-              "each transaction to one kind table, by the Merkle root of its entries;",
-              "a transaction settles when that is this table or the empty one",
+              "each transaction to one kind tree, by the Merkle root of its entries;",
+              "a transaction settles when that is this kind tree or the empty one",
               "(`is_kind_tree_root_accepted`), as in pa-evm."
             ],
             "type": {
@@ -2538,8 +2538,8 @@
     {
       "name": "EMPTY_KIND_TREE_ROOT",
       "docs": [
-        "The root of the empty kind table, under which every resource kind is",
-        "derived via hash-to-curve: the table every deployment starts on, as",
+        "The root of the empty kind tree, under which every resource kind is",
+        "derived via hash-to-curve: the kind tree every deployment starts on, as",
         "pa-evm's `EMPTY_KIND_TREE_ROOT`. A Merkle tree without entries has its",
         "padding leaf as its root, `sha256(\"EMPTY\")`."
       ],

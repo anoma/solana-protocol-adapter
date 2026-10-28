@@ -9,7 +9,6 @@
 //! against any historical root, not just the current one.
 
 use crate::error::PAError;
-use crate::state::PAStateAccount;
 use anchor_lang::prelude::*;
 use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
@@ -78,17 +77,17 @@ pub fn create_root_marker<'info>(
 
 /// Check if a root is valid for transaction construction.
 ///
-/// A root is valid if it matches the current root, equals PADDING_LEAF
-/// (ephemeral resources), or has a root marker PDA in remaining_accounts.
+/// A root is valid if it is `latest_root`, the tree's latest recorded root,
+/// equals PADDING_LEAF (ephemeral resources), or has a root marker PDA in
+/// remaining_accounts.
 pub fn is_root_valid(
-    state: &PAStateAccount,
+    latest_root: &[u8; 32],
     program_id: &Pubkey,
     pa_state_key: &Pubkey,
     root: &Digest,
     remaining_accounts: &[AccountInfo],
 ) -> bool {
-    // Current root is always valid
-    if root.as_bytes() == state.root {
+    if root.as_bytes() == latest_root {
         return true;
     }
 
