@@ -87,11 +87,12 @@ Commands:
                          runtime, and its e2e environment's unit tests; with
                          --e2e, its e2e cases with real proofs, on its local
                          runtime (E2E_RUNTIME=devnet: on a fork of devnet,
-                         DEVNET_RPC_URL; E2E_RUNTIME=cluster: on the cluster
-                         at E2E_RPC_URL, paid by E2E_PAYER, by default
-                         scripts/devnet-wallet.json), proven by the queue
+                         DEVNET_RPC_URL), proven by the queue
                          (QUEUE_BASE_URL, QUEUE_AUTH_TOKEN) or locally
-                         (E2E_PROVER=local)
+                         (E2E_PROVER=local). The suite refuses
+                         E2E_RUNTIME=cluster, which runs only a consumer's
+                         explicit settlement e2e tests (the forwarder's
+                         wrap/transfer/unwrap)
   validator              Start the local test validator (RISC0 verifier stack
                          and Program Metadata program copied from devnet,
                          marker fixtures preloaded)
@@ -1038,8 +1039,8 @@ case "$COMMAND" in
     require_cmd cargo
     if [[ "$E2E" == "true" ]]; then
       # The e2e cases (the harness reads E2E_RUNTIME, with DEVNET_RPC_URL for
-      # devnet and E2E_RPC_URL and E2E_PAYER for cluster, E2E_PROVER, and
-      # QUEUE_BASE_URL and QUEUE_AUTH_TOKEN for the queue) one at a time, like
+      # devnet, refusing cluster; E2E_PROVER; and QUEUE_BASE_URL and
+      # QUEUE_AUTH_TOKEN for the queue) one at a time, like
       # pa-evm's, in release mode, since risc0 proves far faster optimized.
       RUST_TEST_THREADS=1 cargo test --release --manifest-path "${HARNESS_DIR}/Cargo.toml" --features e2e e2e_test
     else
