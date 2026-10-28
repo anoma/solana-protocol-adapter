@@ -6,7 +6,7 @@ use anoma_rm_risc0::compliance::KindTreeEntry;
 use anoma_rm_risc0::constants::{init_kind_tree_from_entries, kind_tree_root};
 use anyhow::Context;
 
-/// Makes solana-devnet's kind tree, as anoma/risc0-kind-tables records it,
+/// Makes solana-devnet's kind tree, as anoma/risc0-kind-trees records it,
 /// the prover's, and returns the root it records for it. Fails when the
 /// process's prover already holds another tree, or the recorded entries do
 /// not have the recorded root.

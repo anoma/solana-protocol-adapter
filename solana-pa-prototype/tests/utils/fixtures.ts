@@ -10,7 +10,7 @@ import path from "path";
 // initialize argument, the verifier-entry PDA, and the verifier program.
 // A cluster run (ops.sh test) proves its own set for the deployment into
 // PA_FIXTURE_DIR, each fixture when a test first loads it, under the run's
-// salt (PA_FIXTURE_SALT) and the deployment's kind table (PA_KIND_TABLE).
+// salt (PA_FIXTURE_SALT) and the deployment's kind tree (PA_KIND_TABLE).
 const MODE = process.env.PA_TEST_MODE ?? "real";
 if (MODE !== "real" && MODE !== "mock") {
   throw new Error(`PA_TEST_MODE must be "real" or "mock", got "${MODE}"`);

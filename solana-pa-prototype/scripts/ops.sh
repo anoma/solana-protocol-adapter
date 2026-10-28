@@ -139,7 +139,7 @@ Initialization parameters (required by deploy/init when the PA is a target):
   PA_PROOF_SELECTOR    4-byte Groth16 verifier selector (hex).
                        Devnet: ${GROTH16_SELECTOR}
 
-The PA starts on the empty kind table; set-kind-table installs another.
+The PA starts on the empty kind tree; set-kind-table installs another.
 USAGE
   exit 1
 }
@@ -907,7 +907,7 @@ cmd_test() {
 
   # The wallet must own none of the programs under test: their owner is their
   # upgrade authority, and a spec signing as the owner could pause the
-  # deployment, replace its kind table, or renounce the authority for good.
+  # deployment, replace its kind tree root, or renounce the authority for good.
   # A local validator's deployment is disposable and owned by the local wallet.
   if [[ "$CLUSTER" != "localnet" ]]; then
     run_ts scripts/cluster-test-guard.ts "${pids[@]}"
@@ -915,11 +915,11 @@ cmd_test() {
 
   # The run proves its own fixture set for the deployment: under a salt no
   # earlier run used, so nothing in it was settled before, and against the
-  # kind table the deployment stores. Each fixture is proven when a test
+  # kind tree the deployment stores. Each fixture is proven when a test
   # first loads it (tests/utils/fixtures.ts), so the run stops at the first
   # failure and proves only what its tests use.
   if [[ -z "${PA_KIND_TABLE:-}" || ! -f "$PA_KIND_TABLE" ]]; then
-    echo "❌ Set PA_KIND_TABLE to the kind table (JSON, as fixture-gen reads it) whose root the deployment stores;" >&2
+    echo "❌ Set PA_KIND_TABLE to the kind tree (JSON, as fixture-gen reads it) whose root the deployment stores;" >&2
     echo "   the run proves its fixtures against it." >&2
     exit 1
   fi

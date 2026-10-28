@@ -19,7 +19,7 @@ import { cpiEventsOf, provider, program, paState, upgradeThroughProgram, useAdap
 describe("protocol-adapter (ownership and upgrades) @localnet", () => {
   const { funder } = useAdapterSuite();
   const wallet = provider.wallet.publicKey;
-  // The owner-only call these tests make: rewriting the kind table the
+  // The owner-only call these tests make: rewriting the kind tree root the
   // adapter already holds, which leaves its configuration as it was found.
   let kindTable: number[];
   before(async () => {

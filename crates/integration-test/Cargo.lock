@@ -1485,7 +1485,7 @@ dependencies = [
 [[package]]
 name = "anoma-risc0-kind-trees"
 version = "1.0.0-rc.8"
-source = "git+https://github.com/anoma/risc0-kind-tables?rev=999fcf47627468fd35ad8ad16464ce28f6e443dd#999fcf47627468fd35ad8ad16464ce28f6e443dd"
+source = "git+https://github.com/anoma/risc0-kind-trees?rev=999fcf47627468fd35ad8ad16464ce28f6e443dd#999fcf47627468fd35ad8ad16464ce28f6e443dd"
 dependencies = [
  "alloy",
  "alloy-chains",

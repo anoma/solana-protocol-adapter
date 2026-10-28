@@ -34,7 +34,7 @@ anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-clien
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "e4e28f34ab7d8fc0212413283c32503f110638be", default-features = false, features = [
   "fixtures",
 ] }
-anoma-risc0-kind-trees = { git = "https://github.com/anoma/risc0-kind-tables", rev = "999fcf47627468fd35ad8ad16464ce28f6e443dd", features = [
+anoma-risc0-kind-trees = { git = "https://github.com/anoma/risc0-kind-trees", rev = "999fcf47627468fd35ad8ad16464ce28f6e443dd", features = [
   "arm",
 ], optional = true }
 anoma-rm-risc0 = { version = "=2.0.0-rc.8.1", default-features = false, features = ["transaction"] }

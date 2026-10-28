@@ -14,8 +14,8 @@ async function main() {
   const kindTreeRoot = requireHexBytes(
     "PA_KIND_TREE_ROOT",
     32,
-    "the Merkle root (hex, 32 bytes) of the kind table a settled transaction must be proven against from now on, besides the empty one.\n" +
-      "   Transactions proven against the previous table are rejected once this is installed.",
+    "the Merkle root (hex, 32 bytes) of the kind tree a settled transaction must be proven against from now on, besides the empty one.\n" +
+      "   Transactions proven against the previous tree are rejected once this is installed.",
   );
 
   await setKindTreeRoot(program, provider.wallet.publicKey, kindTreeRoot).rpc();

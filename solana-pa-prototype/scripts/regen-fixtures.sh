@@ -10,7 +10,7 @@
 #   --out DIR         write to DIR instead
 #   --salt SALT       derive every nonce from SALT too, so nothing proven was
 #                     settled before on the deployment it is proven for
-#   --kind-table PATH prove against that kind table instead of the committed
+#   --kind-table PATH prove against that kind tree instead of the committed
 #                     empty one; the deployment must store its root
 #   --only FILE       prove only the recipe that writes FILE (an error variant
 #                     comes with its base); fixtures it spends from must exist
@@ -70,7 +70,7 @@ while [[ $# -gt 0 ]]; do
   shift 2
 done
 
-# One fixture: the shape, the run's mode, salt and kind table, then the
+# One fixture: the shape, the run's mode, salt and kind tree, then the
 # shape's own arguments.
 gen() {
   local shape="$1"

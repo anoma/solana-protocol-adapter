@@ -4,7 +4,7 @@ This document is the operator's procedure set for a Protocol Adapter (PA) deploy
 
 Commands run through `./scripts/dev.sh` from `solana-pa-prototype/`, which enters the Nix shell automatically; cluster operations take `--cluster <localnet|devnet|mainnet>` (see `scripts/ops.sh` for all flags). devnet and mainnet operations go through the operator's RPC provider: pass `--url <rpc>` or set `DEVNET_RPC_URL` / `MAINNET_RPC_URL`; there is no public-endpoint default. Commands shown as `solana`, `npx` or `solana-verify` run directly.
 
-`dev.sh anchor-test --cluster <devnet|mainnet>` runs the local suite's tests against the live deployment, building on whatever history it holds: every spec file outside `tests/fresh/` and `tests/terminal/`, without the tests tagged `@localnet` (those need the owner, change a deployment setting, or call a program deployed only on a local validator). The run first proves its own fixture set for the deployment, under a salt no earlier run used and against the kind table it stores, so name that table's JSON (as fixture-gen reads it) in `PA_KIND_TABLE`; proving runs locally unless `QUEUE_BASE_URL` sends it to the workers queue. Its wallet must own nothing under test: the run refuses a wallet that holds an owner's role: the adapter's stored owner, or a program's upgrade authority while that is not the program's own PDA. Use a separate funded test wallet (`--wallet`).
+`dev.sh anchor-test --cluster <devnet|mainnet>` runs the local suite's tests against the live deployment, building on whatever history it holds: every spec file outside `tests/fresh/` and `tests/terminal/`, without the tests tagged `@localnet` (those need the owner, change a deployment setting, or call a program deployed only on a local validator). The run first proves its own fixture set for the deployment, under a salt no earlier run used and against the kind tree it stores, so name that tree's JSON (as fixture-gen reads it) in `PA_KIND_TABLE`; proving runs locally unless `QUEUE_BASE_URL` sends it to the workers queue. Its wallet must own nothing under test: the run refuses a wallet that holds an owner's role: the adapter's stored owner, or a program's upgrade authority while that is not the program's own PDA. Use a separate funded test wallet (`--wallet`).
 
 ## The owner
 
@@ -118,15 +118,15 @@ PA_DENIED_LOGIC_REFS=<hex, 32 bytes>:consumed,<hex, 32 bytes>:created ./scripts/
 
 Each comma-separated entry names a logic ref and the denylist it goes on, as pa-evm's `(logicRef, consumed)` pairs. The zero ref and a ref already on its denylist are rejected, and then no entry of that call is added; an entry cannot be removed. The denylists are part of the state account (`denied_consumed_logic_refs`, `denied_created_logic_refs`), which grows by 32 bytes per entry at the owner's expense, and each entry emits `LogicRefDenied`.
 
-## The kind table
+## The kind tree
 
-The PA stores the Merkle root of a kind table, and settles a transaction proven against that table or against the empty one, as pa-evm's `_isKindTreeRootAccepted`: the empty table merges no kinds, so what balances under it balances under any table. A transaction proven against any other table is refused (`UnacceptedKindTreeRoot`) before its proofs are verified. `initialize` installs the empty table's root (`cc1d2f83…`, the tree's padding leaf; fixture-gen's committed `kind_table.json` is that table) and emits `KindTreeRootUpdated` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTreeRoot`:
+The PA stores the Merkle root of a kind tree, and settles a transaction proven against that tree or against the empty one, as pa-evm's `_isKindTreeRootAccepted`: the empty tree merges no kinds, so what balances under it balances under any tree. A transaction proven against any other tree is refused (`UnacceptedKindTreeRoot`) before its proofs are verified. `initialize` installs the empty tree's root (`cc1d2f83…`, the tree's padding leaf; fixture-gen's committed `kind_table.json` is that tree) and emits `KindTreeRootUpdated` with it, as pa-evm's initializer does; the owner replaces it in place, as the EVM adapter's owner does with `setKindTreeRoot`:
 
 ```sh
 PA_KIND_TREE_ROOT=<hex, 32 bytes> ./scripts/dev.sh set-kind-table --cluster <c>   # owner wallet
 ```
 
-The instruction rejects a zero root and emits `KindTreeRootUpdated` with the new value, as pa-evm's `setKindTreeRoot` does. From that slot on, transactions proven against the previous table are refused (`UnacceptedKindTreeRoot`), unless it is the empty one, so provers must load the new table before it is installed. The generated Solana tables and their roots come from anoma/risc0-kind-tables (`crates/kind-tables/data/generated/<environment>/roots.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
+The instruction rejects a zero root and emits `KindTreeRootUpdated` with the new value, as pa-evm's `setKindTreeRoot` does. From that slot on, transactions proven against the previous tree are refused (`UnacceptedKindTreeRoot`), unless it is the empty one, so provers must load the new tree before it is installed. The generated Solana trees and their roots come from anoma/risc0-kind-trees (`crates/kind-trees/data/generated/<environment>/roots.json`, keyed `solana:<genesis hash prefix>`; anoma/dos-pm#61).
 
 ## Pausing
 
@@ -141,7 +141,7 @@ Both are owner-only. `pause` is refused while already paused (`EnforcedPause`) a
 
 What pauses: `settle` and `settle_from_txdata` reject every transaction with `EnforcedPause`. Those are the only two instructions gated on the flag, as `execute` is pa-evm's only `whenNotPaused` function.
 
-What keeps working: everything else. All accounts (PAState, the commitment tree, nullifier and root markers) remain on chain and readable. Transaction-data upload accounts can still be closed and their rent reclaimed by their owners. Expiry configuration, the kind table, the denylist, upgrades, and moving the ownership still function.
+What keeps working: everything else. All accounts (PAState, the commitment tree, nullifier and root markers) remain on chain and readable. Transaction-data upload accounts can still be closed and their rent reclaimed by their owners. Expiry configuration, the kind tree root, the denylist, upgrades, and moving the ownership still function.
 
 A pause is as permanent as the ownership's custody: the owner can unpause. To make it permanent, finish with the Sunsetting steps below.
 
