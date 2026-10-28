@@ -1438,6 +1438,7 @@ dependencies = [
  "dotenvy",
  "futures 0.3.34",
  "serde_json",
+ "solana-cluster-type 3.1.0",
  "solana-commitment-config",
  "solana-instruction 3.4.1",
  "solana-keypair",

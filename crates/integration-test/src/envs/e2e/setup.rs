@@ -1,7 +1,9 @@
 use std::sync::Arc;
 
+use anoma_pa_solana_client::deployments::{chain_id, chain_id_of_genesis_hash};
 use anoma_pa_testkit::prover::{QueueProver, Risc0Prover};
 use anyhow::Context;
+use solana_cluster_type::ClusterType;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
 
@@ -69,6 +71,12 @@ impl Environment {
                 })?;
                 let pa = program_id(DEVNET, "PROTOCOL_ADAPTER")?;
                 let rpc = runtime::client(rpc_url.clone());
+                // The adapter's address is devnet's, so the cluster must be.
+                let genesis_hash = rpc
+                    .get_genesis_hash()
+                    .await
+                    .context("failed to fetch the cluster's genesis hash")?;
+                ensure_devnet(&genesis_hash)?;
                 let env = Self::assemble(None, rpc, Arc::new(payer), pa, prover).await?;
                 env.ensure_devnet_kind_table().await?;
                 Ok(env)
@@ -88,5 +96,40 @@ impl Environment {
             anoma_rm_risc0::Digest::from_bytes(loaded)
         );
         Ok(())
+    }
+}
+
+/// Refuses a cluster whose genesis hash is `genesis_hash` unless its CAIP-2
+/// chain id is devnet's.
+fn ensure_devnet(genesis_hash: &solana_message::Hash) -> anyhow::Result<()> {
+    let found = chain_id_of_genesis_hash(genesis_hash);
+    let devnet = chain_id(ClusterType::Devnet).context("devnet has no recorded genesis hash")?;
+    anyhow::ensure!(
+        found == devnet,
+        "E2E_RPC_URL serves the cluster {found}, not devnet {devnet}, whose adapter the cluster \
+         runtime settles on"
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_cluster_runtime_runs_on_devnet_only() {
+        let hash = |cluster: ClusterType| cluster.get_genesis_hash().unwrap();
+        ensure_devnet(&hash(ClusterType::Devnet)).expect("devnet is devnet");
+        for cluster in [ClusterType::MainnetBeta, ClusterType::Testnet] {
+            let refused = ensure_devnet(&hash(cluster)).unwrap_err();
+            println!("{cluster:?}: {refused:#}");
+            let found = chain_id(cluster).unwrap();
+            assert!(
+                refused
+                    .to_string()
+                    .contains(&format!("serves the cluster {found}, not devnet")),
+                "{cluster:?}: {refused:#}"
+            );
+        }
     }
 }
