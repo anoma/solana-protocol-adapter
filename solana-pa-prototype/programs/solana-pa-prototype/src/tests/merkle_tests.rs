@@ -1,4 +1,4 @@
-use crate::merkle::{append_to_tree, hash_two, EMPTY_TREE_ROOT_INITIAL, ZEROS};
+use crate::merkle::{current_root, hash_two, push, EMPTY_TREE_ROOT_INITIAL, ZEROS};
 use crate::tests::utils::{assert_anchor_err, create_test_pa_state};
 use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
@@ -141,13 +141,13 @@ fn tree_matches_evm_merkle_tree_from_empty_through_every_push() {
             "left siblings after {leaf_count} pushes"
         );
         assert_eq!(
-            state.root_digest(),
+            current_root(&state),
             evm.current_root(),
             "root after {leaf_count} pushes"
         );
 
         let leaf = Digest::from_bytes([leaf_count as u8 + 1; 32]);
-        append_to_tree(&mut state, leaf).unwrap();
+        push(&mut state, leaf).unwrap();
         evm.push(leaf);
     }
 }
@@ -200,10 +200,10 @@ fn evm_minimal_depth(leaf_count: usize) -> usize {
     bits as usize
 }
 
-/// Regression test: the incremental `append_to_tree` must produce
+/// Regression test: the incremental `push` and `current_root` must produce
 /// the same root as the EVM's batch `computeRoot` for 1..8 leaves.
 /// This is the primary guard against the expand-after-fill bug
-/// recurring: if `append_to_tree` ever fails to expand when exactly
+/// recurring: if `push` ever fails to expand when exactly
 /// full, the roots will diverge at every power-of-two leaf count.
 #[test]
 fn test_incremental_matches_evm_compute_root() {
@@ -211,8 +211,8 @@ fn test_incremental_matches_evm_compute_root() {
 
     let mut state = create_test_pa_state();
     for (i, leaf) in leaves.iter().enumerate() {
-        append_to_tree(&mut state, *leaf).unwrap();
-        let incremental_root = state.root_digest();
+        push(&mut state, *leaf).unwrap();
+        let incremental_root = current_root(&state);
 
         let n = i + 1;
         // The EVM tree depth after N pushes: for non-power-of-two N it's
@@ -250,7 +250,7 @@ fn test_append_accepts_final_declared_leaf_at_max_depth() {
     state.next_index = (1u64 << 32) - 1;
 
     let leaf = Digest::from_bytes([0x77; 32]);
-    let result = append_to_tree(&mut state, leaf);
+    let result = push(&mut state, leaf);
 
     assert!(
         result.is_ok(),
@@ -267,7 +267,7 @@ fn test_append_accepts_final_declared_leaf_at_max_depth() {
     // takes the "right child" branch, hashing the (test) all-zero frontier
     // against the running value, and MAX_TREE_DEPTH blocks the post-loop
     // expansion — the plain depth-32 root, with no extra zero-padding level.
-    // Recompute it independently of append_to_tree to pin the exact value:
+    // Recompute it independently of push to pin the exact value:
     // the spec requires off-chain implementations to agree on this root.
     let zero_frontier = Digest::from_bytes([0u8; 32]);
     let mut expected = leaf;
@@ -275,7 +275,7 @@ fn test_append_accepts_final_declared_leaf_at_max_depth() {
         expected = hash_two(&zero_frontier, &expected);
     }
     assert_eq!(
-        state.root_digest(),
+        current_root(&state),
         expected,
         "max-depth root must equal the plain depth-32 hash chain over the frontier"
     );
@@ -295,7 +295,7 @@ fn test_append_rejects_when_full_without_mutating() {
     let before_root = state.root;
     let before_frontier = state.frontier.clone();
 
-    let result = append_to_tree(&mut state, Digest::from_bytes([0x88; 32]));
+    let result = push(&mut state, Digest::from_bytes([0x88; 32]));
 
     assert_anchor_err!(result, TreeMaxDepthReached);
     assert_eq!(state.next_index, before_index, "next_index must not change");

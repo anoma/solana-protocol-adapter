@@ -56,7 +56,8 @@ pub struct PAStateAccount {
     /// Whether settlement is paused, as pa-evm's `paused()`: `pause` sets it
     /// and `unpause` clears it, both owner-only.
     pub paused: bool,
-    /// Cached tree root (updated on every append). Avoids recomputing from frontier.
+    /// The tree's root, computed once per settlement that adds commitments,
+    /// after the last one (`merkle::current_root`), as pa-evm stores its root.
     pub root: [u8; 32],
     pub next_index: u64,
     /// Tree depth (0-32). Capacity = 2^current_depth.

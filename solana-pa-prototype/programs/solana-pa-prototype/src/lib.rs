@@ -107,7 +107,7 @@ use arm_core::transaction::{Delta, Transaction};
 pub use error::PAError;
 use events::event_discriminator;
 use groth16::{check_selector, prepare_proof_for_verification};
-use merkle::{append_to_tree, required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, MAX_TREE_DEPTH};
+use merkle::{required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, MAX_TREE_DEPTH};
 use state::*;
 pub use u256::U256;
 
@@ -645,7 +645,7 @@ fn maybe_grow_account<'info>(
     let final_next_index = state.next_index.saturating_add(num_commitments as u64);
     let required_depth = required_depth_for_leaves(final_next_index);
 
-    // Cap at MAX_TREE_DEPTH (append_to_tree will error if exceeded)
+    // Cap at MAX_TREE_DEPTH (merkle::push errors if exceeded)
     let target_depth = required_depth.min(MAX_TREE_DEPTH);
 
     if target_depth <= state.depth() {
@@ -886,7 +886,7 @@ fn execute_settlement(
                 executed.nullifiers.push(resource.tag.into());
                 executed.consumed_logic_refs.push(resource.logic_ref.into());
             } else {
-                append_to_tree(state, resource.tag)?;
+                merkle::push(state, resource.tag)?;
                 executed.commitments.push(resource.tag.into());
                 executed.created_logic_refs.push(resource.logic_ref.into());
             }
@@ -938,6 +938,7 @@ fn execute_settlement(
     if created_count == 0 {
         require!(accounts.new_root_marker.is_none(), PAError::RootPdaMismatch);
     } else {
+        state.root = merkle::current_root(state).into();
         let new_root = state.root;
         let new_root_marker = accounts.new_root_marker.ok_or(PAError::RootPdaMismatch)?;
         root::create_root_marker(

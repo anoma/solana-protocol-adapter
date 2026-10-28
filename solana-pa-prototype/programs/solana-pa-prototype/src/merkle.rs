@@ -197,23 +197,15 @@ pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
     Digest::from_bytes(result.to_bytes())
 }
 
-/// Append a single commitment to the tree.
+/// Add a leaf to the commitment tree, as pa-evm V2's `MerkleTree.push`: one
+/// left-sibling write, the root of the subtree the leaf completes, and no root
+/// computation (`current_root` computes it).
 ///
-/// The frontier changes as pa-evm V2's `MerkleTree.push` changes its left
-/// siblings: only the root of the subtree the leaf completes is stored. The
-/// root becomes its `currentRoot`:
-/// 1. Walk the branch at the current depth, hashing up from the leaf.
-///    - Left child: hash with the zero sibling.
-///    - Right child: hash with frontier (left sibling).
-/// 2. After the walk, if the tree is now full, expand by one level:
-///    store the computed hash as the new frontier entry and hash it
-///    with `ZEROS[depth]` to produce the root at the new depth.
-///
-/// Below `MAX_TREE_DEPTH`, this means a tree with exactly 2^d leaves has
-/// depth d+1 and its root includes one level of zero-padding — matching the
-/// EVM PA. At `MAX_TREE_DEPTH` the tree cannot expand further (`can_grow`
-/// gates step 2), so the root stays the plain depth-32 root instead.
-pub fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
+/// A leaf that fills the tree below `MAX_TREE_DEPTH` grows it by one level,
+/// its completed root the left sibling there. At `MAX_TREE_DEPTH` the tree
+/// cannot grow, so the completed root is the full tree's root, kept in
+/// `state.root`, where `current_root` reads it.
+pub fn push(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
     // The tree is full only at maximum depth with every slot used: below the
     // maximum, filling a level grows immediately and doubles capacity, so
     // next_index < capacity always holds afterwards. Reject before any mutation.
@@ -222,35 +214,50 @@ pub fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
         PAError::TreeMaxDepthReached
     );
 
-    let depth = state.depth();
-    let mut index = state.next_index;
-    let completed_level = index.trailing_ones() as usize;
+    let mut node_index = state.next_index;
     state.next_index += 1;
 
-    let mut current = leaf;
-    for (level, zero) in ZEROS.iter().enumerate().take(depth) {
-        if index & 1 == 0 {
-            if level == completed_level {
-                state.set_frontier(level, current);
-            }
-            current = hash_two(&current, zero);
-        } else {
-            // Right child — hash with frontier (left sibling).
-            current = hash_two(&state.get_frontier(level), &current);
-        }
-        index >>= 1;
+    // The loop ends at the root of the subtree that the leaf completes.
+    let mut node = leaf;
+    let mut level = 0;
+    while node_index & 1 == 1 {
+        node = hash_two(&state.get_frontier(level), &node);
+        level += 1;
+        node_index >>= 1;
     }
 
-    // Expand only when there is a further leaf to place. At maximum depth the
-    // tree stays at depth 32 and its root is the plain depth-32 root.
-    if state.next_index == state.capacity() && state.can_grow() {
+    if level < state.depth() {
+        state.set_frontier(level, node);
+    } else if state.can_grow() {
         let new_level = state.grow();
-        state.set_frontier(new_level, current);
-        current = hash_two(&current, &ZEROS[new_level]);
+        state.set_frontier(new_level, node);
+    } else {
+        state.root = node.into();
     }
-
-    state.root = current.into();
     Ok(())
+}
+
+/// The root of the commitment tree, as pa-evm V2's `MerkleTree.currentRoot`.
+///
+/// A tree with exactly 2^d leaves has depth d+1, so below `MAX_TREE_DEPTH`
+/// its root includes one level of padding, as pa-evm's. Only a tree full at
+/// `MAX_TREE_DEPTH` holds `capacity` leaves; its root is the one `push`
+/// stored, the plain depth-32 root.
+pub fn current_root(state: &PAStateAccount) -> Digest {
+    if state.next_index == state.capacity() {
+        return state.root_digest();
+    }
+    let mut node_index = state.next_index;
+    let mut node = ZEROS[0];
+    for (level, empty_subtree_root) in ZEROS.iter().enumerate().take(state.depth()) {
+        node = if node_index & 1 == 1 {
+            hash_two(&state.get_frontier(level), &node)
+        } else {
+            hash_two(&node, empty_subtree_root)
+        };
+        node_index >>= 1;
+    }
+    node
 }
 
 /// Required tree depth after `final_next_index` leaves have been appended.

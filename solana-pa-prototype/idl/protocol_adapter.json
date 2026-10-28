@@ -2294,7 +2294,8 @@
           {
             "name": "root",
             "docs": [
-              "Cached tree root (updated on every append). Avoids recomputing from frontier."
+              "The tree's root, computed once per settlement that adds commitments,",
+              "after the last one (`merkle::current_root`), as pa-evm stores its root."
             ],
             "type": {
               "array": [

@@ -1,5 +1,5 @@
 use super::strategies::arb_digest;
-use crate::merkle::append_to_tree;
+use crate::merkle::{current_root, push};
 use crate::tests::utils::{create_test_pa_state, minimal_instance};
 use arm_core::aggregation_instance::{ActionAggregated, AggregationInstance};
 use arm_core::logic_instance::ExpirableBlob;
@@ -131,11 +131,11 @@ proptest! {
         let mut state = create_test_pa_state();
 
         for leaf in &leaves {
-            append_to_tree(&mut state, *leaf).unwrap();
+            push(&mut state, *leaf).unwrap();
         }
 
         let expected = reference_merkle_root(&leaves);
-        let actual = state.root_digest();
+        let actual = current_root(&state);
 
         prop_assert_eq!(
             actual, expected,
@@ -160,11 +160,11 @@ proptest! {
 
         let mut state = create_test_pa_state();
         for leaf in &leaves {
-            append_to_tree(&mut state, *leaf).unwrap();
+            push(&mut state, *leaf).unwrap();
         }
 
         let expected = reference_merkle_root(&leaves);
-        let actual = state.root_digest();
+        let actual = current_root(&state);
         prop_assert_eq!(actual, expected, "boundary test: {} leaves (2^{} {:+})", target_count, k, extra as i32 - 1);
     }
 }
@@ -191,7 +191,7 @@ fn merkle_tree_rejects_at_max_capacity() {
             let h: [u8; 32] = Sha256::digest(i.to_le_bytes()).into();
             h
         });
-        let result = append_to_tree(&mut state, leaf_i);
+        let result = push(&mut state, leaf_i);
         if result.is_err() {
             // Should only fail at TreeMaxDepthReached once we hit max depth
             assert!(
