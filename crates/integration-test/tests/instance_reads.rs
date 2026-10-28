@@ -159,7 +159,6 @@ async fn every_read_answers_what_the_adapter_was_set_up_with() -> anyhow::Result
         &payer.pubkey(),
         &input,
         SettlementAccounts {
-            pa_state,
             new_root_marker: Some(derive_root_marker_pda(&pa, &pa_state, &added.root).0),
             verifier_router_program: router,
             router: router_state,

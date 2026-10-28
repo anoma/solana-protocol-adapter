@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anchor_lang::{AnchorDeserialize, Discriminator};
 use anoma_pa_solana_client::forwarders::Forwarders;
+use anoma_pa_solana_client::generated::U256LeBytes;
 use anoma_pa_solana_client::generated::protocol_adapter::accounts::PAStateAccount;
 use anoma_pa_solana_client::generated::protocol_adapter::error::ProtocolAdapterError;
 use anoma_pa_solana_client::generated::protocol_adapter::events::{
@@ -483,7 +484,7 @@ fn settlement_event(data: &[u8]) -> anyhow::Result<Event> {
         decode_cpi_event::<E>(data)
             .with_context(|| format!("the adapter's event {data:02x?} does not decode"))
     }
-    let payload = |kind, tag, index: [u8; 32], blob| {
+    let payload = |kind, tag, U256LeBytes(index), blob| {
         let (low, high) = index.split_at(size_of::<u32>());
         anyhow::ensure!(
             high.iter().all(|byte| *byte == 0),
@@ -605,7 +606,7 @@ mod tests {
         index[0] = 3;
         let event = settlement_event(&emitted(&ExternalPayload {
             tag: [9; 32],
-            index,
+            index: U256LeBytes(index),
             blob: vec![1, 2],
         }))
         .unwrap();
@@ -624,7 +625,7 @@ mod tests {
         index[size_of::<u32>()] = 1;
         let err = settlement_event(&emitted(&ResourcePayload {
             tag: [9; 32],
-            index,
+            index: U256LeBytes(index),
             blob: vec![],
         }))
         .unwrap_err()
@@ -707,7 +708,6 @@ mod tests {
             &key,
             &[1],
             SettlementAccounts {
-                pa_state: key,
                 new_root_marker: None,
                 verifier_router_program: key,
                 router: key,

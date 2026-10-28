@@ -28,7 +28,7 @@ e2e = [
 # The Anchor traits of the client's generated types (their discriminators,
 # account encodings): the client's Anchor commit.
 anchor-lang = { git = "https://github.com/otter-sec/anchor", rev = "2c9747a2d31bd5e94745cee6c083577f3e6675c0" }
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "59527d4671bc7c930310f66467964da9db8269a1", features = [
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", tag = "bindings/v0.8.0", features = [
   "rpc",
 ] }
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "fd6a7becc1f8a5a43c3fa78ee7c36adec73fc50a", default-features = false, features = [

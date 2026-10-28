@@ -309,7 +309,6 @@ mod tests {
         let rpc = RpcClient::new("http://127.0.0.1:1".to_string());
         let instance = ProtocolAdapter::at(&rpc, ADAPTER);
         let accounts = || anoma_pa_solana_client::SettlementAccounts {
-            pa_state: KEY,
             new_root_marker: None,
             verifier_router_program: KEY,
             router: KEY,
