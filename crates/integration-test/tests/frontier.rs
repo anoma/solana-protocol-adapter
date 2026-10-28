@@ -7,12 +7,11 @@
 use anoma_pa_solana_client::CommitmentTreeState;
 use anoma_pa_solana_client::generated::protocol_adapter::accounts::PAStateAccount;
 use anoma_pa_solana_client::generated::protocol_adapter::constants::SCHEMA_VERSION;
-use anoma_pa_solana_integration_test::actions::{self, Logic, ResourceSpec};
 use anoma_pa_solana_integration_test::commitment_tree::from_state;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
+use anoma_pa_testkit::fixtures::ordered::{self, Logic, ResourceSpec};
 use anoma_pa_testkit::{execute_tx, prove_actions};
 use anoma_rm_risc0::Digest;
-use anoma_rm_risc0::compliance::INITIAL_ROOT;
 use surfpool_sdk::Pubkey;
 
 fn leaf(seed: usize) -> [u8; 32] {
@@ -63,57 +62,68 @@ fn the_tree_from_the_adapters_state_gives_the_adapters_roots() {
     }
 }
 
-// After each settlement, the tree the client's `CommitmentTreeState` replays
-// from the commitments the settled transactions created, in their list order,
-// is the adapter's: its count, depth, frontier and root. The settlements'
-// actions are created, consumed, created, and the tree grows past 1, 2, 4
-// and 8 leaves.
+/// Fails unless the adapter's tree is the one the client's
+/// `CommitmentTreeState` replays from `leaves`: its count, depth, frontier
+/// and root.
+async fn ensure_the_replay_is_the_adapters_tree(
+    env: &SolanaLocalEnv,
+    leaves: &[[u8; 32]],
+) -> anyhow::Result<()> {
+    let chain = env.protocol_adapter.state().await?;
+    let replay = CommitmentTreeState::over(leaves)?;
+    anyhow::ensure!(
+        (
+            chain.next_index,
+            chain.current_depth,
+            &chain.frontier,
+            chain.root
+        ) == (
+            replay.next_index,
+            replay.current_depth,
+            &replay.frontier,
+            replay.root
+        ),
+        "after {} leaves the adapter holds the tree (count {}, depth {}, frontier {:02x?}, root \
+         {:02x?}), the client replays (count {}, depth {}, frontier {:02x?}, root {:02x?})",
+        leaves.len(),
+        chain.next_index,
+        chain.current_depth,
+        chain.frontier,
+        chain.root,
+        replay.next_index,
+        replay.current_depth,
+        replay.frontier,
+        replay.root
+    );
+    Ok(())
+}
+
+// The tree the client's `CommitmentTreeState` replays from the commitments
+// the settled transactions created, in their list order, is the adapter's:
+// on the empty tree (depth 0), then after settlements that leave 1, 3, 5, 7
+// and 9 leaves. The first action is created, consumed; the others are
+// created, consumed, created.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_clients_replay_of_the_settled_commitments_is_the_adapters_tree() -> anyhow::Result<()>
 {
     let mut env = SolanaLocalEnv::setup_bare().await?;
     let mut leaves: Vec<[u8; 32]> = Vec::new();
+    ensure_the_replay_is_the_adapters_tree(&env, &leaves).await?;
+    let resource = |consumed| ResourceSpec {
+        consumed,
+        logic: Logic::Trivial,
+    };
     for seed in 1..=5 {
-        let resource = |consumed| ResourceSpec {
-            consumed,
-            logic: Logic::Trivial,
+        let shape = if seed == 1 {
+            vec![resource(false), resource(true)]
+        } else {
+            vec![resource(false), resource(true), resource(false)]
         };
-        let action = actions::build(
-            seed,
-            vec![resource(false), resource(true), resource(false)],
-            INITIAL_ROOT,
-        )?;
-        let tx = prove_actions(&env, &[action]).await?;
+        let action = ordered::build(seed, shape, ordered::Overrides::default())?;
+        let tx = prove_actions(&env, &[action.witnesses]).await?;
         leaves.extend(tx.created_commitments()?.map(<[u8; 32]>::from));
         execute_tx(&mut env, tx).await?;
-
-        let chain = env.protocol_adapter.state().await?;
-        let replay = CommitmentTreeState::over(&leaves)?;
-        anyhow::ensure!(
-            (
-                chain.next_index,
-                chain.current_depth,
-                &chain.frontier,
-                chain.root
-            ) == (
-                replay.next_index,
-                replay.current_depth,
-                &replay.frontier,
-                replay.root
-            ),
-            "after {} leaves the adapter holds the tree (count {}, depth {}, frontier {:02x?}, \
-             root {:02x?}), the client replays (count {}, depth {}, frontier {:02x?}, root \
-             {:02x?})",
-            leaves.len(),
-            chain.next_index,
-            chain.current_depth,
-            chain.frontier,
-            chain.root,
-            replay.next_index,
-            replay.current_depth,
-            replay.frontier,
-            replay.root
-        );
+        ensure_the_replay_is_the_adapters_tree(&env, &leaves).await?;
     }
     Ok(())
 }

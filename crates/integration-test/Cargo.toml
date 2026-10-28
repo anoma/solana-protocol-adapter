@@ -31,7 +31,7 @@ anchor-lang = { git = "https://github.com/otter-sec/anchor", rev = "2c9747a2d31b
 anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "94c4b3bb5b4c74d66093330d79cebca789120552", features = [
   "rpc",
 ] }
-anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "e4e28f34ab7d8fc0212413283c32503f110638be", default-features = false, features = [
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "e936070f217295aba7437c142dce1b65ddea80a3", default-features = false, features = [
   "fixtures",
 ] }
 anoma-risc0-kind-trees = { git = "https://github.com/anoma/risc0-kind-trees", rev = "999fcf47627468fd35ad8ad16464ce28f6e443dd", features = [

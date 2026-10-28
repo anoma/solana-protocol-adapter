@@ -15,7 +15,6 @@ use anoma_pa_solana_client::generated::protocol_adapter::events::{
     ActionExecuted, CommitmentTreeRootAdded, ForwarderCallExecuted, TransactionExecuted,
 };
 use anoma_pa_solana_client::settlement::CallAccounts;
-use anoma_pa_solana_integration_test::actions::{self, Logic, ResourceSpec};
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
 use anoma_pa_solana_integration_test::executed::Executed;
 use anoma_pa_solana_integration_test::test_forwarder::{
@@ -24,12 +23,12 @@ use anoma_pa_solana_integration_test::test_forwarder::{
 use anoma_pa_testkit::environment::{
     DELETION_CRITERION_NEVER, Event, Outcome, PayloadKind, Refusal,
 };
+use anoma_pa_testkit::fixtures::ordered::{self, Logic, ResourceSpec};
 use anoma_pa_testkit::fixtures::passthrough::{self, PASSTHROUGH_LOGIC_VK};
 use anoma_pa_testkit::transaction::Transaction;
 use anoma_pa_testkit::witness::{AppData, ExpirableBlob};
 use anoma_pa_testkit::{latest_root, prove_actions, settle_tx};
 use anoma_rm_risc0::Digest;
-use anoma_rm_risc0::compliance::INITIAL_ROOT;
 use anoma_rm_risc0::utils::{bytes_to_words, words_to_bytes};
 use anyhow::Context;
 use solana_instruction::{AccountMeta, Instruction};
@@ -372,16 +371,16 @@ async fn an_actions_resources_settle_in_their_list_order() -> anyhow::Result<()>
         }),
     };
     let blobs = [0xa0, 0xb1, 0xc2];
-    let action = actions::build(
+    let action = ordered::build(
         8,
         vec![
             resource(false, blobs[0]),
             resource(true, blobs[1]),
             resource(false, blobs[2]),
         ],
-        INITIAL_ROOT,
+        ordered::Overrides::default(),
     )?;
-    let tx = prove_actions(&s.env, &[action]).await?;
+    let tx = prove_actions(&s.env, &[action.witnesses]).await?;
     let proven = &tx.aggregation_instance()?.actions[0];
     let tags: Vec<Digest> = proven.resource_instances.iter().map(|r| r.tag()).collect();
     let action_tree_root = proven.action_tree_root;

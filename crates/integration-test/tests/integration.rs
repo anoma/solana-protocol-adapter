@@ -5,7 +5,7 @@
 use anchor_lang::Discriminator;
 use anoma_pa_solana_client::generated::protocol_adapter::client::args;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
-use anoma_pa_testkit::fixtures::{passthrough, trivial};
+use anoma_pa_testkit::fixtures::{ordered, passthrough, trivial};
 use anoma_pa_testkit::{execute_tx, prove_actions};
 use anyhow::Context;
 use solana_message::VersionedMessage;
@@ -334,17 +334,14 @@ async fn a_transaction_repeating_a_nullifier_is_refused_as_spent() -> anyhow::Re
     Ok(())
 }
 
-// As pa-evm next's `_processAction`, the adapter checks each resource, its
-// logic ref against the denylists and a consumed one's root, before it moves
-// on to the next resource: an action whose first consumed resource names an
-// unknown root, and whose second has a denied logic ref, is refused for the
-// root.
-#[tokio::test(flavor = "multi_thread")]
-async fn an_unknown_root_is_refused_before_a_later_resources_denied_logic_ref() -> anyhow::Result<()>
-{
-    use anoma_pa_solana_integration_test::actions::{self, Logic, ResourceSpec};
-    use anoma_pa_testkit::environment::{DeniedLogicRef, ProtocolAdapter as _, Refusal};
-    use anoma_pa_testkit::witness::AppData;
+/// What the adapter refuses an action of two consumed resources for, both
+/// naming an unknown root: `first`, then `second`. The owner first denies the
+/// trivial logic to consumed resources.
+async fn refusal_of_two_consumed_naming_an_unknown_root(
+    first: ordered::Logic,
+    second: ordered::Logic,
+) -> anyhow::Result<Option<anoma_pa_testkit::environment::Refusal>> {
+    use anoma_pa_testkit::environment::{DeniedLogicRef, ProtocolAdapter as _};
     use anoma_rm_risc0::Digest;
     use anoma_rm_risc0::constants::PADDING_LOGIC_VK;
 
@@ -355,25 +352,61 @@ async fn an_unknown_root_is_refused_before_a_later_resources_denied_logic_ref() 
             consumed: true,
         }])
         .await?;
-    let action = actions::build(
+    let consumed = |logic| ordered::ResourceSpec {
+        consumed: true,
+        logic,
+    };
+    let action = ordered::build(
         58,
-        vec![
-            ResourceSpec {
-                consumed: true,
-                logic: Logic::Passthrough(AppData::default()),
-            },
-            ResourceSpec {
-                consumed: true,
-                logic: Logic::Trivial,
-            },
-        ],
-        Digest::from_bytes([0x7e; 32]),
+        vec![consumed(first), consumed(second)],
+        ordered::Overrides {
+            ephemeral_root: Some(Digest::from_bytes([0x7e; 32])),
+        },
     )?;
-    let tx = prove_actions(&env, &[action]).await?;
-    let refusal = env.protocol_adapter.submit(tx).await?.err();
+    let tx = prove_actions(&env, &[action.witnesses]).await?;
+    Ok(env.protocol_adapter.submit(tx).await?.err())
+}
+
+// As pa-evm next's `_processAction`, the adapter checks each resource, its
+// logic ref against the denylists and then a consumed one's root, before it
+// moves on to the next resource. An action whose first consumed resource
+// names an unknown root, and whose second has a denied logic ref, is refused
+// for the root.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_root_is_refused_before_a_later_resources_denied_logic_ref() -> anyhow::Result<()>
+{
+    use anoma_pa_testkit::environment::Refusal;
+    use anoma_pa_testkit::witness::AppData;
+
+    let refusal = refusal_of_two_consumed_naming_an_unknown_root(
+        ordered::Logic::Passthrough(AppData::default()),
+        ordered::Logic::Trivial,
+    )
+    .await?;
     anyhow::ensure!(
         refusal == Some(Refusal::UnknownRoot),
         "the adapter returned {refusal:?}, not the refusal for the first resource's unknown root"
+    );
+    Ok(())
+}
+
+// The converse: an action whose first consumed resource has a denied logic
+// ref, both naming an unknown root, is refused for the logic ref, which
+// pa-evm checks before the root.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_denied_logic_ref_is_refused_before_its_resources_unknown_root() -> anyhow::Result<()> {
+    use anoma_pa_testkit::environment::Refusal;
+    use anoma_pa_testkit::witness::AppData;
+
+    let refusal = refusal_of_two_consumed_naming_an_unknown_root(
+        ordered::Logic::Trivial,
+        ordered::Logic::Passthrough(AppData::default()),
+    )
+    .await?;
+    anyhow::ensure!(
+        refusal == Some(Refusal::DeniedLogicRef),
+        "the adapter returned {refusal:?}, not the refusal for the first resource's denied logic \
+         ref"
     );
     Ok(())
 }

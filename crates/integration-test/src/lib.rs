@@ -4,7 +4,6 @@
 //!
 //! [`ProtocolAdapter`]: anoma_pa_testkit::environment::ProtocolAdapter
 
-pub mod actions;
 pub mod commitment_tree;
 pub mod envs;
 pub mod executed;
