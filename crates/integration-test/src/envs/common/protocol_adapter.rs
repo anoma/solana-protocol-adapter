@@ -3,6 +3,7 @@ use std::sync::Arc;
 use anchor_lang::{AnchorDeserialize, Discriminator};
 use anoma_pa_solana_client::forwarders::Forwarders;
 use anoma_pa_solana_client::generated::protocol_adapter::accounts::PAStateAccount;
+use anoma_pa_solana_client::generated::protocol_adapter::client::args;
 use anoma_pa_solana_client::generated::protocol_adapter::error::ProtocolAdapterError;
 use anoma_pa_solana_client::generated::protocol_adapter::events::{
     ActionExecuted, ApplicationPayload, CommitmentTreeRootAdded, DiscoveryPayload, ExternalPayload,
@@ -52,15 +53,20 @@ pub struct ProtocolAdapter {
     pub forwarders: Forwarders,
     /// The next transaction-data upload's id; each settlement takes one.
     next_upload_id: u64,
+    /// Whether the adapter is a live cluster's, on which no instruction of
+    /// its owner or upgrade authority is sent (`refuse_on_live_cluster`).
+    live: bool,
 }
 
 impl ProtocolAdapter {
     /// The initialized adapter `program`: the verifier its router and
-    /// selector name, and the commitment tree its state holds.
+    /// selector name, and the commitment tree its state holds; `live` when it
+    /// is a live cluster's.
     pub(in crate::envs) async fn new(
         rpc: Arc<RpcClient>,
         payer: Arc<Keypair>,
         program: Pubkey,
+        live: bool,
     ) -> anyhow::Result<Self> {
         let state = read_adapter_state(&rpc, &program).await?;
         let verifier_program =
@@ -73,9 +79,23 @@ impl ProtocolAdapter {
             commitment_tree: crate::commitment_tree::from_state(&state)?,
             forwarders: Forwarders::default(),
             next_upload_id: 0,
+            live,
         };
         adapter.ensure_latest_root(&state)?;
         Ok(adapter)
+    }
+
+    /// Refuses `instructions` on a live cluster when one is an instruction of
+    /// the adapter's owner or upgrade authority, before anything is sent;
+    /// elsewhere every instruction is sent.
+    pub(in crate::envs) fn refuse_on_live_cluster(
+        &self,
+        instructions: &[Instruction],
+    ) -> anyhow::Result<()> {
+        if self.live {
+            refuse_authority_instructions(&self.program, instructions)?;
+        }
+        Ok(())
     }
 
     /// The adapter as the client's instance of it: its reads, and its
@@ -250,6 +270,7 @@ impl ProtocolAdapter {
     /// Sends `instruction`, which the adapter's owner signs: the payer, which
     /// owns the adapter.
     async fn as_owner(&self, instruction: Instruction, what: &str) -> anyhow::Result<()> {
+        self.refuse_on_live_cluster(std::slice::from_ref(&instruction))?;
         send_signed(&self.rpc, &self.payer, &[], &[instruction])
             .await
             .with_context(|| format!("failed to {what}"))?;
@@ -308,6 +329,68 @@ impl CoreProtocolAdapter for ProtocolAdapter {
             .deny_logic_refs_ix(&self.payer.pubkey(), &entries);
         self.as_owner(ix, "deny the logic refs").await
     }
+}
+
+/// The adapter's instructions a live cluster is sent: a settlement's, its
+/// upload's, its simulation's, and the reads. Every other instruction of the
+/// adapter is its owner's or its upgrade authority's.
+const LIVE_CLUSTER_INSTRUCTIONS: [&[u8]; 10] = [
+    args::Settle::DISCRIMINATOR,
+    args::SettleFromTxdata::DISCRIMINATOR,
+    args::SimulateExecute::DISCRIMINATOR,
+    args::TxdataInit::DISCRIMINATOR,
+    args::TxdataWrite::DISCRIMINATOR,
+    args::TxdataExtend::DISCRIMINATOR,
+    args::TxdataClose::DISCRIMINATOR,
+    args::TxdataCloseExpired::DISCRIMINATOR,
+    args::RiscZeroVerifierPaused::DISCRIMINATOR,
+    args::Version::DISCRIMINATOR,
+];
+
+/// The adapter's owner and upgrade-authority instructions, by name.
+const AUTHORITY_INSTRUCTIONS: [(&[u8], &str); 9] = [
+    (args::Initialize::DISCRIMINATOR, "initialize"),
+    (args::Pause::DISCRIMINATOR, "pause"),
+    (args::Unpause::DISCRIMINATOR, "unpause"),
+    (args::SetKindTreeRoot::DISCRIMINATOR, "set_kind_tree_root"),
+    (args::DenyLogicRefs::DISCRIMINATOR, "deny_logic_refs"),
+    (args::TransferOwnership::DISCRIMINATOR, "transfer_ownership"),
+    (args::RenounceOwnership::DISCRIMINATOR, "renounce_ownership"),
+    (
+        args::UpdateExpiryConfig::DISCRIMINATOR,
+        "update_expiry_config",
+    ),
+    (args::Upgrade::DISCRIMINATOR, "upgrade"),
+];
+
+/// Refuses `instructions` when one of them is an instruction of the adapter
+/// `program` that a live cluster is not sent (`LIVE_CLUSTER_INSTRUCTIONS`):
+/// an owner's or the upgrade authority's, which would change a deployment
+/// others use, or one the adapter does not have.
+fn refuse_authority_instructions(
+    program: &Pubkey,
+    instructions: &[Instruction],
+) -> anyhow::Result<()> {
+    for ix in instructions.iter().filter(|ix| ix.program_id == *program) {
+        if LIVE_CLUSTER_INSTRUCTIONS
+            .iter()
+            .any(|d| ix.data.starts_with(d))
+        {
+            continue;
+        }
+        let name = match AUTHORITY_INSTRUCTIONS
+            .iter()
+            .find(|(d, _)| ix.data.starts_with(d))
+        {
+            Some((_, name)) => (*name).to_string(),
+            None => format!(
+                "the adapter instruction starting {:02x?}",
+                &ix.data[..ix.data.len().min(8)]
+            ),
+        };
+        anyhow::bail!("refused on a live cluster: {name}");
+    }
+    Ok(())
 }
 
 /// The refusal a settlement's log names, from the failure that ended it
@@ -453,6 +536,7 @@ fn settlement_event(data: &[u8]) -> anyhow::Result<Event> {
 mod tests {
     use super::*;
     use crate::executed::emitted;
+    use anoma_pa_solana_client::SettlementAccounts;
 
     const ADAPTER: Pubkey = Pubkey::new_from_array([1; 32]);
     const VERIFIER: Pubkey = Pubkey::new_from_array([2; 32]);
@@ -552,5 +636,116 @@ mod tests {
         .to_string();
         println!("{err}");
         assert!(err.contains("which is no settlement event"), "{err}");
+    }
+
+    /// An adapter on a live cluster whose RPC endpoint nothing serves: a
+    /// call that sent anything would fail to reach it.
+    fn live_adapter() -> ProtocolAdapter {
+        ProtocolAdapter {
+            rpc: Arc::new(RpcClient::new("http://127.0.0.1:1".to_string())),
+            payer: Arc::new(Keypair::new()),
+            program: ADAPTER,
+            verifier_program: VERIFIER,
+            commitment_tree: FrontierCommitmentTree::new(0, vec![]).unwrap(),
+            forwarders: Forwarders::default(),
+            next_upload_id: 0,
+            live: true,
+        }
+    }
+
+    fn refused(name: &str, result: anyhow::Result<()>) {
+        let error = format!("{:#}", result.expect_err(name));
+        println!("{name}: {error}");
+        assert_eq!(error, format!("refused on a live cluster: {name}"));
+    }
+
+    #[tokio::test]
+    async fn a_live_cluster_refuses_the_owners_calls_before_sending_them() {
+        let mut adapter = live_adapter();
+        refused(
+            "set_kind_tree_root",
+            adapter
+                .set_kind_tree_root(Digest::from_bytes([7; 32]))
+                .await,
+        );
+        refused("pause", adapter.pause().await);
+        refused("unpause", adapter.unpause().await);
+        refused(
+            "deny_logic_refs",
+            adapter
+                .deny_logic_refs(&[DeniedLogicRef {
+                    logic_ref: Digest::from_bytes([7; 32]),
+                    consumed: true,
+                }])
+                .await,
+        );
+    }
+
+    #[test]
+    fn a_live_cluster_refuses_every_authority_instruction_and_sends_settlements() {
+        let adapter = live_adapter();
+        let instance = adapter.instance();
+        let key = Pubkey::new_from_array([5; 32]);
+        for (name, ix) in [
+            (
+                "initialize",
+                instance.initialize_ix(&key, &key, &key, [1; 4]),
+            ),
+            (
+                "transfer_ownership",
+                instance.transfer_ownership_ix(&key, &key),
+            ),
+            ("renounce_ownership", instance.renounce_ownership_ix(&key)),
+            (
+                "update_expiry_config",
+                instance.update_expiry_config_ix(&key, 1, 2),
+            ),
+            ("upgrade", instance.upgrade_ix(&key, &key, &key)),
+        ] {
+            refused(name, adapter.refuse_on_live_cluster(&[ix]));
+        }
+        let unknown = Instruction::new_with_bytes(ADAPTER, &[0; 8], vec![]);
+        let error = adapter.refuse_on_live_cluster(&[unknown]).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .starts_with("refused on a live cluster: the adapter instruction"),
+            "{error:#}"
+        );
+
+        let accounts = || SettlementAccounts {
+            pa_state: key,
+            new_root_marker: None,
+            verifier_router_program: key,
+            router: key,
+            verifier_entry: key,
+            verifier_program: key,
+            remaining_accounts: vec![],
+        };
+        let settlement = [
+            instance.settle_ix(&key, &[1], accounts()),
+            instance.settle_from_txdata_ix(&key, 0, accounts()),
+            instance.simulate_execute_ix(&key, &[1], true, accounts()),
+            instance.txdata_init_ix(&key, 0, 1, 2),
+            instance.txdata_write_ix(&key, 0, 0, &[1]),
+            instance.txdata_extend_ix(&key, 0, 3),
+            instance.txdata_close_ix(&key, &key, 0),
+            instance.txdata_close_expired_ix(&key, &key, &key, 0),
+            instance.risc_zero_verifier_paused_ix(&key, [1; 4]),
+            instance.version_ix(),
+            // Another program's instruction, such as a consumer's setup.
+            Instruction::new_with_bytes(FORWARDER, &[0; 8], vec![]),
+        ];
+        adapter
+            .refuse_on_live_cluster(&settlement)
+            .expect("a live cluster is sent settlements");
+
+        let local = ProtocolAdapter {
+            live: false,
+            ..live_adapter()
+        };
+        local
+            .refuse_on_live_cluster(&[instance.pause_ix(&key)])
+            .expect("a runtime of the harness's own is sent the owner's calls");
     }
 }

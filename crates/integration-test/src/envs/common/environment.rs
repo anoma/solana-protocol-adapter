@@ -110,13 +110,16 @@ impl<P> Environment<P> {
     /// Sends `instructions` as one transaction the default signer pays for,
     /// signed by it and `signers`, and waits for it to be confirmed: a
     /// consumer's setup, such as minting a token and approving a delegate.
-    /// Returns its signature.
+    /// Returns its signature. On a live cluster, an instruction of the
+    /// adapter's owner or upgrade authority is refused before anything is
+    /// sent.
     pub async fn send(
         &self,
         instructions: &[Instruction],
         signers: &[&Keypair],
     ) -> anyhow::Result<Signature> {
         let adapter = &self.protocol_adapter;
+        adapter.refuse_on_live_cluster(instructions)?;
         runtime::send_signed(&adapter.rpc, &adapter.payer, signers, instructions).await
     }
 
@@ -130,7 +133,8 @@ impl<P> Environment<P> {
         pa: Pubkey,
         prover: P,
     ) -> anyhow::Result<Self> {
-        let protocol_adapter = ProtocolAdapter::new(rpc, payer, pa).await?;
+        let live = surfnet.is_none();
+        let protocol_adapter = ProtocolAdapter::new(rpc, payer, pa, live).await?;
         Ok(Self {
             surfnet,
             prover,

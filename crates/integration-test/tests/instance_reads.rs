@@ -334,7 +334,8 @@ async fn every_read_answers_what_the_adapter_was_set_up_with() -> anyhow::Result
 }
 
 // An adapter deployed but never initialized has no state account: every read
-// of its state says so, naming the account, rather than decoding nothing.
+// of its state says so, naming the account, rather than decoding nothing; its
+// marker reads answer false.
 #[tokio::test(flavor = "multi_thread")]
 async fn an_adapter_never_initialized_has_no_state_to_read() -> anyhow::Result<()> {
     let env = SolanaLocalEnv::setup_bare().await?;
@@ -426,5 +427,20 @@ async fn an_adapter_never_initialized_has_no_state_to_read() -> anyhow::Result<(
             .map(|v| shown(&v)),
     )?;
     missing("owner", instance.owner().await.map(|v| shown(&v)))?;
+
+    // The marker reads read no state: an adapter never initialized holds no
+    // marker, as an EVM adapter's empty storage holds none.
+    let contained = instance.is_nullifier_contained(&[1; 32]).await?;
+    let historical = instance
+        .is_commitment_tree_root_historical(&[1; 32])
+        .await?;
+    println!(
+        "is_nullifier_contained: {contained}; is_commitment_tree_root_historical: {historical}"
+    );
+    anyhow::ensure!(
+        !contained && !historical,
+        "an adapter never initialized has a nullifier ({contained}) or a historical root \
+         ({historical})"
+    );
     Ok(())
 }

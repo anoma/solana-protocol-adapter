@@ -13,9 +13,11 @@ use super::config::{E2eConfig, E2eRuntime};
 use super::{Environment, Prover};
 
 impl Environment {
-    /// The environment the process environment configures (`E2eConfig`).
+    /// The environment the process environment configures (`E2eConfig`), for
+    /// the harness's suite, which refuses the cluster runtime.
     pub async fn setup_bare() -> anyhow::Result<Self> {
         let config = E2eConfig::from_env().context("failed to parse e2e test config")?;
+        config.ensure_harness_suite_runtime()?;
         Self::setup(&config).await
     }
 

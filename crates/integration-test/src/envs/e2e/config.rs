@@ -63,6 +63,17 @@ fn operator_rpc_url(name: &str, url: String) -> anyhow::Result<String> {
 }
 
 impl E2eConfig {
+    /// Refuses the cluster runtime for the harness's suite, which makes the
+    /// owner's calls: a live deployment is only sent settlements.
+    pub(super) fn ensure_harness_suite_runtime(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            !matches!(self.runtime, E2eRuntime::Cluster { .. }),
+            "E2E_RUNTIME is cluster: the cluster runtime runs only explicit settlement e2e tests \
+             (the forwarder's wrap/transfer/unwrap), not the harness suite"
+        );
+        Ok(())
+    }
+
     /// Read the config from the environment (and a `.env` file, if any): see
     /// `from_vars`.
     pub fn from_env() -> anyhow::Result<Self> {
@@ -212,6 +223,26 @@ mod tests {
             format!("{refused:#}").contains("the public RPC is not used"),
             "{refused:#}"
         );
+    }
+
+    #[test]
+    fn the_harness_suite_refuses_the_cluster_runtime() {
+        let cluster = config(&[("E2E_RUNTIME", "cluster"), ("E2E_RPC_URL", HELIUS)]).unwrap();
+        let refused = cluster.ensure_harness_suite_runtime().unwrap_err();
+        println!("{refused:#}");
+        assert!(
+            format!("{refused:#}").contains("not the harness suite"),
+            "{refused:#}"
+        );
+        for vars in [
+            &[("E2E_RUNTIME", "local")][..],
+            &[("E2E_RUNTIME", "devnet"), ("DEVNET_RPC_URL", HELIUS)],
+        ] {
+            config(vars)
+                .unwrap()
+                .ensure_harness_suite_runtime()
+                .unwrap_or_else(|e| panic!("{vars:?}: {e:#}"));
+        }
     }
 
     #[test]
