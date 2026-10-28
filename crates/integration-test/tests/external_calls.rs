@@ -21,7 +21,7 @@ use anoma_pa_solana_integration_test::test_forwarder::{
     MODE_EMPTY, RELAY_OK, log_ix, relay_input, write_input,
 };
 use anoma_pa_testkit::environment::{
-    DELETION_CRITERION_NEVER, Event, Outcome, PayloadKind, Refusal,
+    self, DELETION_CRITERION_NEVER, Event, Outcome, PayloadKind, Refusal,
 };
 use anoma_pa_testkit::fixtures::ordered::{self, Logic, ResourceSpec};
 use anoma_pa_testkit::fixtures::passthrough::{self, PASSTHROUGH_LOGIC_VK};
@@ -381,9 +381,11 @@ async fn an_actions_resources_settle_in_their_list_order() -> anyhow::Result<()>
         ordered::Overrides::default(),
     )?;
     let tx = prove_actions(&s.env, &[action.witnesses]).await?;
-    let proven = &tx.aggregation_instance()?.actions[0];
+    let instance = tx.aggregation_instance()?;
+    let proven = &instance.actions[0];
     let tags: Vec<Digest> = proven.resource_instances.iter().map(|r| r.tag()).collect();
     let action_tree_root = proven.action_tree_root;
+    let transaction_id = environment::transaction_id(instance);
 
     let Outcome::Settled(events) = settle_tx(&mut s.env, tx).await? else {
         anyhow::bail!("the adapter refused the transaction");
@@ -413,15 +415,13 @@ async fn an_actions_resources_settle_in_their_list_order() -> anyhow::Result<()>
                 created_logic_refs: vec![logic, logic],
             },
             Event::CommitmentTreeRootAdded { root },
+            Event::TransactionExecuted { transaction_id },
         ])
         .collect();
     anyhow::ensure!(
-        events.len() == expected.len() + 1
-            && events[..expected.len()] == expected[..]
-            && matches!(events.last(), Some(Event::TransactionExecuted { .. })),
+        events == expected,
         "the settlement emitted {events:#?}, not, per resource in list order, its call and its \
-         blob, then its action, its root and its transaction: {expected:#?} and a \
-         TransactionExecuted"
+         blob, then its action, its root and its transaction: {expected:#?}"
     );
     Ok(())
 }
