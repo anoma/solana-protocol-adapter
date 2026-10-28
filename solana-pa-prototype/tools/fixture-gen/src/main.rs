@@ -43,11 +43,11 @@ use std::time::{Duration, Instant};
 
 use anoma_pa_testkit::fixtures::passthrough::{PASSTHROUGH_LOGIC_PK, PASSTHROUGH_LOGIC_VK};
 
-/// The kind tree a fixture commits to unless `--kind-table` names another:
+/// The kind tree a fixture commits to unless `--kind-tree` names another:
 /// the committed empty tree. The compliance circuit commits the root of the
 /// witness's tree in the instance, and the PA pins that root at
 /// initialization, so fixtures and deployment tooling must agree on this file.
-const KIND_TREE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/kind_table.json");
+const KIND_TREE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/kind_tree.json");
 
 /// Per-HTTP-request timeout for queue calls. Queue-side job timeouts (5–10 min)
 /// are independent.
@@ -408,13 +408,13 @@ struct GenerateArgs {
     prover: ProverArgs,
     /// Also write the final transaction's error variants to DIR:
     /// wrong_root, no_aggregation, garbage_proof, wrong_selector, corrupt_seal,
-    /// zero_action, foreign_kind_table and witness_delta.
+    /// zero_action, foreign_kind_tree and witness_delta.
     #[arg(long, value_name = "DIR")]
     error_variants: Option<PathBuf>,
     /// Prove against this kind tree instead of the committed empty one
-    /// (kind_table.json); the PA must store its root.
+    /// (kind_tree.json); the PA must store its root.
     #[arg(long, value_name = "PATH", default_value = KIND_TREE_PATH)]
-    kind_table: PathBuf,
+    kind_tree: PathBuf,
     /// Print claim digests for composition debugging.
     #[arg(long)]
     debug_assumptions: bool,
@@ -1090,7 +1090,7 @@ fn generate_error_variant_fixtures(
         require_aggregation_mut(&mut foreign_kind_tree)?
             .instance
             .kind_tree_root = Digest::from_bytes([0x4b; 32]);
-        write_variant("foreign_kind_table.json", &foreign_kind_tree)?;
+        write_variant("foreign_kind_tree.json", &foreign_kind_tree)?;
     }
 
     {
@@ -1517,10 +1517,10 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         salt,
         prover,
         error_variants,
-        kind_table,
+        kind_tree,
         debug_assumptions,
     } = generate;
-    load_kind_tree(kind_table)?;
+    load_kind_tree(kind_tree)?;
     let total_start = Instant::now();
 
     let prover = resolve_prover(apply_mock_mode(prover))?;
@@ -1880,7 +1880,7 @@ mod tests {
             &["batch", "--error-variants", "", "out.json"],
             &[
                 "historical-root",
-                "--kind-table",
+                "--kind-tree",
                 "t.json",
                 "a.json",
                 "b.json",

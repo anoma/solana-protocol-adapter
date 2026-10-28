@@ -93,7 +93,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-table|deny-logic-refs|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs|idl-write|idl-check)
+  deploy|upgrade|init|set-kind-tree-root|deny-logic-refs|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs|idl-write|idl-check)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -258,7 +258,7 @@ PYEOF
     echo "               the programs already deployed there"
     echo "  gen-fixtures <shape> [options] OUT"
     echo "               Generate one fixture (gen-fixtures --help lists the shapes)"
-    echo "  regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH]"
+    echo "  regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-tree PATH]"
     echo "               Regenerate the complete fixture set for one proof mode"
     echo "               (sequential; real mode is hours of CPU proving)"
     echo "  fixture-test Run fixture-gen tests"
@@ -296,7 +296,7 @@ PYEOF
     echo "  upgrade [${DEPLOY_TARGETS}|all]   Rebuild + deploy over existing programs"
     echo "  init                   Initialize PA state (idempotent; needs PA_OWNER,"
     echo "                         PA_VERIFIER_ROUTER and PA_PROOF_SELECTOR)"
-    echo "  set-kind-table         Replace the PA's kind tree root (PA_KIND_TREE_ROOT)"
+    echo "  set-kind-tree-root     Replace the PA's kind tree root (PA_KIND_TREE_ROOT)"
     echo "  deny-logic-refs        Add logic refs to the consumed or created denylist (PA_DENIED_LOGIC_REFS)"
     echo "  idl-publish            Publish the production IDL on chain"
     echo "  verify-build           Deterministic solana-verify build of the PA; with"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Regenerate the complete fixture set for one proof mode, or one fixture of it.
 #
-# Usage: regen-fixtures.sh <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH] [--only FILE]
+# Usage: regen-fixtures.sh <real|mock> [--out DIR] [--salt SALT] [--kind-tree PATH] [--only FILE]
 #   real — full RISC0 proving (succinct base proofs + Groth16 aggregation via
 #          a container runtime, or the workers queue at QUEUE_BASE_URL).
 #          Writes tests/fixtures/. Hours of CPU.
@@ -10,7 +10,7 @@
 #   --out DIR         write to DIR instead
 #   --salt SALT       derive every nonce from SALT too, so nothing proven was
 #                     settled before on the deployment it is proven for
-#   --kind-table PATH prove against that kind tree instead of the committed
+#   --kind-tree PATH prove against that kind tree instead of the committed
 #                     empty one; the deployment must store its root
 #   --only FILE       prove only the recipe that writes FILE (an error variant
 #                     comes with its base); fixtures it spends from must exist
@@ -46,21 +46,21 @@ case "$MODE" in
     MODE_FLAG=(--mock)
     ;;
   *)
-    echo "Usage: $0 <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH] [--only FILE]" >&2
+    echo "Usage: $0 <real|mock> [--out DIR] [--salt SALT] [--kind-tree PATH] [--only FILE]" >&2
     exit 1
     ;;
 esac
 shift
 
 SALT_FLAG=()
-KIND_TABLE_FLAG=()
+KIND_TREE_FLAG=()
 ONLY=""
 while [[ $# -gt 0 ]]; do
   [[ $# -ge 2 ]] || { echo "❌ $1 requires a value" >&2; exit 1; }
   case "$1" in
     --out) OUT_DIR="$2" ;;
     --salt) SALT_FLAG=(--salt "$2") ;;
-    --kind-table) KIND_TABLE_FLAG=(--kind-table "$2") ;;
+    --kind-tree) KIND_TREE_FLAG=(--kind-tree "$2") ;;
     --only) ONLY="$2" ;;
     *)
       echo "❌ Unknown argument: $1" >&2
@@ -77,7 +77,7 @@ gen() {
   shift
   echo "==> fixture-gen ${shape} $*"
   cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- \
-    "$shape" "${MODE_FLAG[@]}" "${SALT_FLAG[@]}" "${KIND_TABLE_FLAG[@]}" "$@"
+    "$shape" "${MODE_FLAG[@]}" "${SALT_FLAG[@]}" "${KIND_TREE_FLAG[@]}" "$@"
 }
 
 # Whether this run proves the recipe that writes the files named: every
@@ -132,7 +132,7 @@ if wanted batch_groth16_resubmitted.json; then gen batch "$OUT_DIR/batch_groth16
 # Never settled: rejections that fail after the nullifiers are recorded need
 # them unspent. The error variants are mutations of this transaction.
 if wanted batch_groth16_rejected.json wrong_root.json no_aggregation.json garbage_proof.json wrong_selector.json \
-  corrupt_seal.json zero_action.json foreign_kind_table.json witness_delta.json; then
+  corrupt_seal.json zero_action.json foreign_kind_tree.json witness_delta.json; then
   gen batch --error-variants "$OUT_DIR" "$OUT_DIR/batch_groth16_rejected.json"
 fi
 if wanted batch_groth16_mismatch.json; then gen output-mismatch "$OUT_DIR/batch_groth16_mismatch.json"; fi

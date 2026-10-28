@@ -100,9 +100,9 @@ describe("protocol-adapter (kind tree root) @localnet", () => {
 
   // pa-evm's UnacceptedKindTreeRoot: the transaction claims a kind
   // tree that is neither the stored one nor the empty one (fixture-gen's
-  // foreign_kind_table error variant), refused before its proof is verified.
+  // foreign_kind_tree error variant), refused before its proof is verified.
   it("refuses a transaction proven against a kind tree neither stored nor empty", async () =>
-    assertFails(resettleFixture(await loadFixture("foreign_kind_table.json")), {
+    assertFails(resettleFixture(await loadFixture("foreign_kind_tree.json")), {
       program,
       error: "UnacceptedKindTreeRoot",
     }));

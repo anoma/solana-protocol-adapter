@@ -85,7 +85,7 @@ entry point for one fixture.
 | `./scripts/dev.sh coverage` | Unit-test line coverage |
 | `./scripts/dev.sh clean` | Remove local validator/test artifacts |
 | `./scripts/dev.sh shell` / `run <cmd>` | Interactive Nix shell / one command in it |
-| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-table`, `deny-logic-refs`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
+| `./scripts/dev.sh <op> --cluster <c>` | Cluster operations (`deploy`, `upgrade`, `init`, `set-kind-tree-root`, `deny-logic-refs`, `pause`, `unpause`, `status`, `balance`, `idl-publish`, `verify-build`) against `localnet`/`devnet`/`mainnet`: see `scripts/ops.sh` for flags and `docs/OPERATIONS.md` for procedures |
 
 ### Rebuilding From Scratch
 
@@ -456,7 +456,7 @@ Fixtures contain pre-generated RM transactions with valid proofs, committed beca
 
 ### Generating Fixtures
 
-`./scripts/dev.sh regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-table PATH]` regenerates the whole set (a salt sets every nonce apart from earlier runs, so the set settles on a deployment that already holds another run's); `./scripts/dev.sh gen-fixtures <shape> [options] OUT` generates one (`gen-fixtures --help` lists the shapes). Proving runs locally by default; its Groth16 step needs a container runtime (the Nix shell provides podman behind a `docker` wrapper). Setting `QUEUE_BASE_URL` and `QUEUE_AUTH_TOKEN`, or passing `--prover queue`, sends the proving jobs to the AnomaPay workers queue instead.
+`./scripts/dev.sh regen-fixtures <real|mock> [--out DIR] [--salt SALT] [--kind-tree PATH]` regenerates the whole set (a salt sets every nonce apart from earlier runs, so the set settles on a deployment that already holds another run's); `./scripts/dev.sh gen-fixtures <shape> [options] OUT` generates one (`gen-fixtures --help` lists the shapes). Proving runs locally by default; its Groth16 step needs a container runtime (the Nix shell provides podman behind a `docker` wrapper). Setting `QUEUE_BASE_URL` and `QUEUE_AUTH_TOKEN`, or passing `--prover queue`, sends the proving jobs to the AnomaPay workers queue instead.
 
 The fixtures' external calls ride on pa-testkit's pass-through logic (`anoma_pa_testkit::fixtures::passthrough`), whose guest pa-testkit ships prebuilt.
 

@@ -31,7 +31,7 @@ Commands:
                          their own upgrade (owner wallet) once their upgrade
                          authority is their PDA, else through the loader
   init                   Initialize PA state (idempotent)
-  set-kind-table         Replace the PA's kind tree root with
+  set-kind-tree-root     Replace the PA's kind tree root with
                          PA_KIND_TREE_ROOT (owner wallet).
   deny-logic-refs        Add each PA_DENIED_LOGIC_REFS entry
                          (<hex>:<consumed|created>, comma-separated) to the
@@ -51,7 +51,7 @@ Commands:
                          No cluster (or localnet): full deterministic local
                          integration flow, every spec file on one validator.
                          devnet/mainnet: proves a fixture set for the
-                         deployment (new salt, PA_KIND_TABLE), then runs the
+                         deployment (new salt, PA_KIND_TREE), then runs the
                          spec files that build on any state, without the
                          tests tagged @localnet, against the programs
                          deployed there; refused when the wallet holds an
@@ -139,7 +139,7 @@ Initialization parameters (required by deploy/init when the PA is a target):
   PA_PROOF_SELECTOR    4-byte Groth16 verifier selector (hex).
                        Devnet: ${GROTH16_SELECTOR}
 
-The PA starts on the empty kind tree; set-kind-table installs another.
+The PA starts on the empty kind tree; set-kind-tree-root installs another.
 USAGE
   exit 1
 }
@@ -667,9 +667,9 @@ cmd_init() {
   init_pa
 }
 
-cmd_set_kind_table() {
+cmd_set_kind_tree_root() {
   prepare_pa_script
-  run_ts scripts/set-kind-table.ts
+  run_ts scripts/set-kind-tree-root.ts
 }
 
 cmd_deny_logic_refs() {
@@ -918,8 +918,8 @@ cmd_test() {
   # kind tree whose root the deployment stores. Each fixture is proven when a
   # test first loads it (tests/utils/fixtures.ts), so the run stops at the
   # first failure and proves only what its tests use.
-  if [[ -z "${PA_KIND_TABLE:-}" || ! -f "$PA_KIND_TABLE" ]]; then
-    echo "❌ Set PA_KIND_TABLE to the kind tree (JSON, as fixture-gen reads it) whose root the deployment stores;" >&2
+  if [[ -z "${PA_KIND_TREE:-}" || ! -f "$PA_KIND_TREE" ]]; then
+    echo "❌ Set PA_KIND_TREE to the kind tree (JSON, as fixture-gen reads it) whose root the deployment stores;" >&2
     echo "   the run proves its fixtures against it." >&2
     exit 1
   fi
@@ -934,7 +934,7 @@ cmd_test() {
   # Every spec file loads the suite harness, which reads the primary fixture
   # for the deployment's proof selector before any test runs.
   if [[ ! -f "${fixture_dir}/batch_groth16.json" ]]; then
-    "${SCRIPT_DIR}/regen-fixtures.sh" real --out "$fixture_dir" --salt "$salt" --kind-table "$PA_KIND_TABLE" \
+    "${SCRIPT_DIR}/regen-fixtures.sh" real --out "$fixture_dir" --salt "$salt" --kind-tree "$PA_KIND_TREE" \
       --only batch_groth16.json
   fi
 
@@ -962,7 +962,7 @@ cmd_test() {
     PA_TEST_MODE=real \
     PA_FIXTURE_DIR="$fixture_dir" \
     PA_FIXTURE_SALT="$salt" \
-    PA_KIND_TABLE="$PA_KIND_TABLE" \
+    PA_KIND_TREE="$PA_KIND_TREE" \
       yarn run ts-mocha --type-check -p ./tsconfig.json -t 0 --grep @localnet --invert "$spec"
   done
 
@@ -1121,7 +1121,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|init|set-kind-table|deny-logic-refs|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-tree-root|deny-logic-refs|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

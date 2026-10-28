@@ -17,7 +17,7 @@ async function main() {
   // no safe default: guessing wrong hands the adapter to the wrong key or
   // installs the wrong verifier. All three must be supplied explicitly. The
   // signer, the program's upgrade authority, hands that authority to the
-  // program. The adapter starts on the empty kind tree; set-kind-table
+  // program. The adapter starts on the empty kind tree; set-kind-tree-root
   // installs another.
   const owner = requirePubkey(
     "PA_OWNER",
