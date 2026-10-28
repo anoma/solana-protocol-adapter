@@ -1771,13 +1771,13 @@
     },
     {
       "code": 6026,
-      "name": "ComplianceKeyMismatch",
-      "msg": "Aggregation instance compliance key does not match the compliance circuit VK"
+      "name": "ComplianceVkMismatch",
+      "msg": "Aggregation instance compliance VK does not match the compliance circuit VK"
     },
     {
       "code": 6027,
       "name": "UnacceptedKindTreeRoot",
-      "msg": "The transaction's kind tree root is neither the stored one nor the empty table's"
+      "msg": "The transaction's kind tree root is neither the stored one nor the empty kind tree's"
     },
     {
       "code": 6028,
@@ -2294,8 +2294,10 @@
           {
             "name": "root",
             "docs": [
-              "The tree's root, computed once per settlement that adds commitments,",
-              "after the last one (`merkle::current_root`), as pa-evm stores its root."
+              "The latest root added to the set of past roots (each has its marker",
+              "PDA): the tree's root after the last settlement that added",
+              "commitments, computed once after its last one (`merkle::current_root`),",
+              "as pa-evm's `latestCommitmentTreeRoot`."
             ],
             "type": {
               "array": [

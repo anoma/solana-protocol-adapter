@@ -759,10 +759,11 @@ struct SettlementAccounts<'a, 'info> {
 /// consumed one's root is checked to be historical and its nullifier is
 /// recorded, a created one's commitment is added to the tree; then its
 /// forwarder calls run and its payload events are emitted; then the action's
-/// ActionExecuted. After the actions the proof's selector is checked, the
-/// proofs are verified (the RISC Zero proof unless skipped), if any
-/// commitment was added the tree's root is computed and recorded with
-/// CommitmentTreeRootAdded, and TransactionExecuted closes the settlement.
+/// ActionExecuted. After the actions the delta proof is verified, then the
+/// aggregation proof's selector is checked and the RISC Zero proof verified
+/// (unless skipped); if any commitment was added the tree's root is computed
+/// and recorded with CommitmentTreeRootAdded, and TransactionExecuted closes
+/// the settlement.
 /// Roots are checked against the root set as it stood before the
 /// transaction, as pa-evm's does not change until the end.
 fn execute_settlement(
@@ -800,7 +801,7 @@ fn execute_settlement(
     // settlement to *the* compliance circuit.
     require!(
         instance.compliance_vk == arm_core::constants::COMPLIANCE_VK,
-        PAError::ComplianceKeyMismatch
+        PAError::ComplianceVkMismatch
     );
     require!(
         state.is_kind_tree_root_accepted(&instance.kind_tree_root.into()),
@@ -892,6 +893,11 @@ fn execute_settlement(
         events.emit(&executed)?;
     }
 
+    // pa-evm's `_verifyGlobalProofs`: the delta proof, then the aggregation
+    // proof's selector, then the proof.
+    arm_solana::delta::verify_delta_proof_with_instance(delta_proof, instance)
+        .map_err(PAError::from)?;
+
     check_selector(&aggregation.proof, state.proof_selector)?;
     if !skip_risc_zero_proof_verification {
         let prepared = prepare_proof_for_verification(aggregation)?;
@@ -913,9 +919,6 @@ fn execute_settlement(
         )
         .map_err(|_| error!(PAError::VerifierRouterFailed))?;
     }
-
-    arm_solana::delta::verify_delta_proof_with_instance(delta_proof, instance)
-        .map_err(PAError::from)?;
 
     // A transaction that creates nothing leaves the tree, and so its latest
     // root, untouched: there is no new root to record, as pa-evm adds no root

@@ -24,44 +24,46 @@ const ZEROS: Buffer[] = (() => {
 
 type TreeState = {
   nextIndex: anchor.BN;
-  currentDepth: number;
   frontier: number[][];
-  root: number[];
 };
 
+// merkle.rs `push` for each leaf, then `current_root`.
 function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
   let nextIndex = BigInt(state.nextIndex.toString());
-  let depth = state.currentDepth;
   const frontier: Buffer[] = state.frontier.map((f) => Buffer.from(f));
-  let root: Buffer = Buffer.from(state.root);
+  let fullRoot: Buffer | null = null;
 
   for (const leaf of leaves) {
-    if (nextIndex >= 1n << BigInt(depth)) {
+    if (nextIndex >= 1n << BigInt(frontier.length)) {
       throw new Error("tree over capacity in root prediction");
     }
-    let index = nextIndex;
+    let nodeIndex = nextIndex;
     nextIndex += 1n;
 
-    let current: Buffer = leaf;
-    for (let level = 0; level < depth; level++) {
-      if ((index & 1n) === 0n) {
-        frontier[level] = current;
-        current = hashTwo(current, ZEROS[level]);
-      } else {
-        current = hashTwo(frontier[level], current);
-      }
-      index >>= 1n;
+    let node: Buffer = leaf;
+    let level = 0;
+    while ((nodeIndex & 1n) === 1n) {
+      node = hashTwo(frontier[level], node);
+      level += 1;
+      nodeIndex >>= 1n;
     }
-
-    if (nextIndex === 1n << BigInt(depth) && depth < MAX_TREE_DEPTH) {
-      frontier.push(current);
-      current = hashTwo(current, ZEROS[depth]);
-      depth += 1;
+    if (level < frontier.length) {
+      frontier[level] = node;
+    } else if (frontier.length < MAX_TREE_DEPTH) {
+      frontier.push(node);
+    } else {
+      fullRoot = hashTwo(node, hashTwo(ZEROS[MAX_TREE_DEPTH - 1], ZEROS[MAX_TREE_DEPTH - 1]));
     }
-
-    root = current;
   }
-  return root;
+
+  if (fullRoot !== null) return fullRoot;
+  let nodeIndex = nextIndex;
+  let node: Buffer = ZEROS[0];
+  for (let level = 0; level < frontier.length; level++) {
+    node = (nodeIndex & 1n) === 1n ? hashTwo(frontier[level], node) : hashTwo(node, ZEROS[level]);
+    nodeIndex >>= 1n;
+  }
+  return node;
 }
 
 /**
@@ -69,8 +71,8 @@ function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
  * `createdCommitments`, or null when there are none: a settlement that
  * creates nothing produces no root and takes no marker. The produced root is
  * only known after the append, so a submitter fetches the tree state and
- * replays the append locally (merkle.rs `append_to_tree`, including the
- * expand-after-fill growth step).
+ * replays the appends locally (merkle.rs `push`, including the
+ * expand-after-fill growth step, then `current_root`).
  * A wrong prediction cannot settle: the program rejects it with
  * RootPdaMismatch, so the on-chain check keeps this replica honest.
  */

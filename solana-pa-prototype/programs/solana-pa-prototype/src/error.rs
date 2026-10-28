@@ -75,10 +75,10 @@ pub enum PAError {
     ExpectedDeltaProof,
 
     // Aggregation instance binding errors
-    #[msg("Aggregation instance compliance key does not match the compliance circuit VK")]
-    ComplianceKeyMismatch,
+    #[msg("Aggregation instance compliance VK does not match the compliance circuit VK")]
+    ComplianceVkMismatch,
     /// pa-evm's `UnacceptedKindTreeRoot`.
-    #[msg("The transaction's kind tree root is neither the stored one nor the empty table's")]
+    #[msg("The transaction's kind tree root is neither the stored one nor the empty kind tree's")]
     UnacceptedKindTreeRoot,
     #[msg("Zero kind tree root not allowed")]
     ZeroKindTreeRootNotAllowed,

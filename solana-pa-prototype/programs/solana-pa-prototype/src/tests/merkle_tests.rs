@@ -265,19 +265,21 @@ fn test_append_accepts_final_declared_leaf_at_max_depth() {
 
     // index = 2^32 - 1 is all-ones in binary, so every one of the 32 levels
     // takes the "right child" branch, hashing the (test) all-zero frontier
-    // against the running value, and MAX_TREE_DEPTH blocks the post-loop
-    // expansion — the plain depth-32 root, with no extra zero-padding level.
-    // Recompute it independently of push to pin the exact value:
-    // the spec requires off-chain implementations to agree on this root.
+    // against the running value: the full depth-32 tree's root. pa-evm's
+    // push then grows the tree to depth 33, whose root pads that with the
+    // empty depth-32 subtree (`MerkleTree.push`, `currentRoot`).
+    // The account cannot hold a 33rd level, so the next push is refused, but
+    // the root this push adds is pa-evm's.
     let zero_frontier = Digest::from_bytes([0u8; 32]);
-    let mut expected = leaf;
+    let mut full = leaf;
     for _ in 0..32 {
-        expected = hash_two(&zero_frontier, &expected);
+        full = hash_two(&zero_frontier, &full);
     }
+    let empty_depth_32 = hash_two(&ZEROS[31], &ZEROS[31]);
     assert_eq!(
         current_root(&state),
-        expected,
-        "max-depth root must equal the plain depth-32 hash chain over the frontier"
+        hash_two(&full, &empty_depth_32),
+        "the root of 2^32 leaves must be pa-evm's depth-33 root"
     );
 }
 

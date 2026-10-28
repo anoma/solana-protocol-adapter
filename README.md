@@ -204,7 +204,7 @@ A settlement (`settle`, or `settle_from_txdata` after a TxData upload) runs in p
 
 1. **Checks** — the transaction carries an aggregation and a delta proof, the compliance VK matches, and the kind tree is the stored or the empty one.
 2. **Per action**, pa-evm's `_processAction`: each resource in the order of the action's `resource_instances` is checked against the denylist for its kind; a consumed one's root must be a known root and its nullifier's marker PDA is created, which refuses a spent nullifier; a created one's commitment is added to the tree; then the resource's forwarder calls run and its payload events are emitted. Then `ActionExecuted`.
-3. **Proof verification** — a CPI to the RISC0 verifier router, which routes the seal to the verifier registered for its selector; then the delta proof.
+3. **Proof verification**, as pa-evm's `_verifyGlobalProofs` — the delta proof; then the aggregation proof's selector is checked and the proof verified by a CPI to the RISC0 verifier router, which routes the seal to the verifier registered for its selector.
 4. **Root** — if the transaction created commitments, the tree's root is computed, its marker PDA is recorded and `CommitmentTreeRootAdded` emitted.
 5. `TransactionExecuted`.
 

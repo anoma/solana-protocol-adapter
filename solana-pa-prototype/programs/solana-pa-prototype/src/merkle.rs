@@ -202,9 +202,11 @@ pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
 /// computation (`current_root` computes it).
 ///
 /// A leaf that fills the tree below `MAX_TREE_DEPTH` grows it by one level,
-/// its completed root the left sibling there. At `MAX_TREE_DEPTH` the tree
-/// cannot grow, so the completed root is the full tree's root, kept in
-/// `state.root`, where `current_root` reads it.
+/// its completed root the left sibling there. pa-evm grows a full depth-32
+/// tree too; the account cannot hold a 33rd level, so the next push is
+/// refused, but the root of the depth-33 tree, the full tree's root padded
+/// with the empty depth-32 subtree, is kept in `state.root`, where
+/// `current_root` reads it.
 pub fn push(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
     // The tree is full only at maximum depth with every slot used: below the
     // maximum, filling a level grows immediately and doubles capacity, so
@@ -232,17 +234,16 @@ pub fn push(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
         let new_level = state.grow();
         state.set_frontier(new_level, node);
     } else {
-        state.root = node.into();
+        state.root = hash_two(&node, &hash_two(&ZEROS[31], &ZEROS[31])).into();
     }
     Ok(())
 }
 
 /// The root of the commitment tree, as pa-evm V2's `MerkleTree.currentRoot`.
 ///
-/// A tree with exactly 2^d leaves has depth d+1, so below `MAX_TREE_DEPTH`
-/// its root includes one level of padding, as pa-evm's. Only a tree full at
-/// `MAX_TREE_DEPTH` holds `capacity` leaves; its root is the one `push`
-/// stored, the plain depth-32 root.
+/// A tree with exactly 2^d leaves has depth d+1, so its root includes one
+/// level of padding, as pa-evm's. Only a tree full at `MAX_TREE_DEPTH` holds
+/// `capacity` leaves; its depth-33 root is the one `push` stored.
 pub fn current_root(state: &PAStateAccount) -> Digest {
     if state.next_index == state.capacity() {
         return state.root_digest();
