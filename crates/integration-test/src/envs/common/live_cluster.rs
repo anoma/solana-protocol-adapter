@@ -72,13 +72,13 @@ impl LiveCluster {
     /// Allows the instructions of `program` whose data starts with
     /// `discriminator`, which must not be empty: every instruction starts
     /// with no bytes. The loader's and the adapter's instructions are judged
-    /// by their own rules, whatever is registered for them.
+    /// by their own rules, so registering them is an error.
     pub(in crate::envs) fn register(
         &mut self,
         program: Pubkey,
         discriminator: &[u8],
     ) -> anyhow::Result<()> {
-        ensure_discriminator(&program, discriminator)?;
+        ensure_registrable(&self.adapter, &program, discriminator)?;
         self.registered
             .entry(program)
             .or_default()
@@ -131,12 +131,22 @@ impl LiveCluster {
     }
 }
 
-/// Refuses an empty `discriminator` registered for `program`, which every
-/// instruction of it would match.
-pub(in crate::envs) fn ensure_discriminator(
+/// Refuses registering `discriminator` for `program` when it cannot be
+/// allowed: an empty one, which every instruction of `program` would match,
+/// or any for the upgradeable loader or `adapter`, whose allowlist is fixed.
+pub(in crate::envs) fn ensure_registrable(
+    adapter: &Pubkey,
     program: &Pubkey,
     discriminator: &[u8],
 ) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        *program != solana_sdk_ids::bpf_loader_upgradeable::ID,
+        "the loader's instructions cannot be allowed on a live cluster: the allowlist is fixed"
+    );
+    anyhow::ensure!(
+        program != adapter,
+        "the adapter's instructions cannot be allowed on a live cluster: the allowlist is fixed"
+    );
     anyhow::ensure!(
         !discriminator.is_empty(),
         "an empty discriminator registered for {program} would allow every instruction of it"
@@ -377,21 +387,31 @@ mod tests {
     }
 
     #[test]
-    fn registering_the_loader_or_the_adapter_allows_nothing() {
+    fn registering_the_loader_or_the_adapter_is_an_error() {
         let mut cluster = LiveCluster::new(ADAPTER);
         let upgrade = Instruction::new_with_bincode(
             solana_sdk_ids::bpf_loader_upgradeable::ID,
             &UpgradeableLoaderInstruction::Upgrade,
             vec![],
         );
-        cluster
+        let error = cluster
             .register(solana_sdk_ids::bpf_loader_upgradeable::ID, &upgrade.data)
-            .unwrap();
+            .unwrap_err();
+        println!("{error:#}");
+        assert_eq!(
+            error.to_string(),
+            "the loader's instructions cannot be allowed on a live cluster: the allowlist is fixed"
+        );
         refused(&cluster, upgrade, "bpf_loader_upgradeable/Upgrade");
         let pause = Instruction::new_with_bytes(ADAPTER, args::Pause::DISCRIMINATOR, vec![]);
-        cluster
+        let error = cluster
             .register(ADAPTER, args::Pause::DISCRIMINATOR)
-            .unwrap();
+            .unwrap_err();
+        println!("{error:#}");
+        assert_eq!(
+            error.to_string(),
+            "the adapter's instructions cannot be allowed on a live cluster: the allowlist is fixed"
+        );
         refused(&cluster, pause, "protocol_adapter/pause");
     }
 }

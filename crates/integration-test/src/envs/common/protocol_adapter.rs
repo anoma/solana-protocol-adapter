@@ -36,7 +36,7 @@ use solana_signature::Signature;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
-use super::live_cluster::{LiveCluster, ensure_discriminator};
+use super::live_cluster::{LiveCluster, ensure_registrable};
 use super::runtime::{latest_blockhash, send_planned, send_signed};
 use crate::executed::Executed;
 
@@ -111,8 +111,9 @@ impl ProtocolAdapter {
     /// discriminator): a consumer's own instruction its tests need on a live
     /// cluster, such as one the payer makes for itself. Every other
     /// instruction of `program` stays refused, and an empty discriminator,
-    /// which every instruction starts with, is an error. A runtime of the
-    /// harness's own is sent every instruction already.
+    /// which every instruction starts with, is an error, as is any for the
+    /// upgradeable loader or the adapter, whose allowlist is fixed. A runtime
+    /// of the harness's own is sent every instruction already.
     pub fn allow_on_live_cluster(
         &mut self,
         program: Pubkey,
@@ -120,7 +121,7 @@ impl ProtocolAdapter {
     ) -> anyhow::Result<()> {
         match &mut self.live_cluster {
             Some(live_cluster) => live_cluster.register(program, discriminator),
-            None => ensure_discriminator(&program, discriminator),
+            None => ensure_registrable(&self.program, &program, discriminator),
         }
     }
 
@@ -786,7 +787,7 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_discriminator_is_refused_on_any_runtime() {
+    fn an_empty_discriminator_or_a_fixed_program_is_refused_on_any_runtime() {
         let program = Pubkey::new_from_array([9; 32]);
         for mut adapter in [live_adapter(), local_adapter()] {
             let error = adapter.allow_on_live_cluster(program, &[]).unwrap_err();
@@ -797,6 +798,13 @@ mod tests {
             adapter
                 .allow_on_live_cluster(program, &[1; 8])
                 .expect("a discriminator registers");
+            for fixed in [solana_sdk_ids::bpf_loader_upgradeable::ID, ADAPTER] {
+                let error = adapter.allow_on_live_cluster(fixed, &[1; 8]).unwrap_err();
+                assert!(
+                    error.to_string().contains("the allowlist is fixed"),
+                    "{error:#}"
+                );
+            }
         }
     }
 }
