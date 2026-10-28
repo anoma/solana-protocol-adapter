@@ -3,7 +3,6 @@ use std::sync::Arc;
 use anchor_lang::{AnchorDeserialize, Discriminator};
 use anoma_pa_solana_client::forwarders::Forwarders;
 use anoma_pa_solana_client::generated::protocol_adapter::accounts::PAStateAccount;
-use anoma_pa_solana_client::generated::protocol_adapter::client::args;
 use anoma_pa_solana_client::generated::protocol_adapter::error::ProtocolAdapterError;
 use anoma_pa_solana_client::generated::protocol_adapter::events::{
     ActionExecuted, ApplicationPayload, CommitmentTreeRootAdded, DiscoveryPayload, ExternalPayload,
@@ -11,6 +10,7 @@ use anoma_pa_solana_client::generated::protocol_adapter::events::{
 };
 use anoma_pa_solana_client::generated::protocol_adapter::types;
 use anoma_pa_solana_client::instance;
+use anoma_pa_solana_client::settlement::SettlementPlan;
 use anoma_pa_solana_client::submission::{
     Failure, SimulationOutcome, Submission, read_adapter_state, read_verifier_program,
     settlement_failure,
@@ -34,6 +34,7 @@ use solana_rpc_client_api::response::RpcSimulateTransactionResult;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
+use super::live_cluster::LiveCluster;
 use super::runtime::{latest_blockhash, send_planned, send_signed};
 use crate::executed::Executed;
 
@@ -53,9 +54,9 @@ pub struct ProtocolAdapter {
     pub forwarders: Forwarders,
     /// The next transaction-data upload's id; each settlement takes one.
     next_upload_id: u64,
-    /// Whether the adapter is a live cluster's, on which no instruction of
-    /// its owner or upgrade authority is sent (`refuse_on_live_cluster`).
-    live: bool,
+    /// On a live cluster, what it is sent (`refuse_on_live_cluster`);
+    /// `None` on a runtime of the harness's own, which is sent anything.
+    live_cluster: Option<LiveCluster>,
 }
 
 impl ProtocolAdapter {
@@ -79,23 +80,37 @@ impl ProtocolAdapter {
             commitment_tree: crate::commitment_tree::from_state(&state)?,
             forwarders: Forwarders::default(),
             next_upload_id: 0,
-            live,
+            live_cluster: live.then(|| LiveCluster::new(program)),
         };
         adapter.ensure_latest_root(&state)?;
         Ok(adapter)
     }
 
-    /// Refuses `instructions` on a live cluster when one is an instruction of
-    /// the adapter's owner or upgrade authority, before anything is sent;
-    /// elsewhere every instruction is sent.
+    /// Refuses `instructions` on a live cluster when one is not on its
+    /// allowlist (`live_cluster`), before anything is sent: settlements, the
+    /// payer's system, token and associated-token instructions, compute
+    /// budgets, ed25519 checks, and the instructions registered with
+    /// `allow_on_live_cluster`. Elsewhere every instruction is sent.
     pub(in crate::envs) fn refuse_on_live_cluster(
         &self,
         instructions: &[Instruction],
     ) -> anyhow::Result<()> {
-        if self.live {
-            refuse_authority_instructions(&self.program, instructions)?;
+        match &self.live_cluster {
+            Some(live_cluster) => live_cluster.check(instructions),
+            None => Ok(()),
         }
-        Ok(())
+    }
+
+    /// Allows a live cluster to be sent the instructions of `program` whose
+    /// data starts with `discriminator` (an Anchor instruction's
+    /// discriminator): a consumer's own instruction its tests need on a live
+    /// cluster, such as one the payer makes for itself. Every other
+    /// instruction of `program` stays refused. A runtime of the harness's own
+    /// is sent every instruction already.
+    pub fn allow_on_live_cluster(&mut self, program: Pubkey, discriminator: &[u8]) {
+        if let Some(live_cluster) = &mut self.live_cluster {
+            live_cluster.register(program, discriminator);
+        }
     }
 
     /// The adapter as the client's instance of it: its reads, and its
@@ -144,6 +159,7 @@ impl ProtocolAdapter {
         let upload_id = self.next_upload_id;
         self.next_upload_id += 1;
         let plan = submission.plan_settlement(upload_id, slot + TXDATA_EXPIRY_SLOTS_DEFAULT)?;
+        self.refuse_on_live_cluster(&planned_instructions(&plan))?;
 
         let (rpc, payer) = (&*self.rpc, &*self.payer);
         let settled = match &plan.upload {
@@ -331,66 +347,18 @@ impl CoreProtocolAdapter for ProtocolAdapter {
     }
 }
 
-/// The adapter's instructions a live cluster is sent: a settlement's, its
-/// upload's, its simulation's, and the reads. Every other instruction of the
-/// adapter is its owner's or its upgrade authority's.
-const LIVE_CLUSTER_INSTRUCTIONS: [&[u8]; 10] = [
-    args::Settle::DISCRIMINATOR,
-    args::SettleFromTxdata::DISCRIMINATOR,
-    args::SimulateExecute::DISCRIMINATOR,
-    args::TxdataInit::DISCRIMINATOR,
-    args::TxdataWrite::DISCRIMINATOR,
-    args::TxdataExtend::DISCRIMINATOR,
-    args::TxdataClose::DISCRIMINATOR,
-    args::TxdataCloseExpired::DISCRIMINATOR,
-    args::RiscZeroVerifierPaused::DISCRIMINATOR,
-    args::Version::DISCRIMINATOR,
-];
-
-/// The adapter's owner and upgrade-authority instructions, by name.
-const AUTHORITY_INSTRUCTIONS: [(&[u8], &str); 9] = [
-    (args::Initialize::DISCRIMINATOR, "initialize"),
-    (args::Pause::DISCRIMINATOR, "pause"),
-    (args::Unpause::DISCRIMINATOR, "unpause"),
-    (args::SetKindTreeRoot::DISCRIMINATOR, "set_kind_tree_root"),
-    (args::DenyLogicRefs::DISCRIMINATOR, "deny_logic_refs"),
-    (args::TransferOwnership::DISCRIMINATOR, "transfer_ownership"),
-    (args::RenounceOwnership::DISCRIMINATOR, "renounce_ownership"),
-    (
-        args::UpdateExpiryConfig::DISCRIMINATOR,
-        "update_expiry_config",
-    ),
-    (args::Upgrade::DISCRIMINATOR, "upgrade"),
-];
-
-/// Refuses `instructions` when one of them is an instruction of the adapter
-/// `program` that a live cluster is not sent (`LIVE_CLUSTER_INSTRUCTIONS`):
-/// an owner's or the upgrade authority's, which would change a deployment
-/// others use, or one the adapter does not have.
-fn refuse_authority_instructions(
-    program: &Pubkey,
-    instructions: &[Instruction],
-) -> anyhow::Result<()> {
-    for ix in instructions.iter().filter(|ix| ix.program_id == *program) {
-        if LIVE_CLUSTER_INSTRUCTIONS
-            .iter()
-            .any(|d| ix.data.starts_with(d))
-        {
-            continue;
-        }
-        let name = match AUTHORITY_INSTRUCTIONS
-            .iter()
-            .find(|(d, _)| ix.data.starts_with(d))
-        {
-            Some((_, name)) => (*name).to_string(),
-            None => format!(
-                "the adapter instruction starting {:02x?}",
-                &ix.data[..ix.data.len().min(8)]
-            ),
-        };
-        anyhow::bail!("refused on a live cluster: {name}");
-    }
-    Ok(())
+/// Every instruction of the transactions `plan` sends: the upload's, and the
+/// settlement's with the instructions the forwarders put before it.
+fn planned_instructions(plan: &SettlementPlan) -> Vec<Instruction> {
+    let upload = plan.upload.iter().flat_map(|upload| {
+        std::iter::once(&upload.init)
+            .chain(&upload.writes)
+            .chain(std::iter::once(&upload.close))
+    });
+    upload
+        .chain(std::iter::once(&plan.settle))
+        .flat_map(|transaction| transaction.instructions.iter().cloned())
+        .collect()
 }
 
 /// The refusal a settlement's log names, from the failure that ended it
@@ -649,7 +617,7 @@ mod tests {
             commitment_tree: FrontierCommitmentTree::new(0, vec![]).unwrap(),
             forwarders: Forwarders::default(),
             next_upload_id: 0,
-            live: true,
+            live_cluster: Some(LiveCluster::new(ADAPTER)),
         }
     }
 
@@ -663,15 +631,15 @@ mod tests {
     async fn a_live_cluster_refuses_the_owners_calls_before_sending_them() {
         let mut adapter = live_adapter();
         refused(
-            "set_kind_tree_root",
+            "protocol_adapter/set_kind_tree_root",
             adapter
                 .set_kind_tree_root(Digest::from_bytes([7; 32]))
                 .await,
         );
-        refused("pause", adapter.pause().await);
-        refused("unpause", adapter.unpause().await);
+        refused("protocol_adapter/pause", adapter.pause().await);
+        refused("protocol_adapter/unpause", adapter.unpause().await);
         refused(
-            "deny_logic_refs",
+            "protocol_adapter/deny_logic_refs",
             adapter
                 .deny_logic_refs(&[DeniedLogicRef {
                     logic_ref: Digest::from_bytes([7; 32]),
@@ -681,71 +649,74 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_live_cluster_refuses_every_authority_instruction_and_sends_settlements() {
+    /// A settlement plan whose transactions carry `preceding` before the
+    /// adapter's `settle`, uploading its input when `uploads`.
+    fn plan(preceding: Instruction, uploads: bool) -> SettlementPlan {
+        use anoma_pa_solana_client::settlement::{PlannedTransaction, Upload};
         let adapter = live_adapter();
         let instance = adapter.instance();
         let key = Pubkey::new_from_array([5; 32]);
-        for (name, ix) in [
-            (
-                "initialize",
-                instance.initialize_ix(&key, &key, &key, [1; 4]),
-            ),
-            (
-                "transfer_ownership",
-                instance.transfer_ownership_ix(&key, &key),
-            ),
-            ("renounce_ownership", instance.renounce_ownership_ix(&key)),
-            (
-                "update_expiry_config",
-                instance.update_expiry_config_ix(&key, 1, 2),
-            ),
-            ("upgrade", instance.upgrade_ix(&key, &key, &key)),
-        ] {
-            refused(name, adapter.refuse_on_live_cluster(&[ix]));
-        }
-        let unknown = Instruction::new_with_bytes(ADAPTER, &[0; 8], vec![]);
-        let error = adapter.refuse_on_live_cluster(&[unknown]).unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .starts_with("refused on a live cluster: the adapter instruction"),
-            "{error:#}"
-        );
-
-        let accounts = || SettlementAccounts {
-            pa_state: key,
-            new_root_marker: None,
-            verifier_router_program: key,
-            router: key,
-            verifier_entry: key,
-            verifier_program: key,
-            remaining_accounts: vec![],
+        let transaction = |instructions| PlannedTransaction {
+            instructions,
+            config: Default::default(),
         };
-        let settlement = [
-            instance.settle_ix(&key, &[1], accounts()),
-            instance.settle_from_txdata_ix(&key, 0, accounts()),
-            instance.simulate_execute_ix(&key, &[1], true, accounts()),
-            instance.txdata_init_ix(&key, 0, 1, 2),
-            instance.txdata_write_ix(&key, 0, 0, &[1]),
-            instance.txdata_extend_ix(&key, 0, 3),
-            instance.txdata_close_ix(&key, &key, 0),
-            instance.txdata_close_expired_ix(&key, &key, &key, 0),
-            instance.risc_zero_verifier_paused_ix(&key, [1; 4]),
-            instance.version_ix(),
-            // Another program's instruction, such as a consumer's setup.
-            Instruction::new_with_bytes(FORWARDER, &[0; 8], vec![]),
-        ];
-        adapter
-            .refuse_on_live_cluster(&settlement)
-            .expect("a live cluster is sent settlements");
+        let settle = instance.settle_ix(
+            &key,
+            &[1],
+            SettlementAccounts {
+                pa_state: key,
+                new_root_marker: None,
+                verifier_router_program: key,
+                router: key,
+                verifier_entry: key,
+                verifier_program: key,
+                remaining_accounts: vec![],
+            },
+        );
+        SettlementPlan {
+            upload: uploads.then(|| Upload {
+                init: transaction(vec![instance.txdata_init_ix(&key, 0, 1, 2)]),
+                writes: vec![transaction(vec![instance.txdata_write_ix(
+                    &key,
+                    0,
+                    0,
+                    &[1],
+                )])],
+                close: transaction(vec![instance.txdata_close_ix(&key, &key, 0)]),
+            }),
+            settle: transaction(vec![preceding, settle]),
+            new_root: None,
+        }
+    }
 
+    #[test]
+    fn a_live_cluster_checks_every_instruction_a_settlement_sends() {
+        let adapter = live_adapter();
+        let check =
+            |plan: &SettlementPlan| adapter.refuse_on_live_cluster(&planned_instructions(plan));
+        let ed25519 =
+            Instruction::new_with_bytes(solana_sdk_ids::ed25519_program::ID, &[1], vec![]);
+        let preceding = Instruction::new_with_bytes(FORWARDER, &[8; 8], vec![]);
+        for uploads in [false, true] {
+            let planned = planned_instructions(&plan(ed25519.clone(), uploads));
+            assert_eq!(planned.len(), if uploads { 5 } else { 2 }, "{planned:?}");
+            check(&plan(ed25519.clone(), uploads))
+                .expect("a settlement after an ed25519 check is sent");
+            refused(
+                &format!("{FORWARDER}/[08, 08, 08, 08, 08, 08, 08, 08]"),
+                check(&plan(preceding.clone(), uploads)),
+            );
+        }
+    }
+
+    #[test]
+    fn a_runtime_of_the_harnesss_own_is_sent_the_owners_calls() {
         let local = ProtocolAdapter {
-            live: false,
+            live_cluster: None,
             ..live_adapter()
         };
         local
-            .refuse_on_live_cluster(&[instance.pause_ix(&key)])
+            .refuse_on_live_cluster(&[local.instance().pause_ix(&ADAPTER)])
             .expect("a runtime of the harness's own is sent the owner's calls");
     }
 }

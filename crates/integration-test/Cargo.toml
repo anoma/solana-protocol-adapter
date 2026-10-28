@@ -56,6 +56,10 @@ solana-signature = "3"
 solana-signer = "3"
 solana-transaction = "4"
 solana-transaction-status-client-types = "4"
+# The token programs a live cluster is sent the payer's instructions of.
+spl-associated-token-account-interface = "2"
+spl-token-2022-interface = "2"
+spl-token-interface = "2"
 surfpool-sdk = "=1.6.0"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 # The host of an e2e runtime's RPC endpoint, which must not be a public one.
