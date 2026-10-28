@@ -39,7 +39,11 @@ pub struct QueueConfig {
 
 /// The hosts of the clusters' public RPC endpoints, which rate-limit the
 /// tests' traffic: the tests reach a cluster through the operator's endpoint.
-const PUBLIC_RPC_HOSTS: [&str; 2] = ["api.devnet.solana.com", "api.mainnet-beta.solana.com"];
+const PUBLIC_RPC_HOSTS: [&str; 3] = [
+    "api.devnet.solana.com",
+    "api.testnet.solana.com",
+    "api.mainnet-beta.solana.com",
+];
 
 /// The payer of the cluster runtime when `E2E_PAYER` is unset: the operator's
 /// devnet wallet, where the adapter repository's scripts keep it.
@@ -52,11 +56,15 @@ const DEFAULT_CLUSTER_PAYER: &str = concat!(
 /// public endpoint.
 fn operator_rpc_url(name: &str, url: String) -> anyhow::Result<String> {
     let parsed = url::Url::parse(&url).with_context(|| format!("{name} {url:?} is not a URL"))?;
+    // A host names the same machine in any case and with or without the
+    // root's trailing dot.
     let host = parsed
         .host_str()
-        .with_context(|| format!("{name} {url:?} names no host"))?;
+        .with_context(|| format!("{name} {url:?} names no host"))?
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
     anyhow::ensure!(
-        !PUBLIC_RPC_HOSTS.contains(&host),
+        !PUBLIC_RPC_HOSTS.contains(&host.as_str()),
         "{name} is {host}: the public RPC is not used; set it to the operator's endpoint"
     );
     Ok(url)
@@ -197,7 +205,12 @@ mod tests {
         for url in [
             "https://api.devnet.solana.com",
             "https://api.mainnet-beta.solana.com/",
+            "https://api.testnet.solana.com",
             "http://user@api.devnet.solana.com:8899/path",
+            "https://api.devnet.solana.com.",
+            "https://API.Devnet.Solana.COM/",
+            "https://api.mainnet-beta.solana.com.:443",
+            "HTTPS://API.TESTNET.SOLANA.COM.:8899",
         ] {
             let refused = config(&[("E2E_RUNTIME", "cluster"), ("E2E_RPC_URL", url)])
                 .err()
