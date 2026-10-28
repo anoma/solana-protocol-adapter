@@ -3,7 +3,6 @@
 
 use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, MAX_TREE_DEPTH};
 use anchor_lang::prelude::*;
-use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
 
 /// The layout number of `PAStateAccount` this binary reads and writes.
@@ -19,7 +18,7 @@ pub const SCHEMA_VERSION: u8 = 4;
 pub const EMPTY_KIND_TREE_ROOT: [u8; 32] =
     hex_literal::hex!("cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06");
 
-/// Protocol Adapter state — commitment tree frontier with variable depth (1-32).
+/// Protocol Adapter state — commitment tree frontier with variable depth (0-32).
 /// Nullifiers and historical roots are stored as separate PDA marker accounts.
 #[account]
 #[derive(InitSpace)]
@@ -60,7 +59,7 @@ pub struct PAStateAccount {
     /// Cached tree root (updated on every append). Avoids recomputing from frontier.
     pub root: [u8; 32],
     pub next_index: u64,
-    /// Tree depth (1-32). Capacity = 2^current_depth.
+    /// Tree depth (0-32). Capacity = 2^current_depth.
     pub current_depth: u8,
     /// Filled subtree hashes at each level. Grows via realloc when tree expands.
     #[max_len(MAX_TREE_DEPTH)]
@@ -187,7 +186,7 @@ impl PAStateAccount {
             root: EMPTY_TREE_ROOT_INITIAL.into(),
             next_index: 0,
             current_depth: INITIAL_TREE_DEPTH as u8,
-            frontier: vec![PADDING_LEAF.into()],
+            frontier: Vec::new(),
             min_expiry_slots: MIN_EXPIRY_SLOTS,
             max_expiry_slots: MAX_EXPIRY_SLOTS,
             denied_consumed_logic_refs: Vec::new(),

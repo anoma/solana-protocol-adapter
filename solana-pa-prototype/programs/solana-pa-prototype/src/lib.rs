@@ -88,6 +88,8 @@ pub mod error;
 pub mod events;
 pub mod external_calls;
 pub mod groth16;
+#[cfg(feature = "idl-build")]
+pub mod idl_seeds;
 pub mod marker;
 pub mod merkle;
 pub mod nullifier;
@@ -964,7 +966,7 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = payer,
-        space = PAStateAccount::INITIAL_SPACE, // Variable-depth tree starts at depth 1
+        space = PAStateAccount::INITIAL_SPACE, // Variable-depth tree starts at depth 0
         seeds = [PA_STATE_SEED],
         bump
     )]

@@ -2,7 +2,7 @@
   "address": "2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx",
   "metadata": {
     "name": "protocol_adapter",
-    "version": "2.0.0-rc.8",
+    "version": "2.0.0-rc.9",
     "spec": "0.1.0",
     "description": "Solana Protocol Adapter for Anoma Resource Machine"
   },
@@ -2209,7 +2209,7 @@
     {
       "name": "PAStateAccount",
       "docs": [
-        "Protocol Adapter state — commitment tree frontier with variable depth (1-32).",
+        "Protocol Adapter state — commitment tree frontier with variable depth (0-32).",
         "Nullifiers and historical roots are stored as separate PDA marker accounts."
       ],
       "type": {
@@ -2310,7 +2310,7 @@
           {
             "name": "current_depth",
             "docs": [
-              "Tree depth (1-32). Capacity = 2^current_depth."
+              "Tree depth (0-32). Capacity = 2^current_depth."
             ],
             "type": "u8"
           },

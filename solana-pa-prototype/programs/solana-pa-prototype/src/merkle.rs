@@ -9,9 +9,9 @@ use solana_sha256_hasher::hashv;
 use crate::error::PAError;
 use crate::state::PAStateAccount;
 
-/// Initial tree depth for new commitment trees (capacity = 2 leaves). pa-evm
-/// starts at depth 0 (capacity 1); both grow by doubling.
-pub const INITIAL_TREE_DEPTH: usize = 1;
+/// Depth of the empty commitment tree (capacity 1), as pa-evm's
+/// `MerkleTree.setup`; the tree grows by one level each time a leaf fills it.
+pub const INITIAL_TREE_DEPTH: usize = 0;
 
 /// Maximum tree depth for the commitment tree.
 /// Supports up to 2^32 = 4,294,967,296 leaves.
@@ -184,8 +184,8 @@ pub const ZEROS: [Digest; MAX_TREE_DEPTH] = [
     ]),
 ];
 
-/// Empty tree root at initial depth (depth 1) = ZEROS[0] = PADDING_LEAF.
-pub const EMPTY_TREE_ROOT_INITIAL: Digest = ZEROS[INITIAL_TREE_DEPTH - 1];
+/// Root of the empty tree = ZEROS[0] = PADDING_LEAF, pa-evm's `SHA256.EMPTY_HASH`.
+pub const EMPTY_TREE_ROOT_INITIAL: Digest = ZEROS[0];
 
 /// Hash two digests together (SHA-256).
 /// Must match arm-risc0's hash_two implementation.
@@ -199,9 +199,11 @@ pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
 
 /// Append a single commitment to the tree.
 ///
-/// Direct port of the EVM reference implementation (MerkleTree.sol `push`):
+/// The frontier changes as pa-evm V2's `MerkleTree.push` changes its left
+/// siblings: only the root of the subtree the leaf completes is stored. The
+/// root becomes its `currentRoot`:
 /// 1. Walk the branch at the current depth, hashing up from the leaf.
-///    - Left child: store in frontier, hash with zero sibling.
+///    - Left child: hash with the zero sibling.
 ///    - Right child: hash with frontier (left sibling).
 /// 2. After the walk, if the tree is now full, expand by one level:
 ///    store the computed hash as the new frontier entry and hash it
@@ -222,13 +224,15 @@ pub fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
 
     let depth = state.depth();
     let mut index = state.next_index;
+    let completed_level = index.trailing_ones() as usize;
     state.next_index += 1;
 
     let mut current = leaf;
     for (level, zero) in ZEROS.iter().enumerate().take(depth) {
         if index & 1 == 0 {
-            // Left child — store in frontier, hash with zero sibling.
-            state.set_frontier(level, current);
+            if level == completed_level {
+                state.set_frontier(level, current);
+            }
             current = hash_two(&current, zero);
         } else {
             // Right child — hash with frontier (left sibling).
@@ -257,9 +261,5 @@ pub fn append_to_tree(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
 ///
 /// Equivalently: depth = bit-length of `final_next_index`.
 pub fn required_depth_for_leaves(final_next_index: u64) -> usize {
-    if final_next_index == 0 {
-        return INITIAL_TREE_DEPTH;
-    }
-    let bits = 64 - final_next_index.leading_zeros();
-    (bits as usize).max(INITIAL_TREE_DEPTH)
+    (u64::BITS - final_next_index.leading_zeros()) as usize
 }

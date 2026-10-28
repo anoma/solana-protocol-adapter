@@ -1,5 +1,5 @@
 use super::strategies::arb_digest;
-use crate::merkle::{append_to_tree, hash_two, required_depth_for_leaves, INITIAL_TREE_DEPTH};
+use crate::merkle::{append_to_tree, hash_two, required_depth_for_leaves};
 use crate::tests::utils::create_test_pa_state;
 use proptest::prelude::*;
 
@@ -78,14 +78,5 @@ proptest! {
             "required_depth_for_leaves({}) = {} but tree depth is {}",
             leaves.len(), expected_depth, state.depth()
         );
-    }
-
-    #[test]
-    fn prop_required_depth_at_least_initial(
-        final_next_index in 0u64..100,
-    ) {
-        let depth = required_depth_for_leaves(final_next_index);
-        prop_assert!(depth >= INITIAL_TREE_DEPTH,
-            "depth {} should be at least INITIAL_TREE_DEPTH ({})", depth, INITIAL_TREE_DEPTH);
     }
 }
