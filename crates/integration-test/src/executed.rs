@@ -4,6 +4,7 @@
 
 use anchor_lang::event::EVENT_IX_TAG_LE;
 use anchor_lang::{AnchorDeserialize, Discriminator};
+use anoma_pa_solana_client::decode_cpi_event;
 use anyhow::Context;
 use solana_commitment_config::CommitmentConfig;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
@@ -108,182 +109,108 @@ impl Executed {
             .map(|(_, data)| data.as_slice())
     }
 
-    /// The events the adapter `program` emitted, decoded, in order.
-    pub fn adapter_events(&self, program: &Pubkey) -> anyhow::Result<Vec<PaEvent>> {
-        self.cpi_events(program).map(decode_adapter_event).collect()
+    /// The events of type `E` that `program` emitted, in order: its event
+    /// self-invocations that carry an `E`, each decoded whole
+    /// (`decode_cpi_event`); its other events are passed over.
+    pub fn events<E: Discriminator + AnchorDeserialize>(
+        &self,
+        program: &Pubkey,
+    ) -> anyhow::Result<Vec<E>> {
+        self.cpi_events(program)
+            .filter_map(|data| {
+                decode_cpi_event::<E>(data)
+                    .with_context(|| {
+                        format!(
+                            "the event {data:02x?} of {program} with the discriminator of {} does \
+                             not decode as one",
+                            std::any::type_name::<E>()
+                        )
+                    })
+                    .transpose()
+            })
+            .collect()
     }
 }
 
-macro_rules! adapter_events {
-    ($($event:ident),* $(,)?) => {
-        /// An event of the adapter, decoded with the program's own type.
-        #[derive(Debug)]
-        pub enum PaEvent {
-            $($event(protocol_adapter::$event),)*
-        }
-
-        /// The event an adapter's event self-invocation carries: Anchor's
-        /// event tag, then the event's discriminator, then its Borsh body,
-        /// which ends the data.
-        pub fn decode_adapter_event(data: &[u8]) -> anyhow::Result<PaEvent> {
-            let event = data
-                .strip_prefix(EVENT_IX_TAG_LE)
-                .with_context(|| format!("{data:02x?} does not start with Anchor's event tag"))?;
-            $(
-                if let Some(body) = event.strip_prefix(protocol_adapter::$event::DISCRIMINATOR) {
-                    return Ok(PaEvent::$event(event_body(body)?));
-                }
-            )*
-            anyhow::bail!(
-                "the adapter emits no event whose discriminator starts {:02x?}",
-                &event[..event.len().min(8)]
-            )
-        }
-    };
-}
-
-adapter_events!(
-    ResourcePayload,
-    DiscoveryPayload,
-    ExternalPayload,
-    ApplicationPayload,
-    ActionExecuted,
-    TransactionExecuted,
-    ForwarderCallExecuted,
-    CommitmentTreeRootAdded,
-    KindTreeRootUpdated,
-    LogicRefDenied,
-    Paused,
-    Unpaused,
-    OwnershipTransferred,
-    Initialized,
-    Upgraded,
-);
-
-/// The event `body` encodes, which must be all of it.
-fn event_body<E: AnchorDeserialize + Discriminator>(mut body: &[u8]) -> anyhow::Result<E> {
-    let event = E::deserialize(&mut body).with_context(|| {
-        format!(
-            "the body of the event with discriminator {:02x?} does not decode",
-            E::DISCRIMINATOR
-        )
-    })?;
-    anyhow::ensure!(
-        body.is_empty(),
-        "{} bytes follow the body of the event with discriminator {:02x?}",
-        body.len(),
-        E::DISCRIMINATOR
-    );
-    Ok(event)
+/// The instruction data of the self-invocation emitting `event`.
+#[cfg(test)]
+pub(crate) fn emitted<E: Discriminator + anchor_lang::AnchorSerialize>(event: &E) -> Vec<u8> {
+    let mut data = [EVENT_IX_TAG_LE, E::DISCRIMINATOR].concat();
+    event.serialize(&mut data).unwrap();
+    data
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use protocol_adapter::events::event_instruction_data;
+    use anoma_pa_solana_client::generated::protocol_adapter::events::{
+        ActionExecuted, TransactionExecuted,
+    };
+
+    const ADAPTER: Pubkey = Pubkey::new_from_array([1; 32]);
+
+    fn executed(inner: Vec<(Pubkey, Vec<u8>)>) -> Executed {
+        Executed {
+            transaction: VersionedTransaction::default(),
+            logs: vec![],
+            inner,
+        }
+    }
+
+    fn transaction_executed(id: u8) -> Vec<u8> {
+        emitted(&TransactionExecuted {
+            transaction_id: [id; 32],
+        })
+    }
 
     #[test]
-    fn an_event_the_adapter_encodes_decodes_to_itself() {
-        let data = event_instruction_data(&protocol_adapter::ActionExecuted {
+    fn a_programs_events_of_one_type_decode_in_order() {
+        let action = ActionExecuted {
             action_tree_root: [1; 32],
             nullifiers: vec![[2; 32]],
             consumed_logic_refs: vec![[3; 32]],
             commitments: vec![[4; 32], [5; 32]],
             created_logic_refs: vec![[6; 32], [7; 32]],
-        })
-        .unwrap();
-        let decoded = decode_adapter_event(&data).unwrap();
-        let PaEvent::ActionExecuted(action) = &decoded else {
-            panic!("{data:02x?} decoded to {decoded:?}, not an ActionExecuted");
         };
-        assert_eq!(action.action_tree_root, [1; 32], "{decoded:?}");
-        assert_eq!(action.nullifiers, [[2; 32]], "{decoded:?}");
-        assert_eq!(action.consumed_logic_refs, [[3; 32]], "{decoded:?}");
-        assert_eq!(action.commitments, [[4; 32], [5; 32]], "{decoded:?}");
-        assert_eq!(action.created_logic_refs, [[6; 32], [7; 32]], "{decoded:?}");
+        let executed = executed(vec![
+            (ADAPTER, transaction_executed(1)),
+            (ADAPTER, emitted(&action)),
+            // Another program's event, and an instruction of the adapter's
+            // that is no event.
+            (Pubkey::new_from_array([2; 32]), transaction_executed(3)),
+            (ADAPTER, vec![0; 16]),
+            (ADAPTER, transaction_executed(2)),
+        ]);
+        let ids: Vec<_> = executed
+            .events::<TransactionExecuted>(&ADAPTER)
+            .unwrap()
+            .into_iter()
+            .map(|event| event.transaction_id)
+            .collect();
+        assert_eq!(ids, [[1; 32], [2; 32]]);
+        let actions = executed.events::<ActionExecuted>(&ADAPTER).unwrap();
+        println!("{actions:?}");
+        let [decoded] = &actions[..] else {
+            panic!("{} ActionExecuted events, not one", actions.len());
+        };
+        assert_eq!(decoded.action_tree_root, [1; 32]);
+        assert_eq!(decoded.nullifiers, [[2; 32]]);
+        assert_eq!(decoded.consumed_logic_refs, [[3; 32]]);
+        assert_eq!(decoded.commitments, [[4; 32], [5; 32]]);
+        assert_eq!(decoded.created_logic_refs, [[6; 32], [7; 32]]);
     }
 
     #[test]
-    fn events_of_one_layout_decode_by_their_own_discriminator() {
-        let payload = |data: Vec<u8>| decode_adapter_event(&data).unwrap();
-        let tag = [9; 32];
-        let index = protocol_adapter::U256::from(3);
-        let decoded = payload(
-            event_instruction_data(&protocol_adapter::ExternalPayload {
-                tag,
-                index,
-                blob: vec![1, 2],
-            })
-            .unwrap(),
-        );
-        assert!(
-            matches!(&decoded, PaEvent::ExternalPayload(p) if p.tag == tag && p.index == index && p.blob == [1, 2]),
-            "an ExternalPayload decoded to {decoded:?}"
-        );
-        let decoded = payload(
-            event_instruction_data(&protocol_adapter::ApplicationPayload {
-                tag,
-                index,
-                blob: vec![1, 2],
-            })
-            .unwrap(),
-        );
-        assert!(
-            matches!(&decoded, PaEvent::ApplicationPayload(_)),
-            "an ApplicationPayload decoded to {decoded:?}"
-        );
-    }
-
-    #[test]
-    fn data_without_the_event_tag_is_no_event() {
-        let mut data = event_instruction_data(&protocol_adapter::TransactionExecuted {
-            transaction_id: [1; 32],
-        })
-        .unwrap();
-        data[0] ^= 1;
-        let err = decode_adapter_event(&data).unwrap_err().to_string();
-        assert!(
-            err.contains("does not start with Anchor's event tag"),
-            "{data:02x?}: {err}"
-        );
-    }
-
-    #[test]
-    fn an_unknown_discriminator_is_refused() {
-        let mut data = event_instruction_data(&protocol_adapter::TransactionExecuted {
-            transaction_id: [1; 32],
-        })
-        .unwrap();
-        data[EVENT_IX_TAG_LE.len()] ^= 1;
-        let err = decode_adapter_event(&data).unwrap_err().to_string();
-        assert!(
-            err.contains("the adapter emits no event whose discriminator starts"),
-            "{data:02x?}: {err}"
-        );
-    }
-
-    #[test]
-    fn bytes_after_the_body_are_refused() {
-        let mut data = event_instruction_data(&protocol_adapter::TransactionExecuted {
-            transaction_id: [1; 32],
-        })
-        .unwrap();
+    fn an_event_whose_body_does_not_decode_is_an_error() {
+        let mut data = transaction_executed(1);
         data.push(0);
-        let err = decode_adapter_event(&data).unwrap_err().to_string();
+        let error = executed(vec![(ADAPTER, data)])
+            .events::<TransactionExecuted>(&ADAPTER)
+            .unwrap_err();
+        println!("{error:#}");
         assert!(
-            err.contains("1 bytes follow the body"),
-            "{data:02x?}: {err}"
+            format!("{error:#}").contains("bytes remain after the event body"),
+            "{error:#}"
         );
-    }
-
-    #[test]
-    fn a_truncated_body_is_refused() {
-        let mut data = event_instruction_data(&protocol_adapter::TransactionExecuted {
-            transaction_id: [1; 32],
-        })
-        .unwrap();
-        data.pop();
-        let err = decode_adapter_event(&data).unwrap_err().to_string();
-        assert!(err.contains("does not decode"), "{data:02x?}: {err}");
     }
 }

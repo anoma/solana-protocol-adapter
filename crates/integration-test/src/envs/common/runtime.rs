@@ -3,9 +3,9 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use anoma_pa_solana_client::{
-    PlannedTransaction, decode_pa_state, derive_pa_state_pda, encode_pa_state, initialize_ix,
-};
+use anchor_lang::AccountSerialize;
+use anoma_pa_solana_client::instance::ProtocolAdapter;
+use anoma_pa_solana_client::{PlannedTransaction, decode_pa_state, derive_pa_state_pda};
 use anyhow::Context;
 use solana_commitment_config::CommitmentConfig;
 use solana_instruction::Instruction;
@@ -286,8 +286,11 @@ pub(in crate::envs) async fn take_ownership(
         .await
         .with_context(|| format!("the protocol adapter {pa} has no state account {pa_state}"))?;
     let mut state = decode_pa_state(&account.data).context("failed to decode the adapter state")?;
-    state.owner = owner.to_bytes();
-    let encoded = encode_pa_state(&state);
+    state.owner = owner;
+    let mut encoded = Vec::new();
+    state
+        .try_serialize(&mut encoded)
+        .context("failed to encode the adapter state")?;
     let mut data = account.data;
     anyhow::ensure!(
         encoded.len() <= data.len(),
@@ -321,8 +324,7 @@ pub(in crate::envs) async fn initialize(
         rpc,
         payer,
         &[],
-        &[initialize_ix(
-            &pa,
+        &[ProtocolAdapter::at(rpc, pa).initialize_ix(
             &payer.pubkey(),
             &payer.pubkey(),
             &router,

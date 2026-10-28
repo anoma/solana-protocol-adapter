@@ -6,11 +6,17 @@
 
 use std::sync::Arc;
 
+use anchor_lang::Discriminator;
+use anoma_pa_solana_client::cpi_event_discriminator;
 use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};
 use anoma_pa_solana_client::forwarders::{CallAccountsFuture, Forwarder};
+use anoma_pa_solana_client::generated::protocol_adapter::client::args;
+use anoma_pa_solana_client::generated::protocol_adapter::events::{
+    ActionExecuted, CommitmentTreeRootAdded, ForwarderCallExecuted, TransactionExecuted,
+};
 use anoma_pa_solana_client::settlement::CallAccounts;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
-use anoma_pa_solana_integration_test::executed::{Executed, PaEvent};
+use anoma_pa_solana_integration_test::executed::Executed;
 use anoma_pa_solana_integration_test::test_forwarder::{
     RELAY_OK, log_ix, relay_input, write_input,
 };
@@ -165,9 +171,12 @@ impl Setup {
         Ok(data[..WRITTEN.len()].to_vec())
     }
 
-    /// The adapter's events of the settlement `executed`.
-    fn events(&self, executed: &Executed) -> anyhow::Result<Vec<PaEvent>> {
-        executed.adapter_events(&self.env.protocol_adapter.program)
+    /// The adapter's events of type `E` in the settlement `executed`.
+    fn events<E: Discriminator + anchor_lang::AnchorDeserialize>(
+        &self,
+        executed: &Executed,
+    ) -> anyhow::Result<Vec<E>> {
+        executed.events(&self.env.protocol_adapter.program)
     }
 }
 
@@ -296,19 +305,25 @@ async fn the_adapters_events_survive_a_truncated_log() -> anyhow::Result<()> {
     );
     // Every event of the settlement, in pa-evm's order: the call, the
     // action, the new root, the transaction.
-    let events = s.events(&executed)?;
+    let order = executed
+        .cpi_events(&s.env.protocol_adapter.program)
+        .map(cpi_event_discriminator)
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected = [
+        ForwarderCallExecuted::DISCRIMINATOR,
+        ActionExecuted::DISCRIMINATOR,
+        CommitmentTreeRootAdded::DISCRIMINATOR,
+        TransactionExecuted::DISCRIMINATOR,
+    ];
     anyhow::ensure!(
-        matches!(
-            events.as_slice(),
-            [
-                PaEvent::ForwarderCallExecuted(call),
-                PaEvent::ActionExecuted(_),
-                PaEvent::CommitmentTreeRootAdded(_),
-                PaEvent::TransactionExecuted(_),
-            ] if call.output == WRITTEN
-        ),
-        "the settlement's events are {events:?}, not its call's, its action's, its root's and \
-         its transaction's"
+        order.iter().map(|d| d.as_slice()).eq(expected),
+        "the settlement's events have the discriminators {order:02x?}, not its call's, its \
+         action's, its root's and its transaction's {expected:02x?}"
+    );
+    let calls = s.events::<ForwarderCallExecuted>(&executed)?;
+    anyhow::ensure!(
+        matches!(calls.as_slice(), [call] if call.output == WRITTEN),
+        "the settlement's calls are {calls:?}, not one returning {WRITTEN:?}"
     );
     Ok(())
 }
@@ -319,16 +334,9 @@ async fn the_action_executed_event_carries_its_resources_logic_refs() -> anyhow:
     let mut s = setup().await?;
     let tx = s.prove_write(6, vec![]).await?;
     let executed = s.env.protocol_adapter.settled(tx).await?;
-    let events = s.events(&executed)?;
-    let [action] = events
-        .iter()
-        .filter_map(|event| match event {
-            PaEvent::ActionExecuted(action) => Some(action),
-            _ => None,
-        })
-        .collect::<Vec<_>>()[..]
-    else {
-        anyhow::bail!("the settlement does not emit one ActionExecuted: {events:?}");
+    let actions = s.events::<ActionExecuted>(&executed)?;
+    let [action] = &actions[..] else {
+        anyhow::bail!("the settlement does not emit one ActionExecuted: {actions:?}");
     };
     let logic: [u8; 32] = PASSTHROUGH_LOGIC_VK.into();
     anyhow::ensure!(
@@ -364,7 +372,7 @@ async fn the_largest_settlement_settles_in_one_v1_transaction() -> anyhow::Resul
         .instruction_data(&s.env.protocol_adapter.program)
         .context("the settlement transaction has no adapter instruction")?;
     anyhow::ensure!(
-        data[..8] == anoma_pa_solana_client::anchor_instruction_disc("settle"),
+        data[..8] == *args::Settle::DISCRIMINATOR,
         "the largest settlement is not settled inline in one transaction"
     );
     Ok(())

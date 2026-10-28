@@ -2,7 +2,8 @@
 //! checks only the Solana adapter's harness makes. Every settlement also
 //! checks that the tree the harness keeps gives the root the adapter stores.
 
-use anoma_pa_solana_client::anchor_instruction_disc;
+use anchor_lang::Discriminator;
+use anoma_pa_solana_client::generated::protocol_adapter::client::args;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
 use anoma_pa_testkit::fixtures::{passthrough, trivial};
 use anoma_pa_testkit::{execute_tx, prove_actions};
@@ -144,7 +145,7 @@ async fn a_settlement_that_fits_one_transaction_settles_in_it() -> anyhow::Resul
         .instruction_data(&env.protocol_adapter.program)
         .context("the settlement transaction has no adapter instruction")?;
     anyhow::ensure!(
-        data[..8] == anchor_instruction_disc("settle"),
+        data[..8] == *args::Settle::DISCRIMINATOR,
         "a settlement that fits one transaction is not settled inline"
     );
     Ok(())
@@ -178,7 +179,7 @@ async fn a_settlement_too_large_for_one_transaction_settles_from_an_upload() -> 
         .instruction_data(&env.protocol_adapter.program)
         .context("the settlement transaction has no adapter instruction")?;
     anyhow::ensure!(
-        data[..8] == anchor_instruction_disc("settle_from_txdata"),
+        data[..8] == *args::SettleFromTxdata::DISCRIMINATOR,
         "a settlement too large for one transaction is not settled from an upload"
     );
     // The upload is closed after the settlement.
@@ -274,6 +275,7 @@ async fn the_local_environment_runs_the_program_metadata_program() -> anyhow::Re
 // the state stays.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_taken_adapter_obeys_its_new_owner() -> anyhow::Result<()> {
+    use anoma_pa_solana_client::generated::protocol_adapter::accounts::PAStateAccount;
     use solana_keypair::Keypair;
 
     let env = SolanaLocalEnv::setup_bare().await?;
@@ -282,24 +284,22 @@ async fn a_taken_adapter_obeys_its_new_owner() -> anyhow::Result<()> {
     env.take_ownership(owner.pubkey()).await?;
     let taken = env.protocol_adapter.state().await?;
     anyhow::ensure!(
-        taken.owner == owner.pubkey().to_bytes(),
-        "the adapter is owned by {:02x?}, not the new owner",
+        taken.owner == owner.pubkey(),
+        "the adapter is owned by {}, not the new owner",
         taken.owner
     );
+    let untaken = PAStateAccount {
+        owner: before.owner,
+        ..taken
+    };
     anyhow::ensure!(
-        anoma_pa_solana_client::PAStateAccount {
-            owner: before.owner,
-            ..taken
-        } == before,
-        "taking the ownership changed more of the state than its owner"
+        format!("{untaken:?}") == format!("{before:?}"),
+        "taking the ownership changed more of the state than its owner: {before:?} became \
+         {untaken:?}"
     );
 
-    let pa = env.protocol_adapter.program;
-    env.send(
-        &[anoma_pa_solana_client::pause_ix(&pa, &owner.pubkey())],
-        &[&owner],
-    )
-    .await?;
+    let pause = env.protocol_adapter.instance().pause_ix(&owner.pubkey());
+    env.send(&[pause], &[&owner]).await?;
     anyhow::ensure!(
         env.protocol_adapter.state().await?.paused,
         "the new owner's pause did not take"

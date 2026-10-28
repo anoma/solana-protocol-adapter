@@ -1400,13 +1400,18 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.7.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=7ed4f3ee29ec4f8840fd20599e28f2e50a79fb37#7ed4f3ee29ec4f8840fd20599e28f2e50a79fb37"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=59527d4671bc7c930310f66467964da9db8269a1#59527d4671bc7c930310f66467964da9db8269a1"
 dependencies = [
+ "anchor-lang",
  "anoma-rm-risc0",
+ "base64 0.22.1",
  "bincode",
+ "heck 0.5.0",
  "risc0-zkvm",
  "serde",
+ "serde_json",
  "sha2 0.10.9",
+ "solana-cluster-type 3.1.0",
  "solana-instruction 3.4.1",
  "solana-message 4.4.1",
  "solana-pubkey 3.0.0",
@@ -1432,7 +1437,6 @@ dependencies = [
  "bs58",
  "dotenvy",
  "futures 0.3.34",
- "protocol-adapter",
  "serde_json",
  "solana-commitment-config",
  "solana-instruction 3.4.1",
@@ -1499,7 +1503,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67e1bcd869cc28ff97bfd0524d8ec212a271e5dd579000c85bb6089788a8fe49"
 dependencies = [
  "bincode",
- "borsh 1.8.1",
  "bytemuck",
  "hex",
  "risc0-zkp",
@@ -1546,21 +1549,6 @@ dependencies = [
  "rand 0.8.8",
  "serde",
  "zeroize",
-]
-
-[[package]]
-name = "anoma-rm-solana"
-version = "2.0.0-rc.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "518757b11ab6dd394c80d8164bae85e50569ab75b59c30b28d17c4c5f2cdece0"
-dependencies = [
- "anoma-rm-core",
- "borsh 1.8.1",
- "solana-keccak-hasher 3.1.0",
- "solana-secp256k1",
- "solana-secp256k1-recover 3.3.0",
- "solana-sha256-hasher 3.1.0",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3228,12 +3216,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cpubits"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15b85f9c39137c3a891689859392b1bd49812121d0d61c9caf00d46ed5ce06ae"
-
-[[package]]
 name = "cpufeatures"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3353,17 +3335,6 @@ dependencies = [
  "rand_core 0.6.4",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "crypto-bigint"
-version = "0.7.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c035cb64cba03dad2fb921f3e218785e8cf9a41790da5eb3a1400f62fa2be11"
-dependencies = [
- "cpubits",
- "ctutils",
- "num-traits",
 ]
 
 [[package]]
@@ -4142,7 +4113,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b5e6043086bf7973472e0c7dff2142ea0b680d30e18d9cc40f267efbf222bd47"
 dependencies = [
  "base16ct",
- "crypto-bigint 0.5.5",
+ "crypto-bigint",
  "digest 0.10.7",
  "ff",
  "generic-array 0.14.7",
@@ -5102,12 +5073,6 @@ name = "hex-literal"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6fe2267d4ed49bc07b63801559be28c718ea06c4738b7a03c94df7386d2cde46"
-
-[[package]]
-name = "hex-literal"
-version = "1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e712f64ec3850b98572bffac52e2c6f282b29fe6c5fa6d42334b30be438d95c1"
 
 [[package]]
 name = "hifijson"
@@ -7790,23 +7755,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "protocol-adapter"
-version = "2.0.0-rc.8"
-dependencies = [
- "anchor-lang",
- "anoma-rm-core",
- "anoma-rm-solana",
- "ark-bn254 0.5.0",
- "ark-ff 0.5.0",
- "bincode",
- "borsh 1.8.1",
- "hex-literal 1.1.0",
- "serde",
- "sha2-const-stable",
- "solana-sha256-hasher 3.1.0",
-]
-
-[[package]]
 name = "puffin"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8652,7 +8600,7 @@ dependencies = [
  "digest 0.10.7",
  "ff",
  "hex",
- "hex-literal 0.4.1",
+ "hex-literal",
  "metal",
  "ndarray",
  "parking_lot 0.12.5",
@@ -11277,16 +11225,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "solana-nostd-secp256k1-recover"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b03f149b0d2eba4514f4444b7300ea65ee23f509b10417e13799517c28c2ebc"
-dependencies = [
- "k256",
- "solana-program-error 3.0.1",
-]
-
-[[package]]
 name = "solana-nullable"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -12097,17 +12035,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
-]
-
-[[package]]
-name = "solana-secp256k1"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0675ad548c832e19f920da37e088b5840426a531e633636b9bc6842fa0faf6b0"
-dependencies = [
- "crypto-bigint 0.7.10",
- "solana-nostd-secp256k1-recover",
- "solana-program-error 3.0.1",
 ]
 
 [[package]]

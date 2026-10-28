@@ -3,9 +3,12 @@
 //! adapter's tree held, the tree `commitment_tree::from_state` builds gives
 //! the adapter's root, before and after the leaves a settlement adds.
 
-use anoma_pa_solana_client::{CommitmentTreeState, PAStateAccount};
+use anoma_pa_solana_client::CommitmentTreeState;
+use anoma_pa_solana_client::generated::protocol_adapter::accounts::PAStateAccount;
+use anoma_pa_solana_client::generated::protocol_adapter::constants::SCHEMA_VERSION;
 use anoma_pa_solana_integration_test::commitment_tree::from_state;
 use anoma_rm_risc0::Digest;
+use surfpool_sdk::Pubkey;
 
 fn leaf(seed: usize) -> [u8; 32] {
     let mut leaf = [0u8; 32];
@@ -17,10 +20,10 @@ fn leaf(seed: usize) -> [u8; 32] {
 /// irrelevant to it.
 fn state_holding(tree: &CommitmentTreeState) -> PAStateAccount {
     PAStateAccount {
-        schema_version: 4,
+        schema_version: SCHEMA_VERSION,
         bump: 255,
-        owner: [1; 32],
-        verifier_router: [2; 32],
+        owner: Pubkey::new_from_array([1; 32]),
+        verifier_router: Pubkey::new_from_array([2; 32]),
         proof_selector: [0xff; 4],
         kind_tree_root: [0; 32],
         paused: false,

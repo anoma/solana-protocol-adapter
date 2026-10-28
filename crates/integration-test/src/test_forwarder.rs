@@ -3,7 +3,6 @@
 //! settlement's external call gives it, and the instructions a test sends it
 //! directly.
 
-use anoma_pa_solana_client::anchor_instruction_disc;
 use solana_instruction::Instruction;
 use surfpool_sdk::Pubkey;
 
@@ -18,6 +17,10 @@ pub const MODE_LOG: u8 = 0x03;
 pub const MODE_WRITE: u8 = 0x04;
 /// What a relay returns once the relayed call succeeded.
 pub const RELAY_OK: u8 = 0x2a;
+
+/// Anchor's discriminator of `forward_call`, every forwarder's instruction:
+/// `sha256("global:forward_call")[..8]`.
+const FORWARD_CALL_DISCRIMINATOR: [u8; 8] = [0x9f, 0xaa, 0xe0, 0x0a, 0xfd, 0x69, 0x6c, 0xde];
 
 /// The `forward_call` input of a relay: the target's `forward_call` with the
 /// logic ref `logic_ref` and the input `input`.
@@ -35,7 +38,7 @@ pub fn write_input(bytes: &[u8]) -> Vec<u8> {
 /// transaction's program-log budget for the instructions after it.
 pub fn log_ix(program: &Pubkey, lines: u8) -> Instruction {
     let input = [MODE_LOG, lines];
-    let mut data = anchor_instruction_disc("forward_call").to_vec();
+    let mut data = FORWARD_CALL_DISCRIMINATOR.to_vec();
     data.extend_from_slice(&[0; 32]);
     data.extend_from_slice(&(input.len() as u32).to_le_bytes());
     data.extend_from_slice(&input);
