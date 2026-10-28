@@ -19,7 +19,7 @@ pub struct ArgSeed {
 impl ArgSeed {
     /// Whether the seed's path starts with one of the instruction's arguments.
     pub fn names_an_arg(&self) -> bool {
-        let first = self.path.split('.').next().unwrap_or_default();
+        let first = self.path.split('.').next().expect("split yields a segment");
         self.args.iter().any(|arg| arg == first)
     }
 }

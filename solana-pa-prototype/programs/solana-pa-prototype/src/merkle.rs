@@ -200,11 +200,10 @@ pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
 /// Append a single commitment to the tree.
 ///
 /// The frontier changes as pa-evm V2's `MerkleTree.push` changes its left
-/// siblings, and the root becomes its `currentRoot`:
+/// siblings: only the root of the subtree the leaf completes is stored. The
+/// root becomes its `currentRoot`:
 /// 1. Walk the branch at the current depth, hashing up from the leaf.
-///    - Left child: hash with the zero sibling. The first left child is the
-///      root of the subtree the leaf completes, and becomes the frontier
-///      entry of its level; the frontier above it is left as it is.
+///    - Left child: hash with the zero sibling.
 ///    - Right child: hash with frontier (left sibling).
 /// 2. After the walk, if the tree is now full, expand by one level:
 ///    store the computed hash as the new frontier entry and hash it

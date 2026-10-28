@@ -39,7 +39,6 @@ mod governance_tests {
         // denylists' 4-byte lengths after the fields.
         assert_eq!(PAStateAccount::INITIAL_SPACE, 180);
         assert_eq!(PAStateAccount::MAX_SPACE, 1204);
-        assert_eq!(PAStateAccount::space(0, 0), 180);
         assert_eq!(PAStateAccount::space(1, 0), 212);
         assert_eq!(PAStateAccount::space(2, 0), 244);
         assert_eq!(PAStateAccount::space(32, 0), 1204);

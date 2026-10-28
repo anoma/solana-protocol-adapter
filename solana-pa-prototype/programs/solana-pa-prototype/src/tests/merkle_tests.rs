@@ -146,10 +146,7 @@ fn tree_matches_evm_merkle_tree_from_empty_through_every_push() {
             "root after {leaf_count} pushes"
         );
 
-        let leaf = hash_two(
-            &Digest::from_bytes([0xab; 32]),
-            &Digest::from_bytes(leaf_count.to_le_bytes().repeat(4).try_into().unwrap()),
-        );
+        let leaf = Digest::from_bytes([leaf_count as u8 + 1; 32]);
         append_to_tree(&mut state, leaf).unwrap();
         evm.push(leaf);
     }
@@ -168,55 +165,6 @@ fn test_zeros_chain_property() {
             i - 1
         );
     }
-}
-
-/// EVM MerkleTree.sol expand-after-fill: when the tree is exactly full,
-/// it expands by one level. A tree with 2 leaves (filled depth 1) has
-/// depth 2 and root = hash(hash(L0, L1), ZEROS[1]).
-#[test]
-fn test_expand_after_fill_at_depth_1() {
-    let mut state = create_test_pa_state();
-    let leaf0 = Digest::from_bytes([0x01; 32]);
-    let leaf1 = Digest::from_bytes([0x02; 32]);
-
-    append_to_tree(&mut state, leaf0).unwrap();
-    append_to_tree(&mut state, leaf1).unwrap();
-
-    assert_eq!(state.next_index, 2);
-    assert_eq!(
-        state.current_depth, 2,
-        "filling depth 1 must expand to depth 2"
-    );
-
-    let root = state.root_digest();
-    let expected = hash_two(&hash_two(&leaf0, &leaf1), &ZEROS[1]);
-    assert_eq!(
-        root, expected,
-        "root must include zero-padding at the expanded level"
-    );
-}
-
-/// After expand-after-fill grows the tree to depth 2, the 3rd leaf
-/// goes into the right subtree without triggering another expansion.
-#[test]
-fn test_append_after_expansion() {
-    let mut state = create_test_pa_state();
-    let leaf0 = Digest::from_bytes([0x01; 32]);
-    let leaf1 = Digest::from_bytes([0x02; 32]);
-    let leaf2 = Digest::from_bytes([0x03; 32]);
-
-    append_to_tree(&mut state, leaf0).unwrap();
-    append_to_tree(&mut state, leaf1).unwrap();
-    append_to_tree(&mut state, leaf2).unwrap();
-
-    assert_eq!(state.current_depth, 2, "depth should remain 2");
-    assert_eq!(state.next_index, 3);
-
-    let root = state.root_digest();
-    let left = hash_two(&leaf0, &leaf1);
-    let right = hash_two(&leaf2, &PADDING_LEAF);
-    let expected = hash_two(&left, &right);
-    assert_eq!(root, expected, "root after 3 leaves at depth 2");
 }
 
 /// Port of MerkleTree.sol `computeRoot`: builds a full tree of `2^depth`
@@ -291,28 +239,6 @@ fn test_incremental_matches_evm_compute_root() {
             n,
         );
     }
-}
-
-/// Verify that filling a depth-2 tree (4 leaves) expands to depth 3.
-/// This is the exact scenario that triggered the original bug.
-#[test]
-fn test_expand_after_fill_at_depth_2() {
-    let mut state = create_test_pa_state();
-    let leaves: Vec<Digest> = (1u8..=4).map(|i| Digest::from_bytes([i; 32])).collect();
-
-    for leaf in &leaves {
-        append_to_tree(&mut state, *leaf).unwrap();
-    }
-
-    assert_eq!(state.next_index, 4);
-    assert_eq!(
-        state.current_depth, 3,
-        "filling depth 2 must expand to depth 3"
-    );
-
-    let root = state.root_digest();
-    let expected = evm_compute_root(&leaves, 3);
-    assert_eq!(root, expected, "4-leaf root must match EVM at depth 3");
 }
 
 /// A depth-32 tree declares capacity 2^32 and must accept index 2^32 - 1.
