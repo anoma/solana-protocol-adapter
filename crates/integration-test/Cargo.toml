@@ -1,6 +1,6 @@
 [package]
 name = "anoma-pa-solana-integration-test"
-description = "Integration and e2e tests for the Anoma Solana protocol adapter: pa-testkit's environments on a surfpool runtime."
+description = "Integration and e2e tests for the Anoma Solana protocol adapter: pa-testkit's environments on a surfpool runtime or, for e2e settlements, on a cluster itself."
 version = "0.3.0"
 edition = "2024"
 license = "Apache-2.0"
