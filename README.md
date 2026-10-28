@@ -79,7 +79,7 @@ entry point for one fixture.
 | `./scripts/dev.sh harness-lint` | The integration-test harness's format check and clippy, as CI's Harness job runs them (`dev.sh clippy` runs it too) |
 | `./scripts/dev.sh harness-test [--e2e]` | The integration-test harness's tests on surfpool, and its e2e environment's unit tests; with `--e2e`, its e2e cases with real proofs, on surfpool (`E2E_RUNTIME=devnet` on a fork of devnet, `DEVNET_RPC_URL`), in release mode, proven by the queue (`QUEUE_BASE_URL`, `QUEUE_AUTH_TOKEN`) or with `E2E_PROVER=local` on this machine. The suite refuses `E2E_RUNTIME=cluster`, which runs only a consumer's explicit settlement e2e tests (the forwarder's wrap, transfer and unwrap) |
 | `./scripts/dev.sh harness-programs [--check]` | Write the harness's program binaries (the deterministic builds); `--check` fails when the committed ones are not |
-| `./scripts/dev.sh idl-write` / `idl-check` | Write the production IDL to `solana-pa-prototype/idl/protocol_adapter.json` (the IDL every release tag holds); `idl-check` fails when the committed file is not a fresh production build's IDL (CI runs it) |
+| `./scripts/dev.sh idl-write` / `idl-check` | Write the production IDLs: the adapter's to `solana-pa-prototype/idl/protocol_adapter.json` (the IDL every release tag holds) and the test forwarder's to `crates/integration-test/idls/test_forwarder.json` (the harness's bindings of it); `idl-check` fails when a committed file is not a fresh production build's IDL (CI runs it) |
 | `./scripts/dev.sh lock-check` / `lock-sync` | Check / re-align the Cargo.lock files' shared dependencies |
 | `./scripts/dev.sh update-deps` | Regenerate `yarn.lock` |
 | `./scripts/dev.sh coverage` | Unit-test line coverage |

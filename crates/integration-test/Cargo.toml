@@ -68,3 +68,11 @@ url = { version = "2", optional = true }
 [dev-dependencies]
 solana-system-interface = { version = "3.2", features = ["bincode"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+# The cfgs `declare_program!`'s output tests: the Solana target, and the
+# `idl-build` feature of a program crate, which this crate is not.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = [
+  'cfg(target_os, values("solana"))',
+  'cfg(feature, values("idl-build"))',
+] }

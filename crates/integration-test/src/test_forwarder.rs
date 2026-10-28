@@ -3,8 +3,19 @@
 //! settlement's external call gives it, and the instructions a test sends it
 //! directly.
 
+use anchor_lang::InstructionData;
 use solana_instruction::Instruction;
 use surfpool_sdk::Pubkey;
+
+/// The test forwarder's bindings, generated from its production IDL
+/// (`idls/test_forwarder.json`, which `dev.sh idl-check` checks against a
+/// fresh build). The generated code reads `anchor_lang` from its parent, as
+/// Anchor's prelude names it.
+mod generated {
+    use anchor_lang::prelude::*;
+
+    declare_program!(test_forwarder);
+}
 
 /// The `forward_call` mode that relays the call to the program its first
 /// remaining account names, handing it the rest: a program the adapter
@@ -17,10 +28,6 @@ pub const MODE_LOG: u8 = 0x03;
 pub const MODE_WRITE: u8 = 0x04;
 /// What a relay returns once the relayed call succeeded.
 pub const RELAY_OK: u8 = 0x2a;
-
-/// Anchor's discriminator of `forward_call`, every forwarder's instruction:
-/// `sha256("global:forward_call")[..8]`.
-const FORWARD_CALL_DISCRIMINATOR: [u8; 8] = [0x9f, 0xaa, 0xe0, 0x0a, 0xfd, 0x69, 0x6c, 0xde];
 
 /// The `forward_call` input of a relay: the target's `forward_call` with the
 /// logic ref `logic_ref` and the input `input`.
@@ -37,12 +44,11 @@ pub fn write_input(bytes: &[u8]) -> Vec<u8> {
 /// instruction of its own: it logs `lines` lines of 100 bytes, which fill a
 /// transaction's program-log budget for the instructions after it.
 pub fn log_ix(program: &Pubkey, lines: u8) -> Instruction {
-    let input = [MODE_LOG, lines];
-    let mut data = FORWARD_CALL_DISCRIMINATOR.to_vec();
-    data.extend_from_slice(&[0; 32]);
-    data.extend_from_slice(&(input.len() as u32).to_le_bytes());
-    data.extend_from_slice(&input);
-    Instruction::new_with_bytes(*program, &data, vec![])
+    let call = generated::test_forwarder::client::args::ForwardCall {
+        _logic_ref: [0; 32],
+        input: vec![MODE_LOG, lines],
+    };
+    Instruction::new_with_bytes(*program, &call.data(), vec![])
 }
 
 #[cfg(test)]
