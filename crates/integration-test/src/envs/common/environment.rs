@@ -7,7 +7,6 @@ use solana_instruction::Instruction;
 use solana_keypair::Keypair;
 use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_signature::Signature;
-use solana_signer::Signer;
 use surfpool_sdk::{Pubkey, Surfnet};
 
 use super::addresses::{LOCALNET, program_id};
@@ -103,24 +102,21 @@ impl<P> Environment<P> {
         so: &[u8],
     ) -> anyhow::Result<Pubkey> {
         let program = program_id(LOCALNET, name)?;
-        self.deploy_program(program, so, self.protocol_adapter.payer.pubkey())?;
+        self.deploy_program(program, so, self.protocol_adapter.payer_pubkey())?;
         Ok(program)
     }
 
     /// Sends `instructions` as one transaction the default signer pays for,
     /// signed by it and `signers`, and waits for it to be confirmed: a
     /// consumer's setup, such as minting a token and approving a delegate.
-    /// Returns its signature. On a live cluster, an instruction of the
-    /// adapter's owner or upgrade authority is refused before anything is
-    /// sent.
+    /// Returns its signature. On a live cluster, an instruction off its
+    /// allowlist is refused before anything is sent.
     pub async fn send(
         &self,
         instructions: &[Instruction],
         signers: &[&Keypair],
     ) -> anyhow::Result<Signature> {
-        let adapter = &self.protocol_adapter;
-        adapter.refuse_on_live_cluster(instructions)?;
-        runtime::send_signed(&adapter.rpc, &adapter.payer, signers, instructions).await
+        self.protocol_adapter.send(instructions, signers).await
     }
 
     /// The environment whose initialized adapter `pa` `rpc` reaches, on

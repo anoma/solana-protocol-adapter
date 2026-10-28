@@ -31,19 +31,23 @@ use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 use solana_rpc_client_api::client_error::{Error as ClientError, ErrorKind};
 use solana_rpc_client_api::request::{RpcError, RpcResponseErrorData};
 use solana_rpc_client_api::response::RpcSimulateTransactionResult;
+use solana_signature::Signature;
 use solana_signer::Signer;
 use surfpool_sdk::Pubkey;
 
-use super::live_cluster::LiveCluster;
+use super::live_cluster::{LiveCluster, ensure_discriminator};
 use super::runtime::{latest_blockhash, send_planned, send_signed};
 use crate::executed::Executed;
 
 /// The Solana protocol adapter, settling each transaction in one v1
 /// transaction when it fits, through a transaction-data upload otherwise.
 pub struct ProtocolAdapter {
+    /// The runtime's RPC client, for reads: what it sends needs a signer,
+    /// and the payer's keypair, which owns the adapter on a runtime of the
+    /// harness's own, is handed out only there (`payer`).
     pub rpc: Arc<RpcClient>,
-    /// Pays for and signs every upload and settlement.
-    pub payer: Arc<Keypair>,
+    /// Pays for and signs every upload and settlement, and the owner's calls.
+    payer: Arc<Keypair>,
     pub program: Pubkey,
     /// The verifier program the router's entry for the adapter's selector
     /// names.
@@ -105,11 +109,17 @@ impl ProtocolAdapter {
     /// data starts with `discriminator` (an Anchor instruction's
     /// discriminator): a consumer's own instruction its tests need on a live
     /// cluster, such as one the payer makes for itself. Every other
-    /// instruction of `program` stays refused. A runtime of the harness's own
-    /// is sent every instruction already.
-    pub fn allow_on_live_cluster(&mut self, program: Pubkey, discriminator: &[u8]) {
-        if let Some(live_cluster) = &mut self.live_cluster {
-            live_cluster.register(program, discriminator);
+    /// instruction of `program` stays refused, and an empty discriminator,
+    /// which every instruction starts with, is an error. A runtime of the
+    /// harness's own is sent every instruction already.
+    pub fn allow_on_live_cluster(
+        &mut self,
+        program: Pubkey,
+        discriminator: &[u8],
+    ) -> anyhow::Result<()> {
+        match &mut self.live_cluster {
+            Some(live_cluster) => live_cluster.register(program, discriminator),
+            None => ensure_discriminator(&program, discriminator),
         }
     }
 
@@ -286,11 +296,39 @@ impl ProtocolAdapter {
     /// Sends `instruction`, which the adapter's owner signs: the payer, which
     /// owns the adapter.
     async fn as_owner(&self, instruction: Instruction, what: &str) -> anyhow::Result<()> {
-        self.refuse_on_live_cluster(std::slice::from_ref(&instruction))?;
-        send_signed(&self.rpc, &self.payer, &[], &[instruction])
+        self.send(&[instruction], &[])
             .await
             .with_context(|| format!("failed to {what}"))?;
         Ok(())
+    }
+
+    /// Sends `instructions` as one transaction the payer pays for, signed by
+    /// it and `signers`, once the live cluster's allowlist passes them
+    /// (`refuse_on_live_cluster`).
+    pub(in crate::envs) async fn send(
+        &self,
+        instructions: &[Instruction],
+        signers: &[&Keypair],
+    ) -> anyhow::Result<Signature> {
+        self.refuse_on_live_cluster(instructions)?;
+        send_signed(&self.rpc, &self.payer, signers, instructions).await
+    }
+
+    /// The payer's address.
+    pub fn payer_pubkey(&self) -> Pubkey {
+        self.payer.pubkey()
+    }
+
+    /// The payer's keypair, for a test's own signing on a runtime of the
+    /// harness's own; an error on a live cluster, where the payer holds the
+    /// adapter's authority and everything it signs goes through the
+    /// allowlist (`Environment::send`).
+    pub fn payer(&self) -> anyhow::Result<&Arc<Keypair>> {
+        anyhow::ensure!(
+            self.live_cluster.is_none(),
+            "the payer's keypair is not handed out on a live cluster"
+        );
+        Ok(&self.payer)
     }
 }
 
@@ -621,10 +659,15 @@ mod tests {
         }
     }
 
+    /// `result` failed as refused on a live cluster, whatever it adds of
+    /// what it was doing.
     fn refused(name: &str, result: anyhow::Result<()>) {
         let error = format!("{:#}", result.expect_err(name));
         println!("{name}: {error}");
-        assert_eq!(error, format!("refused on a live cluster: {name}"));
+        assert!(
+            error.ends_with(&format!("refused on a live cluster: {name}")),
+            "{error}"
+        );
     }
 
     #[tokio::test]
@@ -718,5 +761,46 @@ mod tests {
         local
             .refuse_on_live_cluster(&[local.instance().pause_ix(&ADAPTER)])
             .expect("a runtime of the harness's own is sent the owner's calls");
+    }
+
+    #[test]
+    fn the_payers_keypair_is_handed_out_off_a_live_cluster_only() {
+        let live = live_adapter();
+        let error = live.payer().unwrap_err();
+        println!("{error:#}");
+        assert_eq!(
+            error.to_string(),
+            "the payer's keypair is not handed out on a live cluster"
+        );
+        let local = ProtocolAdapter {
+            live_cluster: None,
+            ..live_adapter()
+        };
+        let payer = local
+            .payer()
+            .expect("a runtime of the harness's own hands out the payer");
+        assert_eq!(payer.pubkey(), local.payer_pubkey());
+        assert_eq!(live.payer_pubkey(), live.payer.pubkey());
+    }
+
+    #[test]
+    fn an_empty_discriminator_is_refused_on_any_runtime() {
+        let program = Pubkey::new_from_array([9; 32]);
+        for mut adapter in [
+            live_adapter(),
+            ProtocolAdapter {
+                live_cluster: None,
+                ..live_adapter()
+            },
+        ] {
+            let error = adapter.allow_on_live_cluster(program, &[]).unwrap_err();
+            assert!(
+                error.to_string().contains("would allow every instruction"),
+                "{error:#}"
+            );
+            adapter
+                .allow_on_live_cluster(program, &[1; 8])
+                .expect("a discriminator registers");
+        }
     }
 }

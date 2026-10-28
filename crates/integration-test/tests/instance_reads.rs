@@ -93,7 +93,7 @@ fn empty_subtree_roots(depth: usize) -> Vec<[u8; 32]> {
 async fn every_read_answers_what_the_adapter_was_set_up_with() -> anyhow::Result<()> {
     let mut env = SolanaLocalEnv::setup_bare().await?;
     let pa = env.protocol_adapter.program;
-    let payer = env.protocol_adapter.payer.clone();
+    let payer = env.protocol_adapter.payer()?.clone();
     let rpc = env.protocol_adapter.rpc.clone();
     let router: Pubkey = VERIFIER_ROUTER.parse()?;
     let instance = ProtocolAdapter::at(&rpc, pa);
@@ -339,7 +339,7 @@ async fn every_read_answers_what_the_adapter_was_set_up_with() -> anyhow::Result
 #[tokio::test(flavor = "multi_thread")]
 async fn an_adapter_never_initialized_has_no_state_to_read() -> anyhow::Result<()> {
     let env = SolanaLocalEnv::setup_bare().await?;
-    let payer = env.protocol_adapter.payer.pubkey();
+    let payer = env.protocol_adapter.payer_pubkey();
     let program = Pubkey::new_unique();
     env.deploy_program(
         program,

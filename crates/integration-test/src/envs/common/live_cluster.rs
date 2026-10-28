@@ -70,12 +70,20 @@ impl LiveCluster {
     }
 
     /// Allows the instructions of `program` whose data starts with
-    /// `discriminator`.
-    pub(in crate::envs) fn register(&mut self, program: Pubkey, discriminator: &[u8]) {
+    /// `discriminator`, which must not be empty: every instruction starts
+    /// with no bytes. The loader's and the adapter's instructions are judged
+    /// by their own rules, whatever is registered for them.
+    pub(in crate::envs) fn register(
+        &mut self,
+        program: Pubkey,
+        discriminator: &[u8],
+    ) -> anyhow::Result<()> {
+        ensure_discriminator(&program, discriminator)?;
         self.registered
             .entry(program)
             .or_default()
             .push(discriminator.to_vec());
+        Ok(())
     }
 
     /// Refuses `instructions` when one is not on the allowlist, naming its
@@ -121,6 +129,19 @@ impl LiveCluster {
         });
         Ok((!registered).then(|| format!("{program}/{:02x?}", leading(data))))
     }
+}
+
+/// Refuses an empty `discriminator` registered for `program`, which every
+/// instruction of it would match.
+pub(in crate::envs) fn ensure_discriminator(
+    program: &Pubkey,
+    discriminator: &[u8],
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !discriminator.is_empty(),
+        "an empty discriminator registered for {program} would allow every instruction of it"
+    );
+    Ok(())
 }
 
 /// The first bytes of `data`, where a discriminator is.
@@ -329,7 +350,7 @@ mod tests {
             init.clone(),
             &format!("{FORWARDER}/[04, 04, 04, 04, 04, 04, 04, 04]"),
         );
-        cluster.register(FORWARDER, &[4; 8]);
+        cluster.register(FORWARDER, &[4; 8]).unwrap();
         cluster
             .check(&[init])
             .expect("a registered instruction is sent");
@@ -338,5 +359,40 @@ mod tests {
             owners,
             &format!("{FORWARDER}/[06, 06, 06, 06, 06, 06, 06, 06]"),
         );
+    }
+
+    #[test]
+    fn an_empty_discriminator_is_refused() {
+        let mut cluster = LiveCluster::new(ADAPTER);
+        let error = cluster.register(FORWARDER, &[]).unwrap_err();
+        println!("{error:#}");
+        assert!(
+            error.to_string().contains("would allow every instruction"),
+            "{error:#}"
+        );
+        refused(
+            &cluster,
+            Instruction::new_with_bytes(FORWARDER, &[4; 8], vec![]),
+            &format!("{FORWARDER}/[04, 04, 04, 04, 04, 04, 04, 04]"),
+        );
+    }
+
+    #[test]
+    fn registering_the_loader_or_the_adapter_allows_nothing() {
+        let mut cluster = LiveCluster::new(ADAPTER);
+        let upgrade = Instruction::new_with_bincode(
+            solana_sdk_ids::bpf_loader_upgradeable::ID,
+            &UpgradeableLoaderInstruction::Upgrade,
+            vec![],
+        );
+        cluster
+            .register(solana_sdk_ids::bpf_loader_upgradeable::ID, &upgrade.data)
+            .unwrap();
+        refused(&cluster, upgrade, "bpf_loader_upgradeable/Upgrade");
+        let pause = Instruction::new_with_bytes(ADAPTER, args::Pause::DISCRIMINATOR, vec![]);
+        cluster
+            .register(ADAPTER, args::Pause::DISCRIMINATOR)
+            .unwrap();
+        refused(&cluster, pause, "protocol_adapter/pause");
     }
 }

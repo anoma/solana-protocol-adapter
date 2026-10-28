@@ -71,7 +71,7 @@ async fn setup() -> anyhow::Result<Setup> {
     let env = SolanaLocalEnv::setup_bare().await?;
     let forwarder = env.deploy_test_forwarder()?;
     let account = Keypair::new();
-    let payer = env.protocol_adapter.payer.pubkey();
+    let payer = env.protocol_adapter.payer_pubkey();
     let len = WRITTEN.len();
     let rent = env
         .protocol_adapter
