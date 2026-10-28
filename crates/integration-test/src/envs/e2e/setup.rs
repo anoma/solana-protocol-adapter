@@ -28,42 +28,63 @@ impl Environment {
             ),
             None => Prover::Risc0(Risc0Prover::new(JOURNAL_ENCODING)),
         };
-        let payer = Arc::new(Keypair::new());
         match &config.runtime {
             E2eRuntime::Local => {
+                let payer = Arc::new(Keypair::new());
                 let surfnet = runtime::start(&payer, |builder| builder)
                     .await
                     .context("failed to start the surfpool runtime")?;
                 let pa = deployment::deploy(&surfnet, &payer, Verifier::Groth16).await?;
-                Self::assemble(surfnet, payer, pa, prover).await
+                let rpc = runtime::client(surfnet.rpc_url().to_string());
+                Self::assemble(Some(surfnet), rpc, payer, pa, prover).await
             }
             E2eRuntime::Devnet { rpc_url } => {
                 // The adapter is already deployed and initialized on devnet,
                 // so its address comes from the deployment record rather than
                 // a fresh deployment; forking keeps devnet's state from being
                 // mutated.
+                let payer = Arc::new(Keypair::new());
                 let surfnet =
                     runtime::start(&payer, |builder| builder.remote_rpc_url(rpc_url.clone()))
                         .await
                         .context("failed to start the surfpool runtime forking devnet")?;
                 let pa = program_id(DEVNET, "PROTOCOL_ADAPTER")?;
                 let owner = payer.pubkey();
-                let env = Self::assemble(surfnet, payer, pa, prover).await?;
+                let rpc = runtime::client(surfnet.rpc_url().to_string());
+                let env = Self::assemble(Some(surfnet), rpc, payer, pa, prover).await?;
                 // The suite makes the owner's calls as the payer, so on the
                 // fork the payer owns the adapter.
                 env.take_ownership(owner).await?;
-                // The tests prove against devnet's kind table, which the
-                // adapter must store.
-                let loaded = super::kind_table::load_devnet()?;
-                let stored = env.protocol_adapter.state().await?.kind_tree_root;
-                anyhow::ensure!(
-                    stored == loaded,
-                    "the protocol adapter stores the kind table {}, the tests prove against {}",
-                    anoma_rm_risc0::Digest::from_bytes(stored),
-                    anoma_rm_risc0::Digest::from_bytes(loaded)
-                );
+                env.ensure_devnet_kind_table().await?;
+                Ok(env)
+            }
+            E2eRuntime::Cluster { rpc_url, payer } => {
+                // The adapter is deployed and initialized on the cluster, at
+                // the address the deployment record names; the tests send
+                // their transactions to the cluster, which keeps them.
+                let payer = solana_keypair::read_keypair_file(payer).map_err(|error| {
+                    anyhow::anyhow!("failed to read the payer {}: {error}", payer.display())
+                })?;
+                let pa = program_id(DEVNET, "PROTOCOL_ADAPTER")?;
+                let rpc = runtime::client(rpc_url.clone());
+                let env = Self::assemble(None, rpc, Arc::new(payer), pa, prover).await?;
+                env.ensure_devnet_kind_table().await?;
                 Ok(env)
             }
         }
+    }
+
+    /// Makes solana-devnet's kind table the prover's, and checks that the
+    /// adapter stores its root: the tests prove against devnet's kind table.
+    async fn ensure_devnet_kind_table(&self) -> anyhow::Result<()> {
+        let loaded = super::kind_table::load_devnet()?;
+        let stored = self.protocol_adapter.state().await?.kind_tree_root;
+        anyhow::ensure!(
+            stored == loaded,
+            "the protocol adapter stores the kind table {}, the tests prove against {}",
+            anoma_rm_risc0::Digest::from_bytes(stored),
+            anoma_rm_risc0::Digest::from_bytes(loaded)
+        );
+        Ok(())
     }
 }

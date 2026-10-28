@@ -105,11 +105,12 @@ async fn start_within(
         .context("failed to build the start-up thread's tokio runtime")
 }
 
-/// A client of the runtime at `confirmed` commitment: the runtime produces
-/// blocks on a clock and never finalizes them.
-pub(in crate::envs) fn client(surfnet: &Surfnet) -> Arc<RpcClient> {
+/// A client of the runtime at `url` at `confirmed` commitment: surfpool
+/// produces blocks on a clock and never finalizes them, and a cluster's
+/// transactions confirm well before they finalize.
+pub(in crate::envs) fn client(url: String) -> Arc<RpcClient> {
     Arc::new(RpcClient::new_with_commitment(
-        surfnet.rpc_url().to_string(),
+        url,
         CommitmentConfig::confirmed(),
     ))
 }

@@ -29,6 +29,8 @@ impl Environment {
             .await
             .context("failed to start the surfpool runtime")?;
         let pa = deployment::deploy(&surfnet, &payer, Verifier::Mock).await?;
-        Self::assemble(surfnet, payer, pa, LocalProver::new(JOURNAL_ENCODING)).await
+        let rpc = runtime::client(surfnet.rpc_url().to_string());
+        let prover = LocalProver::new(JOURNAL_ENCODING);
+        Self::assemble(Some(surfnet), rpc, payer, pa, prover).await
     }
 }

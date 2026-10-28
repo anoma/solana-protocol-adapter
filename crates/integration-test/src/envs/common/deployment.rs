@@ -76,7 +76,7 @@ pub(in crate::envs) async fn deploy(
     payer: &Keypair,
     verifier: Verifier,
 ) -> anyhow::Result<Pubkey> {
-    let rpc = runtime::client(surfnet);
+    let rpc = runtime::client(surfnet.rpc_url().to_string());
     let router: Pubkey = VERIFIER_ROUTER.parse().expect("a base58 address");
     runtime::deploy(surfnet, router, VERIFIER_ROUTER_SO, payer.pubkey())?;
     let program_metadata: Pubkey = PROGRAM_METADATA.parse().expect("a base58 address");

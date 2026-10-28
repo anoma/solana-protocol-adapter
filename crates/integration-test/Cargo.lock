@@ -1454,6 +1454,7 @@ dependencies = [
  "solana-transaction-status-client-types",
  "surfpool-sdk",
  "tokio",
+ "url 2.5.8",
 ]
 
 [[package]]
