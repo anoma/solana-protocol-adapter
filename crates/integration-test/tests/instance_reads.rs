@@ -332,6 +332,22 @@ async fn every_read_answers_what_the_adapter_was_set_up_with() -> anyhow::Result
     Ok(())
 }
 
+/// Requires `result`, the read `read` of an adapter never initialized, to be
+/// the error that its state account `state` is missing.
+fn missing<T: std::fmt::Debug>(
+    state: Pubkey,
+    read: &str,
+    result: Result<T, InstanceError>,
+) -> anyhow::Result<()> {
+    println!("{read}: {result:?}");
+    anyhow::ensure!(
+        matches!(&result, Err(InstanceError::AccountMissing { address }) if *address == state),
+        "{read} on an adapter never initialized is {result:?}, not AccountMissing of its state \
+         {state}"
+    );
+    Ok(())
+}
+
 // An adapter deployed but never initialized has no state account: every read
 // of its state says so, naming the account, rather than decoding nothing; its
 // marker reads answer false.
@@ -349,83 +365,59 @@ async fn an_adapter_never_initialized_has_no_state_to_read() -> anyhow::Result<(
     let instance = ProtocolAdapter::at(&rpc, program);
     let state = derive_pa_state_pda(&program).0;
 
-    let missing = |read: &str, result: Result<String, InstanceError>| {
-        println!("{read}: {result:?}");
-        anyhow::ensure!(
-            matches!(&result, Err(InstanceError::AccountMissing { address }) if *address == state),
-            "{read} on an adapter never initialized is {result:?}, not AccountMissing of its \
-             state {state}"
-        );
-        Ok(())
-    };
-    let shown = |value: &dyn std::fmt::Debug| format!("{value:?}");
-    missing("paused", instance.paused().await.map(|v| shown(&v)))?;
+    missing(state, "paused", instance.paused().await)?;
     missing(
+        state,
         "risc_zero_verifier_paused",
-        instance
-            .risc_zero_verifier_paused(&payer)
-            .await
-            .map(|v| shown(&v)),
+        instance.risc_zero_verifier_paused(&payer).await,
     )?;
     missing(
+        state,
         "risc_zero_verifier_router",
-        instance
-            .risc_zero_verifier_router()
-            .await
-            .map(|v| shown(&v)),
+        instance.risc_zero_verifier_router().await,
     )?;
     missing(
+        state,
         "risc_zero_verifier_selector",
-        instance
-            .risc_zero_verifier_selector()
-            .await
-            .map(|v| shown(&v)),
+        instance.risc_zero_verifier_selector().await,
     )?;
+    missing(state, "commitment_count", instance.commitment_count().await)?;
     missing(
-        "commitment_count",
-        instance.commitment_count().await.map(|v| shown(&v)),
-    )?;
-    missing(
+        state,
         "commitment_tree_depth",
-        instance.commitment_tree_depth().await.map(|v| shown(&v)),
+        instance.commitment_tree_depth().await,
     )?;
     missing(
+        state,
         "commitment_tree_capacity",
-        instance.commitment_tree_capacity().await.map(|v| shown(&v)),
+        instance.commitment_tree_capacity().await,
     )?;
     missing(
+        state,
         "commitment_tree_left_siblings",
-        instance
-            .commitment_tree_left_siblings()
-            .await
-            .map(|v| shown(&v)),
+        instance.commitment_tree_left_siblings().await,
     )?;
     missing(
+        state,
         "commitment_tree_empty_subtree_roots",
-        instance
-            .commitment_tree_empty_subtree_roots()
-            .await
-            .map(|v| shown(&v)),
+        instance.commitment_tree_empty_subtree_roots().await,
     )?;
     missing(
+        state,
         "latest_commitment_tree_root",
-        instance
-            .latest_commitment_tree_root()
-            .await
-            .map(|v| shown(&v)),
+        instance.latest_commitment_tree_root().await,
     )?;
     missing(
+        state,
         "get_kind_tree_root",
-        instance.get_kind_tree_root().await.map(|v| shown(&v)),
+        instance.get_kind_tree_root().await,
     )?;
     missing(
+        state,
         "is_logic_ref_denied",
-        instance
-            .is_logic_ref_denied(&DENIED_CONSUMED, true)
-            .await
-            .map(|v| shown(&v)),
+        instance.is_logic_ref_denied(&DENIED_CONSUMED, true).await,
     )?;
-    missing("owner", instance.owner().await.map(|v| shown(&v)))?;
+    missing(state, "owner", instance.owner().await)?;
 
     // The marker reads read no state: an adapter never initialized holds no
     // marker, as an EVM adapter's empty storage holds none.

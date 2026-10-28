@@ -660,6 +660,14 @@ mod tests {
         }
     }
 
+    /// The adapter of `live_adapter` on a runtime of the harness's own.
+    fn local_adapter() -> ProtocolAdapter {
+        ProtocolAdapter {
+            live_cluster: None,
+            ..live_adapter()
+        }
+    }
+
     /// `result` failed as refused on a live cluster, whatever it adds of
     /// what it was doing.
     fn refused(name: &str, result: anyhow::Result<()>) {
@@ -754,10 +762,7 @@ mod tests {
 
     #[test]
     fn a_runtime_of_the_harnesss_own_is_sent_the_owners_calls() {
-        let local = ProtocolAdapter {
-            live_cluster: None,
-            ..live_adapter()
-        };
+        let local = local_adapter();
         local
             .refuse_on_live_cluster(&[local.instance().pause_ix(&ADAPTER)])
             .expect("a runtime of the harness's own is sent the owner's calls");
@@ -772,10 +777,7 @@ mod tests {
             error.to_string(),
             "the payer's keypair is not handed out on a live cluster"
         );
-        let local = ProtocolAdapter {
-            live_cluster: None,
-            ..live_adapter()
-        };
+        let local = local_adapter();
         let payer = local
             .payer()
             .expect("a runtime of the harness's own hands out the payer");
@@ -786,13 +788,7 @@ mod tests {
     #[test]
     fn an_empty_discriminator_is_refused_on_any_runtime() {
         let program = Pubkey::new_from_array([9; 32]);
-        for mut adapter in [
-            live_adapter(),
-            ProtocolAdapter {
-                live_cluster: None,
-                ..live_adapter()
-            },
-        ] {
+        for mut adapter in [live_adapter(), local_adapter()] {
             let error = adapter.allow_on_live_cluster(program, &[]).unwrap_err();
             assert!(
                 error.to_string().contains("would allow every instruction"),

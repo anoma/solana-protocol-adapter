@@ -101,11 +101,13 @@ impl E2eConfig {
     /// `QUEUE_BASE_URL` and `QUEUE_AUTH_TOKEN` for the queue.
     fn from_vars(var: impl Fn(&str) -> Result<String, VarError>) -> anyhow::Result<Self> {
         let read = |name: &str| var(name).with_context(|| format!("failed to read {name}"));
-        let runtime = match var("E2E_RUNTIME") {
-            Ok(runtime) => runtime,
-            Err(VarError::NotPresent) => "local".to_string(),
-            Err(e) => return Err(e).context("failed to read E2E_RUNTIME"),
+        // `None` for a variable that is not set.
+        let optional = |name: &str| match var(name) {
+            Ok(value) => Ok(Some(value)),
+            Err(VarError::NotPresent) => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("failed to read {name}")),
         };
+        let runtime = optional("E2E_RUNTIME")?.unwrap_or_else(|| "local".to_string());
         let runtime = match runtime.as_str() {
             "local" => E2eRuntime::Local,
             "devnet" => E2eRuntime::Devnet {
@@ -113,23 +115,16 @@ impl E2eConfig {
             },
             "cluster" => E2eRuntime::Cluster {
                 rpc_url: operator_rpc_url("E2E_RPC_URL", read("E2E_RPC_URL")?)?,
-                payer: match var("E2E_PAYER") {
-                    Ok(payer) => PathBuf::from(payer),
-                    Err(VarError::NotPresent) => PathBuf::from(DEFAULT_CLUSTER_PAYER),
-                    Err(e) => return Err(e).context("failed to read E2E_PAYER"),
-                },
+                payer: PathBuf::from(
+                    optional("E2E_PAYER")?.unwrap_or_else(|| DEFAULT_CLUSTER_PAYER.to_string()),
+                ),
             },
             other => anyhow::bail!("E2E_RUNTIME is {other:?}, not local, devnet or cluster"),
         };
-        let prover = match var("E2E_PROVER") {
-            Ok(prover) => prover,
-            Err(VarError::NotPresent)
-                if !matches!(var("QUEUE_BASE_URL"), Err(VarError::NotPresent)) =>
-            {
-                "queue".to_string()
-            }
-            Err(VarError::NotPresent) => "local".to_string(),
-            Err(e) => return Err(e).context("failed to read E2E_PROVER"),
+        let prover = match optional("E2E_PROVER")? {
+            Some(prover) => prover,
+            None if optional("QUEUE_BASE_URL")?.is_some() => "queue".to_string(),
+            None => "local".to_string(),
         };
         let queue = match prover.as_str() {
             "queue" => Some(QueueConfig {
@@ -256,6 +251,37 @@ mod tests {
                 .ensure_harness_suite_runtime()
                 .unwrap_or_else(|e| panic!("{vars:?}: {e:#}"));
         }
+    }
+
+    #[test]
+    fn the_prover_is_the_queue_by_default_when_its_url_is_set() {
+        let queue = config(&[
+            ("QUEUE_BASE_URL", "https://queue.example"),
+            ("QUEUE_AUTH_TOKEN", "t"),
+        ])
+        .unwrap()
+        .queue
+        .expect("QUEUE_BASE_URL set and E2E_PROVER unset: the queue");
+        assert_eq!(
+            (queue.base_url.as_str(), queue.auth_token.as_str()),
+            ("https://queue.example", "t")
+        );
+        let local = config(&[
+            ("E2E_PROVER", "local"),
+            ("QUEUE_BASE_URL", "https://queue.example"),
+        ])
+        .unwrap();
+        assert!(local.queue.is_none(), "E2E_PROVER=local proves locally");
+        assert!(
+            config(&[]).unwrap().queue.is_none(),
+            "without QUEUE_BASE_URL the prover is local"
+        );
+        let missing = config(&[("E2E_PROVER", "queue")]).err().unwrap();
+        println!("E2E_PROVER=queue without its URL: {missing:#}");
+        assert!(
+            format!("{missing:#}").contains("failed to read QUEUE_BASE_URL"),
+            "{missing:#}"
+        );
     }
 
     #[test]
