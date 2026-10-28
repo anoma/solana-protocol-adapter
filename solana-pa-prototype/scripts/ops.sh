@@ -915,9 +915,9 @@ cmd_test() {
 
   # The run proves its own fixture set for the deployment: under a salt no
   # earlier run used, so nothing in it was settled before, and against the
-  # kind tree the deployment stores. Each fixture is proven when a test
-  # first loads it (tests/utils/fixtures.ts), so the run stops at the first
-  # failure and proves only what its tests use.
+  # kind tree whose root the deployment stores. Each fixture is proven when a
+  # test first loads it (tests/utils/fixtures.ts), so the run stops at the
+  # first failure and proves only what its tests use.
   if [[ -z "${PA_KIND_TABLE:-}" || ! -f "$PA_KIND_TABLE" ]]; then
     echo "❌ Set PA_KIND_TABLE to the kind tree (JSON, as fixture-gen reads it) whose root the deployment stores;" >&2
     echo "   the run proves its fixtures against it." >&2

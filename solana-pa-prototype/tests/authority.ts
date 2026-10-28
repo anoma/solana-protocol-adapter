@@ -21,9 +21,9 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
   const wallet = provider.wallet.publicKey;
   // The owner-only call these tests make: rewriting the kind tree root the
   // adapter already holds, which leaves its configuration as it was found.
-  let kindTable: number[];
+  let kindTreeRoot: number[];
   before(async () => {
-    kindTable = Array.from((await program.account.paStateAccount.fetch(paState)).kindTreeRoot);
+    kindTreeRoot = Array.from((await program.account.paStateAccount.fetch(paState)).kindTreeRoot);
   });
 
   it("rejects pause from a signer that is not the owner", async () => {
@@ -62,15 +62,15 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
         [["ownershipTransferred", wallet.toBase58(), successor.publicKey.toBase58()]],
       );
 
-      await assertFails(setKindTreeRoot(program, wallet, kindTable).rpc(), {
+      await assertFails(setKindTreeRoot(program, wallet, kindTreeRoot).rpc(), {
         program,
         error: "OwnableUnauthorizedAccount",
         account: "authority",
       });
-      await setKindTreeRoot(program, successor.publicKey, kindTable).signers([successor]).rpc();
+      await setKindTreeRoot(program, successor.publicKey, kindTreeRoot).signers([successor]).rpc();
 
       await localTransferAdapterOwnership(program, successor.publicKey, wallet).signers([successor]).rpc();
-      await setKindTreeRoot(program, wallet, kindTable).rpc();
+      await setKindTreeRoot(program, wallet, kindTreeRoot).rpc();
     });
   });
 
@@ -114,7 +114,7 @@ describe("protocol-adapter (ownership and upgrades) @localnet", () => {
       await upgradeThroughProgram(program, ADAPTER_SO, "upgraded", (buffer, spill) =>
         upgradeAdapter(program, wallet, buffer, spill),
       );
-      await setKindTreeRoot(program, wallet, kindTable).rpc();
+      await setKindTreeRoot(program, wallet, kindTreeRoot).rpc();
     });
   });
 });
