@@ -15,16 +15,22 @@ use anoma_pa_solana_client::generated::protocol_adapter::events::{
     ActionExecuted, CommitmentTreeRootAdded, ForwarderCallExecuted, TransactionExecuted,
 };
 use anoma_pa_solana_client::settlement::CallAccounts;
+use anoma_pa_solana_integration_test::actions::{self, Logic, ResourceSpec};
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
 use anoma_pa_solana_integration_test::executed::Executed;
 use anoma_pa_solana_integration_test::test_forwarder::{
-    RELAY_OK, log_ix, relay_input, write_input,
+    MODE_EMPTY, RELAY_OK, log_ix, relay_input, write_input,
 };
-use anoma_pa_testkit::environment::Refusal;
+use anoma_pa_testkit::environment::{
+    DELETION_CRITERION_NEVER, Event, Outcome, PayloadKind, Refusal,
+};
 use anoma_pa_testkit::fixtures::passthrough::{self, PASSTHROUGH_LOGIC_VK};
-use anoma_pa_testkit::prove_actions;
 use anoma_pa_testkit::transaction::Transaction;
-use anoma_rm_risc0::utils::bytes_to_words;
+use anoma_pa_testkit::witness::{AppData, ExpirableBlob};
+use anoma_pa_testkit::{latest_root, prove_actions, settle_tx};
+use anoma_rm_risc0::Digest;
+use anoma_rm_risc0::compliance::INITIAL_ROOT;
+use anoma_rm_risc0::utils::{bytes_to_words, words_to_bytes};
 use anyhow::Context;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
@@ -324,6 +330,99 @@ async fn the_adapters_events_survive_a_truncated_log() -> anyhow::Result<()> {
     anyhow::ensure!(
         matches!(calls.as_slice(), [call] if call.output == WRITTEN),
         "the settlement's calls are {calls:?}, not one returning {WRITTEN:?}"
+    );
+    Ok(())
+}
+
+// As pa-evm next's `_processAction`, the adapter settles an action's
+// resources in their list order, created, consumed, created: each resource's
+// forwarder calls, then its payload events. Then the action's ActionExecuted,
+// and, as pa-evm's `execute`, the transaction's one new root and its
+// TransactionExecuted.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_actions_resources_settle_in_their_list_order() -> anyhow::Result<()> {
+    let mut s = setup().await?;
+    s.env.protocol_adapter.forwarders.register(
+        s.forwarder,
+        Arc::new(Fixed {
+            segment: vec![AccountMeta::new_readonly(s.forwarder, false)],
+            preceding: vec![],
+        }),
+    );
+    let call = SolanaExternalCall {
+        program_id: s.forwarder.to_bytes(),
+        instruction_data: vec![MODE_EMPTY],
+        expected_output: vec![],
+        output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
+    };
+    // Each resource makes one call and keeps one blob, its own.
+    let resource = |consumed: bool, blob: u32| ResourceSpec {
+        consumed,
+        logic: Logic::Passthrough(AppData {
+            external_payload: vec![ExpirableBlob {
+                blob: bytes_to_words(&call.encode()),
+                deletion_criterion: 0,
+            }],
+            application_payload: vec![ExpirableBlob {
+                blob: vec![blob],
+                deletion_criterion: DELETION_CRITERION_NEVER,
+            }],
+            ..AppData::default()
+        }),
+    };
+    let blobs = [0xa0, 0xb1, 0xc2];
+    let action = actions::build(
+        8,
+        vec![
+            resource(false, blobs[0]),
+            resource(true, blobs[1]),
+            resource(false, blobs[2]),
+        ],
+        INITIAL_ROOT,
+    )?;
+    let tx = prove_actions(&s.env, &[action]).await?;
+    let proven = &tx.aggregation_instance()?.actions[0];
+    let tags: Vec<Digest> = proven.resource_instances.iter().map(|r| r.tag()).collect();
+    let action_tree_root = proven.action_tree_root;
+
+    let Outcome::Settled(events) = settle_tx(&mut s.env, tx).await? else {
+        anyhow::bail!("the adapter refused the transaction");
+    };
+    let root = latest_root(&s.env).await?;
+    let logic = PASSTHROUGH_LOGIC_VK;
+    let expected: Vec<Event> = tags
+        .iter()
+        .zip(blobs)
+        .flat_map(|(tag, blob)| {
+            [
+                Event::ForwarderCallExecuted,
+                Event::Payload {
+                    kind: PayloadKind::Application,
+                    tag: *tag,
+                    index: 0,
+                    blob: words_to_bytes(&[blob]).to_vec(),
+                },
+            ]
+        })
+        .chain([
+            Event::ActionExecuted {
+                action_tree_root,
+                nullifiers: vec![tags[1]],
+                consumed_logic_refs: vec![logic],
+                commitments: vec![tags[0], tags[2]],
+                created_logic_refs: vec![logic, logic],
+            },
+            Event::CommitmentTreeRootAdded { root },
+        ])
+        .collect();
+    anyhow::ensure!(
+        events.len() == expected.len() + 1
+            && events[..expected.len()] == expected[..]
+            && matches!(events.last(), Some(Event::TransactionExecuted { .. })),
+        "the settlement emitted {events:#?}, not, per resource in list order, its call and its \
+         blob, then its action, its root and its transaction: {expected:#?} and a \
+         TransactionExecuted"
     );
     Ok(())
 }

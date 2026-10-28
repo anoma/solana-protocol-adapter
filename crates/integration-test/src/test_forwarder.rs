@@ -26,6 +26,8 @@ pub const MODE_LOG: u8 = 0x03;
 /// The `forward_call` mode that writes the rest of its input to the start of
 /// its first account, which the test forwarder owns, and returns it.
 pub const MODE_WRITE: u8 = 0x04;
+/// The `forward_call` mode that returns the empty output.
+pub const MODE_EMPTY: u8 = 0x05;
 /// What a relay returns once the relayed call succeeded.
 pub const RELAY_OK: u8 = 0x2a;
 

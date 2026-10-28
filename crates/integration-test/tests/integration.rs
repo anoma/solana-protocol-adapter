@@ -333,3 +333,47 @@ async fn a_transaction_repeating_a_nullifier_is_refused_as_spent() -> anyhow::Re
     );
     Ok(())
 }
+
+// As pa-evm next's `_processAction`, the adapter checks each resource, its
+// logic ref against the denylists and a consumed one's root, before it moves
+// on to the next resource: an action whose first consumed resource names an
+// unknown root, and whose second has a denied logic ref, is refused for the
+// root.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_root_is_refused_before_a_later_resources_denied_logic_ref() -> anyhow::Result<()>
+{
+    use anoma_pa_solana_integration_test::actions::{self, Logic, ResourceSpec};
+    use anoma_pa_testkit::environment::{DeniedLogicRef, ProtocolAdapter as _, Refusal};
+    use anoma_pa_testkit::witness::AppData;
+    use anoma_rm_risc0::Digest;
+    use anoma_rm_risc0::constants::PADDING_LOGIC_VK;
+
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    env.protocol_adapter
+        .deny_logic_refs(&[DeniedLogicRef {
+            logic_ref: PADDING_LOGIC_VK,
+            consumed: true,
+        }])
+        .await?;
+    let action = actions::build(
+        58,
+        vec![
+            ResourceSpec {
+                consumed: true,
+                logic: Logic::Passthrough(AppData::default()),
+            },
+            ResourceSpec {
+                consumed: true,
+                logic: Logic::Trivial,
+            },
+        ],
+        Digest::from_bytes([0x7e; 32]),
+    )?;
+    let tx = prove_actions(&env, &[action]).await?;
+    let refusal = env.protocol_adapter.submit(tx).await?.err();
+    anyhow::ensure!(
+        refusal == Some(Refusal::UnknownRoot),
+        "the adapter returned {refusal:?}, not the refusal for the first resource's unknown root"
+    );
+    Ok(())
+}
