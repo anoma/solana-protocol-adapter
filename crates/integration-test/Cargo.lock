@@ -1400,7 +1400,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.8.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=813e68b4feb0b7b5a94e65667e909ae0f64d2314#813e68b4feb0b7b5a94e65667e909ae0f64d2314"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=3ddb1c260fc3202dfa6fdd95cf21e6e2eee73151#3ddb1c260fc3202dfa6fdd95cf21e6e2eee73151"
 dependencies = [
  "anchor-lang",
  "anoma-rm-risc0",
