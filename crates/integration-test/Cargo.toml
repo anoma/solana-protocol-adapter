@@ -37,7 +37,7 @@ anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "c2a44b6
 anoma-risc0-kind-trees = { git = "https://github.com/anoma/risc0-kind-trees", rev = "999fcf47627468fd35ad8ad16464ce28f6e443dd", features = [
   "arm",
 ], optional = true }
-anoma-rm-risc0 = { version = "2.0.0-rc.8.1", default-features = false, features = ["transaction"] }
+anoma-rm-risc0 = { version = "2.0.0-rc.8.2", default-features = false, features = ["transaction"] }
 anyhow = "1.0"
 bincode = "1.3"
 bs58 = "0.5"
