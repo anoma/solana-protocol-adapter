@@ -17,7 +17,7 @@ fn invoke_forwarder(
     logic_ref: &[u8; 32],
     instruction_data: &[u8],
     segment: &[AccountInfo<'_>],
-) -> Result<(), PAError> {
+) -> anchor_lang::Result<()> {
     let ix_data = build_forwarder_instruction_data(logic_ref, instruction_data);
 
     let ix_accounts: Vec<AccountMeta> = super::build_account_metas(segment);
@@ -28,11 +28,7 @@ fn invoke_forwarder(
         data: ix_data,
     };
 
-    invoke(&ix, segment).map_err(|e| {
-        anchor_lang::prelude::msg!("CPI failed: {:?}", e);
-        PAError::ExternalCallCpiFailed
-    })?;
-    Ok(())
+    Ok(invoke(&ix, segment)?)
 }
 
 fn read_forwarder_output(output_mode: &OutputMode, forwarder: &Pubkey) -> Result<Vec<u8>, PAError> {
@@ -47,7 +43,7 @@ fn execute_forwarder_call(
     logic_ref: &arm_core::Digest,
     call: SolanaExternalCall,
     segment: &[AccountInfo<'_>],
-) -> Result<crate::ForwarderCallExecuted, PAError> {
+) -> anchor_lang::Result<crate::ForwarderCallExecuted> {
     invoke_forwarder(&(*logic_ref).into(), &call.instruction_data, segment)?;
 
     let forwarder = *segment[0].key;
@@ -86,17 +82,17 @@ impl<'a, 'info> ForwarderSegments<'a, 'info> {
         &mut self,
         logic_ref: &arm_core::Digest,
         app_data: &arm_core::logic_instance::AppData,
-    ) -> Result<Vec<crate::ForwarderCallExecuted>, PAError> {
+    ) -> anchor_lang::Result<Vec<crate::ForwarderCallExecuted>> {
         let calls = super::decode_external_calls(app_data)?;
         let mut events = Vec::with_capacity(calls.len());
         for call in calls {
             let seg_len = call.num_accounts as usize;
             if seg_len == 0 || seg_len > self.accounts.len() {
-                return Err(PAError::InvalidTransactionData);
+                return Err(PAError::InvalidTransactionData.into());
             }
             let (segment, rest) = self.accounts.split_at(seg_len);
             if segment[0].key != &Pubkey::new_from_array(call.program_id) {
-                return Err(PAError::UnregisteredForwarder);
+                return Err(PAError::UnregisteredForwarder.into());
             }
             events.push(execute_forwarder_call(logic_ref, call, segment)?);
             self.accounts = rest;

@@ -6,7 +6,7 @@
 //!
 //! | Mode byte | Behavior                                          | What it tests               |
 //! |-----------|---------------------------------------------------|-----------------------------|
-//! | 0x00      | Returns `Err(IntentionalFailure)`                 | ExternalCallCpiFailed       |
+//! | 0x00      | Returns `Err(IntentionalFailure)`                 | the callee's error aborting the settlement |
 //! | 0x01      | Returns `Ok` without calling `set_return_data`    | ForwarderCallOutputMismatch |
 //! | 0x02      | Relays `forward_call` to `remaining_accounts[0]`  | a multi-program segment, the relayed program called at depth 3 |
 //! | 0x03      | Logs `input[1]` lines of 100 bytes, returns `Ok`  | events survive log truncation |

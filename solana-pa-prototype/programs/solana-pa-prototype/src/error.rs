@@ -59,8 +59,6 @@ pub enum PAError {
     UnregisteredForwarder,
     #[msg("External call output verification failed")]
     ForwarderCallOutputMismatch,
-    #[msg("External call CPI failed")]
-    ExternalCallCpiFailed,
 
     // Delta proof errors
     #[msg("Delta proof verification failed")]

@@ -449,7 +449,6 @@ fn refusal_for(error: ProtocolAdapterError) -> Option<Refusal> {
         | ProtocolAdapterError::RiscZeroVerifierSelectorMismatch
         | ProtocolAdapterError::InvalidExternalCallBlob
         | ProtocolAdapterError::UnregisteredForwarder
-        | ProtocolAdapterError::ExternalCallCpiFailed
         | ProtocolAdapterError::DeltaProofVerificationFailed
         | ProtocolAdapterError::DeltaMismatch
         | ProtocolAdapterError::InvalidDeltaProof

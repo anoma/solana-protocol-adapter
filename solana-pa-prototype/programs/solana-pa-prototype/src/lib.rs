@@ -866,10 +866,7 @@ fn execute_settlement(
             }
 
             #[cfg(not(test))]
-            for event in forwarder_segments
-                .execute(&resource.logic_ref(), resource.app_data())
-                .map_err(anchor_lang::error::Error::from)?
-            {
+            for event in forwarder_segments.execute(&resource.logic_ref(), resource.app_data())? {
                 events.emit(&event)?;
             }
             emit_app_data_events(events, &resource.tag(), resource.app_data())
