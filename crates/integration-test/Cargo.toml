@@ -1,7 +1,7 @@
 [package]
 name = "anoma-pa-solana-integration-test"
 description = "Integration and e2e tests for the Anoma Solana protocol adapter: pa-testkit's environments on a surfpool runtime or, for e2e settlements, on a cluster itself."
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/anoma/solana-protocol-adapter"
@@ -28,7 +28,7 @@ e2e = [
 # The Anchor traits of the client's generated types (their discriminators,
 # account encodings): the client's Anchor commit.
 anchor-lang = { git = "https://github.com/otter-sec/anchor", rev = "2c9747a2d31bd5e94745cee6c083577f3e6675c0" }
-anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "3ddb1c260fc3202dfa6fdd95cf21e6e2eee73151", features = [
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", tag = "bindings/v0.9.0", features = [
   "rpc",
 ] }
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "ce0dba467d5b00cd216acc7de44c263f5335add6", default-features = false, features = [
