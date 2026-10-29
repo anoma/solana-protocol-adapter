@@ -1,4 +1,6 @@
-use crate::merkle::{current_root, hash_two, push, EMPTY_TREE_ROOT_INITIAL, MAX_TREE_DEPTH, ZEROS};
+use crate::merkle::{
+    current_root, hash_two, push, EMPTY_TREE_ROOT_INITIAL, MAX_LEAF_COUNT, MAX_TREE_DEPTH, ZEROS,
+};
 use crate::state::PAStateAccount;
 use crate::tests::utils::{assert_anchor_err, create_test_pa_state};
 use arm_core::merkle_path::PADDING_LEAF;
@@ -121,7 +123,6 @@ fn assert_tree_is_evms(state: &PAStateAccount, evm: &EvmMerkleTree, when: &str) 
         .collect();
     assert_eq!(state.next_index, evm.leaf_count, "leaf count {when}");
     assert_eq!(state.depth(), evm.depth(), "depth {when}");
-    assert_eq!(state.capacity(), 1u64 << evm.depth(), "capacity {when}");
     assert_eq!(frontier, evm.left_siblings, "left siblings {when}");
     assert_eq!(current_root(state), evm.current_root(), "root {when}");
 }
@@ -136,12 +137,12 @@ fn state_holding(evm: &EvmMerkleTree) -> PAStateAccount {
     }
 }
 
-/// pa-evm's tree one leaf short of 2^`MAX_TREE_DEPTH` leaves: depth
-/// `MAX_TREE_DEPTH`, with distinct left siblings.
+/// pa-evm's tree one leaf short of `MAX_LEAF_COUNT` leaves: one level short
+/// of `MAX_TREE_DEPTH`, with distinct left siblings.
 fn evm_tree_one_leaf_short_of_full() -> EvmMerkleTree {
     EvmMerkleTree {
-        leaf_count: (1u64 << MAX_TREE_DEPTH) - 1,
-        left_siblings: (0..MAX_TREE_DEPTH)
+        leaf_count: MAX_LEAF_COUNT - 1,
+        left_siblings: (0..MAX_TREE_DEPTH - 1)
             .map(|level| Digest::from_bytes([level as u8 + 1; 32]))
             .collect(),
     }

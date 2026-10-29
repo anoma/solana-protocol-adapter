@@ -6,18 +6,20 @@ import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
 import { deriveRootMarkerPda } from "../../client/pda";
 
-const MAX_TREE_DEPTH = 32;
+// merkle.rs: the depth of the deepest tree, and the most leaves it holds.
+const MAX_TREE_DEPTH = 33;
+const MAX_LEAF_COUNT = 1n << BigInt(MAX_TREE_DEPTH - 1);
 
 function hashTwo(left: Buffer, right: Buffer): Buffer {
   return createHash("sha256").update(left).update(right).digest();
 }
 
 // ZEROS[0] = PADDING_LEAF; ZEROS[i] = hash(ZEROS[i-1], ZEROS[i-1]) — the
-// zero-subtree hashes from merkle.rs, up to the deepest tree's
-// (MAX_TREE_DEPTH + 1 levels), derived rather than copied.
+// zero-subtree hashes from merkle.rs, one per level of the deepest tree,
+// derived rather than copied.
 const ZEROS: Buffer[] = (() => {
   const zeros: Buffer[] = [EMPTY_TREE_ROOT_INITIAL];
-  for (let i = 1; i <= MAX_TREE_DEPTH; i++) {
+  for (let i = 1; i < MAX_TREE_DEPTH; i++) {
     zeros.push(hashTwo(zeros[i - 1], zeros[i - 1]));
   }
   return zeros;
@@ -34,7 +36,7 @@ function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
   const frontier: Buffer[] = state.frontier.map((f) => Buffer.from(f));
 
   for (const leaf of leaves) {
-    if (nextIndex >= 1n << BigInt(MAX_TREE_DEPTH)) {
+    if (nextIndex >= MAX_LEAF_COUNT) {
       throw new Error("the commitment tree is full (2^32 leaves)");
     }
     let nodeIndex = nextIndex;

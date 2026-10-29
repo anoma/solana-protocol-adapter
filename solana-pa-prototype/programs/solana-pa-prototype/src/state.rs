@@ -1,7 +1,7 @@
 //! On-chain account definitions.
 //! Named "state" to avoid conflict with Anchor's internal "accounts" module.
 
-use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, FULL_TREE_DEPTH, INITIAL_TREE_DEPTH};
+use crate::merkle::{EMPTY_TREE_ROOT_INITIAL, INITIAL_TREE_DEPTH, MAX_TREE_DEPTH};
 use anchor_lang::prelude::*;
 use arm_core::Digest;
 
@@ -65,7 +65,7 @@ pub struct PAStateAccount {
     /// Tree depth (0-33). Capacity = 2^current_depth.
     pub current_depth: u8,
     /// Filled subtree hashes at each level. Grows via realloc when tree expands.
-    #[max_len(FULL_TREE_DEPTH)]
+    #[max_len(MAX_TREE_DEPTH)]
     pub frontier: Vec<[u8; 32]>,
     pub min_expiry_slots: u64,
     pub max_expiry_slots: u64,
@@ -91,7 +91,7 @@ impl PAStateAccount {
     /// the denylists. Every other field has a fixed size, so the account
     /// grows only with the frontier and the denylists.
     pub const fn space(depth: usize, denied: usize) -> usize {
-        Self::MAX_SPACE - size_of::<[u8; 32]>() * (FULL_TREE_DEPTH - depth)
+        Self::MAX_SPACE - size_of::<[u8; 32]>() * (MAX_TREE_DEPTH - depth)
             + size_of::<[u8; 32]>() * denied
     }
 
@@ -139,10 +139,6 @@ impl PAStateAccount {
 
     pub fn depth(&self) -> usize {
         self.current_depth as usize
-    }
-
-    pub fn capacity(&self) -> u64 {
-        1u64 << self.current_depth
     }
 
     /// Adds a level to the tree, its left sibling for the caller to set.

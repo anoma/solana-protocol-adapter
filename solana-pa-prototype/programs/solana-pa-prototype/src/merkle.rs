@@ -13,18 +13,18 @@ use crate::state::PAStateAccount;
 /// `MerkleTree.setup`; the tree grows by one level each time a leaf fills it.
 pub const INITIAL_TREE_DEPTH: usize = 0;
 
-/// The commitment tree holds at most 2^`MAX_TREE_DEPTH` = 4,294,967,296
-/// leaves.
-pub const MAX_TREE_DEPTH: usize = 32;
+/// The depth of the deepest commitment tree, the one holding
+/// `MAX_LEAF_COUNT` leaves: the leaf that fills the depth-32 tree grows it,
+/// as at every depth.
+pub const MAX_TREE_DEPTH: usize = 33;
 
-/// The depth of the tree of 2^`MAX_TREE_DEPTH` leaves, the deepest: the leaf
-/// that fills the depth-`MAX_TREE_DEPTH` tree grows it, as at every depth.
-pub const FULL_TREE_DEPTH: usize = MAX_TREE_DEPTH + 1;
+/// The most leaves the commitment tree holds, 2^32 = 4,294,967,296.
+pub const MAX_LEAF_COUNT: u64 = 1 << (MAX_TREE_DEPTH - 1);
 
 /// Precomputed zero hashes at each level of the deepest tree.
 /// zeros[0] = PADDING_LEAF, zeros[i] = hash(zeros[i-1], zeros[i-1]).
 /// Precomputed to avoid ~200k CU cost of on-chain hash computation.
-pub const ZEROS: [Digest; FULL_TREE_DEPTH] = [
+pub const ZEROS: [Digest; MAX_TREE_DEPTH] = [
     // Level 0: cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06
     Digest::new([
         0x832f1dcc, 0x7adb4584, 0xf91d43ec, 0x1f878aee, 0x5eaae740, 0x56c04f06, 0xc6f83e63,
@@ -210,10 +210,10 @@ pub fn hash_two(left: &Digest, right: &Digest) -> Digest {
 /// computation (`current_root` computes it). A leaf that fills the tree grows
 /// it by one level, its completed root the left sibling there.
 ///
-/// Refused once the tree holds 2^`MAX_TREE_DEPTH` leaves, before any mutation.
+/// Refused once the tree holds `MAX_LEAF_COUNT` leaves, before any mutation.
 pub fn push(state: &mut PAStateAccount, leaf: Digest) -> Result<()> {
     require!(
-        state.next_index < 1 << MAX_TREE_DEPTH,
+        state.next_index < MAX_LEAF_COUNT,
         PAError::TreeMaxDepthReached
     );
 

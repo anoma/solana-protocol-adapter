@@ -107,7 +107,7 @@ use arm_core::transaction::{Delta, Transaction};
 pub use error::PAError;
 use events::event_discriminator;
 use groth16::{check_selector, prepare_proof_for_verification};
-use merkle::{required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, FULL_TREE_DEPTH};
+use merkle::{required_depth_for_leaves, EMPTY_TREE_ROOT_INITIAL, MAX_TREE_DEPTH};
 use state::*;
 pub use u256::U256;
 
@@ -646,7 +646,7 @@ fn maybe_grow_account<'info>(
     let required_depth = required_depth_for_leaves(final_next_index);
 
     // merkle::push refuses more leaves than the deepest tree holds.
-    let target_depth = required_depth.min(FULL_TREE_DEPTH);
+    let target_depth = required_depth.min(MAX_TREE_DEPTH);
 
     if target_depth <= state.depth() {
         return Ok(());
