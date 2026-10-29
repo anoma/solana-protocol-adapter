@@ -1,0 +1,8 @@
+# Any [http] setting makes cargo fetch git dependencies through libcurl,
+# which aborts a transfer slower than `low-speed-limit` bytes/s for `timeout`
+# seconds and retries it (`net.retry`). With no [http] setting cargo uses
+# libgit2's own networking, which has no such limit: a stalled fetch of a git
+# dependency then hangs for good. The values are cargo's defaults.
+[http]
+timeout = 30
+low-speed-limit = 10
