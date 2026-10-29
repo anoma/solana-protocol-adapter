@@ -30,7 +30,7 @@ solana-sha256-hasher = "3.1"
 # Event discriminators: sha256 of the event signature, at compile time
 sha2-const-stable = "0.1.0"
 
-# Serialization - must match arm-risc0 exactly: anoma-rm-core 2.0.0-rc.8.1
+# Serialization - must match arm-risc0 exactly: anoma-rm-core 2.0.0-rc.8.2
 # encodes Transaction with bincode 1.3 (bincode 3.0.0 is a compile_error! stub).
 bincode = "1.3.3"
 borsh = "1.5"
