@@ -2,7 +2,7 @@
   "address": "2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx",
   "metadata": {
     "name": "protocol_adapter",
-    "version": "2.0.0-rc.9",
+    "version": "2.0.0-rc.10",
     "spec": "0.1.0",
     "description": "Solana Protocol Adapter for Anoma Resource Machine"
   },
@@ -94,8 +94,8 @@
         "empty-tree root equals `PADDING_LEAF`, which `is_root_valid` accepts",
         "unconditionally, so transactions built against the initial tree stay",
         "valid without a genesis marker. Like pa-evm's initializer, it sets the",
-        "owner, starts on the empty kind table, and announces both;",
-        "`set_kind_tree_root` installs any other table."
+        "owner, starts on the empty kind tree, and announces both;",
+        "`set_kind_tree_root` installs any other kind tree."
       ],
       "discriminator": [
         175,
@@ -379,10 +379,10 @@
       "name": "set_kind_tree_root",
       "docs": [
         "Replace the stored kind tree root: from then on a transaction settles",
-        "when proven against this table or against the empty one. Mirrors",
+        "when proven against this kind tree or against the empty one. Mirrors",
         "pa-evm's `setKindTreeRoot`: authority only, zero rejected, the change",
-        "emitted. A table changes whenever a token or a circuit version is",
-        "listed, and transactions proven against the previous table are",
+        "emitted. A kind tree changes whenever a token or a circuit version is",
+        "listed, and transactions proven against the previous kind tree are",
         "rejected from this point on."
       ],
       "discriminator": [
@@ -1741,146 +1741,141 @@
     },
     {
       "code": 6020,
-      "name": "ExternalCallCpiFailed",
-      "msg": "External call CPI failed"
-    },
-    {
-      "code": 6021,
       "name": "DeltaProofVerificationFailed",
       "msg": "Delta proof verification failed"
     },
     {
-      "code": 6022,
+      "code": 6021,
       "name": "DeltaMismatch",
       "msg": "Delta mismatch: transaction is not balanced"
     },
     {
-      "code": 6023,
+      "code": 6022,
       "name": "InvalidDeltaProof",
       "msg": "Invalid delta proof format"
     },
     {
-      "code": 6024,
+      "code": 6023,
       "name": "PointNotOnCurve",
       "msg": "Delta point not on secp256k1 curve"
     },
     {
-      "code": 6025,
+      "code": 6024,
       "name": "ExpectedDeltaProof",
       "msg": "Expected delta proof, got witness"
     },
     {
+      "code": 6025,
+      "name": "ComplianceVkMismatch",
+      "msg": "Aggregation instance compliance VK does not match the compliance circuit VK"
+    },
+    {
       "code": 6026,
-      "name": "ComplianceKeyMismatch",
-      "msg": "Aggregation instance compliance key does not match the compliance circuit VK"
+      "name": "UnacceptedKindTreeRoot",
+      "msg": "The transaction's kind tree root is neither the stored one nor the empty kind tree's"
     },
     {
       "code": 6027,
-      "name": "UnacceptedKindTreeRoot",
-      "msg": "The transaction's kind tree root is neither the stored one nor the empty table's"
-    },
-    {
-      "code": 6028,
       "name": "ZeroKindTreeRootNotAllowed",
       "msg": "Zero kind tree root not allowed"
     },
     {
-      "code": 6029,
+      "code": 6028,
       "name": "Unauthorized",
       "msg": "Unauthorized: the signer does not hold the authority this instruction requires"
     },
     {
-      "code": 6030,
+      "code": 6029,
       "name": "EnforcedPause",
       "msg": "The protocol adapter is paused"
     },
     {
-      "code": 6031,
+      "code": 6030,
       "name": "ExpectedPause",
       "msg": "The protocol adapter is not paused"
     },
     {
-      "code": 6032,
+      "code": 6031,
       "name": "RiscZeroVerifierPaused",
       "msg": "The RISC Zero verifier for this deployment's selector is paused"
     },
     {
-      "code": 6033,
+      "code": 6032,
       "name": "InvalidVerifierEntry",
       "msg": "Account is not the verifier router's entry for this deployment's selector"
     },
     {
-      "code": 6034,
+      "code": 6033,
       "name": "TreeMaxDepthReached",
-      "msg": "Tree has reached maximum depth (32 levels)"
+      "msg": "Commitment tree is full (2^32 leaves)"
     },
     {
-      "code": 6035,
+      "code": 6034,
       "name": "InvalidMarker",
       "msg": "Account is not owned by this program"
     },
     {
-      "code": 6036,
+      "code": 6035,
       "name": "MarkerUnexpectedOwner",
       "msg": "Marker address is held by an unexpected owner"
     },
     {
-      "code": 6037,
+      "code": 6036,
       "name": "MarkerUnexpectedData",
       "msg": "Marker address already contains data"
     },
     {
-      "code": 6038,
+      "code": 6037,
       "name": "PreExistingRoot",
       "msg": "The commitment tree root is already stored"
     },
     {
-      "code": 6039,
+      "code": 6038,
       "name": "UnsupportedStateSchema",
       "msg": "PAState schema version is not the one this program binary reads; migrate the account first"
     },
     {
-      "code": 6040,
+      "code": 6039,
       "name": "ZeroLogicRefNotAllowed",
       "msg": "Zero logic ref not allowed"
     },
     {
-      "code": 6041,
+      "code": 6040,
       "name": "LogicRefAlreadyDenied",
       "msg": "Logic ref is already on that denylist"
     },
     {
-      "code": 6042,
+      "code": 6041,
       "name": "ResourceWithDeniedLogicRef",
       "msg": "A resource's logic ref is on the denylist for its side"
     },
     {
-      "code": 6043,
+      "code": 6042,
       "name": "ZeroRiscZeroVerifierRouterNotAllowed",
       "msg": "Zero verifier router not allowed"
     },
     {
-      "code": 6044,
+      "code": 6043,
       "name": "ZeroRiscZeroVerifierSelectorNotAllowed",
       "msg": "Zero proof selector not allowed"
     },
     {
-      "code": 6045,
+      "code": 6044,
       "name": "OwnableUnauthorizedAccount",
       "msg": "The signer is not the adapter's owner"
     },
     {
-      "code": 6046,
+      "code": 6045,
       "name": "OwnableInvalidOwner",
       "msg": "The zero key cannot be the owner"
     },
     {
-      "code": 6047,
+      "code": 6046,
       "name": "InvalidUpgradeBuffer",
       "msg": "Buffer is not a loader buffer holding a program"
     },
     {
-      "code": 6048,
+      "code": 6047,
       "name": "Simulated",
       "msg": "Simulated: the transaction executes"
     }
@@ -2209,7 +2204,7 @@
     {
       "name": "PAStateAccount",
       "docs": [
-        "Protocol Adapter state — commitment tree frontier with variable depth (0-32).",
+        "Protocol Adapter state — commitment tree frontier with variable depth (0-33).",
         "Nullifiers and historical roots are stored as separate PDA marker accounts."
       ],
       "type": {
@@ -2270,10 +2265,10 @@
           {
             "name": "kind_tree_root",
             "docs": [
-              "The stored kind tree root: the empty table's at initialization,",
+              "The stored kind tree root: the empty kind tree's at initialization,",
               "replaced by `set_kind_tree_root`. The aggregation circuit binds",
-              "each transaction to one kind table, by the Merkle root of its entries;",
-              "a transaction settles when that is this table or the empty one",
+              "each transaction to one kind tree, by the Merkle root of its entries;",
+              "a transaction settles when that is this kind tree or the empty one",
               "(`is_kind_tree_root_accepted`), as in pa-evm."
             ],
             "type": {
@@ -2294,7 +2289,10 @@
           {
             "name": "root",
             "docs": [
-              "Cached tree root (updated on every append). Avoids recomputing from frontier."
+              "The latest root added to the set of past roots (each has its marker",
+              "PDA): the tree's root after the last settlement that added",
+              "commitments, computed once after its last one (`merkle::current_root`),",
+              "as pa-evm's `latestCommitmentTreeRoot`."
             ],
             "type": {
               "array": [
@@ -2310,7 +2308,7 @@
           {
             "name": "current_depth",
             "docs": [
-              "Tree depth (0-32). Capacity = 2^current_depth."
+              "Tree depth (0-33). Capacity = 2^current_depth."
             ],
             "type": "u8"
           },
@@ -2537,8 +2535,8 @@
     {
       "name": "EMPTY_KIND_TREE_ROOT",
       "docs": [
-        "The root of the empty kind table, under which every resource kind is",
-        "derived via hash-to-curve: the table every deployment starts on, as",
+        "The root of the empty kind tree, under which every resource kind is",
+        "derived via hash-to-curve: the kind tree every deployment starts on, as",
         "pa-evm's `EMPTY_KIND_TREE_ROOT`. A Merkle tree without entries has its",
         "padding leaf as its root, `sha256(\"EMPTY\")`."
       ],

@@ -1,8 +1,8 @@
 /**
  * `initialize`: only the program's upgrade authority may call it (AUTH-01);
  * it sets the owner and hands the upgrade authority to the program's PDA,
- * and starts every deployment on the empty kind table, announcing the owner,
- * the table and the initialized version as pa-evm's initializer does. Needs an adapter that was
+ * and starts every deployment on the empty kind tree, announcing the owner,
+ * the kind tree and the initialized version as pa-evm's initializer does. Needs an adapter that was
  * never initialized: it runs first, on the fresh deployment the rest of the
  * suite builds on.
  */
@@ -95,7 +95,7 @@ describe("protocol-adapter (initialize)", () => {
       },
     ));
 
-  it("stores the owner and the empty kind table, hands the upgrade authority to the program, and announces the owner, the initial root and the kind table, as pa-evm's initializer does", async () => {
+  it("stores the owner and the empty kind tree, hands the upgrade authority to the program, and announces the owner, the initial root and the kind tree, as pa-evm's initializer does", async () => {
     assert.isFalse(await paStateExists(), "this test initializes the adapter, so it must start uninitialized");
 
     const sig = await buildInitialize(provider.wallet.publicKey).rpc();
@@ -110,7 +110,7 @@ describe("protocol-adapter (initialize)", () => {
     assert.deepEqual(
       Buffer.from(state.kindTreeRoot),
       EMPTY_KIND_TREE_ROOT,
-      "initialize must store the empty kind table's root",
+      "initialize must store the empty kind tree's root",
     );
     assert.isFalse(state.paused, "the adapter starts unpaused");
     assert.equal(state.nextIndex.toNumber(), 0, "the tree starts empty");
@@ -119,7 +119,7 @@ describe("protocol-adapter (initialize)", () => {
     assert.deepEqual(Buffer.from(state.root as number[]), EMPTY_TREE_ROOT_INITIAL, "the root is the empty tree's");
     // pa-evm's initializer sets the owner (OwnershipTransferred from the zero
     // address), adds the empty tree's root (CommitmentTreeRootAdded) and
-    // installs the empty kind table (KindTreeRootUpdated), in that
+    // installs the empty kind tree (KindTreeRootUpdated), in that
     // order; OpenZeppelin's `initializer` then announces the version
     // (Initialized), here the state's schema version.
     const { events } = await cpiEventsOf(sig);

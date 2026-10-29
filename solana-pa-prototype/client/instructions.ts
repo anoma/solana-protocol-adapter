@@ -15,7 +15,7 @@ import { derivePaStatePda } from "./pda";
  * The adapter's `initialize`, signed and paid by `payer`, the program's
  * upgrade authority, which it hands to the program's upgrade authority PDA:
  * it makes `initialOwner` the owner, pins the verifier, starts on the empty
- * kind table, and refuses a verifier the router has paused, read from the
+ * kind tree, and refuses a verifier the router has paused, read from the
  * router's verifier entry for `proofSelector`.
  */
 export function initializeAdapter(

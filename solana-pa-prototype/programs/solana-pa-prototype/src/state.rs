@@ -10,15 +10,15 @@ use arm_core::Digest;
 #[constant]
 pub const SCHEMA_VERSION: u8 = 4;
 
-/// The root of the empty kind table, under which every resource kind is
-/// derived via hash-to-curve: the table every deployment starts on, as
+/// The root of the empty kind tree, under which every resource kind is
+/// derived via hash-to-curve: the kind tree every deployment starts on, as
 /// pa-evm's `EMPTY_KIND_TREE_ROOT`. A Merkle tree without entries has its
 /// padding leaf as its root, `sha256("EMPTY")`.
 #[constant]
 pub const EMPTY_KIND_TREE_ROOT: [u8; 32] =
     hex_literal::hex!("cc1d2f838445db7aec431df9ee8a871f40e7aa5e064fc056633ef8c60fab7b06");
 
-/// Protocol Adapter state — commitment tree frontier with variable depth (0-32).
+/// Protocol Adapter state — commitment tree frontier with variable depth (0-33).
 /// Nullifiers and historical roots are stored as separate PDA marker accounts.
 #[account]
 #[derive(InitSpace)]
@@ -47,19 +47,22 @@ pub struct PAStateAccount {
     /// Expected proof selector (4 bytes), set at initialization.
     /// Validated before sending proofs to the verifier router.
     pub proof_selector: [u8; 4],
-    /// The stored kind tree root: the empty table's at initialization,
+    /// The stored kind tree root: the empty kind tree's at initialization,
     /// replaced by `set_kind_tree_root`. The aggregation circuit binds
-    /// each transaction to one kind table, by the Merkle root of its entries;
-    /// a transaction settles when that is this table or the empty one
+    /// each transaction to one kind tree, by the Merkle root of its entries;
+    /// a transaction settles when that is this kind tree or the empty one
     /// (`is_kind_tree_root_accepted`), as in pa-evm.
     pub kind_tree_root: [u8; 32],
     /// Whether settlement is paused, as pa-evm's `paused()`: `pause` sets it
     /// and `unpause` clears it, both owner-only.
     pub paused: bool,
-    /// Cached tree root (updated on every append). Avoids recomputing from frontier.
+    /// The latest root added to the set of past roots (each has its marker
+    /// PDA): the tree's root after the last settlement that added
+    /// commitments, computed once after its last one (`merkle::current_root`),
+    /// as pa-evm's `latestCommitmentTreeRoot`.
     pub root: [u8; 32],
     pub next_index: u64,
-    /// Tree depth (0-32). Capacity = 2^current_depth.
+    /// Tree depth (0-33). Capacity = 2^current_depth.
     pub current_depth: u8,
     /// Filled subtree hashes at each level. Grows via realloc when tree expands.
     #[max_len(MAX_TREE_DEPTH)]
@@ -92,11 +95,11 @@ impl PAStateAccount {
             + size_of::<[u8; 32]>() * denied
     }
 
-    /// Whether a transaction proven against the kind table with root `root`
+    /// Whether a transaction proven against the kind tree with root `root`
     /// settles: the stored one or the empty one, as pa-evm's
-    /// `_isKindTreeRootAccepted`. The empty table merges no kinds, so
+    /// `_isKindTreeRootAccepted`. The empty kind tree merges no kinds, so
     /// a transaction that balances under it also balances under the stored
-    /// table.
+    /// kind tree.
     pub fn is_kind_tree_root_accepted(&self, root: &[u8; 32]) -> bool {
         *root == self.kind_tree_root || *root == EMPTY_KIND_TREE_ROOT
     }
@@ -138,25 +141,10 @@ impl PAStateAccount {
         self.current_depth as usize
     }
 
-    pub fn root_digest(&self) -> Digest {
-        Digest::from_bytes(self.root)
-    }
-
-    pub fn capacity(&self) -> u64 {
-        1u64 << self.current_depth
-    }
-
-    pub fn can_grow(&self) -> bool {
-        (self.current_depth as usize) < MAX_TREE_DEPTH
-    }
-
-    /// Returns the new level index. Caller must check `can_grow()` first.
-    pub fn grow(&mut self) -> usize {
-        debug_assert!(self.can_grow(), "caller must check can_grow()");
-        let new_level = self.current_depth as usize;
-        self.frontier.push([0u8; 32]); // Will be filled by caller
+    /// Adds a level to the tree, its left sibling for the caller to set.
+    pub fn grow(&mut self) {
+        self.frontier.push([0u8; 32]);
         self.current_depth += 1;
-        new_level
     }
 
     pub fn get_frontier(&self, level: usize) -> Digest {
@@ -168,7 +156,7 @@ impl PAStateAccount {
     }
 
     /// A running adapter owned by `owner`, with an empty commitment tree on
-    /// the empty kind table: the state `initialize` writes.
+    /// the empty kind tree: the state `initialize` writes.
     pub fn running(
         bump: u8,
         owner: Pubkey,

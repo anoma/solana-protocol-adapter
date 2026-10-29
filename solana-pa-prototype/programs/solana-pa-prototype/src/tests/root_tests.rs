@@ -1,4 +1,4 @@
-use crate::root::{create_root_marker, derive_root_pda, is_root_valid};
+use crate::root::{create_root_marker, derive_root_pda, is_root_valid, HistoricalRoots};
 use crate::state::PAStateAccount;
 use crate::tests::utils::{
     assert_anchor_err, create_test_pa_state, make_account_info, make_account_info_with_data,
@@ -21,7 +21,7 @@ fn test_is_root_valid_current_root() {
     let root = Digest::from_bytes([0xAA; 32]);
 
     assert!(is_root_valid(
-        &state,
+        &state.root,
         &program_id,
         &pa_state_key,
         &root,
@@ -36,7 +36,7 @@ fn test_is_root_valid_padding_leaf() {
     let pa_state_key = Pubkey::new_unique();
 
     assert!(is_root_valid(
-        &state,
+        &state.root,
         &program_id,
         &pa_state_key,
         &PADDING_LEAF,
@@ -52,7 +52,7 @@ fn test_is_root_valid_non_current_without_marker() {
     let old_root = Digest::from_bytes([0xBB; 32]);
 
     assert!(!is_root_valid(
-        &state,
+        &state.root,
         &program_id,
         &pa_state_key,
         &old_root,
@@ -74,13 +74,44 @@ fn test_is_root_valid_with_historical_marker() {
 
     assert!(
         is_root_valid(
-            &state,
+            &state.root,
             &program_id,
             &pa_state_key,
             &Digest::from_bytes(old_root),
             &[marker],
         ),
         "Historical root with valid marker PDA should be accepted"
+    );
+}
+
+/// A settlement's check accepts its latest root, the empty tree's and a root
+/// with a marker, each as often as resources reference it, and refuses a root
+/// without one.
+#[test]
+fn historical_roots_require_a_valid_root_for_every_reference() {
+    let pa_state_key = Pubkey::new_unique();
+    let latest_root = [0xAA; 32];
+    let old_root = [0xBB; 32];
+    let (expected_pda, _) = derive_root_pda(&crate::ID, &pa_state_key, &old_root);
+    make_account_info!(marker, &expected_pda, owner: &crate::ID,
+        lamports: 1, signer: false, writable: false, executable: false);
+    let remaining = [marker];
+    let mut roots = HistoricalRoots::new(latest_root, &pa_state_key, &remaining, 5);
+
+    for root in [
+        Digest::from_bytes(latest_root),
+        PADDING_LEAF,
+        Digest::from_bytes(old_root),
+        Digest::from_bytes(old_root),
+        Digest::from_bytes(latest_root),
+    ] {
+        let checked = roots.require_historical(&root);
+        println!("{root:?}: {checked:?}");
+        assert!(checked.is_ok(), "{root:?} is historical: {checked:?}");
+    }
+    assert_anchor_err!(
+        roots.require_historical(&Digest::from_bytes([0xCC; 32])),
+        NonExistingRoot
     );
 }
 
@@ -99,7 +130,7 @@ fn test_is_root_valid_marker_wrong_owner() {
 
     assert!(
         !is_root_valid(
-            &state,
+            &state.root,
             &program_id,
             &pa_state_key,
             &Digest::from_bytes(old_root),
@@ -179,7 +210,7 @@ fn test_is_root_valid_marker_wrong_key() {
 
     assert!(
         !is_root_valid(
-            &state,
+            &state.root,
             &program_id,
             &pa_state_key,
             &Digest::from_bytes(old_root),
@@ -268,7 +299,7 @@ fn test_empty_tree_root_valid_without_marker_after_tree_advances() {
     );
     assert!(
         is_root_valid(
-            &state,
+            &state.root,
             &program_id,
             &pa_state_key,
             &EMPTY_TREE_ROOT_INITIAL,

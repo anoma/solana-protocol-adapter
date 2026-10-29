@@ -25,9 +25,9 @@ describe("protocol-adapter (kind tree root) @localnet", () => {
 
   // Mirrors pa-evm's setKindTreeRoot: owner-only, zero rejected,
   // KindTreeRootUpdated emitted. A transaction settles when it is
-  // proven against the stored kind table or against the empty one, as
+  // proven against the stored kind tree or against the empty one, as
   // pa-evm's _isKindTreeRootAccepted. The committed fixtures are proven
-  // against the empty table. The tests change the stored root and
+  // against the empty kind tree. The tests change the stored root and
   // restore the one the deployment held.
   let found: number[];
   const stored = async () => (await program.account.paStateAccount.fetch(paState)).kindTreeRoot;
@@ -77,7 +77,7 @@ describe("protocol-adapter (kind tree root) @localnet", () => {
       error: "ZeroKindTreeRootNotAllowed",
     }));
 
-  it("stores a new root, emits KindTreeRootUpdated, and still accepts a transaction proven against the empty table", async () => {
+  it("stores a new root, emits KindTreeRootUpdated, and still accepts a transaction proven against the empty kind tree", async () => {
     const rotated = randomRef();
     const sig = await setKindTreeRoot(program, provider.wallet.publicKey, rotated).rpc();
     assert.deepEqual(await stored(), rotated, "the new root is stored");
@@ -90,7 +90,7 @@ describe("protocol-adapter (kind tree root) @localnet", () => {
       { kindTreeRoot: rotated },
       "the event carries exactly pa-evm's field, the new root",
     );
-    // The fixture, proven against the empty table, passes the root
+    // The fixture, proven against the empty kind tree, passes the root
     // check under the new root and reaches nullifier creation.
     await assertFails(resettleFixture(), { program, error: "PreExistingNullifier" });
 
@@ -99,10 +99,10 @@ describe("protocol-adapter (kind tree root) @localnet", () => {
   });
 
   // pa-evm's UnacceptedKindTreeRoot: the transaction claims a kind
-  // table that is neither the stored one nor the empty one (fixture-gen's
-  // foreign_kind_table error variant), refused before its proof is verified.
-  it("refuses a transaction proven against a kind table neither stored nor empty", async () =>
-    assertFails(resettleFixture(await loadFixture("foreign_kind_table.json")), {
+  // tree that is neither the stored one nor the empty one (fixture-gen's
+  // foreign_kind_tree error variant), refused before its proof is verified.
+  it("refuses a transaction proven against a kind tree neither stored nor empty", async () =>
+    assertFails(resettleFixture(await loadFixture("foreign_kind_tree.json")), {
       program,
       error: "UnacceptedKindTreeRoot",
     }));

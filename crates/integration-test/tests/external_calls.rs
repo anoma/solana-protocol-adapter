@@ -18,13 +18,18 @@ use anoma_pa_solana_client::settlement::CallAccounts;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
 use anoma_pa_solana_integration_test::executed::Executed;
 use anoma_pa_solana_integration_test::test_forwarder::{
-    RELAY_OK, log_ix, relay_input, write_input,
+    MODE_EMPTY, RELAY_OK, log_ix, relay_input, write_input,
 };
-use anoma_pa_testkit::environment::Refusal;
+use anoma_pa_testkit::environment::{
+    self, DELETION_CRITERION_NEVER, Event, Outcome, PayloadKind, Refusal,
+};
+use anoma_pa_testkit::fixtures::ordered::{self, Logic, ResourceSpec};
 use anoma_pa_testkit::fixtures::passthrough::{self, PASSTHROUGH_LOGIC_VK};
-use anoma_pa_testkit::prove_actions;
 use anoma_pa_testkit::transaction::Transaction;
-use anoma_rm_risc0::utils::bytes_to_words;
+use anoma_pa_testkit::witness::{AppData, ExpirableBlob};
+use anoma_pa_testkit::{latest_root, prove_actions, settle_tx};
+use anoma_rm_risc0::Digest;
+use anoma_rm_risc0::utils::{bytes_to_words, words_to_bytes};
 use anyhow::Context;
 use solana_instruction::{AccountMeta, Instruction};
 use solana_keypair::Keypair;
@@ -97,18 +102,16 @@ async fn setup() -> anyhow::Result<Setup> {
 }
 
 impl Setup {
-    /// Proves a pass-through action, with nonces from `seed`, that calls the
-    /// test forwarder with `input`, expecting `expected`, and has the
-    /// forwarder's calls take `segment` after the forwarder, with `preceding`
-    /// before the settlement.
-    async fn prove_call(
+    /// Registers the test forwarder's calls as taking `segment` after the
+    /// forwarder, with `preceding` before the settlement, and returns the
+    /// call of the test forwarder with `input`, expecting `expected`.
+    fn register_call(
         &mut self,
-        seed: u8,
         segment: Vec<AccountMeta>,
         preceding: Vec<Instruction>,
         input: Vec<u8>,
         expected: &[u8],
-    ) -> anyhow::Result<Transaction> {
+    ) -> anyhow::Result<SolanaExternalCall> {
         let segment: Vec<AccountMeta> =
             std::iter::once(AccountMeta::new_readonly(self.forwarder, false))
                 .chain(segment)
@@ -124,6 +127,20 @@ impl Setup {
             .protocol_adapter
             .forwarders
             .register(self.forwarder, Arc::new(Fixed { segment, preceding }));
+        Ok(call)
+    }
+
+    /// Proves a pass-through action, with nonces from `seed`, that makes the
+    /// `register_call` call.
+    async fn prove_call(
+        &mut self,
+        seed: u8,
+        segment: Vec<AccountMeta>,
+        preceding: Vec<Instruction>,
+        input: Vec<u8>,
+        expected: &[u8],
+    ) -> anyhow::Result<Transaction> {
+        let call = self.register_call(segment, preceding, input, expected)?;
         let action = passthrough::build(
             seed,
             vec![bytes_to_words(&call.encode())],
@@ -324,6 +341,86 @@ async fn the_adapters_events_survive_a_truncated_log() -> anyhow::Result<()> {
     anyhow::ensure!(
         matches!(calls.as_slice(), [call] if call.output == WRITTEN),
         "the settlement's calls are {calls:?}, not one returning {WRITTEN:?}"
+    );
+    Ok(())
+}
+
+// As pa-evm next's `_processAction`, the adapter settles an action's
+// resources in their list order, created, consumed, created: each resource's
+// forwarder calls, then its payload events. Then the action's ActionExecuted,
+// and, as pa-evm's `execute`, the transaction's one new root and its
+// TransactionExecuted.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_actions_resources_settle_in_their_list_order() -> anyhow::Result<()> {
+    let mut s = setup().await?;
+    let call = s.register_call(vec![], vec![], vec![MODE_EMPTY], &[])?;
+    // Each resource makes one call and keeps one blob, its own.
+    let resource = |consumed: bool, blob: u32| ResourceSpec {
+        consumed,
+        logic: Logic::Passthrough(AppData {
+            external_payload: vec![ExpirableBlob {
+                blob: bytes_to_words(&call.encode()),
+                deletion_criterion: 0,
+            }],
+            application_payload: vec![ExpirableBlob {
+                blob: vec![blob],
+                deletion_criterion: DELETION_CRITERION_NEVER,
+            }],
+            ..AppData::default()
+        }),
+    };
+    let blobs = [0xa0, 0xb1, 0xc2];
+    let action = ordered::build(
+        8,
+        vec![
+            resource(false, blobs[0]),
+            resource(true, blobs[1]),
+            resource(false, blobs[2]),
+        ],
+        ordered::Overrides::default(),
+    )?;
+    let tx = prove_actions(&s.env, &[action.witnesses]).await?;
+    let instance = tx.aggregation_instance()?;
+    let proven = &instance.actions[0];
+    let tags: Vec<Digest> = proven.resource_instances.iter().map(|r| r.tag()).collect();
+    let action_tree_root = proven.action_tree_root;
+    let transaction_id = environment::transaction_id(instance);
+
+    let Outcome::Settled(events) = settle_tx(&mut s.env, tx).await? else {
+        anyhow::bail!("the adapter refused the transaction");
+    };
+    let root = latest_root(&s.env).await?;
+    let logic = PASSTHROUGH_LOGIC_VK;
+    let expected: Vec<Event> = tags
+        .iter()
+        .zip(blobs)
+        .flat_map(|(tag, blob)| {
+            [
+                Event::ForwarderCallExecuted,
+                Event::Payload {
+                    kind: PayloadKind::Application,
+                    tag: *tag,
+                    index: 0,
+                    blob: words_to_bytes(&[blob]).to_vec(),
+                },
+            ]
+        })
+        .chain([
+            Event::ActionExecuted {
+                action_tree_root,
+                nullifiers: vec![tags[1]],
+                consumed_logic_refs: vec![logic],
+                commitments: vec![tags[0], tags[2]],
+                created_logic_refs: vec![logic, logic],
+            },
+            Event::CommitmentTreeRootAdded { root },
+            Event::TransactionExecuted { transaction_id },
+        ])
+        .collect();
+    anyhow::ensure!(
+        events == expected,
+        "the settlement emitted {events:#?}, not, per resource in list order, its call and its \
+         blob, then its action, its root and its transaction: {expected:#?}"
     );
     Ok(())
 }

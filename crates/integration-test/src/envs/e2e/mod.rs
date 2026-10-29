@@ -1,5 +1,5 @@
 mod config;
-mod kind_table;
+mod kind_tree;
 mod setup;
 
 pub use config::{E2eConfig, E2eRuntime, QueueConfig};

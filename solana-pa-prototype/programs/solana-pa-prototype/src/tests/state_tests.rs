@@ -51,7 +51,7 @@ fn empty_kind_tree_root_is_the_padding_leaf() {
     assert_eq!(
         EMPTY_KIND_TREE_ROOT,
         <[u8; 32]>::from(PADDING_LEAF),
-        "the constant initialize stores must be the ARM's root of the empty kind table, its padding leaf"
+        "the constant initialize stores must be the ARM's root of the empty kind tree, its padding leaf"
     );
 }
 
@@ -89,10 +89,10 @@ fn each_side_is_checked_against_its_own_denylist() {
 }
 
 /// pa-evm's `_isKindTreeRootAccepted`: a transaction is proven against
-/// the stored kind table or against the empty one, which merges no kinds, so
-/// what balances under it also balances under the stored table.
+/// the stored kind tree or against the empty one, which merges no kinds, so
+/// what balances under it also balances under the stored tree.
 #[test]
-fn the_stored_and_the_empty_kind_table_are_accepted_and_no_other() {
+fn the_stored_and_the_empty_kind_tree_are_accepted_and_no_other() {
     let stored = [7u8; 32];
     let state = PAStateAccount {
         kind_tree_root: stored,

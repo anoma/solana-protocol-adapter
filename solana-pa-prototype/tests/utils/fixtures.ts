@@ -10,7 +10,7 @@ import path from "path";
 // initialize argument, the verifier-entry PDA, and the verifier program.
 // A cluster run (ops.sh test) proves its own set for the deployment into
 // PA_FIXTURE_DIR, each fixture when a test first loads it, under the run's
-// salt (PA_FIXTURE_SALT) and the deployment's kind table (PA_KIND_TABLE).
+// salt (PA_FIXTURE_SALT) and the deployment's kind tree (PA_KIND_TREE).
 const MODE = process.env.PA_TEST_MODE ?? "real";
 if (MODE !== "real" && MODE !== "mock") {
   throw new Error(`PA_TEST_MODE must be "real" or "mock", got "${MODE}"`);
@@ -63,9 +63,9 @@ const proving = new Map<string, Promise<void>>();
  * its pooled RPC connections stale, and its next request fails.
  */
 function proveForClusterRun(filename: string): Promise<void> {
-  const kindTable = process.env.PA_KIND_TABLE;
-  if (!kindTable) throw new Error("a cluster run (PA_FIXTURE_SALT set) needs PA_KIND_TABLE to prove its fixtures");
-  const args = ["real", "--out", FIXTURE_DIR, "--salt", process.env.PA_FIXTURE_SALT!, "--kind-table", kindTable];
+  const kindTree = process.env.PA_KIND_TREE;
+  if (!kindTree) throw new Error("a cluster run (PA_FIXTURE_SALT set) needs PA_KIND_TREE to prove its fixtures");
+  const args = ["real", "--out", FIXTURE_DIR, "--salt", process.env.PA_FIXTURE_SALT!, "--kind-tree", kindTree];
   return new Promise((resolve, reject) => {
     const prover = spawn("./scripts/regen-fixtures.sh", [...args, "--only", filename], { stdio: "inherit" });
     prover.on("error", reject);

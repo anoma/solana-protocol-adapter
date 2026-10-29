@@ -1,4 +1,4 @@
-//! Settlement extraction helpers over the aggregation instance.
+//! Settlement helpers over the aggregation instance.
 //!
 //! The aggregation instance is the only proof-backed source of settlement
 //! data: every field below is committed by the batch aggregation Groth16
@@ -6,73 +6,63 @@
 //! transaction's unproven parts) is what makes the extracted values
 //! trustworthy.
 
+use anchor_lang::prelude::Result;
 use arm_core::aggregation_instance::{
-    ActionAggregated, AggregationInstance, ConsumedResourceAggregated, CreatedResourceAggregated,
+    ActionAggregated, AggregationInstance, AggregationResourceInstance,
 };
-use arm_core::logic_instance::AppData;
-use arm_core::Digest;
 
-/// One resource of an action, seen uniformly across the consumed/created split.
-pub struct ResourceView<'a> {
-    /// Nullifier of a consumed resource, commitment of a created one.
-    pub tag: Digest,
-    pub logic_ref: Digest,
-    pub app_data: &'a AppData,
-    pub is_consumed: bool,
-}
+use crate::ActionExecuted;
 
-/// An action's resources in the order the aggregation journal commits to: every
-/// consumed resource, then every created one. Each on-chain effect sequence
-/// (events, external calls) is produced by traversing this, so the order the
-/// effects follow has a single definition.
-pub fn action_resources(action: &ActionAggregated) -> impl Iterator<Item = ResourceView<'_>> {
-    action
-        .consumed_publics
-        .iter()
-        .map(|consumed| ResourceView {
-            tag: consumed.resource_nullifier,
-            logic_ref: consumed.resource_logic_ref,
-            app_data: &consumed.app_data,
-            is_consumed: true,
-        })
-        .chain(action.created_publics.iter().map(|created| ResourceView {
-            tag: created.resource_commitment,
-            logic_ref: created.resource_logic_ref,
-            app_data: &created.app_data,
-            is_consumed: false,
-        }))
-}
-
-fn consumed(instance: &AggregationInstance) -> impl Iterator<Item = &ConsumedResourceAggregated> {
-    instance.actions.iter().flat_map(|a| &a.consumed_publics)
-}
-
-fn created(instance: &AggregationInstance) -> impl Iterator<Item = &CreatedResourceAggregated> {
-    instance.actions.iter().flat_map(|a| &a.created_publics)
+fn resources(instance: &AggregationInstance) -> impl Iterator<Item = &AggregationResourceInstance> {
+    instance.actions.iter().flat_map(|a| &a.resource_instances)
 }
 
 /// The number of consumed resources: the nullifier markers a settlement creates.
 pub fn nullifier_count(instance: &AggregationInstance) -> usize {
-    consumed(instance).count()
+    resources(instance).filter(|r| r.is_consumed()).count()
 }
 
-/// The number of created resources: the commitments a settlement appends.
-pub fn commitment_count(instance: &AggregationInstance) -> usize {
-    created(instance).count()
+/// The number of resources a settlement consumes or creates.
+pub fn resource_count(instance: &AggregationInstance) -> usize {
+    instance
+        .actions
+        .iter()
+        .map(|a| a.resource_instances.len())
+        .sum()
 }
 
-/// Deduplicated commitment-tree roots consumed by the instance.
-///
-/// Each root is validated against the adapter's historical root set, and each
-/// `is_root_valid` call may invoke `Pubkey::find_program_address` (~1500 CU),
-/// so deduplication saves significant compute when resources share roots.
-/// Pre-sized to the worst case (one root per consumed resource).
-pub fn unique_consumed_roots(instance: &AggregationInstance) -> Vec<Digest> {
-    let mut unique_roots: Vec<Digest> = Vec::with_capacity(consumed(instance).count());
-    for resource in consumed(instance) {
-        if !unique_roots.contains(&resource.commitment_tree_root) {
-            unique_roots.push(resource.commitment_tree_root);
-        }
+/// pa-evm's `_processAction`: runs `process_resource` on each of the
+/// action's resources, in the order of `resource_instances`, and returns the
+/// action's `ActionExecuted`, whose arrays hold the consumed and the created
+/// resources each in that order. `process_resource` is where a resource's
+/// checks, its nullifier or commitment, its forwarder calls and its payload
+/// events happen, so all of them follow the list.
+pub fn process_action(
+    action: &ActionAggregated,
+    mut process_resource: impl FnMut(&AggregationResourceInstance) -> Result<()>,
+) -> Result<ActionExecuted> {
+    let consumed_count = action
+        .resource_instances
+        .iter()
+        .filter(|r| r.is_consumed())
+        .count();
+    let created_count = action.resource_instances.len() - consumed_count;
+    let mut executed = ActionExecuted {
+        action_tree_root: action.action_tree_root.into(),
+        nullifiers: Vec::with_capacity(consumed_count),
+        consumed_logic_refs: Vec::with_capacity(consumed_count),
+        commitments: Vec::with_capacity(created_count),
+        created_logic_refs: Vec::with_capacity(created_count),
+    };
+    for resource in &action.resource_instances {
+        process_resource(resource)?;
+        let (tags, logic_refs) = if resource.is_consumed() {
+            (&mut executed.nullifiers, &mut executed.consumed_logic_refs)
+        } else {
+            (&mut executed.commitments, &mut executed.created_logic_refs)
+        };
+        tags.push(resource.tag().into());
+        logic_refs.push(resource.logic_ref().into());
     }
-    unique_roots
+    Ok(executed)
 }

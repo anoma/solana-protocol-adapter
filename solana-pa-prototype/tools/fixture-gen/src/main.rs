@@ -5,11 +5,11 @@ use anoma_pa_solana_client::MOCK_SELECTOR;
 use anyhow::{anyhow, bail, Context, Result};
 use arm::action::Action;
 use arm::action_tree::ActionTree;
-use arm::aggregation_instance::ConsumedResourceAggregated;
+use arm::aggregation_instance::AggregationResourceInstance;
 use arm::compliance::{ComplianceWitness, KindPath, INITIAL_ROOT};
 use arm::compliance_unit::ComplianceUnit;
 use arm::constants::{
-    global_kind_table, init_kind_table_from_file, kind_table_root, BATCH_AGGREGATION_PK,
+    global_kind_tree, init_kind_tree_from_file, kind_tree_root, BATCH_AGGREGATION_PK,
     COMPLIANCE_PK, COMPLIANCE_VK,
 };
 use arm::logic_instance::ExpirableBlob;
@@ -18,7 +18,7 @@ use arm::logic_proof::LogicVerifier;
 use arm::merkle_path::MerklePath;
 use arm::nullifier_key::NullifierKey;
 use arm::proving_system::{JournalEncoding, ProofType as LocalProofType};
-use arm::resource::{ConsumedResourceWitness, Resource};
+use arm::resource::{Resource, ResourceWitness, ResourceWitnessConsumed};
 use arm::transaction::{Aggregation, Delta, Transaction};
 use arm::Digest;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -43,11 +43,11 @@ use std::time::{Duration, Instant};
 
 use anoma_pa_testkit::fixtures::passthrough::{PASSTHROUGH_LOGIC_PK, PASSTHROUGH_LOGIC_VK};
 
-/// The kind table a fixture commits to unless `--kind-table` names another:
-/// the committed empty table. The compliance circuit hashes the witness's
-/// table into the instance, and the PA pins that commitment at
+/// The kind tree a fixture commits to unless `--kind-tree` names another:
+/// the committed empty tree. The compliance circuit commits the root of the
+/// witness's tree in the instance, and the PA pins that root at
 /// initialization, so fixtures and deployment tooling must agree on this file.
-const KIND_TABLE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/kind_table.json");
+const KIND_TREE_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/kind_tree.json");
 
 /// Per-HTTP-request timeout for queue calls. Queue-side job timeouts (5–10 min)
 /// are independent.
@@ -408,13 +408,13 @@ struct GenerateArgs {
     prover: ProverArgs,
     /// Also write the final transaction's error variants to DIR:
     /// wrong_root, no_aggregation, garbage_proof, wrong_selector, corrupt_seal,
-    /// zero_action, foreign_kind_table and witness_delta.
+    /// zero_action, foreign_kind_tree and witness_delta.
     #[arg(long, value_name = "DIR")]
     error_variants: Option<PathBuf>,
-    /// Prove against this kind table instead of the committed empty one
-    /// (kind_table.json); the PA must store its root.
-    #[arg(long, value_name = "PATH", default_value = KIND_TABLE_PATH)]
-    kind_table: PathBuf,
+    /// Prove against this kind tree instead of the committed empty one
+    /// (kind_tree.json); the PA must store its root.
+    #[arg(long, value_name = "PATH", default_value = KIND_TREE_PATH)]
+    kind_tree: PathBuf,
     /// Print claim digests for composition debugging.
     #[arg(long)]
     debug_assumptions: bool,
@@ -484,15 +484,17 @@ fn mutate_tag_keep_structure(tx: &mut Transaction) -> Result<()> {
         .actions
         .get_mut(0)
         .ok_or_else(|| anyhow!("aggregation instance has no actions"))?;
-    let tag = match action.created_publics.first_mut() {
-        Some(created) => &mut created.resource_commitment,
-        None => {
-            &mut action
-                .consumed_publics
-                .first_mut()
-                .ok_or_else(|| anyhow!("the first action has no resources"))?
-                .resource_nullifier
-        }
+    let resources = &mut action.resource_instances;
+    let index = resources
+        .iter()
+        .position(|resource| !resource.is_consumed())
+        .unwrap_or(0);
+    let tag = match resources
+        .get_mut(index)
+        .ok_or_else(|| anyhow!("the first action has no resources"))?
+    {
+        AggregationResourceInstance::Consumed { nullifier, .. } => nullifier,
+        AggregationResourceInstance::Created { commitment, .. } => commitment,
     };
 
     let mut bytes = <[u8; 32]>::from(*tag);
@@ -536,16 +538,16 @@ fn test_forwarder_payload_blob(mode: u8) -> ExpirableBlob {
     })
 }
 
-/// The adapter's commitment tree after appending `leaves` in order, replayed
-/// through the program's own `append_to_tree` on a fresh state, so the root
-/// carries the on-chain growth rule rather than a second implementation.
+/// The root of the adapter's commitment tree after appending `leaves` in
+/// order, replayed through the program's own `push` and `current_root` on a
+/// fresh state, so the root carries the on-chain growth rule rather than a
+/// second implementation.
 fn pa_tree_root(leaves: &[Digest]) -> Result<Digest> {
     let mut state = PAStateAccount::running(0, Pubkey::default(), Pubkey::default(), [0; 4]);
     for leaf in leaves {
-        solana_pa::merkle::append_to_tree(&mut state, *leaf)
-            .map_err(|e| anyhow!("replay append_to_tree: {e:?}"))?;
+        solana_pa::merkle::push(&mut state, *leaf).map_err(|e| anyhow!("replay push: {e:?}"))?;
     }
-    Ok(Digest::from_bytes(state.root))
+    Ok(solana_pa::merkle::current_root(&state))
 }
 
 /// The Merkle path of leaf `index` in the adapter's tree over `leaves`, as
@@ -569,20 +571,12 @@ fn checked_pa_merkle_path(leaves: &[Digest], index: usize) -> Result<(MerklePath
     if path_root != expected_root {
         bail!(
             "the Merkle path of leaf {index} does not reconstruct the adapter's root: \
-             path {} vs append_to_tree {}",
+             path {} vs the adapter's {}",
             hex::encode(path_root.as_bytes()),
             hex::encode(expected_root.as_bytes())
         );
     }
     Ok((path, expected_root))
-}
-
-/// The action tree root of a one-consumed, one-created action: nullifier
-/// then commitment, the order the aggregation guest enforces.
-fn single_action_tree_root(consumed_nf: Digest, created_cm: Digest) -> Result<Digest> {
-    ActionTree::new(vec![consumed_nf, created_cm])
-        .root()
-        .map_err(|e| anyhow!("compute action tree root: {e:?}"))
 }
 
 /// Domain tag of the resource nonces derived from fixture names.
@@ -666,11 +660,7 @@ fn deterministic_ephemeral_resource(
 }
 
 /// Build the compliance witness for a single-consumed / single-created
-/// action. Built through `from_parts` with a fixed, caller-chosen `rcv`
-/// rather than arm's randomized `from_resources*` constructors, which draw
-/// a fresh `rcv` and would make fixture generation nondeterministic.
-/// Carries the resources' paths in the globally loaded kind table, so the
-/// instance commits to that table's root when it lists one of them.
+/// action, consumed then created.
 fn single_action_compliance_witness(
     consumed: Resource,
     cm_merkle_path: MerklePath,
@@ -678,82 +668,74 @@ fn single_action_compliance_witness(
     created: Resource,
     rcv: Scalar,
 ) -> ComplianceWitness {
-    let consumed = vec![ConsumedResourceWitness {
-        resource: consumed,
-        cm_merkle_path,
-        nf_key,
-    }];
-    let created = vec![created];
-    let kind_paths = kind_paths(&consumed, &created);
-    ComplianceWitness::from_parts(consumed, created, INITIAL_ROOT, &rcv.to_bytes(), kind_paths)
+    compliance_witness(
+        vec![
+            ResourceWitness::Consumed(ResourceWitnessConsumed {
+                resource: consumed,
+                cm_merkle_path,
+                nf_key,
+            }),
+            ResourceWitness::Created(created),
+        ],
+        rcv,
+    )
 }
 
-/// The paths of a witness's resources in the globally loaded kind table,
-/// consumed first, then created, as the compliance circuit reads them: a
-/// resource the table does not list has none, and the circuit derives its
-/// kind point by hash-to-curve. An instance whose resources are all unlisted
-/// commits to the empty table's root.
-fn kind_paths(consumed: &[ConsumedResourceWitness], created: &[Resource]) -> Vec<Option<KindPath>> {
-    global_kind_table()
-        .expect("the kind table is loaded before any witness is built")
-        .kind_paths_for(consumed, created)
+/// The compliance witness of an action's resources, in their order. Built
+/// through `from_parts` with a fixed, caller-chosen `rcv` rather than arm's
+/// randomized `from_resources*` constructors, which draw a fresh `rcv` and
+/// would make fixture generation nondeterministic. Carries the resources'
+/// paths in the globally loaded kind tree, as the compliance circuit reads
+/// them: a resource the tree does not list has none, and the circuit derives
+/// its kind base by hash-to-curve. An instance whose resources are all
+/// unlisted commits to the empty tree's root.
+fn compliance_witness(resources: Vec<ResourceWitness>, rcv: Scalar) -> ComplianceWitness {
+    let kind_paths: Vec<Option<KindPath>> = global_kind_tree()
+        .expect("the kind tree is loaded before any witness is built")
+        .kind_paths_for(&resources);
+    ComplianceWitness::from_parts(resources, INITIAL_ROOT, &rcv.to_bytes(), kind_paths)
 }
 
-/// Prove one action (one compliance unit, one consumed + one created
-/// resource): the compliance proof plus one passthrough logic proof per
-/// resource, each carrying the given app_data.
+/// Prove one action: the compliance proof plus one passthrough logic proof
+/// per resource, in the witness's resource order, the resource at `i`
+/// carrying `app_data[i]`.
 async fn prove_action(
     prover: &Prover,
     compliance_witness: &ComplianceWitness,
-    consumed_app_data: AppData,
-    created_app_data: AppData,
+    app_data: Vec<AppData>,
 ) -> Result<Action> {
-    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
+    let resources = &compliance_witness.resource_witnesses;
+    if app_data.len() != resources.len() {
+        bail!(
+            "{} app data for an action of {} resources",
+            app_data.len(),
+            resources.len()
+        );
+    }
+    let tags: Vec<Digest> = resources
+        .iter()
+        .map(|resource| match resource {
+            ResourceWitness::Consumed(consumed) => consumed
+                .resource
+                .nullifier(&consumed.nf_key)
+                .map_err(|e| anyhow!("compute consumed nullifier: {e:?}")),
+            ResourceWitness::Created(created) => Ok(created.commitment()),
+        })
+        .collect::<Result<_>>()?;
+    let action_tree_root = ActionTree::new(tags.clone())
+        .root()
+        .map_err(|e| anyhow!("compute action tree root: {e:?}"))?;
+    let instances = resources
+        .iter()
+        .zip(tags)
+        .zip(app_data)
+        .map(|((resource, tag), app_data)| LogicInstance {
+            tag,
+            is_consumed: matches!(resource, ResourceWitness::Consumed(_)),
+            action_tree_root,
+            app_data,
+        });
 
-    let consumed = &compliance_witness.consumed_data[0];
-    let consumed_nf = consumed
-        .resource
-        .nullifier(&consumed.nf_key)
-        .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
-    let created_cm = compliance_witness.created_resources[0].commitment();
-
-    let root = single_action_tree_root(consumed_nf, created_cm)?;
-
-    let consumed_instance = LogicInstance {
-        tag: consumed_nf,
-        is_consumed: true,
-        root,
-        app_data: consumed_app_data,
-    };
-    let created_instance = LogicInstance {
-        tag: created_cm,
-        is_consumed: false,
-        root,
-        app_data: created_app_data,
-    };
-
-    prove_compliance_and_logic(
-        prover,
-        compliance_witness,
-        PASSTHROUGH_LOGIC_PK,
-        &passthrough_vk,
-        consumed_instance,
-        created_instance,
-    )
-    .await
-    .context("prove the passthrough action")
-}
-
-/// Prove an action's compliance unit and its consumed and created
-/// resources' logic under one guest, and build the action from the proofs.
-async fn prove_compliance_and_logic<T: Serialize + Send + 'static>(
-    prover: &Prover,
-    compliance_witness: &ComplianceWitness,
-    proving_key: &'static [u8],
-    verifying_key: &Digest,
-    consumed: T,
-    created: T,
-) -> Result<Action> {
     let (compliance_unit, logic_verifiers) = run_job_pair(
         prover.scheduling(),
         async {
@@ -761,34 +743,29 @@ async fn prove_compliance_and_logic<T: Serialize + Send + 'static>(
                 .await
                 .context("prove compliance")
         },
-        prove_logic_pair(prover, proving_key, verifying_key, consumed, created),
+        run_jobs(
+            prover.scheduling(),
+            instances.enumerate().map(|(i, instance)| async move {
+                let (proof, instance) = prove_logic(
+                    prover,
+                    PASSTHROUGH_LOGIC_PK,
+                    &PASSTHROUGH_LOGIC_VK,
+                    instance,
+                )
+                .await
+                .with_context(|| format!("prove resource {i}'s logic"))?;
+                Ok(LogicVerifier {
+                    proof,
+                    instance,
+                    verifying_key: PASSTHROUGH_LOGIC_VK,
+                })
+            }),
+        ),
     )
-    .await?;
+    .await
+    .context("prove the passthrough action")?;
     arm::action::new(compliance_unit, logic_verifiers)
         .map_err(|e| anyhow!("build the action from its proofs: {e:?}"))
-}
-
-/// Prove the consumed and the created resource's logic under one guest, and
-/// return the verifiers in canonical tag order (consumed, then created), the
-/// order the aggregation guest enforces.
-async fn prove_logic_pair<T: Serialize + Send + 'static>(
-    prover: &Prover,
-    proving_key: &'static [u8],
-    verifying_key: &Digest,
-    consumed: T,
-    created: T,
-) -> Result<Vec<LogicVerifier>> {
-    let jobs = [(consumed, "consumed"), (created, "created")].map(|(witness, label)| async move {
-        let (proof, instance) = prove_logic(prover, proving_key, verifying_key, witness)
-            .await
-            .with_context(|| format!("prove the {label} resource's logic"))?;
-        Ok(LogicVerifier {
-            proof,
-            instance,
-            verifying_key: *verifying_key,
-        })
-    });
-    run_jobs(prover.scheduling(), jobs).await
 }
 
 /// Wrap proven actions into a balanced, delta-proved `Transaction`. The delta
@@ -804,26 +781,21 @@ fn assemble_transaction(actions: Vec<Action>, rcvs: &[Vec<u8>]) -> Result<Transa
     Ok(balanced_tx)
 }
 
-/// Verify a transaction's proofs and delta against the loaded kind table.
+/// Verify a transaction's proofs and delta against the loaded kind tree.
 fn verify_tx(tx: &Transaction) -> Result<()> {
-    let kind_table_root = kind_table_root().ok_or_else(|| anyhow!("kind table not loaded"))?;
-    arm::transaction::verify(tx, kind_table_root, JournalEncoding::Risc0Serde)
+    let kind_tree_root = kind_tree_root().ok_or_else(|| anyhow!("kind tree not loaded"))?;
+    arm::transaction::verify(tx, kind_tree_root, JournalEncoding::Risc0Serde)
         .map_err(|e| anyhow!("verify tx: {e:?}"))
 }
 
-/// Prove a one-action transaction (the shape every single-action fixture uses).
+/// Prove a one-action transaction (the shape every single-action fixture
+/// uses), its resource at `i` carrying `app_data[i]`.
 async fn prove_single_action_transaction(
     prover: &Prover,
     compliance_witness: ComplianceWitness,
-    consumed_app_data: AppData,
+    app_data: Vec<AppData>,
 ) -> Result<Transaction> {
-    let action = prove_action(
-        prover,
-        &compliance_witness,
-        consumed_app_data,
-        AppData::default(),
-    )
-    .await?;
+    let action = prove_action(prover, &compliance_witness, app_data).await?;
     assemble_transaction(vec![action], std::slice::from_ref(&compliance_witness.rcv))
 }
 
@@ -911,8 +883,7 @@ async fn generate_transfer_shape_transaction(
             prove_action(
                 prover,
                 witness,
-                AppData::default(),
-                created_app_data.clone(),
+                vec![AppData::default(), created_app_data.clone()],
             )
         }),
     )
@@ -980,7 +951,12 @@ async fn generate_test_transaction_with_external_payload(
             .push(block_time_forwarder_external_payload_blob(false));
     }
 
-    prove_single_action_transaction(prover, compliance_witness, consumed_app_data).await
+    prove_single_action_transaction(
+        prover,
+        compliance_witness,
+        vec![consumed_app_data, AppData::default()],
+    )
+    .await
 }
 
 /// A one-action transaction that consumes a zero-quantity ephemeral
@@ -993,62 +969,15 @@ async fn generate_consume_only_transaction(
 ) -> Result<Transaction> {
     let (mut consumed, nf_key, _, _) = deterministic_ephemeral_resource(fixture_name, 0)?;
     consumed.quantity = 0;
-    let consumed_nf = consumed
-        .nullifier(&nf_key)
-        .map_err(|e| anyhow!("compute consumed nullifier: {e:?}"))?;
-    let consumed = vec![ConsumedResourceWitness {
-        resource: consumed,
-        cm_merkle_path: MerklePath::empty(),
-        nf_key,
-    }];
-    let kind_paths = kind_paths(&consumed, &[]);
-    let compliance_witness = ComplianceWitness::from_parts(
-        consumed,
-        vec![],
-        INITIAL_ROOT,
-        &Scalar::ONE.to_bytes(),
-        kind_paths,
+    let compliance_witness = compliance_witness(
+        vec![ResourceWitness::Consumed(ResourceWitnessConsumed {
+            resource: consumed,
+            cm_merkle_path: MerklePath::empty(),
+            nf_key,
+        })],
+        Scalar::ONE,
     );
-    let root = ActionTree::new(vec![consumed_nf])
-        .root()
-        .map_err(|e| anyhow!("compute action tree root: {e:?}"))?;
-    let passthrough_vk = PASSTHROUGH_LOGIC_VK;
-    let consumed_instance = LogicInstance {
-        tag: consumed_nf,
-        is_consumed: true,
-        root,
-        app_data: AppData::default(),
-    };
-
-    let (compliance_unit, (proof, instance)) = run_job_pair(
-        prover.scheduling(),
-        async {
-            prove_compliance(prover, &compliance_witness)
-                .await
-                .context("prove compliance")
-        },
-        async {
-            prove_logic(
-                prover,
-                PASSTHROUGH_LOGIC_PK,
-                &passthrough_vk,
-                consumed_instance,
-            )
-            .await
-            .context("prove the consumed resource's logic")
-        },
-    )
-    .await?;
-    let action = arm::action::new(
-        compliance_unit,
-        vec![LogicVerifier {
-            proof,
-            instance,
-            verifying_key: passthrough_vk,
-        }],
-    )
-    .map_err(|e| anyhow!("build the action from its proofs: {e:?}"))?;
-    assemble_transaction(vec![action], std::slice::from_ref(&compliance_witness.rcv))
+    prove_single_action_transaction(prover, compliance_witness, vec![AppData::default()]).await
 }
 
 fn generate_error_variant_fixtures(
@@ -1087,12 +1016,20 @@ fn generate_error_variant_fixtures(
     {
         let mut wrong_root = tx.clone();
         let instance = &mut require_aggregation_mut(&mut wrong_root)?.instance;
-        let consumed = instance
+        let root = instance
             .actions
             .get_mut(0)
-            .and_then(|a| a.consumed_publics.get_mut(0))
+            .and_then(|a| {
+                a.resource_instances.iter_mut().find_map(|r| match r {
+                    AggregationResourceInstance::Consumed {
+                        commitment_tree_root,
+                        ..
+                    } => Some(commitment_tree_root),
+                    AggregationResourceInstance::Created { .. } => None,
+                })
+            })
             .ok_or_else(|| anyhow!("aggregation instance has no consumed resources"))?;
-        consumed.commitment_tree_root = Digest::from_bytes([1u8; 32]);
+        *root = Digest::from_bytes([1u8; 32]);
         write_variant("wrong_root.json", &wrong_root)?;
     }
 
@@ -1146,14 +1083,14 @@ fn generate_error_variant_fixtures(
     }
 
     {
-        // The transaction claiming a kind table that is neither the empty
-        // one nor any deployment's: the adapter refuses its commitment before
-        // it verifies the proof.
-        let mut foreign_kind_table = tx.clone();
-        require_aggregation_mut(&mut foreign_kind_table)?
+        // The transaction claiming a kind tree that is neither the empty
+        // one nor any deployment's: the adapter refuses its root before it
+        // verifies the proof.
+        let mut foreign_kind_tree = tx.clone();
+        require_aggregation_mut(&mut foreign_kind_tree)?
             .instance
-            .kind_table_root = Digest::from_bytes([0x4b; 32]);
-        write_variant("foreign_kind_table.json", &foreign_kind_table)?;
+            .kind_tree_root = Digest::from_bytes([0x4b; 32]);
+        write_variant("foreign_kind_tree.json", &foreign_kind_tree)?;
     }
 
     {
@@ -1173,31 +1110,32 @@ fn generate_error_variant_fixtures(
     Ok(())
 }
 
-/// Every consumed resource of a transaction's aggregation instance, in
-/// action order: the single definition of that traversal.
-fn consumed_publics(tx: &Transaction) -> Result<impl Iterator<Item = &ConsumedResourceAggregated>> {
+/// Every resource of a transaction's aggregation instance, in action order
+/// and each action's list order, the order its settlement processes them:
+/// the single definition of that traversal.
+fn resource_instances(
+    tx: &Transaction,
+) -> Result<impl Iterator<Item = &AggregationResourceInstance>> {
     Ok(require_aggregation(tx)?
         .instance
         .actions
         .iter()
-        .flat_map(|action| &action.consumed_publics))
+        .flat_map(|action| &action.resource_instances))
 }
 
 fn consumed_nullifiers_b64(tx: &Transaction) -> Result<Vec<String>> {
-    Ok(consumed_publics(tx)?
-        .map(|c| BASE64.encode(c.resource_nullifier.as_bytes()))
+    Ok(resource_instances(tx)?
+        .filter(|r| r.is_consumed())
+        .map(|c| BASE64.encode(c.tag().as_bytes()))
         .collect())
 }
 
 /// The created commitments of an aggregated transaction in instance order:
 /// the leaves its settlement appends.
 fn created_commitments(tx: &Transaction) -> Result<Vec<Digest>> {
-    Ok(require_aggregation(tx)?
-        .instance
-        .actions
-        .iter()
-        .flat_map(|action| &action.created_publics)
-        .map(|c| c.resource_commitment)
+    Ok(resource_instances(tx)?
+        .filter(|r| !r.is_consumed())
+        .map(|c| c.tag())
         .collect())
 }
 
@@ -1209,9 +1147,10 @@ fn created_commitments_b64(tx: &Transaction) -> Result<Vec<String>> {
 }
 
 fn historical_roots(tx: &Transaction) -> Result<Vec<[u8; 32]>> {
-    let roots: BTreeSet<[u8; 32]> = consumed_publics(tx)?
-        .filter(|c| c.commitment_tree_root != INITIAL_ROOT)
-        .map(|c| <[u8; 32]>::from(c.commitment_tree_root))
+    let roots: BTreeSet<[u8; 32]> = resource_instances(tx)?
+        .filter_map(|r| r.commitment_tree_root())
+        .filter(|root| *root != INITIAL_ROOT)
+        .map(<[u8; 32]>::from)
         .collect();
     Ok(roots.into_iter().collect())
 }
@@ -1396,7 +1335,7 @@ async fn generate_historical_root_consumer_transaction(
     );
     let witness =
         build_historical_root_consumer_witness(committed_resource, committer_nf_key, merkle_path)?;
-    prove_single_action_transaction(prover, witness, AppData::default()).await
+    prove_single_action_transaction(prover, witness, vec![AppData::default(); 2]).await
 }
 
 fn fmt_duration(d: Duration) -> String {
@@ -1448,34 +1387,28 @@ fn dump_fixture(input: &Path) -> Result<()> {
             let instance = &aggregation.instance;
             eprintln!("  aggregation instance:");
             eprintln!(
-                "    compliance_key: {}",
-                hex::encode(&instance.compliance_key.as_bytes()[..4])
+                "    compliance_vk: {}",
+                hex::encode(&instance.compliance_vk.as_bytes()[..4])
             );
             eprintln!(
-                "    kind_table_root: {}",
-                hex::encode(&instance.kind_table_root.as_bytes()[..4])
+                "    kind_tree_root: {}",
+                hex::encode(&instance.kind_tree_root.as_bytes()[..4])
             );
             eprintln!("    actions: {}", instance.actions.len());
             for (ai, action) in instance.actions.iter().enumerate() {
                 eprintln!("    Action {}:", ai);
-                for (ci, consumed) in action.consumed_publics.iter().enumerate() {
-                    let nf = consumed.resource_nullifier.as_bytes();
+                for (ri, resource) in action.resource_instances.iter().enumerate() {
+                    let (kind, tag) = match resource {
+                        AggregationResourceInstance::Consumed { .. } => ("consumed", "nullifier"),
+                        AggregationResourceInstance::Created { .. } => ("created", "commitment"),
+                    };
+                    let bytes = resource.tag();
+                    let bytes = bytes.as_bytes();
                     eprintln!(
-                        "      consumed {}: nullifier={:02x}{:02x}..., external_payload={}",
-                        ci,
-                        nf[0],
-                        nf[1],
-                        consumed.app_data.external_payload.len()
-                    );
-                }
-                for (ci, created) in action.created_publics.iter().enumerate() {
-                    let cm = created.resource_commitment.as_bytes();
-                    eprintln!(
-                        "      created {}: commitment={:02x}{:02x}..., external_payload={}",
-                        ci,
-                        cm[0],
-                        cm[1],
-                        created.app_data.external_payload.len()
+                        "      resource {ri} ({kind}): {tag}={:02x}{:02x}..., external_payload={}",
+                        bytes[0],
+                        bytes[1],
+                        resource.app_data().external_payload.len()
                     );
                 }
             }
@@ -1541,17 +1474,17 @@ fn resolve_prover(choice: Option<ProverChoice>) -> Result<Prover> {
     Ok(prover)
 }
 
-/// Load the kind table every proving and verification path checks witness
-/// kind tables against.
-fn load_kind_table(path: &Path) -> Result<()> {
-    init_kind_table_from_file(path)
-        .map_err(|e| anyhow!("load kind table {}: {e:?}", path.display()))?;
+/// Load the kind tree every proving and verification path checks witness
+/// kind paths against.
+fn load_kind_tree(path: &Path) -> Result<()> {
+    init_kind_tree_from_file(path)
+        .map_err(|e| anyhow!("load kind tree {}: {e:?}", path.display()))?;
     eprintln!(
-        "kind table: {} (root {})",
+        "kind tree: {} (root {})",
         path.display(),
         hex::encode(
-            kind_table_root()
-                .ok_or_else(|| anyhow!("kind table not loaded"))?
+            kind_tree_root()
+                .ok_or_else(|| anyhow!("kind tree not loaded"))?
                 .as_bytes()
         )
     );
@@ -1562,7 +1495,7 @@ fn load_kind_table(path: &Path) -> Result<()> {
 async fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Dump { input } => {
-            load_kind_table(Path::new(KIND_TABLE_PATH))?;
+            load_kind_tree(Path::new(KIND_TREE_PATH))?;
             dump_fixture(&input)
         }
         Command::Generate(shape) => generate_fixture(shape).await,
@@ -1584,10 +1517,10 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         salt,
         prover,
         error_variants,
-        kind_table,
+        kind_tree,
         debug_assumptions,
     } = generate;
-    load_kind_table(kind_table)?;
+    load_kind_tree(kind_tree)?;
     let total_start = Instant::now();
 
     let prover = resolve_prover(apply_mock_mode(prover))?;
@@ -1664,7 +1597,7 @@ async fn generate_fixture(shape: ShapeCommand) -> Result<()> {
         }
         ShapeCommand::HistoricalRootCommitter { .. } => {
             let (witness, _, _) = build_historical_root_committer_witness(name)?;
-            prove_single_action_transaction(&prover, witness, AppData::default()).await?
+            prove_single_action_transaction(&prover, witness, vec![AppData::default(); 2]).await?
         }
         ShapeCommand::HistoricalRootConsumer { committer, .. } => {
             generate_historical_root_consumer_transaction(
@@ -1791,12 +1724,12 @@ fn debug_batch_assumptions(tx: &Transaction) -> Result<()> {
 mod tests {
     use super::*;
     use arm::compliance::ComplianceInstance;
-    // Tests build transactions via the local arm prover directly (not through
-    // `Prover::Local`/`spawn_blocking`) so they stay synchronous. Requires
-    // `RISC0_DEV_MODE=1` to run.
+    use arm::resource::ComplianceResourceInstance;
+    // The tests that prove run `Prover::Local`, so they require
+    // `RISC0_DEV_MODE=1`.
 
-    fn init_test_kind_table() {
-        init_kind_table_from_file(Path::new(KIND_TABLE_PATH)).expect("load committed kind table");
+    fn init_test_kind_tree() {
+        init_kind_tree_from_file(Path::new(KIND_TREE_PATH)).expect("load committed kind tree");
     }
 
     fn synthetic_leaves(n: usize) -> Vec<Digest> {
@@ -1805,8 +1738,8 @@ mod tests {
             .collect()
     }
 
-    /// Every leaf's path reconstructs the root the adapter's own
-    /// `append_to_tree` produces, for trees below and above the growth points.
+    /// Every leaf's path reconstructs the root the adapter's own `push` and
+    /// `current_root` produce, for trees below and above the growth points.
     #[test]
     fn pa_merkle_path_reconstructs_the_adapter_root_for_every_leaf() {
         for n in 1..=12 {
@@ -1947,7 +1880,7 @@ mod tests {
             &["batch", "--error-variants", "", "out.json"],
             &[
                 "historical-root",
-                "--kind-table",
+                "--kind-tree",
                 "t.json",
                 "a.json",
                 "b.json",
@@ -2001,15 +1934,13 @@ mod tests {
         Ok(r)
     }
 
-    /// Helper: build a minimal valid transaction with a real delta proof.
-    /// Uses the passthrough logic circuit and ephemeral resources.
-    fn build_valid_tx_with_delta_proof(fixture_name: &str) -> Transaction {
-        init_test_kind_table();
-        let (consumed, nf_key, consumed_nf, created) =
+    /// Helper: build a minimal valid transaction with a real delta proof,
+    /// unaggregated: one passthrough action over ephemeral resources, proven
+    /// as the fixtures are.
+    async fn build_valid_tx_with_delta_proof(fixture_name: &str) -> Transaction {
+        init_test_kind_tree();
+        let (consumed, nf_key, _, created) =
             deterministic_ephemeral_resource(fixture_name, 0).unwrap();
-        let passthrough_vk = PASSTHROUGH_LOGIC_VK;
-        let created_cm = created.commitment();
-
         let witness = single_action_compliance_witness(
             consumed,
             MerklePath::empty(),
@@ -2017,68 +1948,23 @@ mod tests {
             created,
             Scalar::ONE,
         );
-        let cu = arm::compliance_unit::create(&witness, LocalProofType::Succinct).unwrap();
-
-        let tags = vec![consumed_nf, created_cm];
-        let root = ActionTree::new(tags).root().unwrap();
-
-        let consumed_instance = LogicInstance {
-            tag: consumed_nf,
-            is_consumed: true,
-            root,
-            app_data: AppData::default(),
-        };
-        let created_instance = LogicInstance {
-            tag: created_cm,
-            is_consumed: false,
-            root,
-            app_data: AppData::default(),
-        };
-
-        let (cp, cj) = arm::proving_system::prove(
-            PASSTHROUGH_LOGIC_PK,
-            &consumed_instance,
-            LocalProofType::Succinct,
-        )
-        .unwrap();
-        let (crp, crj) = arm::proving_system::prove(
-            PASSTHROUGH_LOGIC_PK,
-            &created_instance,
-            LocalProofType::Succinct,
-        )
-        .unwrap();
-
-        let consumed_logic = LogicVerifier {
-            proof: cp,
-            instance: cj,
-            verifying_key: passthrough_vk,
-        };
-        let created_logic = LogicVerifier {
-            proof: crp,
-            instance: crj,
-            verifying_key: passthrough_vk,
-        };
-
-        let action = arm::action::new(cu, vec![consumed_logic, created_logic]).unwrap();
-
-        let delta_witness =
-            arm::delta_proof::from_bytes_vec(std::slice::from_ref(&witness.rcv)).unwrap();
-        let tx = Transaction::create(vec![action], Delta::Witness(delta_witness));
-        arm::transaction::generate_delta_proof(tx).unwrap()
+        prove_single_action_transaction(&Prover::Local, witness, vec![AppData::default(); 2])
+            .await
+            .unwrap()
     }
 
     /// A valid transaction must pass delta verification via the k256 path.
-    #[test]
-    fn valid_tx_passes_delta_verification() {
-        let tx = build_valid_tx_with_delta_proof("valid_tx");
+    #[tokio::test]
+    async fn valid_tx_passes_delta_verification() {
+        let tx = build_valid_tx_with_delta_proof("valid_tx").await;
         verify_tx(&tx).unwrap();
     }
 
     /// Swapping the nullifier and commitment tags in the delta message
     /// must invalidate the delta proof signature.
-    #[test]
-    fn swapped_tags_invalidate_delta_proof() {
-        let tx = build_valid_tx_with_delta_proof("swapped_tags");
+    #[tokio::test]
+    async fn swapped_tags_invalidate_delta_proof() {
+        let tx = build_valid_tx_with_delta_proof("swapped_tags").await;
         verify_tx(&tx).unwrap();
 
         // Swap nullifier and commitment in the compliance instance. This
@@ -2087,10 +1973,12 @@ mod tests {
         let mut swapped = tx.clone();
         let actions = swapped.actions.as_mut().unwrap();
         mutate_compliance_instance(&mut actions[0].compliance_unit, |inst| {
-            std::mem::swap(
-                &mut inst.consumed_publics[0].resource_nullifier,
-                &mut inst.created_publics[0].resource_commitment,
-            );
+            let [ComplianceResourceInstance::Consumed { nullifier, .. }, ComplianceResourceInstance::Created { commitment, .. }] =
+                &mut inst.resource_instances[..]
+            else {
+                panic!("the action is not one consumed, then one created resource");
+            };
+            std::mem::swap(nullifier, commitment);
         })
         .unwrap();
 
@@ -2099,9 +1987,9 @@ mod tests {
     }
 
     /// Mutating a single delta coordinate must invalidate the delta proof.
-    #[test]
-    fn mutated_delta_x_invalidates_proof() {
-        let mut tx = build_valid_tx_with_delta_proof("mutated_delta_x");
+    #[tokio::test]
+    async fn mutated_delta_x_invalidates_proof() {
+        let mut tx = build_valid_tx_with_delta_proof("mutated_delta_x").await;
         verify_tx(&tx).unwrap();
 
         // Flip a word in delta_x
@@ -2119,15 +2007,20 @@ mod tests {
     }
 
     /// Mutating a nullifier must invalidate the delta proof (changes the message hash).
-    #[test]
-    fn mutated_nullifier_invalidates_delta_proof() {
-        let mut tx = build_valid_tx_with_delta_proof("mutated_nullifier");
+    #[tokio::test]
+    async fn mutated_nullifier_invalidates_delta_proof() {
+        let mut tx = build_valid_tx_with_delta_proof("mutated_nullifier").await;
         verify_tx(&tx).unwrap();
 
         // Corrupt the nullifier
         let actions = tx.actions.as_mut().unwrap();
         mutate_compliance_instance(&mut actions[0].compliance_unit, |inst| {
-            inst.consumed_publics[0].resource_nullifier = Digest::from_bytes([0xFF; 32]);
+            let Some(ComplianceResourceInstance::Consumed { nullifier, .. }) =
+                inst.resource_instances.first_mut()
+            else {
+                panic!("the action's first resource is not consumed");
+            };
+            *nullifier = Digest::from_bytes([0xFF; 32]);
         })
         .unwrap();
 

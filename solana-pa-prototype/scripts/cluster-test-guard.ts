@@ -3,7 +3,7 @@
  *
  * The cluster test run (`ops.sh test --cluster <c>`) signs with its wallet
  * against a live deployment. A wallet that holds an owner's role could have
- * a spec pause the adapter, replace its kind table, upgrade a program, or
+ * a spec pause the adapter, replace its kind tree root, upgrade a program, or
  * renounce the ownership for good. The roles: each program's upgrade
  * authority while it is not the program's own upgrade authority PDA, and
  * the adapter's stored owner. Run through ops.sh before any spec:

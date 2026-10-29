@@ -2,7 +2,7 @@
  * The cluster test run (`ops.sh test --cluster <c>`) settles, uploads and
  * pays with its wallet against a live deployment. A wallet that holds an
  * owner's role, a program's upgrade authority or the adapter's stored owner,
- * could have a spec pause the deployment, replace its kind table, upgrade a
+ * could have a spec pause the deployment, replace its kind tree root, upgrade a
  * program or renounce the ownership for good (scripts/cluster-test-guard.ts).
  * The guard refuses such a wallet before any spec runs.
  */

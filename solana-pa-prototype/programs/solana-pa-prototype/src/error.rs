@@ -59,8 +59,6 @@ pub enum PAError {
     UnregisteredForwarder,
     #[msg("External call output verification failed")]
     ForwarderCallOutputMismatch,
-    #[msg("External call CPI failed")]
-    ExternalCallCpiFailed,
 
     // Delta proof errors
     #[msg("Delta proof verification failed")]
@@ -75,10 +73,10 @@ pub enum PAError {
     ExpectedDeltaProof,
 
     // Aggregation instance binding errors
-    #[msg("Aggregation instance compliance key does not match the compliance circuit VK")]
-    ComplianceKeyMismatch,
+    #[msg("Aggregation instance compliance VK does not match the compliance circuit VK")]
+    ComplianceVkMismatch,
     /// pa-evm's `UnacceptedKindTreeRoot`.
-    #[msg("The transaction's kind tree root is neither the stored one nor the empty table's")]
+    #[msg("The transaction's kind tree root is neither the stored one nor the empty kind tree's")]
     UnacceptedKindTreeRoot,
     #[msg("Zero kind tree root not allowed")]
     ZeroKindTreeRootNotAllowed,
@@ -100,7 +98,7 @@ pub enum PAError {
     InvalidVerifierEntry,
 
     // Merkle tree errors
-    #[msg("Tree has reached maximum depth (32 levels)")]
+    #[msg("Commitment tree is full (2^32 leaves)")]
     TreeMaxDepthReached,
 
     // Close errors

@@ -1,7 +1,9 @@
 use super::strategies::arb_digest;
-use crate::merkle::append_to_tree;
+use crate::merkle::{current_root, push};
 use crate::tests::utils::{create_test_pa_state, minimal_instance};
-use arm_core::aggregation_instance::{ActionAggregated, AggregationInstance};
+use arm_core::aggregation_instance::{
+    ActionAggregated, AggregationInstance, AggregationResourceInstance,
+};
 use arm_core::logic_instance::ExpirableBlob;
 use arm_core::Digest;
 use arm_solana::journal::aggregation_journal_digest;
@@ -18,44 +20,61 @@ use proptest::prelude::*;
 /// Overwrites one instance field with the given digest (or tampers with it).
 type InstanceMutation = fn(&mut AggregationInstance, Digest);
 
+/// Resource `index` of the instance's first action, as its tag (nullifier or
+/// commitment), its logic ref and, when consumed, its commitment tree root.
+fn resource_fields(
+    instance: &mut AggregationInstance,
+    index: usize,
+) -> (&mut Digest, &mut Digest, Option<&mut Digest>) {
+    match &mut instance.actions[0].resource_instances[index] {
+        AggregationResourceInstance::Consumed {
+            nullifier,
+            logic_ref,
+            commitment_tree_root,
+            ..
+        } => (nullifier, logic_ref, Some(commitment_tree_root)),
+        AggregationResourceInstance::Created {
+            commitment,
+            logic_ref,
+            ..
+        } => (commitment, logic_ref, None),
+    }
+}
+
 /// Mutating any field the settlement acts on changes the journal digest.
 /// The app-data case is the H-001 core regression: a tampered transaction
 /// cannot keep its Groth16 proof valid.
 #[test]
 fn every_instance_field_mutation_changes_journal_digest() {
     let replacement = Digest::from_bytes([0xEE; 32]);
-    let mutations: [(&str, InstanceMutation); 10] = [
-        ("nullifier", |i, d| {
-            i.actions[0].consumed_publics[0].resource_nullifier = d
-        }),
-        ("commitment", |i, d| {
-            i.actions[0].created_publics[0].resource_commitment = d
-        }),
-        ("consumed logic ref", |i, d| {
-            i.actions[0].consumed_publics[0].resource_logic_ref = d
-        }),
-        ("created logic ref", |i, d| {
-            i.actions[0].created_publics[0].resource_logic_ref = d
-        }),
+    let mutations: [(&str, InstanceMutation); 11] = [
+        ("nullifier", |i, d| *resource_fields(i, 0).0 = d),
+        ("commitment", |i, d| *resource_fields(i, 1).0 = d),
+        ("consumed logic ref", |i, d| *resource_fields(i, 0).1 = d),
+        ("created logic ref", |i, d| *resource_fields(i, 1).1 = d),
         ("commitment tree root", |i, d| {
-            i.actions[0].consumed_publics[0].commitment_tree_root = d
+            *resource_fields(i, 0).2.expect("resource 0 is consumed") = d
+        }),
+        ("resource order", |i, _| {
+            i.actions[0].resource_instances.swap(0, 1)
         }),
         ("action tree root", |i, d| i.actions[0].action_tree_root = d),
-        ("compliance key", |i, d| i.compliance_key = d),
-        ("kind table root", |i, d| i.kind_table_root = d),
+        ("compliance VK", |i, d| i.compliance_vk = d),
+        ("kind tree root", |i, d| i.kind_tree_root = d),
         ("app data", |i, _| {
-            i.actions[0].consumed_publics[0]
-                .app_data
-                .resource_payload
-                .push(ExpirableBlob {
-                    blob: vec![0xEE],
-                    deletion_criterion: 0,
-                })
+            match &mut i.actions[0].resource_instances[0] {
+                AggregationResourceInstance::Consumed { app_data, .. }
+                | AggregationResourceInstance::Created { app_data, .. } => {
+                    app_data.resource_payload.push(ExpirableBlob {
+                        blob: vec![0xEE],
+                        deletion_criterion: 0,
+                    })
+                }
+            }
         }),
         ("extra action", |i, d| {
             i.actions.push(ActionAggregated {
-                consumed_publics: vec![],
-                created_publics: vec![],
+                resource_instances: vec![],
                 delta_x: [0u32; 8],
                 delta_y: [0u32; 8],
                 action_tree_root: d,
@@ -131,11 +150,11 @@ proptest! {
         let mut state = create_test_pa_state();
 
         for leaf in &leaves {
-            append_to_tree(&mut state, *leaf).unwrap();
+            push(&mut state, *leaf).unwrap();
         }
 
         let expected = reference_merkle_root(&leaves);
-        let actual = state.root_digest();
+        let actual = current_root(&state);
 
         prop_assert_eq!(
             actual, expected,
@@ -160,57 +179,13 @@ proptest! {
 
         let mut state = create_test_pa_state();
         for leaf in &leaves {
-            append_to_tree(&mut state, *leaf).unwrap();
+            push(&mut state, *leaf).unwrap();
         }
 
         let expected = reference_merkle_root(&leaves);
-        let actual = state.root_digest();
+        let actual = current_root(&state);
         prop_assert_eq!(actual, expected, "boundary test: {} leaves (2^{} {:+})", target_count, k, extra as i32 - 1);
     }
-}
-
-/// Tree at max depth with capacity-1 leaves must accept one more, then reject.
-#[test]
-fn merkle_tree_rejects_at_max_capacity() {
-    use crate::merkle::{MAX_TREE_DEPTH, ZEROS};
-    use crate::state::PAStateAccount;
-
-    // Create a state at depth 3 (capacity = 8) to test the boundary quickly
-    let depth = 3usize;
-    let mut state = PAStateAccount {
-        current_depth: depth as u8,
-        frontier: (0..depth).map(|i| ZEROS[i].into()).collect(),
-        ..create_test_pa_state()
-    };
-
-    // Fill to capacity (2^3 = 8 leaves). Each append grows the tree as needed.
-    // At depth 3, capacity = 8. After 8 appends the tree will have grown.
-    for i in 0..128u64 {
-        let leaf_i = Digest::from_bytes({
-            use sha2::{Digest as Sha2Digest, Sha256};
-            let h: [u8; 32] = Sha256::digest(i.to_le_bytes()).into();
-            h
-        });
-        let result = append_to_tree(&mut state, leaf_i);
-        if result.is_err() {
-            // Should only fail at TreeMaxDepthReached once we hit max depth
-            assert!(
-                state.current_depth as usize == MAX_TREE_DEPTH,
-                "should only fail at max depth, got depth {}",
-                state.current_depth
-            );
-            return; // Test passes — rejection observed
-        }
-    }
-
-    // If we got here with 128 appends without error, the tree grew to accommodate.
-    // Verify the tree is at a reasonable depth.
-    assert!(
-        state.current_depth as usize <= MAX_TREE_DEPTH,
-        "depth {} exceeds MAX_TREE_DEPTH {}",
-        state.current_depth,
-        MAX_TREE_DEPTH
-    );
 }
 
 // ---------------------------------------------------------------------------

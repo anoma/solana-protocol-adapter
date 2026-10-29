@@ -75,31 +75,42 @@ use crate::merkle::EMPTY_TREE_ROOT_INITIAL;
 use crate::state::{PAStateAccount, EMPTY_KIND_TREE_ROOT};
 use crate::verifier_router::types::{Proof, Seal};
 use arm_core::aggregation_instance::{
-    ActionAggregated, AggregationInstance, ConsumedResourceAggregated, CreatedResourceAggregated,
+    ActionAggregated, AggregationInstance, AggregationResourceInstance,
 };
 use arm_core::delta_proof::DeltaProof;
-use arm_core::logic_instance::{AppData, ExpirableBlob};
+use arm_core::logic_instance::AppData;
 use arm_core::transaction::{Aggregation, Delta, Transaction};
 use arm_core::Digest;
 
+/// A consumed resource with nullifier `[tag; 32]` and logic ref
+/// `[tag + 100; 32]`, anchored to the initial tree root.
+pub fn consumed(tag: u8) -> AggregationResourceInstance {
+    AggregationResourceInstance::Consumed {
+        nullifier: Digest::from_bytes([tag; 32]),
+        logic_ref: Digest::from_bytes([tag + 100; 32]),
+        commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
+        app_data: AppData::default(),
+    }
+}
+
+/// A created resource with commitment `[tag; 32]` and logic ref
+/// `[tag + 100; 32]`.
+pub fn created(tag: u8) -> AggregationResourceInstance {
+    AggregationResourceInstance::Created {
+        commitment: Digest::from_bytes([tag; 32]),
+        logic_ref: Digest::from_bytes([tag + 100; 32]),
+        app_data: AppData::default(),
+    }
+}
+
 /// One action with one consumed and one created resource, anchored to the
-/// initial tree root and pinned to the compliance VK and empty kind table.
+/// initial tree root and pinned to the compliance VK and empty kind tree.
 pub fn minimal_instance() -> AggregationInstance {
     AggregationInstance {
-        compliance_key: arm_core::constants::COMPLIANCE_VK,
-        kind_table_root: Digest::from_bytes(EMPTY_KIND_TREE_ROOT),
+        compliance_vk: arm_core::constants::COMPLIANCE_VK,
+        kind_tree_root: Digest::from_bytes(EMPTY_KIND_TREE_ROOT),
         actions: vec![ActionAggregated {
-            consumed_publics: vec![ConsumedResourceAggregated {
-                resource_nullifier: Digest::from_bytes([1u8; 32]),
-                resource_logic_ref: Digest::from_bytes([3u8; 32]),
-                commitment_tree_root: EMPTY_TREE_ROOT_INITIAL,
-                app_data: AppData::default(),
-            }],
-            created_publics: vec![CreatedResourceAggregated {
-                resource_commitment: Digest::from_bytes([2u8; 32]),
-                resource_logic_ref: Digest::from_bytes([4u8; 32]),
-                app_data: AppData::default(),
-            }],
+            resource_instances: vec![consumed(1), created(2)],
             delta_x: [0u32; 8],
             delta_y: [0u32; 8],
             action_tree_root: Digest::from_bytes([5u8; 32]),
@@ -133,22 +144,6 @@ pub fn create_minimal_transaction() -> Transaction {
             instance: minimal_instance(),
         }),
     }
-}
-
-/// One action whose consumed and created resources each carry their own
-/// external payloads, for order-sensitive tests.
-pub fn instance_with_consumed_and_created_payloads(
-    consumed_payloads: Vec<ExpirableBlob>,
-    created_payloads: Vec<ExpirableBlob>,
-) -> AggregationInstance {
-    let mut instance = minimal_instance();
-    instance.actions[0].consumed_publics[0]
-        .app_data
-        .external_payload = consumed_payloads;
-    instance.actions[0].created_publics[0]
-        .app_data
-        .external_payload = created_payloads;
-    instance
 }
 
 /// Arbitrary value; verifies the proof parser extracts the selector correctly.

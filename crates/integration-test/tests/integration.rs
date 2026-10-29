@@ -5,7 +5,9 @@
 use anchor_lang::Discriminator;
 use anoma_pa_solana_client::generated::protocol_adapter::client::args;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
-use anoma_pa_testkit::fixtures::{passthrough, trivial};
+use anoma_pa_testkit::environment::Refusal;
+use anoma_pa_testkit::fixtures::{ordered, passthrough, trivial};
+use anoma_pa_testkit::witness::AppData;
 use anoma_pa_testkit::{execute_tx, prove_actions};
 use anyhow::Context;
 use solana_message::VersionedMessage;
@@ -29,6 +31,7 @@ mod e2e_test {
 async fn a_call_to_a_program_no_forwarder_is_registered_for_fails_before_anything_is_sent()
 -> anyhow::Result<()> {
     use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};
+    use anoma_rm_risc0::aggregation_instance::AggregationResourceInstance;
     use anoma_rm_risc0::logic_instance::ExpirableBlob;
 
     let mut env = SolanaLocalEnv::setup_bare().await?;
@@ -42,15 +45,18 @@ async fn a_call_to_a_program_no_forwarder_is_registered_for_fails_before_anythin
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
     };
-    tx.as_arm_mut()
+    let AggregationResourceInstance::Created { app_data, .. } = &mut tx
+        .as_arm_mut()
         .aggregation
         .as_mut()
         .context("the transaction is aggregated")?
         .instance
         .actions[0]
-        .created_publics[0]
-        .app_data
-        .external_payload = vec![ExpirableBlob {
+        .resource_instances[1]
+    else {
+        anyhow::bail!("the trivial action's second resource is not its created one");
+    };
+    app_data.external_payload = vec![ExpirableBlob {
         blob: anoma_rm_risc0::utils::bytes_to_words(&call.encode()),
         deletion_criterion: 0,
     }];
@@ -313,8 +319,6 @@ async fn a_taken_adapter_obeys_its_new_owner() -> anyhow::Result<()> {
 // does), so the adapter is what stands in its way.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_transaction_repeating_a_nullifier_is_refused_as_spent() -> anyhow::Result<()> {
-    use anoma_pa_testkit::environment::Refusal;
-
     let mut env = SolanaLocalEnv::setup_bare().await?;
     let action = || {
         trivial::build(57, trivial::Overrides::default())
@@ -326,6 +330,77 @@ async fn a_transaction_repeating_a_nullifier_is_refused_as_spent() -> anyhow::Re
     anyhow::ensure!(
         refusal == Some(Refusal::NullifierSpent),
         "the adapter returned {refusal:?}, not a refusal for a spent nullifier"
+    );
+    Ok(())
+}
+
+/// What the adapter refuses an action of two consumed resources for, both
+/// naming an unknown root: `first`, then `second`. The owner first denies the
+/// trivial logic to consumed resources.
+async fn refusal_of_two_consumed_naming_an_unknown_root(
+    first: ordered::Logic,
+    second: ordered::Logic,
+) -> anyhow::Result<Option<Refusal>> {
+    use anoma_pa_testkit::environment::{DeniedLogicRef, ProtocolAdapter as _};
+    use anoma_rm_risc0::Digest;
+    use anoma_rm_risc0::constants::PADDING_LOGIC_VK;
+
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    env.protocol_adapter
+        .deny_logic_refs(&[DeniedLogicRef {
+            logic_ref: PADDING_LOGIC_VK,
+            consumed: true,
+        }])
+        .await?;
+    let consumed = |logic| ordered::ResourceSpec {
+        consumed: true,
+        logic,
+    };
+    let action = ordered::build(
+        58,
+        vec![consumed(first), consumed(second)],
+        ordered::Overrides {
+            ephemeral_root: Some(Digest::from_bytes([0x7e; 32])),
+        },
+    )?;
+    let tx = prove_actions(&env, &[action.witnesses]).await?;
+    Ok(env.protocol_adapter.submit(tx).await?.err())
+}
+
+// As pa-evm next's `_processAction`, the adapter checks each resource, its
+// logic ref against the denylists and then a consumed one's root, before it
+// moves on to the next resource. An action whose first consumed resource
+// names an unknown root, and whose second has a denied logic ref, is refused
+// for the root.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_root_is_refused_before_a_later_resources_denied_logic_ref() -> anyhow::Result<()>
+{
+    let refusal = refusal_of_two_consumed_naming_an_unknown_root(
+        ordered::Logic::Passthrough(AppData::default()),
+        ordered::Logic::Trivial,
+    )
+    .await?;
+    anyhow::ensure!(
+        refusal == Some(Refusal::UnknownRoot),
+        "the adapter returned {refusal:?}, not the refusal for the first resource's unknown root"
+    );
+    Ok(())
+}
+
+// The converse: an action whose first consumed resource has a denied logic
+// ref, both naming an unknown root, is refused for the logic ref, which
+// pa-evm checks before the root.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_denied_logic_ref_is_refused_before_its_resources_unknown_root() -> anyhow::Result<()> {
+    let refusal = refusal_of_two_consumed_naming_an_unknown_root(
+        ordered::Logic::Trivial,
+        ordered::Logic::Passthrough(AppData::default()),
+    )
+    .await?;
+    anyhow::ensure!(
+        refusal == Some(Refusal::DeniedLogicRef),
+        "the adapter returned {refusal:?}, not the refusal for the first resource's denied logic \
+         ref"
     );
     Ok(())
 }

@@ -430,7 +430,7 @@ fn refusal_for(error: ProtocolAdapterError) -> Option<Refusal> {
         ProtocolAdapterError::ForwarderCallOutputMismatch => {
             Some(Refusal::ExternalCallOutputMismatch)
         }
-        ProtocolAdapterError::ComplianceKeyMismatch | ProtocolAdapterError::InvalidProof => {
+        ProtocolAdapterError::ComplianceVkMismatch | ProtocolAdapterError::InvalidProof => {
             Some(Refusal::InvalidAggregationProof)
         }
         ProtocolAdapterError::NullifierPdaMismatch
@@ -449,7 +449,6 @@ fn refusal_for(error: ProtocolAdapterError) -> Option<Refusal> {
         | ProtocolAdapterError::RiscZeroVerifierSelectorMismatch
         | ProtocolAdapterError::InvalidExternalCallBlob
         | ProtocolAdapterError::UnregisteredForwarder
-        | ProtocolAdapterError::ExternalCallCpiFailed
         | ProtocolAdapterError::DeltaProofVerificationFailed
         | ProtocolAdapterError::DeltaMismatch
         | ProtocolAdapterError::InvalidDeltaProof

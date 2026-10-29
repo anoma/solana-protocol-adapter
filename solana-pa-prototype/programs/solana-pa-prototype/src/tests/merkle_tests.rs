@@ -1,4 +1,7 @@
-use crate::merkle::{append_to_tree, hash_two, EMPTY_TREE_ROOT_INITIAL, ZEROS};
+use crate::merkle::{
+    current_root, hash_two, push, EMPTY_TREE_ROOT_INITIAL, MAX_LEAF_COUNT, MAX_TREE_DEPTH, ZEROS,
+};
+use crate::state::PAStateAccount;
 use crate::tests::utils::{assert_anchor_err, create_test_pa_state};
 use arm_core::merkle_path::PADDING_LEAF;
 use arm_core::Digest;
@@ -47,7 +50,7 @@ fn test_empty_tree_root_is_padding_based() {
         state.current_depth, 0,
         "the empty tree has depth 0, as pa-evm's"
     );
-    let root = state.root_digest();
+    let root = Digest::from_bytes(state.root);
     assert_ne!(
         root,
         Digest::default(),
@@ -111,6 +114,40 @@ impl EvmMerkleTree {
     }
 }
 
+/// Fails unless the adapter's tree is pa-evm's: the same leaf count, depth,
+/// capacity, left siblings (what `commitmentTreeLeftSiblings` returns) and
+/// root.
+fn assert_tree_is_evms(state: &PAStateAccount, evm: &EvmMerkleTree, when: &str) {
+    let frontier: Vec<Digest> = (0..state.frontier.len())
+        .map(|level| state.get_frontier(level))
+        .collect();
+    assert_eq!(state.next_index, evm.leaf_count, "leaf count {when}");
+    assert_eq!(state.depth(), evm.depth(), "depth {when}");
+    assert_eq!(frontier, evm.left_siblings, "left siblings {when}");
+    assert_eq!(current_root(state), evm.current_root(), "root {when}");
+}
+
+/// The adapter's state holding pa-evm's tree `evm`.
+fn state_holding(evm: &EvmMerkleTree) -> PAStateAccount {
+    PAStateAccount {
+        next_index: evm.leaf_count,
+        current_depth: evm.depth() as u8,
+        frontier: evm.left_siblings.iter().map(|&side| side.into()).collect(),
+        ..create_test_pa_state()
+    }
+}
+
+/// pa-evm's tree one leaf short of `MAX_LEAF_COUNT` leaves: one level short
+/// of `MAX_TREE_DEPTH`, with distinct left siblings.
+fn evm_tree_one_leaf_short_of_full() -> EvmMerkleTree {
+    EvmMerkleTree {
+        leaf_count: MAX_LEAF_COUNT - 1,
+        left_siblings: (0..MAX_TREE_DEPTH - 1)
+            .map(|level| Digest::from_bytes([level as u8 + 1; 32]))
+            .collect(),
+    }
+}
+
 /// The commitment tree is pa-evm V2's after every push, starting from the
 /// empty tree: the same depth, capacity, left siblings (what
 /// `commitmentTreeLeftSiblings` returns) and root.
@@ -119,35 +156,10 @@ fn tree_matches_evm_merkle_tree_from_empty_through_every_push() {
     let mut state = create_test_pa_state();
     let mut evm = EvmMerkleTree::setup();
     for leaf_count in 0..=70u64 {
-        let frontier: Vec<Digest> = (0..state.frontier.len())
-            .map(|level| state.get_frontier(level))
-            .collect();
-        assert_eq!(
-            state.next_index, evm.leaf_count,
-            "leaf count after {leaf_count} pushes"
-        );
-        assert_eq!(
-            state.depth(),
-            evm.depth(),
-            "depth after {leaf_count} pushes"
-        );
-        assert_eq!(
-            state.capacity(),
-            1u64 << evm.depth(),
-            "capacity after {leaf_count} pushes"
-        );
-        assert_eq!(
-            frontier, evm.left_siblings,
-            "left siblings after {leaf_count} pushes"
-        );
-        assert_eq!(
-            state.root_digest(),
-            evm.current_root(),
-            "root after {leaf_count} pushes"
-        );
+        assert_tree_is_evms(&state, &evm, &format!("after {leaf_count} pushes"));
 
         let leaf = Digest::from_bytes([leaf_count as u8 + 1; 32]);
-        append_to_tree(&mut state, leaf).unwrap();
+        push(&mut state, leaf).unwrap();
         evm.push(leaf);
     }
 }
@@ -200,10 +212,10 @@ fn evm_minimal_depth(leaf_count: usize) -> usize {
     bits as usize
 }
 
-/// Regression test: the incremental `append_to_tree` must produce
+/// Regression test: the incremental `push` and `current_root` must produce
 /// the same root as the EVM's batch `computeRoot` for 1..8 leaves.
 /// This is the primary guard against the expand-after-fill bug
-/// recurring: if `append_to_tree` ever fails to expand when exactly
+/// recurring: if `push` ever fails to expand when exactly
 /// full, the roots will diverge at every power-of-two leaf count.
 #[test]
 fn test_incremental_matches_evm_compute_root() {
@@ -211,8 +223,8 @@ fn test_incremental_matches_evm_compute_root() {
 
     let mut state = create_test_pa_state();
     for (i, leaf) in leaves.iter().enumerate() {
-        append_to_tree(&mut state, *leaf).unwrap();
-        let incremental_root = state.root_digest();
+        push(&mut state, *leaf).unwrap();
+        let incremental_root = current_root(&state);
 
         let n = i + 1;
         // The EVM tree depth after N pushes: for non-power-of-two N it's
@@ -241,65 +253,48 @@ fn test_incremental_matches_evm_compute_root() {
     }
 }
 
-/// A depth-32 tree declares capacity 2^32 and must accept index 2^32 - 1.
+/// The 2^32nd leaf fills the depth-32 tree; as at every depth in pa-evm's
+/// `push`, the full tree's root becomes the left sibling on a new level, and
+/// the root is the depth-33 tree's.
 #[test]
-fn test_append_accepts_final_declared_leaf_at_max_depth() {
-    let mut state = create_test_pa_state();
-    state.current_depth = 32;
-    state.frontier = vec![[0u8; 32]; 32];
-    state.next_index = (1u64 << 32) - 1;
-
+fn the_leaf_that_fills_the_deepest_tree_grows_it_as_evms() {
+    let mut evm = evm_tree_one_leaf_short_of_full();
+    let mut state = state_holding(&evm);
     let leaf = Digest::from_bytes([0x77; 32]);
-    let result = append_to_tree(&mut state, leaf);
 
-    assert!(
-        result.is_ok(),
-        "index 2^32-1 is within declared capacity and must be accepted, got {:?}",
-        result
-    );
-    assert_eq!(state.next_index, 1u64 << 32, "final leaf must be committed");
-    assert_eq!(
-        state.current_depth, 32,
-        "tree must not expand past max depth"
-    );
+    push(&mut state, leaf).unwrap();
+    evm.push(leaf);
 
-    // index = 2^32 - 1 is all-ones in binary, so every one of the 32 levels
-    // takes the "right child" branch, hashing the (test) all-zero frontier
-    // against the running value, and MAX_TREE_DEPTH blocks the post-loop
-    // expansion — the plain depth-32 root, with no extra zero-padding level.
-    // Recompute it independently of append_to_tree to pin the exact value:
-    // the spec requires off-chain implementations to agree on this root.
-    let zero_frontier = Digest::from_bytes([0u8; 32]);
-    let mut expected = leaf;
-    for _ in 0..32 {
-        expected = hash_two(&zero_frontier, &expected);
-    }
-    assert_eq!(
-        state.root_digest(),
-        expected,
-        "max-depth root must equal the plain depth-32 hash chain over the frontier"
+    println!(
+        "after the 2^32nd leaf: count {}, depth {}, root {:?}",
+        state.next_index,
+        state.depth(),
+        current_root(&state)
     );
+    assert_tree_is_evms(&state, &evm, "after the 2^32nd leaf");
 }
 
-/// Once full at max depth, the next append is rejected before any mutation.
+/// The tree holds at most 2^32 leaves: the next push is refused before any
+/// mutation.
 #[test]
-fn test_append_rejects_when_full_without_mutating() {
-    let mut state = create_test_pa_state();
-    state.current_depth = 32;
-    state.frontier = vec![[0u8; 32]; 32];
-    state.next_index = 1u64 << 32;
-    state.root = [0xAB; 32];
+fn the_leaf_after_the_two_to_the_thirty_second_is_refused_without_mutating() {
+    let mut evm = evm_tree_one_leaf_short_of_full();
+    evm.push(Digest::from_bytes([0x77; 32]));
+    let mut state = state_holding(&evm);
+    let before = state.clone();
 
-    let before_index = state.next_index;
-    let before_depth = state.current_depth;
-    let before_root = state.root;
-    let before_frontier = state.frontier.clone();
+    let result = push(&mut state, Digest::from_bytes([0x88; 32]));
 
-    let result = append_to_tree(&mut state, Digest::from_bytes([0x88; 32]));
-
+    println!("push of the (2^32 + 1)th leaf: {result:?}");
     assert_anchor_err!(result, TreeMaxDepthReached);
-    assert_eq!(state.next_index, before_index, "next_index must not change");
-    assert_eq!(state.current_depth, before_depth, "depth must not change");
-    assert_eq!(state.root, before_root, "root must not change");
-    assert_eq!(state.frontier, before_frontier, "frontier must not change");
+    assert_eq!(
+        state.next_index, before.next_index,
+        "next_index must not change"
+    );
+    assert_eq!(
+        state.current_depth, before.current_depth,
+        "depth must not change"
+    );
+    assert_eq!(state.root, before.root, "root must not change");
+    assert_eq!(state.frontier, before.frontier, "frontier must not change");
 }

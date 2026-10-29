@@ -1,5 +1,5 @@
 use super::strategies::arb_action;
-use crate::settle::{commitment_count, nullifier_count};
+use crate::settle::{nullifier_count, resource_count};
 use crate::tests::utils::minimal_instance;
 use arm_core::aggregation_instance::AggregationInstance;
 use proptest::prelude::*;
@@ -11,8 +11,9 @@ proptest! {
     fn prop_counts_are_the_consumed_and_created_resources(
         actions in prop::collection::vec(arb_action(), 1..6),
     ) {
-        let consumed: usize = actions.iter().map(|a| a.consumed_publics.len()).sum();
-        let created: usize = actions.iter().map(|a| a.created_publics.len()).sum();
+        let resources = || actions.iter().flat_map(|a| &a.resource_instances);
+        let consumed = resources().filter(|r| r.is_consumed()).count();
+        let created = resources().filter(|r| !r.is_consumed()).count();
         let instance = AggregationInstance {
             actions,
             ..minimal_instance()
@@ -20,7 +21,7 @@ proptest! {
 
         prop_assert_eq!(nullifier_count(&instance), consumed,
             "one nullifier marker per consumed resource, across all actions");
-        prop_assert_eq!(commitment_count(&instance), created,
-            "one commitment per created resource, across all actions");
+        prop_assert_eq!(resource_count(&instance), consumed + created,
+            "every consumed and created resource, across all actions");
     }
 }
