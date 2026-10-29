@@ -4098,7 +4098,7 @@ dependencies = [
 
 [[package]]
 name = "protocol-adapter"
-version = "2.0.0-rc.10"
+version = "2.0.0-rc.11"
 dependencies = [
  "anchor-lang",
  "anoma-rm-core",

@@ -1,6 +1,6 @@
 [package]
 name = "protocol-adapter"
-version = "2.0.0-rc.10"
+version = "2.0.0-rc.11"
 description = "Solana Protocol Adapter for Anoma Resource Machine"
 edition = "2021"
 
