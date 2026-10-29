@@ -102,9 +102,9 @@ async fn setup() -> anyhow::Result<Setup> {
 }
 
 impl Setup {
-    /// The call of the test forwarder with `input`, expecting `expected`,
-    /// having the forwarder's calls take `segment` after the forwarder, with
-    /// `preceding` before the settlement.
+    /// Registers the test forwarder's calls as taking `segment` after the
+    /// forwarder, with `preceding` before the settlement, and returns the
+    /// call of the test forwarder with `input`, expecting `expected`.
     fn register_call(
         &mut self,
         segment: Vec<AccountMeta>,
