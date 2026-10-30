@@ -1,7 +1,7 @@
 [package]
 name = "anoma-pa-solana-integration-test"
 description = "Integration and e2e tests for the Anoma Solana protocol adapter: pa-testkit's environments on a surfpool runtime or, for e2e settlements, on a cluster itself."
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/anoma/solana-protocol-adapter"
@@ -31,13 +31,13 @@ anchor-lang = { git = "https://github.com/otter-sec/anchor", rev = "2c9747a2d31b
 anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", tag = "bindings/v0.9.0", features = [
   "rpc",
 ] }
-anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "ce0dba467d5b00cd216acc7de44c263f5335add6", default-features = false, features = [
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "c2a44b6a466b21176aa2e3ee82684e1882588b81", default-features = false, features = [
   "fixtures",
 ] }
 anoma-risc0-kind-trees = { git = "https://github.com/anoma/risc0-kind-trees", rev = "999fcf47627468fd35ad8ad16464ce28f6e443dd", features = [
   "arm",
 ], optional = true }
-anoma-rm-risc0 = { version = "2.0.0-rc.8.1", default-features = false, features = ["transaction"] }
+anoma-rm-risc0 = { version = "2.0.0-rc.8.2", default-features = false, features = ["transaction"] }
 anyhow = "1.0"
 bincode = "1.3"
 bs58 = "0.5"
