@@ -35,25 +35,18 @@ Procedure:
 
 ```sh
 ./scripts/dev.sh deploy pa --cluster devnet        # or: deploy all; publishes the IDL, stops before init
-# by hand: write the security metadata (below), then give both metadata accounts to the owner
+# by hand: write the security metadata (below)
 ./scripts/dev.sh init --cluster devnet             # hands the upgrade authority to the program
 ./scripts/dev.sh status --cluster devnet           # verify: deployed + PAState initialized
 ```
 
-On devnet and mainnet, `deploy pa` publishes the IDL and stops before `initialize`. The program's canonical metadata accounts (Program Metadata program: `idl`, and `security` below) are created only by the program's upgrade authority, which `initialize` hands to the program. Before `init`, the deployer gives each of them to the owner, who signs every later update:
-
-```sh
-npx @solana-program/program-metadata@latest set-authority idl <PROGRAM_ID> --new-authority <owner> \
-  --keypair <deployer keypair> --rpc <rpc>
-npx @solana-program/program-metadata@latest set-authority security <PROGRAM_ID> --new-authority <owner> \
-  --keypair <deployer keypair> --rpc <rpc>
-```
+On devnet and mainnet, `deploy pa` publishes the IDL and stops before `initialize`. The program's canonical metadata accounts (Program Metadata program: `idl`, and `security` below) are written only by the program's upgrade authority, which `initialize` hands to the program, so they keep what the deployer writes before `init`.
 
 On localnet, `deploy pa` publishes no IDL and initializes at once.
 
 `deploy` builds the production binary by default and verifies that `close_markers_batch` — a development-only instruction that deletes nullifier markers, i.e. replay protection — is absent from it. Passing `--dev-teardown` opts into the development build, which carries `close_markers_batch`; it is refused on every cluster but localnet, so a live deployment never has an instruction that deletes replay protection.
 
-`idl-publish` stores each program's production IDL (`idl-publish pa` or `btf`; both by default) in the program's canonical Program Metadata IDL account on chain, so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), writes it through the `@solana-program/program-metadata` library (`client/programMetadata.ts`), then verifies the cluster serves exactly the published file. The Program Metadata program lets two signers write a canonical account: the program's upgrade authority, and the account's explicit authority (`set-authority`, above). Its CLI, which `anchor idl upgrade` runs, admits only the first, so once `initialize` has given a program's upgrade authority to the program, only the library can update the IDL, signed by the owner as the account's authority. Rerun `idl-publish` after every `upgrade` that changes the interface.
+`idl-publish` stores each program's production IDL (`idl-publish pa` or `btf`; both by default) in the program's canonical Program Metadata IDL account on chain, so explorers and generic Anchor clients decode the deployment's instructions and events without out-of-band files. It rebuilds the production IDL (which self-checks that no dev-only instruction leaks into it), writes it through the `@solana-program/program-metadata` library (`client/programMetadata.ts`), then verifies the cluster serves exactly the published file. Its signer must be the program's upgrade authority, so it runs only before `initialize`: `deploy` runs it, and a rerun of `idl-publish` repeats it when that step failed.
 
 The program's display metadata — name, icon, description, project links, and the security contact (`security@anoma.foundation`, same as the EVM PA's `@custom:security-contact`) — lives in `docs/program-metadata.json` and is published to the program-metadata PDA that Solana Explorer reads:
 
@@ -62,7 +55,7 @@ npx @solana-program/program-metadata@latest write security <PROGRAM_ID> \
   docs/program-metadata.json --rpc <rpc-url> --keypair scripts/devnet-wallet.json
 ```
 
-The first write, which creates the account, is signed by the program's upgrade authority, before `initialize`; later writes by the account's authority, the owner (above). Republish after changing the JSON. The logo URL is the public Anoma GitHub org avatar: this repository is private, so assets in it (`docs/assets/anoma-logo.jpeg`) are not fetchable by explorers — a publicly served URL is required.
+The write is signed by the program's upgrade authority, before `initialize`. The logo URL is the public Anoma GitHub org avatar: this repository is private, so assets in it (`docs/assets/anoma-logo.jpeg`) are not fetchable by explorers — a publicly served URL is required.
 
 After a first deployment, update `docs/DEVNET_DEPLOYMENT.md` (or the equivalent record for the cluster) with the program IDs, wallet, router, selector, and date.
 

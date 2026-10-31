@@ -25,7 +25,7 @@ Commands:
                          production build; on localnet the PA is initialized
                          at once, while on devnet/mainnet each program's IDL
                          is published and init is left for after the
-                         metadata accounts are given to the owner.
+                         adapter's security metadata is written.
   upgrade [${DEPLOY_TARGETS}|all]
                          Rebuild + upgrade existing programs in place: through
                          their own upgrade (owner wallet) once their upgrade
@@ -45,8 +45,8 @@ Commands:
   idl-publish [${DEPLOY_TARGETS}|all]
                          Publish each program's production IDL on chain (the
                          program's canonical Program Metadata IDL account;
-                         signer must be the upgrade authority to create it,
-                         the upgrade authority or its authority to update it)
+                         signer must be the upgrade authority, so only
+                         before init)
   test [--cluster <c>] [spec file...]
                          No cluster (or localnet): full deterministic local
                          integration flow, every spec file on one validator.
@@ -597,10 +597,10 @@ cmd_deploy() {
   done
 
   # `initialize` hands each self-upgrading program's upgrade authority to the
-  # program, and only the upgrade authority creates the program's canonical
+  # program, and only the upgrade authority writes the program's canonical
   # metadata accounts. On devnet and mainnet the IDLs are published first, and
-  # initialization waits until the deployer has given those accounts to the
-  # owner, by hand (docs/OPERATIONS.md).
+  # initialization waits until the deployer has written the adapter's security
+  # metadata, by hand (docs/OPERATIONS.md).
   if [[ "$CLUSTER" == "localnet" ]]; then
     if [[ " $targets " == *" pa "* ]]; then
       init_pa
@@ -608,7 +608,7 @@ cmd_deploy() {
   else
     cmd_idl_publish
     if [[ " $targets " == *" pa "* ]]; then
-      echo "Next, by hand: give the adapter's canonical metadata accounts to its owner, then run init" \
+      echo "Next, by hand: write the adapter's security metadata, then run init" \
         "(docs/OPERATIONS.md, Deploy and initialize)."
     fi
   fi
@@ -860,8 +860,8 @@ cmd_verify_build() {
 # accounts, and events straight from the cluster. Builds the production IDLs
 # first — the build self-checks that the dev-only instructions are absent, so
 # a dev IDL cannot be published by accident. The program's upgrade authority
-# creates the account; it or the account's explicit authority updates it
-# (client/programMetadata.ts).
+# alone writes the account (client/programMetadata.ts), so this runs only
+# before `initialize`.
 cmd_idl_publish() {
   require_cmd npx
   ensure_node_modules
