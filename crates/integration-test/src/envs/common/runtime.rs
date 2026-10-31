@@ -1,0 +1,383 @@
+//! The surfpool runtime an environment runs on, and the transactions it sends.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use anchor_lang::AccountSerialize;
+use anoma_pa_solana_client::instance::ProtocolAdapter;
+use anoma_pa_solana_client::{PlannedTransaction, decode_pa_state, derive_pa_state_pda};
+use anyhow::Context;
+use solana_commitment_config::CommitmentConfig;
+use solana_instruction::Instruction;
+use solana_keypair::Keypair;
+use solana_loader_v3_interface::state::UpgradeableLoaderState;
+use solana_message::{Hash, Message, VersionedMessage};
+use solana_rpc_client::nonblocking::rpc_client::RpcClient;
+use solana_rpc_client_types::response::RpcKeyedAccount;
+use solana_signature::Signature;
+use solana_signer::Signer;
+use solana_transaction::versioned::VersionedTransaction;
+use surfpool_sdk::cheatcodes::builders::{CheatcodeBuilder, DeployProgram, SetAccount};
+use surfpool_sdk::{
+    BlockProductionMode, Pubkey, Surfnet, SurfnetBuilder, SurfnetError, SurfnetResult,
+};
+
+/// The SOL the default signer starts with. surfpool refuses an airdrop of a
+/// million SOL; this covers every upload and settlement of a test run.
+const PAYER_LAMPORTS: u64 = 500_000_000_000;
+
+/// A runtime producing a block every 400 ms, mainnet's slot time, with a fresh
+/// funded default signer.
+fn builder(payer: &Keypair) -> SurfnetBuilder {
+    Surfnet::builder()
+        .block_production_mode(BlockProductionMode::Clock)
+        .slot_time_ms(400)
+        .airdrop_sol(PAYER_LAMPORTS)
+        .payer(payer.insecure_clone())
+}
+
+/// Held while a runtime starts. surfpool picks each of a runtime's ports by
+/// binding port 0 and releasing it, then binds the port again when its
+/// servers start, so a runtime starting at the same time can be handed the
+/// same port: one of them then fails to bind it, or, when its start-up check
+/// finds the port taken, fails without saying so (below).
+static STARTING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// How long a start may take. A start takes about a second, 7.3 s at most
+/// observed with 48 queued behind one another; surfpool only logs a failure
+/// before the runtime is ready (its runloop's error), and its start then
+/// waits for a ready signal that never comes, so a start that takes longer
+/// has failed.
+const START_DEADLINE: Duration = Duration::from_secs(60);
+
+/// Starts the runtime `configure` makes of the harness's (`builder`), once no
+/// other runtime of this process is starting. The two picks of one start can
+/// also return the same port, the second server then failing to bind it; such
+/// a start binds nothing, so the runtime starts again on newly picked ports.
+pub(in crate::envs) async fn start(
+    payer: &Keypair,
+    configure: impl Fn(SurfnetBuilder) -> SurfnetBuilder,
+) -> anyhow::Result<Surfnet> {
+    let _starting = STARTING.lock().await;
+    let mut attempt = 1;
+    loop {
+        match start_within(configure(builder(payer)), START_DEADLINE).await? {
+            Err(SurfnetError::Aborted(error)) if error.contains("AddrInUse") => {
+                eprintln!("surfpool start {attempt} picked a port twice, starting again: {error}");
+                attempt += 1;
+            }
+            started => return Ok(started?),
+        }
+    }
+}
+
+/// Starts `builder`'s runtime on a thread of its own, since surfpool blocks
+/// the thread it starts on until the runtime is ready; fails when that takes
+/// longer than `deadline`.
+async fn start_within(
+    builder: SurfnetBuilder,
+    deadline: Duration,
+) -> anyhow::Result<SurfnetResult<Surfnet>> {
+    let (done, started) = tokio::sync::oneshot::channel();
+    std::thread::Builder::new()
+        .name("surfpool-start".into())
+        .spawn(move || {
+            let started = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(1)
+                .enable_all()
+                .build()
+                .map(|runtime| runtime.block_on(builder.start()));
+            if done.send(started).is_err() {
+                // The caller passed its deadline and reported the failure;
+                // a runtime that started after all shuts down as it drops.
+            }
+        })
+        .context("failed to spawn the runtime's start-up thread")?;
+    tokio::time::timeout(deadline, started)
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "the surfpool runtime did not start within {deadline:?}: surfpool failed while \
+                 starting and only logged why"
+            )
+        })?
+        .context("the runtime's start-up thread ended without a result")?
+        .context("failed to build the start-up thread's tokio runtime")
+}
+
+/// A client of the runtime at `url` at `confirmed` commitment: surfpool
+/// produces blocks on a clock and never finalizes them, and a cluster's
+/// transactions confirm well before they finalize.
+pub(in crate::envs) fn client(url: String) -> Arc<RpcClient> {
+    Arc::new(RpcClient::new_with_commitment(
+        url,
+        CommitmentConfig::confirmed(),
+    ))
+}
+
+/// Sends `instructions` as one transaction with the runtime's default
+/// budget, signed by `payer` and `signers`, and waits for it to be confirmed;
+/// returns its signature. A refused transaction fails with the runtime's
+/// simulation logs.
+pub(in crate::envs) async fn send_signed(
+    rpc: &RpcClient,
+    payer: &Keypair,
+    signers: &[&Keypair],
+    instructions: &[Instruction],
+) -> anyhow::Result<Signature> {
+    let blockhash = latest_blockhash(rpc).await?;
+    let message = Message::new_with_blockhash(instructions, Some(&payer.pubkey()), &blockhash);
+    send_message(rpc, payer, signers, VersionedMessage::Legacy(message)).await
+}
+
+/// The runtime's latest blockhash.
+pub(in crate::envs) async fn latest_blockhash(rpc: &RpcClient) -> anyhow::Result<Hash> {
+    rpc.get_latest_blockhash()
+        .await
+        .context("failed to fetch a blockhash")
+}
+
+/// Sends one of a settlement's planned transactions, built on `blockhash` and
+/// signed by `payer`, as `send_signed` does.
+pub(in crate::envs) async fn send_planned(
+    rpc: &RpcClient,
+    payer: &Keypair,
+    transaction: &PlannedTransaction,
+    blockhash: Hash,
+) -> anyhow::Result<Signature> {
+    let message = transaction
+        .message(&payer.pubkey(), blockhash)
+        .context("failed to compile the transaction")?;
+    send_message(rpc, payer, &[], VersionedMessage::V1(message)).await
+}
+
+/// Signs `message` by `payer` and `signers`, sends it and waits for it to be
+/// confirmed.
+async fn send_message(
+    rpc: &RpcClient,
+    payer: &Keypair,
+    signers: &[&Keypair],
+    message: VersionedMessage,
+) -> anyhow::Result<Signature> {
+    // A signer that is also the payer signs once.
+    let all_signers: Vec<&Keypair> = std::iter::once(payer)
+        .chain(
+            signers
+                .iter()
+                .copied()
+                .filter(|signer| signer.pubkey() != payer.pubkey()),
+        )
+        .collect();
+    let transaction = VersionedTransaction::try_new(message, &all_signers)
+        .context("failed to sign the transaction")?;
+    // The client's error keeps the runtime's simulation, which a refused
+    // settlement is decoded from.
+    rpc.send_and_confirm_transaction(&transaction)
+        .await
+        .map_err(anyhow::Error::from)
+}
+
+/// Places `so` in a new loader buffer whose authority is `authority`, and
+/// returns the buffer: the code an upgrade installs. Like `deploy`, it sets
+/// the account the loader's writes would leave, the loader's buffer state
+/// followed by the code, at the rent-exempt balance; a program the size of
+/// the adapter would take hundreds of write transactions.
+pub(in crate::envs) async fn write_buffer(
+    surfnet: &Surfnet,
+    rpc: &RpcClient,
+    authority: Pubkey,
+    so: &[u8],
+) -> anyhow::Result<Pubkey> {
+    let buffer = Keypair::new().pubkey();
+    let mut data = bincode::serialize(&UpgradeableLoaderState::Buffer {
+        authority_address: Some(authority),
+    })
+    .context("failed to encode the buffer state")?;
+    data.extend_from_slice(so);
+    let lamports = rpc
+        .get_minimum_balance_for_rent_exemption(data.len())
+        .await
+        .context("failed to read the buffer's rent")?;
+    surfnet
+        .cheatcodes()
+        .execute(
+            SetAccount::new(buffer)
+                .lamports(lamports)
+                .data(data)
+                .owner(solana_sdk_ids::bpf_loader_upgradeable::id()),
+        )
+        .with_context(|| format!("failed to set the buffer {buffer}"))?;
+    Ok(buffer)
+}
+
+/// surfpool's `surfnet_setProgramAuthority`: the upgrade authority of an
+/// upgradeable program.
+struct SetProgramAuthority {
+    program: Pubkey,
+    authority: Pubkey,
+}
+
+impl CheatcodeBuilder for SetProgramAuthority {
+    const METHOD: &'static str = "surfnet_setProgramAuthority";
+
+    fn build(self) -> serde_json::Value {
+        serde_json::json!([self.program.to_string(), self.authority.to_string()])
+    }
+}
+
+/// Deploys `so` at `program`, upgradeable, with `authority` as its upgrade
+/// authority.
+pub(in crate::envs) fn deploy(
+    surfnet: &Surfnet,
+    program: Pubkey,
+    so: &[u8],
+    authority: Pubkey,
+) -> anyhow::Result<()> {
+    let cheats = surfnet.cheatcodes();
+    cheats
+        .deploy(DeployProgram::new(program).so_bytes(so.to_vec()))
+        .with_context(|| format!("failed to deploy {program}"))?;
+    cheats
+        .execute(SetProgramAuthority { program, authority })
+        .with_context(|| format!("failed to set the upgrade authority of {program}"))?;
+    Ok(())
+}
+
+/// Writes the account `dump` describes, and returns its address: a dump in
+/// `solana account --output json` form, as the adapter repository commits
+/// its devnet copies and genesis fixtures.
+pub(in crate::envs) fn set_account_dump(surfnet: &Surfnet, dump: &str) -> anyhow::Result<Pubkey> {
+    let RpcKeyedAccount { pubkey, account } =
+        serde_json::from_str(dump).context("the account dump is not one")?;
+    let address: Pubkey = pubkey.parse().context("the dump's pubkey is not base58")?;
+    let data = account
+        .data
+        .decode()
+        .with_context(|| format!("the dump of {address} holds no binary data"))?;
+    surfnet
+        .cheatcodes()
+        .execute(
+            SetAccount::new(address)
+                .lamports(account.lamports)
+                .data(data)
+                .owner(
+                    account
+                        .owner
+                        .parse()
+                        .context("the dump's owner is not base58")?,
+                )
+                .executable(account.executable),
+        )
+        .with_context(|| format!("failed to set account {address}"))?;
+    Ok(address)
+}
+
+/// Makes `owner` the owner of the adapter `pa` on a runtime forking a
+/// deployment: rewrites the adapter's state with it, keeping the rest of the
+/// state and the account's allocation.
+pub(in crate::envs) async fn take_ownership(
+    surfnet: &Surfnet,
+    rpc: &RpcClient,
+    pa: Pubkey,
+    owner: Pubkey,
+) -> anyhow::Result<()> {
+    let (pa_state, _) = derive_pa_state_pda(&pa);
+    let account = rpc
+        .get_account(&pa_state)
+        .await
+        .with_context(|| format!("the protocol adapter {pa} has no state account {pa_state}"))?;
+    let mut state = decode_pa_state(&account.data).context("failed to decode the adapter state")?;
+    state.owner = owner;
+    let mut encoded = Vec::new();
+    state
+        .try_serialize(&mut encoded)
+        .context("failed to encode the adapter state")?;
+    let mut data = account.data;
+    anyhow::ensure!(
+        encoded.len() <= data.len(),
+        "the adapter state encodes to {} bytes, more than its account's {}",
+        encoded.len(),
+        data.len()
+    );
+    data[..encoded.len()].copy_from_slice(&encoded);
+    surfnet
+        .cheatcodes()
+        .execute(
+            SetAccount::new(pa_state)
+                .lamports(account.lamports)
+                .data(data)
+                .owner(account.owner),
+        )
+        .with_context(|| format!("failed to write the adapter state {pa_state}"))?;
+    Ok(())
+}
+
+/// Initializes the adapter `pa`, deployed with `payer` as its upgrade
+/// authority: `payer` becomes its owner, with `router` and `selector`.
+pub(in crate::envs) async fn initialize(
+    rpc: &RpcClient,
+    payer: &Keypair,
+    pa: Pubkey,
+    router: Pubkey,
+    selector: [u8; 4],
+) -> anyhow::Result<()> {
+    send_signed(
+        rpc,
+        payer,
+        &[],
+        &[ProtocolAdapter::at(rpc, pa).initialize_ix(
+            &payer.pubkey(),
+            &payer.pubkey(),
+            &router,
+            selector,
+        )],
+    )
+    .await
+    .context("failed to initialize the protocol adapter")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Many runtimes starting at once in one process all come up: each
+    /// start picks its ports while the others pick theirs. 48 at once
+    /// failed 14 runs in 40 before starts waited for one another.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn runtimes_starting_at_once_all_come_up() {
+        const STARTS: usize = 48;
+        let starts = (0..STARTS).map(|i| async move {
+            let started = start(&Keypair::new(), |builder| builder).await;
+            started
+                .map_err(|error| format!("start {i}: {error:#}"))
+                .err()
+        });
+        let failures: Vec<String> = futures::future::join_all(starts)
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// A runtime that fails while starting (here, forking a cluster no RPC
+    /// endpoint serves) fails its start: surfpool only logs such a failure,
+    /// and its start waits for a ready signal that never comes.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_runtime_that_fails_to_start_fails_its_start() {
+        let forking_nothing =
+            builder(&Keypair::new()).remote_rpc_url("http://127.0.0.1:9".to_string());
+        match start_within(forking_nothing, Duration::from_secs(10)).await {
+            Err(error) => assert!(
+                error.to_string().contains("did not start within"),
+                "the start failed otherwise: {error:#}"
+            ),
+            Ok(Ok(surfnet)) => panic!(
+                "a runtime forking no cluster started at {}",
+                surfnet.rpc_url()
+            ),
+            Ok(Err(error)) => panic!("surfpool reported the failure itself: {error}"),
+        }
+    }
+}

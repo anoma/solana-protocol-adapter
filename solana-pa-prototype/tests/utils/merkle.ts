@@ -1,0 +1,93 @@
+import * as anchor from "@anchor-lang/core";
+import { PublicKey } from "@solana/web3.js";
+import { Program } from "@anchor-lang/core";
+import { createHash } from "crypto";
+import { ProtocolAdapter } from "../../target/types/protocol_adapter";
+import { EMPTY_TREE_ROOT_INITIAL } from "./constants";
+import { deriveRootMarkerPda } from "../../client/pda";
+
+// merkle.rs: the depth of the deepest tree, and the most leaves it holds.
+const MAX_TREE_DEPTH = 33;
+const MAX_LEAF_COUNT = 1n << BigInt(MAX_TREE_DEPTH - 1);
+
+function hashTwo(left: Buffer, right: Buffer): Buffer {
+  return createHash("sha256").update(left).update(right).digest();
+}
+
+// ZEROS[0] = PADDING_LEAF; ZEROS[i] = hash(ZEROS[i-1], ZEROS[i-1]) — the
+// zero-subtree hashes from merkle.rs, one per level of the deepest tree,
+// derived rather than copied.
+const ZEROS: Buffer[] = (() => {
+  const zeros: Buffer[] = [EMPTY_TREE_ROOT_INITIAL];
+  for (let i = 1; i < MAX_TREE_DEPTH; i++) {
+    zeros.push(hashTwo(zeros[i - 1], zeros[i - 1]));
+  }
+  return zeros;
+})();
+
+type TreeState = {
+  nextIndex: anchor.BN;
+  frontier: number[][];
+};
+
+// merkle.rs `push` for each leaf, then `current_root`.
+function computeRootAfterAppend(state: TreeState, leaves: Buffer[]): Buffer {
+  let nextIndex = BigInt(state.nextIndex.toString());
+  const frontier: Buffer[] = state.frontier.map((f) => Buffer.from(f));
+
+  for (const leaf of leaves) {
+    if (nextIndex >= MAX_LEAF_COUNT) {
+      throw new Error("the commitment tree is full (2^32 leaves)");
+    }
+    let nodeIndex = nextIndex;
+    nextIndex += 1n;
+
+    let node: Buffer = leaf;
+    let level = 0;
+    while ((nodeIndex & 1n) === 1n) {
+      node = hashTwo(frontier[level], node);
+      level += 1;
+      nodeIndex >>= 1n;
+    }
+    // A leaf that fills the tree grows it by one level.
+    frontier[level] = node;
+  }
+
+  let nodeIndex = nextIndex;
+  let node: Buffer = ZEROS[0];
+  for (let level = 0; level < frontier.length; level++) {
+    node = (nodeIndex & 1n) === 1n ? hashTwo(frontier[level], node) : hashTwo(node, ZEROS[level]);
+    nodeIndex >>= 1n;
+  }
+  return node;
+}
+
+/**
+ * The marker PDA of the root the adapter will hold after appending
+ * `createdCommitments`, or null when there are none: a settlement that
+ * creates nothing produces no root and takes no marker. The produced root is
+ * only known after the append, so a submitter fetches the tree state and
+ * replays the appends locally (merkle.rs `push`, including the
+ * expand-after-fill growth step, then `current_root`).
+ * A wrong prediction cannot settle: the program rejects it with
+ * RootPdaMismatch, so the on-chain check keeps this replica honest.
+ */
+export async function predictRootMarkerPda(
+  program: Program<ProtocolAdapter>,
+  paState: PublicKey,
+  createdCommitments: Buffer[],
+): Promise<PublicKey | null> {
+  if (createdCommitments.length === 0) return null;
+  const root = await predictRootAfterAppend(program, paState, createdCommitments);
+  return deriveRootMarkerPda(paState, root, program.programId);
+}
+
+/** The root the adapter will hold after appending `createdCommitments` to its current tree. */
+export async function predictRootAfterAppend(
+  program: Program<ProtocolAdapter>,
+  paState: PublicKey,
+  createdCommitments: Buffer[],
+): Promise<Buffer> {
+  const state = await program.account.paStateAccount.fetch(paState);
+  return computeRootAfterAppend(state, createdCommitments);
+}
