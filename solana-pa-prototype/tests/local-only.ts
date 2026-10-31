@@ -10,7 +10,6 @@ import {
   localCloseAllMarkers,
   localCloseMarkersBatch,
   localRenounceAdapterOwnership,
-  localSetIdlAuthority,
   localSetUpgradeAuthorityIx,
   localTransferAdapterOwnership,
 } from "./utils/localOnly";
@@ -45,19 +44,13 @@ describe("authority and closing instructions are local-only", () => {
       for (const [name, build] of Object.entries(builders(liveAdapter()))) {
         assert.throws(build, /local validator/, `${name} was built against ${endpoint}`);
       }
-      for (const [name, run] of Object.entries({
-        "close all markers": () => localCloseAllMarkers(liveAdapter(), someone()),
-        "set an IDL account's authority": () =>
-          localSetIdlAuthority(endpoint, process.env.ANCHOR_WALLET!, someone(), someone()),
-      })) {
-        let refused = false;
-        try {
-          await run();
-        } catch (e) {
-          refused = /local validator/.test((e as Error).message);
-        }
-        assert.isTrue(refused, `${name} ran against ${endpoint}`);
+      let refused = false;
+      try {
+        await localCloseAllMarkers(liveAdapter(), someone());
+      } catch (e) {
+        refused = /local validator/.test((e as Error).message);
       }
+      assert.isTrue(refused, `close all markers ran against ${endpoint}`);
     });
   }
 

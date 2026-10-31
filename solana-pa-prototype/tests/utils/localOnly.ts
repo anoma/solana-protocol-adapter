@@ -2,19 +2,15 @@
  * The only builders in this repository for instructions that change an
  * authority or close protocol accounts for good: the adapter's
  * `transfer_ownership`, `renounce_ownership` and dev-build
- * `close_markers_batch` (settlement replay protection), the loader's
- * `SetAuthority` and the Program Metadata program's `SetAuthority` on a
- * canonical IDL account. They exist
- * for the tests and refuse any RPC endpoint that is not this machine's, so no
+ * `close_markers_batch` (settlement replay protection) and the loader's
+ * `SetAuthority`. They exist for the tests and refuse any RPC endpoint that is not this machine's, so no
  * repository code can do any of this on devnet or mainnet; there, it is done
  * by hand (docs/OPERATIONS.md).
  */
 import { Program } from "@anchor-lang/core";
-import { address } from "@solana/kit";
 import { Connection, PublicKey, TransactionInstruction } from "@solana/web3.js";
 import { ProtocolAdapter } from "../../target/types/protocol_adapter";
 import { BPF_LOADER_UPGRADEABLE, deriveProgramDataPda, derivePaStatePda } from "../../client/pda";
-import { canonicalIdlAccount, programMetadataClient } from "../../client/programMetadata";
 
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 const BATCH_SIZE = 20;
@@ -55,32 +51,6 @@ export function localSetUpgradeAuthorityIx(
     // UpgradeableLoaderInstruction::SetAuthority, a u32 little-endian variant index.
     data: Buffer.from([4, 0, 0, 0]),
   });
-}
-
-/**
- * The Program Metadata program's `SetAuthority` on `program`'s canonical IDL
- * account: `newAuthority` becomes its explicit authority, signed by the
- * program's upgrade authority, the keypair file `walletPath`.
- */
-export async function localSetIdlAuthority(
-  rpcUrl: string,
-  walletPath: string,
-  program: PublicKey,
-  newAuthority: PublicKey,
-): Promise<void> {
-  assertLocalValidator(new Connection(rpcUrl));
-  const client = await programMetadataClient(rpcUrl, walletPath);
-  const programAddress = address(program.toBase58());
-  const { metadata, programData } = await canonicalIdlAccount(client, programAddress);
-  await client.programMetadata.instructions
-    .setAuthority({
-      account: metadata,
-      authority: client.identity,
-      program: programAddress,
-      programData,
-      newAuthority: address(newAuthority.toBase58()),
-    })
-    .sendTransaction();
 }
 
 /** The adapter's `transfer_ownership` by its owner `authority`, to `newOwner`. */

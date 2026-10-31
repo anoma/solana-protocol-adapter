@@ -1,11 +1,10 @@
 /**
  * `idl-publish` through client/programMetadata.ts: a program's upgrade
- * authority creates its canonical IDL account and makes the owner its
- * explicit authority; once the upgrade authority is a key the owner cannot
- * sign for (a program's own PDA, after `initialize`), the owner still updates
- * the account as its explicit authority. The Program Metadata CLI refuses that
- * update, which is why the library writes it. Exercised on the localnet test
- * forwarder, whose upgrade authority the provider wallet holds at genesis.
+ * authority creates its canonical IDL account, and no other signer writes it,
+ * so once the upgrade authority is a key the wallet cannot sign for (a
+ * program's own PDA, after `initialize`), the account keeps what was
+ * published. Exercised on the localnet test forwarder, whose upgrade authority
+ * the provider wallet holds at genesis.
  */
 import { mkdtempSync, readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
@@ -16,7 +15,7 @@ import { assert } from "chai";
 import { fetchMetadataContent } from "@solana-program/program-metadata";
 import { publishIdl } from "../client/programMetadata";
 import { upgradeAuthority } from "../client/upgrade";
-import { localSetIdlAuthority, localSetUpgradeAuthorityIx } from "./utils/localOnly";
+import { localSetUpgradeAuthorityIx } from "./utils/localOnly";
 import { provider, testForwarderProgram, useAdapterSuite } from "./utils/adapterSuite";
 
 describe("idl-publish @localnet", () => {
@@ -43,12 +42,11 @@ describe("idl-publish @localnet", () => {
       (await upgradeAuthority(provider.connection, program))?.toBase58(),
       provider.wallet.publicKey.toBase58(),
     );
-    assert.equal(await publishIdl(rpcUrl, wallet, idlFile("1.0.0")), "upgrade authority");
+    await publishIdl(rpcUrl, wallet, idlFile("1.0.0"));
     assert.equal(await servedVersion(), "1.0.0");
   });
 
-  it("updates it as the account's explicit authority once the wallet no longer holds the upgrade authority", async () => {
-    await localSetIdlAuthority(rpcUrl, wallet, program, provider.wallet.publicKey);
+  it("refuses the wallet once it no longer holds the upgrade authority, before sending anything", async () => {
     const elsewhere = Keypair.generate().publicKey;
     await provider.sendAndConfirm(
       new Transaction().add(
@@ -57,21 +55,13 @@ describe("idl-publish @localnet", () => {
     );
     assert.equal((await upgradeAuthority(provider.connection, program))?.toBase58(), elsewhere.toBase58());
 
-    assert.equal(await publishIdl(rpcUrl, wallet, idlFile("2.0.0")), "metadata authority");
-    assert.equal(await servedVersion(), "2.0.0");
-  });
-
-  it("refuses a signer that is neither, before sending anything", async () => {
-    const stranger = Keypair.generate();
-    const strangerFile = join(mkdtempSync(join(tmpdir(), "idl-publish-")), "stranger.json");
-    writeFileSync(strangerFile, JSON.stringify(Array.from(stranger.secretKey)));
     let refusal = "";
     try {
-      await publishIdl(rpcUrl, strangerFile, idlFile("3.0.0"));
+      await publishIdl(rpcUrl, wallet, idlFile("2.0.0"));
     } catch (e) {
       refusal = (e as Error).message;
     }
-    assert.match(refusal, /can write neither/);
-    assert.equal(await servedVersion(), "2.0.0");
+    assert.match(refusal, new RegExp(`cannot write .*upgrade authority is ${elsewhere.toBase58()}`));
+    assert.equal(await servedVersion(), "1.0.0");
   });
 });
