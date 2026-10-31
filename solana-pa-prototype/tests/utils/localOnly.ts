@@ -3,9 +3,9 @@
  * authority or close protocol accounts for good: the adapter's
  * `transfer_ownership`, `renounce_ownership` and dev-build
  * `close_markers_batch` (settlement replay protection) and the loader's
- * `SetAuthority`. They exist for the tests and refuse any RPC endpoint that is not this machine's, so no
- * repository code can do any of this on devnet or mainnet; there, it is done
- * by hand (docs/OPERATIONS.md).
+ * `SetAuthority`. They exist for the tests and refuse any RPC endpoint that
+ * is not this machine's, so no repository code can do any of this on devnet
+ * or mainnet; there, it is done by hand (docs/OPERATIONS.md).
  */
 import { Program } from "@anchor-lang/core";
 import { Connection, PublicKey, TransactionInstruction } from "@solana/web3.js";

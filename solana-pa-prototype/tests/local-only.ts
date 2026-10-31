@@ -66,7 +66,8 @@ describe("no code outside tests/utils/localOnly.ts changes an authority or close
   const LOCAL_ONLY = "tests/utils/localOnly.ts";
   /**
    * The adapter instructions localOnly.ts alone may build, any instruction
-   * to the loader, and the Program Metadata program's SetAuthority.
+   * to the loader, and the Program Metadata program's SetAuthority, which
+   * nothing builds.
    */
   const TS_AUTHORITY_CALL =
     /\.(transferOwnership|renounceOwnership|closeMarkersBatch|setAuthority)\s*\(|programId:\s*BPF_LOADER_UPGRADEABLE|getSetAuthority(?=Instruction\b)/;
