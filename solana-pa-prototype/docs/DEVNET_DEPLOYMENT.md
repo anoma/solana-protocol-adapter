@@ -2,15 +2,15 @@
 
 Live state is always what `./scripts/dev.sh status --cluster devnet` reports; this file records what was deployed, by whom, and when. Update it after every deploy, upgrade, pause, unpause, or teardown.
 
-**Record last verified:** 2026-10-27
+**Record last verified:** 2026-10-31
 
-## V2 fresh deployment (addresses since 2026-10-27, not yet deployed)
+## V2 deployment of 2026-10-30
 
-A deployment from scratch under new program IDs, for the clients generated from the programs' IDLs; the 2026-10-01 deployment below stays on devnet, unused. `env/devnet.env` names its addresses, and the operator's uncommitted `env/devnet.keys.env` names the program keypair, kept outside the repository.
+A deployment from scratch under new program IDs, for the clients generated from the programs' IDLs; the 2026-10-01 deployment below stays on devnet, unused. `env/devnet.env` names its addresses, and the operator's uncommitted `env/devnet.keys.env` names the program keypair, kept outside the repository. Deployed 2026-10-30 by the operator wallet `5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9`, the adapter's stored owner; `initialize` handed the upgrade authority to the program's PDA `FjJmYvFbC8zbsGS1zqzVvVaksUH9G4iTvf5siWovdXRC` (seed `upgrade_authority`), so upgrades go through the owner-only `upgrade` (`dev.sh upgrade`).
 
 | Program | ID | State |
 |---|---|---|
-| Protocol Adapter | `2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx` | not yet deployed |
+| Protocol Adapter | `2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx` | deployed 2026-10-30, slot 516619497, from `contracts/v2.0.0-rc.11` `7e1d46a` (protocol-adapter 2.0.0-rc.11; the deterministic `solana-verify` build, executable hash `7700a865e3c6040493ab5562ab64e6a3bcb259d5efee348d30e5e9dfabc20d2a`, which the deployed program matches; `dev.sh deploy pa --prebuilt`, `ZHVnivHsopVZQjgnwTt96w63p86Cqn2DLxCuDAq4nzckhew1mTu32n83aECxqx2sbdPLbEATkG8h89R7uxSfKRt`), which wrote the production IDL to the canonical Program Metadata account `GeJrWfAmMVj7QT9noRUTfLdCfsYG8aoRGy6GUZLVgVrr`; the operator wallet wrote the `security` account `23DiVNzj3s7nrcJRjWuZdfZpDLsJvT4ZBUrCtcFeVByZ` (`2dm3aWW1dxMc1WQDNch9M6fShWqEEJPvUxwpRDMEMtcxPxiL2JFvEFsJiYSExgtsfH6cLrMmUbZm5oJyeoV6cVX9`). Initialized 2026-10-31 (`dev.sh init`, `2rb7PtJcU31VgaK3NtanL6DHDB1uJxDmWkXXzMBYVyrhR3T6qqPUi8iVcjmshh3eaw9gWdktSwyu9DekCVNET9Fx`): PAState `EGcn3mcy4oaoYWzQQkAGi35ypNgUxo5kTyZUyPM4ygtN` (schema 4) with the verifier router `BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg`, proof selector `73c457ba`, the empty kind tree root, an empty commitment tree, not paused, no denied logic refs. ProgramData `EjAoZUfxd6rNcM2S2cV1CiPwVTKR7Eg8fPmSSH6RB3UU` |
 | Block Time Forwarder | `3mesRGxMv9wRB1xp7X4uxbf7GwnQC9PpHSJyCzcXwrsf` | the 2026-10-01 deployment's (stateless) |
 
 The SPL token forwarder this adapter serves, `34kd782wMwzkdwGFS5jfGGdTAz8zbaxVczQHs3E8oKF4`, is recorded in anoma/anomapay-spl-token-forwarder's `docs/DEVNET_DEPLOYMENT.md`.
