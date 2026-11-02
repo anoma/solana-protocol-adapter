@@ -29,27 +29,27 @@
 
           # nixos-26.05 ships anchor 1.0.2, not the Anchor the programs build
           # with, so the CLI is built here with the pinned toolchain, from the
-          # commit solana-pa-prototype/Cargo.toml pins (see there).
+          # release solana-pa-prototype/Cargo.toml pins.
           anchorCli = (pkgs.makeRustPlatform {
             cargo = rustToolchain;
             rustc = rustToolchain;
-          }).buildRustPackage {
+          }).buildRustPackage (finalAttrs: {
             pname = "anchor";
-            version = "1.2.1";
+            version = "1.2.2";
 
             src = pkgs.fetchFromGitHub {
               owner = "otter-sec";
               repo = "anchor";
-              rev = "2c9747a2d31bd5e94745cee6c083577f3e6675c0";
-              hash = "sha256-YyGyvSC4Tdiu/xmIRChCT8Y5Am5CteLSJbUyo0Cdfy8=";
+              tag = "v${finalAttrs.version}";
+              hash = "sha256-YcQWgNeT/2dvU1dnieo42z5VXnZRoZK9PMGmV/rFxFk=";
               fetchSubmodules = true;
             };
 
-            cargoHash = "sha256-yaHGreugJzFRVdKEQLInL/X3ls0AgleV1EO6thmbsf8=";
+            cargoHash = "sha256-obD/QyRliNheBvcj2islxaZ6RgM60l8O69jLUmxlLyc=";
 
             cargoBuildFlags = [ "-p" "anchor-cli" ];
             cargoTestFlags = [ "-p" "anchor-cli" ];
-          };
+          });
 
           solanaRelease = {
             "x86_64-linux" = {
@@ -74,7 +74,7 @@
 
           solanaVersion = "4.3.0";
 
-          # The platform-tools release cargo-build-sbf 4.3.0 and Anchor 1.2.1
+          # The platform-tools release cargo-build-sbf 4.3.0 and Anchor 1.2.2
           # both default to (Rust 1.95, LLVM 22).
           platformToolsVersion = "v1.57";
 

@@ -11,10 +11,7 @@ resolver = "2"
 solana = "4.3.0"
 
 [workspace.dependencies]
-# An Anchor commit with solana-foundation/anchor#4737, which lets a program with
-# a field-less accounts struct compile with `cpi`. No published Anchor has the
-# fix: with 1.2.1, `#[program]` fails E0107 on `Version {}`.
-anchor-lang = { git = "https://github.com/otter-sec/anchor", rev = "2c9747a2d31bd5e94745cee6c083577f3e6675c0" }
+anchor-lang = "1.2.2"
 
 [profile.release]
 overflow-checks = true
