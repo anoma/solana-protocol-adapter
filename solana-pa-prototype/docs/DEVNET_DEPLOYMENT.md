@@ -15,6 +15,8 @@ A deployment from scratch under new program IDs, for the clients generated from 
 
 The SPL token forwarder this adapter serves, `34kd782wMwzkdwGFS5jfGGdTAz8zbaxVczQHs3E8oKF4`, is recorded in anoma/anomapay-spl-token-forwarder's `docs/DEVNET_DEPLOYMENT.md`.
 
+- **Kind tree root 2026-11-02:** the adapter was given anoma/risc0-kind-trees' solana-devnet root `af631616f0064e9450346e61c667e08b7ba29bbe8b534c90ab137cf72384785e` (anoma/risc0-kind-trees#64 at `e90e7cd`; `dev.sh set-kind-tree-root`, slot 517915013, `3wBEvfSyUe1Zm7qDpJNhQjHffdwRzqaDKdcJdfWC9K89UFUv4n3PWBJuT2vaWrAkNTyAH6wNRB948vfqY5eGikm9`), the Merkle root of the tree whose active transfer logic is `c17a7ca5…` (anoma/anomapay-solana-resource 2.0.0-rc.12), the logic ref the forwarder `34kd…` accepts, with each member's label taken under that forwarder.
+
 ## V2 deployment of 2026-10-01 (unused since 2026-10-27)
 
 Deployed 2026-10-01 from `anthony/devnet-v2-redeploy` (production builds under new program IDs, since the previous adapter is final), by the operator wallet `5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9`. Since 2026-10-03 that wallet is the stored owner of both programs, and each program's upgrade authority is its own PDA (seed `upgrade_authority`): the adapter's `5D4ACkUCDEYx9wHWyzjmyU8Awjc8JK8sQAuzzC5ny8C6`, the forwarder's `2z6EPiBxM5Pfubmrouj8qSCZJrSveuDEbe2xvNbVzgvd`. Upgrades go through each program's owner-only `upgrade` (`dev.sh upgrade`).
