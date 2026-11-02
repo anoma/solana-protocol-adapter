@@ -1417,7 +1417,7 @@ dependencies = [
 
 [[package]]
 name = "anoma-pa-solana-integration-test"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anchor-lang",
  "anoma-pa-solana-client",
