@@ -1,4 +1,4 @@
-//! The client's adapter instance (`anoma_pa_solana_client::instance`), pa-evm's
+//! The client's adapter instance (`anoma_pa_solana_client::contract`), pa-evm's
 //! `IProtocolAdapter` bindings on Solana, against a deployed adapter: each
 //! read answers what the test set up, the settlement it builds is the one the
 //! adapter settled, and an adapter never initialized has no state to answer
@@ -6,10 +6,11 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use anoma_pa_solana_client::contract::ProtocolAdapterInstance;
+use anoma_pa_solana_client::error::BindingsError;
 use anoma_pa_solana_client::generated::protocol_adapter::events::{
     ActionExecuted, CommitmentTreeRootAdded,
 };
-use anoma_pa_solana_client::instance::{InstanceError, ProtocolAdapter};
 use anoma_pa_solana_client::settlement_input::{settled_resources, settlement_input};
 use anoma_pa_solana_client::{
     CommitmentTreeState, MOCK_SELECTOR, PADDING_LEAF, SettlementAccounts, derive_nullifier_pda,
@@ -96,8 +97,8 @@ async fn every_read_answers_what_the_adapter_was_set_up_with() -> anyhow::Result
     let payer = env.protocol_adapter.payer()?.clone();
     let rpc = env.protocol_adapter.rpc.clone();
     let router: Pubkey = VERIFIER_ROUTER.parse()?;
-    let instance = ProtocolAdapter::at(&rpc, pa);
-    anyhow::ensure!(instance.program_id() == pa, "the instance is not at {pa}");
+    let instance = ProtocolAdapterInstance::new(pa, &rpc);
+    anyhow::ensure!(instance.address() == pa, "the instance is not at {pa}");
 
     env.protocol_adapter
         .set_kind_tree_root(Digest::from_bytes(KIND_TREE_ROOT))
@@ -337,11 +338,11 @@ async fn every_read_answers_what_the_adapter_was_set_up_with() -> anyhow::Result
 fn missing<T: std::fmt::Debug>(
     state: Pubkey,
     read: &str,
-    result: Result<T, InstanceError>,
+    result: Result<T, BindingsError>,
 ) -> anyhow::Result<()> {
     println!("{read}: {result:?}");
     anyhow::ensure!(
-        matches!(&result, Err(InstanceError::AccountMissing { address }) if *address == state),
+        matches!(&result, Err(BindingsError::AccountMissing { address }) if *address == state),
         "{read} on an adapter never initialized is {result:?}, not AccountMissing of its state \
          {state}"
     );
@@ -362,7 +363,7 @@ async fn an_adapter_never_initialized_has_no_state_to_read() -> anyhow::Result<(
         payer,
     )?;
     let rpc = env.protocol_adapter.rpc.clone();
-    let instance = ProtocolAdapter::at(&rpc, program);
+    let instance = ProtocolAdapterInstance::new(program, &rpc);
     let state = derive_pa_state_pda(&program).0;
 
     missing(state, "paused", instance.paused().await)?;

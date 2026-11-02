@@ -419,8 +419,8 @@ dependencies = [
 
 [[package]]
 name = "anoma-pa-solana-client"
-version = "0.10.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?tag=bindings%2Fv0.10.0#26a612eb0ee3353e03f73447ac080c5615c708ce"
+version = "0.12.0"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?tag=bindings%2Fv0.12.0#04b3ba00084cca858f8b73a4c503435c0d01f90d"
 dependencies = [
  "anoma-rm-risc0",
  "bincode",

@@ -207,7 +207,7 @@ fn adapter_idl_instructions() -> anyhow::Result<Vec<(String, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anoma_pa_solana_client::instance::ProtocolAdapter;
+    use anoma_pa_solana_client::contract::ProtocolAdapterInstance;
     use solana_rpc_client::nonblocking::rpc_client::RpcClient;
 
     const ADAPTER: Pubkey = Pubkey::new_from_array([1; 32]);
@@ -280,7 +280,7 @@ mod tests {
     fn the_adapters_authority_instructions_are_refused_by_their_idl_names() {
         let cluster = LiveCluster::new(ADAPTER);
         let rpc = RpcClient::new("http://127.0.0.1:1".to_string());
-        let instance = ProtocolAdapter::at(&rpc, ADAPTER);
+        let instance = ProtocolAdapterInstance::new(ADAPTER, &rpc);
         for (name, ix) in [
             (
                 "initialize",
@@ -317,7 +317,7 @@ mod tests {
     fn settlements_and_the_open_programs_are_sent() {
         let cluster = LiveCluster::new(ADAPTER);
         let rpc = RpcClient::new("http://127.0.0.1:1".to_string());
-        let instance = ProtocolAdapter::at(&rpc, ADAPTER);
+        let instance = ProtocolAdapterInstance::new(ADAPTER, &rpc);
         let accounts = || anoma_pa_solana_client::SettlementAccounts {
             new_root_marker: None,
             verifier_router_program: KEY,

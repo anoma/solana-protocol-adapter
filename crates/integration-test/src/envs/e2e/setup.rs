@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use anoma_pa_solana_client::deployments::{chain_id, chain_id_of_genesis_hash};
 use anoma_pa_testkit::prover::{QueueProver, Risc0Prover};
 use anyhow::Context;
 use solana_cluster_type::ClusterType;
@@ -99,15 +98,16 @@ impl Environment {
     }
 }
 
-/// Refuses a cluster whose genesis hash is `genesis_hash` unless its CAIP-2
-/// chain id is devnet's.
+/// Refuses a cluster whose genesis hash is `genesis_hash` unless it is
+/// devnet's.
 fn ensure_devnet(genesis_hash: &solana_message::Hash) -> anyhow::Result<()> {
-    let found = chain_id_of_genesis_hash(genesis_hash);
-    let devnet = chain_id(ClusterType::Devnet).context("devnet has no recorded genesis hash")?;
+    let devnet = ClusterType::Devnet
+        .get_genesis_hash()
+        .context("devnet has no recorded genesis hash")?;
     anyhow::ensure!(
-        found == devnet,
-        "E2E_RPC_URL serves the cluster {found}, not devnet {devnet}, whose adapter the cluster \
-         runtime settles on"
+        *genesis_hash == devnet,
+        "E2E_RPC_URL serves the cluster of genesis hash {genesis_hash}, not devnet's \
+         {devnet}, whose adapter the cluster runtime settles on"
     );
     Ok(())
 }
@@ -123,11 +123,12 @@ mod tests {
         for cluster in [ClusterType::MainnetBeta, ClusterType::Testnet] {
             let refused = ensure_devnet(&hash(cluster)).unwrap_err();
             println!("{cluster:?}: {refused:#}");
-            let found = chain_id(cluster).unwrap();
             assert!(
-                refused
-                    .to_string()
-                    .contains(&format!("serves the cluster {found}, not devnet")),
+                refused.to_string().contains(&format!(
+                    "serves the cluster of genesis hash {}, not devnet's {}",
+                    hash(cluster),
+                    hash(ClusterType::Devnet)
+                )),
                 "{cluster:?}: {refused:#}"
             );
         }
