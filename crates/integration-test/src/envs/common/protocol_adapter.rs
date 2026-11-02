@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use anchor_lang::{AnchorDeserialize, Discriminator};
+use anoma_pa_solana_client::contract::ProtocolAdapterInstance;
 use anoma_pa_solana_client::forwarders::Forwarders;
 use anoma_pa_solana_client::generated::U256LeBytes;
 use anoma_pa_solana_client::generated::protocol_adapter::accounts::PAStateAccount;
@@ -10,7 +11,6 @@ use anoma_pa_solana_client::generated::protocol_adapter::events::{
     ForwarderCallExecuted, ResourcePayload, TransactionExecuted,
 };
 use anoma_pa_solana_client::generated::protocol_adapter::types;
-use anoma_pa_solana_client::instance;
 use anoma_pa_solana_client::settlement::SettlementPlan;
 use anoma_pa_solana_client::submission::{
     Failure, SimulationOutcome, Submission, read_adapter_state, read_verifier_program,
@@ -127,8 +127,8 @@ impl ProtocolAdapter {
 
     /// The adapter as the client's instance of it: its reads, and its
     /// instructions built for its address.
-    pub fn instance(&self) -> instance::ProtocolAdapter<'_> {
-        instance::ProtocolAdapter::at(&self.rpc, self.program)
+    pub fn instance(&self) -> ProtocolAdapterInstance<'_> {
+        ProtocolAdapterInstance::new(self.program, &self.rpc)
     }
 
     /// The adapter's state account, as it is now.

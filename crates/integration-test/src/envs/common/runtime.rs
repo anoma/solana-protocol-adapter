@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anchor_lang::AccountSerialize;
-use anoma_pa_solana_client::instance::ProtocolAdapter;
+use anoma_pa_solana_client::contract::ProtocolAdapterInstance;
 use anoma_pa_solana_client::{PlannedTransaction, decode_pa_state, derive_pa_state_pda};
 use anyhow::Context;
 use solana_commitment_config::CommitmentConfig;
@@ -325,7 +325,7 @@ pub(in crate::envs) async fn initialize(
         rpc,
         payer,
         &[],
-        &[ProtocolAdapter::at(rpc, pa).initialize_ix(
+        &[ProtocolAdapterInstance::new(pa, rpc).initialize_ix(
             &payer.pubkey(),
             &payer.pubkey(),
             &router,
