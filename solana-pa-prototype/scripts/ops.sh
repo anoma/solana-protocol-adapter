@@ -103,11 +103,14 @@ Commands:
                          (devnet-programs/) with devnet's current state
   validator-deploy       Build, start the validator with all programs
                          loaded at genesis, and keep it running
+  lock-check             Fail when a Cargo.lock is not the resolution of its
+                         manifests, or the lockfiles pin a shared package
+                         differently
 
 Flags:
   --cluster <c>    Target cluster (required except test/unit-test/build-dev/build-release/
                    idl-write/idl-check/clippy/validator/validator-deploy/harness-programs/harness-lint/
-                   harness-test; optional for verify-build). Program addresses
+                   harness-test/lock-check; optional for verify-build). Program addresses
                    come from env/localnet.env and, for another cluster,
                    env/<cluster>.env on top; a
                    first deploy reads each program's keypair path from the
@@ -1062,6 +1065,11 @@ case "$COMMAND" in
       # The e2e environment's unit tests (its config), which prove nothing.
       cargo test --manifest-path "${HARNESS_DIR}/Cargo.toml" --features e2e --lib envs::e2e::
     fi
+    ;;
+  lock-check)
+    require_cmd cargo
+    ensure_lockfile_sync
+    echo "All Cargo.lock files are in sync."
     ;;
   refresh-devnet-programs)
     if [[ -z "$RPC_OVERRIDE" ]]; then

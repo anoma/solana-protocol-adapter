@@ -39,6 +39,11 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: cargo fmt --all --check
 
+      # The other jobs' cargo would silently re-resolve a stale lockfile.
+      - name: Check the Cargo.lock files
+        working-directory: ./solana-pa-prototype
+        run: ./scripts/ops.sh lock-check
+
   # Clippy linting
   clippy:
     name: Clippy

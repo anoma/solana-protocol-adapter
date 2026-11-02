@@ -113,15 +113,13 @@ case "${1:-}" in
 
   gen-fixtures)
     shift
-    ensure_lockfile_sync
-    run_in_project "cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- $*"
+    run_in_project "./scripts/ops.sh lock-check && cargo run --release --manifest-path tools/fixture-gen/Cargo.toml -- $*"
     ;;
 
   regen-fixtures)
     # Regenerate the COMPLETE fixture set for one proof mode, sequentially.
     shift
-    ensure_lockfile_sync
-    run_in_project "./scripts/regen-fixtures.sh $(printf '%q ' "$@")"
+    run_in_project "./scripts/ops.sh lock-check && ./scripts/regen-fixtures.sh $(printf '%q ' "$@")"
     ;;
 
   lock-sync)
@@ -129,7 +127,7 @@ case "${1:-}" in
     ;;
 
   lock-check)
-    ensure_lockfile_sync && echo "All Cargo.lock files are in sync."
+    run_in_project "./scripts/ops.sh lock-check"
     ;;
 
   fixture-test)
@@ -285,7 +283,7 @@ PYEOF
     echo "  update-deps  Regenerate yarn.lock"
     echo "  coverage     Run unit tests with kcov and report line coverage"
     echo "  clean        Remove local validator/test artifacts"
-    echo "  lock-check   Verify Cargo.lock files agree on shared git deps"
+    echo "  lock-check   Verify each Cargo.lock is its manifests' resolution and they agree on shared deps"
     echo "  lock-sync    Re-lock every Cargo.lock to its manifests' pins"
     echo "  run <cmd>    Run an arbitrary command in the Nix dev shell"
     echo ""
