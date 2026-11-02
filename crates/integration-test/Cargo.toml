@@ -34,7 +34,9 @@ anoma-pa-solana-client = { version = "0.12.1", features = [
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "c2a44b6a466b21176aa2e3ee82684e1882588b81", default-features = false, features = [
   "fixtures",
 ] }
-anoma-risc0-kind-trees = { git = "https://github.com/anoma/risc0-kind-trees", rev = "999fcf47627468fd35ad8ad16464ce28f6e443dd", features = [
+# The head of anoma/risc0-kind-trees#64 (open), whose solana-devnet tree is
+# the one devnet's adapter holds (root af631616…).
+anoma-risc0-kind-trees = { git = "https://github.com/anoma/risc0-kind-trees", rev = "a6e57196c4b0e72e7f82736e7bea5030ca4a337c", features = [
   "arm",
 ], optional = true }
 anoma-rm-risc0 = { version = "2.0.0-rc.8.2", default-features = false, features = ["transaction"] }

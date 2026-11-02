@@ -405,11 +405,27 @@ lock_pin_for() {
   fi
 }
 
-# Verify every package in LOCK_SYNC_PACKAGES resolves to the same pin across
-# every present lockfile that contains it. Exits non-zero if any skew is
-# detected.
+# Verify every present lockfile is the resolution of its manifests
+# (`cargo metadata --locked` fails when the lockfile would have to change,
+# including when its manifests no longer resolve at all), and every package in
+# LOCK_SYNC_PACKAGES resolves to the same pin across every present lockfile
+# that contains it. Exits non-zero if either fails. Needs cargo: run it in the
+# Nix shell.
 ensure_lockfile_sync() {
-  local pkg lockfile commit ref_commit ref_file mismatch=0
+  local pkg lockfile commit ref_commit ref_file mismatch=0 stale=0
+  for lockfile in "${LOCK_FILES[@]}"; do
+    [[ -f "$PROJECT_DIR/$lockfile" ]] || continue
+    # stdout is the resolved graph as JSON; cargo's errors go to stderr.
+    if ! cargo metadata --locked --format-version 1 \
+      --manifest-path "$PROJECT_DIR/${lockfile%Cargo.lock}Cargo.toml" > /dev/null; then
+      echo "❌ ${lockfile} is not the resolution of its manifests (cargo error above)." >&2
+      stale=1
+    fi
+  done
+  if [[ $stale -ne 0 ]]; then
+    echo "Fix: ./scripts/dev.sh lock-sync" >&2
+    return 1
+  fi
   for pkg in "${LOCK_SYNC_PACKAGES[@]}"; do
     ref_commit=''
     ref_file=''
