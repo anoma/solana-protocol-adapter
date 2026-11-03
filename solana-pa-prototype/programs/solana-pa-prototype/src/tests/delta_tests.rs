@@ -1,16 +1,16 @@
 //! Curve point validation and arithmetic tests belong in arm_solana.
 
 use crate::tests::utils::create_minimal_transaction;
-use arm_core::delta_types::{DeltaProof, DeltaWitness};
+use arm_core::delta_proof::DeltaWitness;
 use arm_core::transaction::Delta;
 use arm_solana::delta::verify_delta_proof;
 use arm_solana::SolanaArmError;
 
 #[test]
 fn test_verify_delta_proof_witness_returns_expected_delta_proof() {
-    // create_minimal_transaction has delta_x/delta_y = [0;8] (point not on secp256k1).
     let mut tx = create_minimal_transaction();
-    tx.delta_proof = Delta::Witness(DeltaWitness([0u8; 32]));
+    tx.delta_proof =
+        Delta::Witness(DeltaWitness::from_bytes(&[1u8; 32]).expect("scalar 0x0101… is in range"));
 
     match verify_delta_proof(&tx) {
         Err(SolanaArmError::ExpectedDeltaProof) => {}
@@ -19,17 +19,19 @@ fn test_verify_delta_proof_witness_returns_expected_delta_proof() {
 }
 
 #[test]
-fn test_verify_delta_proof_invalid_point_returns_error() {
-    let mut tx = create_minimal_transaction();
-    // Use Delta::Proof so verify_delta_proof reaches accumulate_deltas (which rejects the point).
-    tx.delta_proof = Delta::Proof(DeltaProof([0u8; 65]));
+fn test_verify_delta_proof_meaningless_proof_rejected() {
+    // create_minimal_transaction carries a wire-valid but cryptographically
+    // meaningless proof (r = s = 1) over a single action. The signature
+    // recovers to *some* public key, which cannot match the accumulated
+    // delta point, so verification fails at the key comparison. (With one
+    // action no point addition runs; curve-arithmetic rejection is covered
+    // by arm_solana's own test suite.)
+    let tx = create_minimal_transaction();
 
-    // All-zeros DeltaProof has recovery_id byte = 0, which is < 27 (Ethereum convention).
-    // arm_solana rejects it as InvalidDeltaProof at the signature parsing step.
     match verify_delta_proof(&tx) {
-        Err(SolanaArmError::InvalidDeltaProof) => {}
+        Err(SolanaArmError::DeltaMismatch) => {}
         other => panic!(
-            "All-zeros delta proof should return InvalidDeltaProof, got {:?}",
+            "Meaningless delta proof should fail the delta comparison, got {:?}",
             other
         ),
     }

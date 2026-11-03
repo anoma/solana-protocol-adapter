@@ -1,0 +1,406 @@
+//! pa-testkit's chain-agnostic suite against each environment, and the
+//! checks only the Solana adapter's harness makes. Every settlement also
+//! checks that the tree the harness keeps gives the root the adapter stores.
+
+use anchor_lang::Discriminator;
+use anoma_pa_solana_client::generated::protocol_adapter::client::args;
+use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
+use anoma_pa_testkit::environment::Refusal;
+use anoma_pa_testkit::fixtures::{ordered, passthrough, trivial};
+use anoma_pa_testkit::witness::AppData;
+use anoma_pa_testkit::{execute_tx, prove_actions};
+use anyhow::Context;
+use solana_message::VersionedMessage;
+use solana_signer::Signer;
+use surfpool_sdk::Pubkey;
+
+mod local {
+    use super::*;
+
+    anoma_pa_testkit::suite_tests!(SolanaLocalEnv::setup_bare());
+}
+
+#[cfg(feature = "e2e")]
+mod e2e_test {
+    use anoma_pa_solana_integration_test::envs::e2e::Environment as SolanaE2eEnv;
+
+    anoma_pa_testkit::suite_tests!(SolanaE2eEnv::setup_bare());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_to_a_program_no_forwarder_is_registered_for_fails_before_anything_is_sent()
+-> anyhow::Result<()> {
+    use anoma_pa_solana_client::external_call::{OutputMode, SolanaExternalCall};
+    use anoma_rm_risc0::aggregation_instance::AggregationResourceInstance;
+    use anoma_rm_risc0::logic_instance::ExpirableBlob;
+
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    let actions = trivial::build_many(1, 81).context("failed to build trivial actions")?;
+    let mut tx = prove_actions(&env, &actions).await?;
+    let program = Pubkey::new_unique();
+    let call = SolanaExternalCall {
+        program_id: program.to_bytes(),
+        instruction_data: vec![0],
+        expected_output: vec![1],
+        output_mode: OutputMode::ReturnData,
+        num_accounts: 1,
+    };
+    let AggregationResourceInstance::Created { app_data, .. } = &mut tx
+        .as_arm_mut()
+        .aggregation
+        .as_mut()
+        .context("the transaction is aggregated")?
+        .instance
+        .actions[0]
+        .resource_instances[1]
+    else {
+        anyhow::bail!("the trivial action's second resource is not its created one");
+    };
+    app_data.external_payload = vec![ExpirableBlob {
+        blob: anoma_rm_risc0::utils::bytes_to_words(&call.encode()),
+        deletion_criterion: 0,
+    }];
+
+    // The harness refuses it before it sends anything: the payer pays nothing.
+    let payer = env.protocol_adapter.payer_pubkey();
+    let rpc = env.protocol_adapter.rpc.clone();
+    let before = rpc.get_balance(&payer).await?;
+    let error = execute_tx(&mut env, tx)
+        .await
+        .err()
+        .context("a call to an unregistered program settled")?;
+    let expected = format!("external call 0 is to {program}, for which no forwarder is registered");
+    anyhow::ensure!(
+        format!("{error:?}").contains(&expected),
+        "the settlement failed with {error:?}, not {expected:?}"
+    );
+    let after = rpc.get_balance(&payer).await?;
+    anyhow::ensure!(
+        before == after,
+        "the payer paid {} lamports for a transaction that must not be sent",
+        before - after
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_consumer_deploys_its_program_and_sends_its_setup() -> anyhow::Result<()> {
+    use solana_keypair::Keypair;
+    use solana_loader_v3_interface::state::UpgradeableLoaderState;
+
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let rpc = env.protocol_adapter.rpc.clone();
+    let payer = env.protocol_adapter.payer_pubkey();
+
+    let program = Pubkey::new_unique();
+    env.deploy_program(
+        program,
+        include_bytes!("../programs/mock_verifier.so"),
+        payer,
+    )?;
+    anyhow::ensure!(
+        rpc.get_account(&program).await?.executable,
+        "the deployed program is not executable"
+    );
+    let program_data = anoma_pa_solana_client::derive_program_data_address(&program);
+    let data = rpc.get_account_data(&program_data).await?;
+    let metadata = UpgradeableLoaderState::size_of_programdata_metadata();
+    let state: UpgradeableLoaderState = bincode::deserialize(&data[..metadata])?;
+    anyhow::ensure!(
+        matches!(
+            state,
+            UpgradeableLoaderState::ProgramData {
+                upgrade_authority_address: Some(authority),
+                ..
+            } if authority == payer
+        ),
+        "the program's state is {state:?}, not program data upgradeable by {payer}"
+    );
+
+    let account = Keypair::new();
+    env.send(
+        &[solana_system_interface::instruction::create_account(
+            &payer,
+            &account.pubkey(),
+            1_000_000,
+            0,
+            &solana_system_interface::program::ID,
+        )],
+        &[&account],
+    )
+    .await?;
+    anyhow::ensure!(
+        rpc.get_balance(&account.pubkey()).await? == 1_000_000,
+        "the account the extra signer created holds the wrong balance"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_settlement_that_fits_one_transaction_settles_in_it() -> anyhow::Result<()> {
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    let actions = trivial::build_many(1, 93).context("failed to build trivial actions")?;
+    let tx = prove_actions(&env, &actions).await?;
+    let executed = env.protocol_adapter.settled(tx).await?;
+
+    anyhow::ensure!(
+        matches!(executed.transaction.message, VersionedMessage::V1(_)),
+        "the settlement is not a v1 transaction"
+    );
+    let data = executed
+        .instruction_data(&env.protocol_adapter.program)
+        .context("the settlement transaction has no adapter instruction")?;
+    anyhow::ensure!(
+        data[..8] == *args::Settle::DISCRIMINATOR,
+        "a settlement that fits one transaction is not settled inline"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_settlement_too_large_for_one_transaction_settles_from_an_upload() -> anyhow::Result<()> {
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    // One pass-through action carrying a 4,800-byte application payload:
+    // large in bytes, light in compute.
+    let action = passthrough::build(
+        94,
+        vec![],
+        passthrough::Overrides {
+            application_payload: vec![vec![0x5a5a_5a5a; 1200]],
+            ..passthrough::Overrides::default()
+        },
+    )
+    .context("failed to build the pass-through action")?;
+    let tx = prove_actions(&env, &[action.witnesses]).await?;
+    let input = anoma_pa_solana_client::settlement_input::settlement_input(tx.clone().into_arm())?;
+    anyhow::ensure!(
+        input.len() > solana_message::v1::MAX_TRANSACTION_SIZE,
+        "the settlement input is {} bytes, which one transaction carries: the test needs a \
+         larger settlement",
+        input.len()
+    );
+    let executed = env.protocol_adapter.settled(tx).await?;
+
+    let data = executed
+        .instruction_data(&env.protocol_adapter.program)
+        .context("the settlement transaction has no adapter instruction")?;
+    anyhow::ensure!(
+        data[..8] == *args::SettleFromTxdata::DISCRIMINATOR,
+        "a settlement too large for one transaction is not settled from an upload"
+    );
+    // The upload is closed after the settlement.
+    let upload_id = u64::from_le_bytes(data[8..16].try_into()?);
+    let (tx_data, _) = anoma_pa_solana_client::derive_tx_data_pda(
+        &env.protocol_adapter.program,
+        &env.protocol_adapter.payer_pubkey(),
+        upload_id,
+    );
+    let account = env
+        .protocol_adapter
+        .rpc
+        .get_account_with_commitment(
+            &tx_data,
+            solana_commitment_config::CommitmentConfig::confirmed(),
+        )
+        .await?
+        .value;
+    anyhow::ensure!(account.is_none(), "the upload {tx_data} is still open");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_consumer_writes_the_loader_buffer_an_upgrade_installs() -> anyhow::Result<()> {
+    use solana_keypair::Keypair;
+    use solana_loader_v3_interface::state::UpgradeableLoaderState;
+
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let so = include_bytes!("../programs/mock_verifier.so");
+    let authority = Keypair::new();
+    let buffer = env.write_buffer(so, authority.pubkey()).await?;
+
+    let account = env.protocol_adapter.rpc.get_account(&buffer).await?;
+    anyhow::ensure!(
+        account.owner == solana_sdk_ids::bpf_loader_upgradeable::id(),
+        "the buffer is owned by {}, not the upgradeable loader",
+        account.owner
+    );
+    let metadata = UpgradeableLoaderState::size_of_buffer_metadata();
+    let state: UpgradeableLoaderState = bincode::deserialize(&account.data[..metadata])?;
+    anyhow::ensure!(
+        state
+            == UpgradeableLoaderState::Buffer {
+                authority_address: Some(authority.pubkey()),
+            },
+        "the buffer's state is {state:?}, not a buffer of {}",
+        authority.pubkey()
+    );
+    anyhow::ensure!(
+        account.data[metadata..] == so[..],
+        "the buffer does not hold the program written to it"
+    );
+    Ok(())
+}
+
+// A consumer's setup may name the payer among its signers (a mint whose
+// authority is the payer); the payer signs once.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_consumer_names_the_payer_among_its_signers() -> anyhow::Result<()> {
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let payer = env.protocol_adapter.payer()?.clone();
+    let to = Pubkey::new_unique();
+    env.send(
+        &[solana_system_interface::instruction::transfer(
+            &payer.pubkey(),
+            &to,
+            1_000_000,
+        )],
+        &[&payer],
+    )
+    .await?;
+    anyhow::ensure!(
+        env.protocol_adapter.rpc.get_balance(&to).await? == 1_000_000,
+        "the transfer the payer signed did not land"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_local_environment_runs_the_program_metadata_program() -> anyhow::Result<()> {
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let program: surfpool_sdk::Pubkey = "ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S".parse()?;
+    let account = env.protocol_adapter.rpc.get_account(&program).await?;
+    anyhow::ensure!(
+        account.executable && account.owner == solana_sdk_ids::bpf_loader_upgradeable::id(),
+        "{program} is not an upgradeable program: {account:?}"
+    );
+    Ok(())
+}
+
+// On a fork of a deployment, the harness takes the adapter's ownership by
+// rewriting its state: the new owner makes the owner's calls, and the rest of
+// the state stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_taken_adapter_obeys_its_new_owner() -> anyhow::Result<()> {
+    use anoma_pa_solana_client::generated::protocol_adapter::accounts::PAStateAccount;
+    use solana_keypair::Keypair;
+
+    let env = SolanaLocalEnv::setup_bare().await?;
+    let before = env.protocol_adapter.state().await?;
+    let owner = Keypair::new();
+    env.take_ownership(owner.pubkey()).await?;
+    let taken = env.protocol_adapter.state().await?;
+    anyhow::ensure!(
+        taken.owner == owner.pubkey(),
+        "the adapter is owned by {}, not the new owner",
+        taken.owner
+    );
+    let untaken = PAStateAccount {
+        owner: before.owner,
+        ..taken
+    };
+    anyhow::ensure!(
+        format!("{untaken:?}") == format!("{before:?}"),
+        "taking the ownership changed more of the state than its owner: {before:?} became \
+         {untaken:?}"
+    );
+
+    let pause = env.protocol_adapter.instance().pause_ix(&owner.pubkey());
+    env.send(&[pause], &[&owner]).await?;
+    anyhow::ensure!(
+        env.protocol_adapter.state().await?.paused,
+        "the new owner's pause did not take"
+    );
+    Ok(())
+}
+
+// A transaction repeating a nullifier is refused as an already spent one,
+// pa-evm's single PreExistingNullifier: its second marker is the first's.
+// arm's aggregation guest does not refuse it (arm's host-side verification
+// does), so the adapter is what stands in its way.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transaction_repeating_a_nullifier_is_refused_as_spent() -> anyhow::Result<()> {
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    let action = || {
+        trivial::build(57, trivial::Overrides::default())
+            .map(|built| built.witnesses)
+            .context("failed to build trivial action 57")
+    };
+    let tx = prove_actions(&env, &[action()?, action()?]).await?;
+    let refusal = env.protocol_adapter.submit(tx).await?.err();
+    anyhow::ensure!(
+        refusal == Some(Refusal::NullifierSpent),
+        "the adapter returned {refusal:?}, not a refusal for a spent nullifier"
+    );
+    Ok(())
+}
+
+/// What the adapter refuses an action of two consumed resources for, both
+/// naming an unknown root: `first`, then `second`. The owner first denies the
+/// trivial logic to consumed resources.
+async fn refusal_of_two_consumed_naming_an_unknown_root(
+    first: ordered::Logic,
+    second: ordered::Logic,
+) -> anyhow::Result<Option<Refusal>> {
+    use anoma_pa_testkit::environment::{DeniedLogicRef, ProtocolAdapter as _};
+    use anoma_rm_risc0::Digest;
+    use anoma_rm_risc0::constants::PADDING_LOGIC_VK;
+
+    let mut env = SolanaLocalEnv::setup_bare().await?;
+    env.protocol_adapter
+        .deny_logic_refs(&[DeniedLogicRef {
+            logic_ref: PADDING_LOGIC_VK,
+            consumed: true,
+        }])
+        .await?;
+    let consumed = |logic| ordered::ResourceSpec {
+        consumed: true,
+        logic,
+    };
+    let action = ordered::build(
+        58,
+        vec![consumed(first), consumed(second)],
+        ordered::Overrides {
+            ephemeral_root: Some(Digest::from_bytes([0x7e; 32])),
+        },
+    )?;
+    let tx = prove_actions(&env, &[action.witnesses]).await?;
+    Ok(env.protocol_adapter.submit(tx).await?.err())
+}
+
+// As pa-evm next's `_processAction`, the adapter checks each resource, its
+// logic ref against the denylists and then a consumed one's root, before it
+// moves on to the next resource. An action whose first consumed resource
+// names an unknown root, and whose second has a denied logic ref, is refused
+// for the root.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_unknown_root_is_refused_before_a_later_resources_denied_logic_ref() -> anyhow::Result<()>
+{
+    let refusal = refusal_of_two_consumed_naming_an_unknown_root(
+        ordered::Logic::Passthrough(AppData::default()),
+        ordered::Logic::Trivial,
+    )
+    .await?;
+    anyhow::ensure!(
+        refusal == Some(Refusal::UnknownRoot),
+        "the adapter returned {refusal:?}, not the refusal for the first resource's unknown root"
+    );
+    Ok(())
+}
+
+// The converse: an action whose first consumed resource has a denied logic
+// ref, both naming an unknown root, is refused for the logic ref, which
+// pa-evm checks before the root.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_denied_logic_ref_is_refused_before_its_resources_unknown_root() -> anyhow::Result<()> {
+    let refusal = refusal_of_two_consumed_naming_an_unknown_root(
+        ordered::Logic::Trivial,
+        ordered::Logic::Passthrough(AppData::default()),
+    )
+    .await?;
+    anyhow::ensure!(
+        refusal == Some(Refusal::DeniedLogicRef),
+        "the adapter returned {refusal:?}, not the refusal for the first resource's denied logic \
+         ref"
+    );
+    Ok(())
+}

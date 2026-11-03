@@ -8,14 +8,14 @@ use arm_solana::SolanaArmError;
 pub enum PAError {
     // Nullifier errors
     #[msg("Duplicate nullifier detected")]
-    DuplicateNullifier,
+    PreExistingNullifier,
     #[msg("Nullifier PDA pubkey mismatch")]
     NullifierPdaMismatch,
 
     // Root marker errors
     #[msg("Commitment tree root does not exist in historical set")]
     NonExistingRoot,
-    #[msg("Root marker PDA pubkey mismatch")]
+    #[msg("Root marker is missing for, does not match, or is passed without a root this settlement produces")]
     RootPdaMismatch,
 
     // TxData errors
@@ -37,6 +37,10 @@ pub enum PAError {
     // Data parsing errors
     #[msg("Invalid transaction data")]
     InvalidTransactionData,
+    /// pa-evm's `EmptyTransactionNotAllowed`: an instance with no actions
+    /// would settle without the delta and aggregation proofs proving anything.
+    #[msg("The transaction has no actions")]
+    EmptyTransactionNotAllowed,
 
     // Proof verification errors
     #[msg("Invalid proof")]
@@ -46,17 +50,15 @@ pub enum PAError {
     #[msg("Aggregation required: non-aggregated proofs not enabled")]
     AggregationRequired,
     #[msg("Proof selector does not match expected selector")]
-    InvalidProofSelector,
+    RiscZeroVerifierSelectorMismatch,
 
     // External call errors
     #[msg("Invalid external call blob encoding")]
     InvalidExternalCallBlob,
-    #[msg("Forwarder is not registered")]
+    #[msg("Forwarder account does not match the program the external call names")]
     UnregisteredForwarder,
     #[msg("External call output verification failed")]
-    ExternalCallOutputMismatch,
-    #[msg("External call CPI failed")]
-    ExternalCallCpiFailed,
+    ForwarderCallOutputMismatch,
 
     // Delta proof errors
     #[msg("Delta proof verification failed")]
@@ -66,41 +68,42 @@ pub enum PAError {
     #[msg("Invalid delta proof format")]
     InvalidDeltaProof,
     #[msg("Delta point not on secp256k1 curve")]
-    DeltaPointNotOnCurve,
+    PointNotOnCurve,
     #[msg("Expected delta proof, got witness")]
     ExpectedDeltaProof,
 
-    // Logic verification errors
-    #[msg("Logic verifier input not found for tag")]
-    TagNotFound,
+    // Aggregation instance binding errors
+    #[msg("Aggregation instance compliance VK does not match the compliance circuit VK")]
+    ComplianceVkMismatch,
+    /// pa-evm's `UnacceptedKindTreeRoot`.
+    #[msg("The transaction's kind tree root is neither the stored one nor the empty kind tree's")]
+    UnacceptedKindTreeRoot,
+    #[msg("Zero kind tree root not allowed")]
+    ZeroKindTreeRootNotAllowed,
 
     // Protocol state errors
-    #[msg("Protocol adapter is stopped")]
-    Stopped,
-    #[msg("Unauthorized: caller is not the authority")]
+    #[msg("Unauthorized: the signer does not hold the authority this instruction requires")]
     Unauthorized,
-    #[msg("Protocol adapter is already stopped")]
-    AlreadyStopped,
-    #[msg("No pending authority transfer to accept")]
-    NoPendingAuthority,
-    #[msg("Operation requires the PA to be stopped")]
-    NotStopped,
+    /// OpenZeppelin Pausable's `EnforcedPause`: the adapter is paused.
+    #[msg("The protocol adapter is paused")]
+    EnforcedPause,
+    /// OpenZeppelin Pausable's `ExpectedPause`: the adapter is not paused.
+    #[msg("The protocol adapter is not paused")]
+    ExpectedPause,
+    /// pa-evm's `RiscZeroVerifierPaused`: the router has emergency-stopped the
+    /// verifier registered for this deployment's selector.
+    #[msg("The RISC Zero verifier for this deployment's selector is paused")]
+    RiscZeroVerifierPaused,
+    #[msg("Account is not the verifier router's entry for this deployment's selector")]
+    InvalidVerifierEntry,
 
     // Merkle tree errors
-    #[msg("Tree has reached maximum depth (32 levels)")]
+    #[msg("Commitment tree is full (2^32 leaves)")]
     TreeMaxDepthReached,
 
     // Close errors
     #[msg("Account is not owned by this program")]
     InvalidMarker,
-
-    // Compliance instance parsing
-    #[msg("Failed to parse compliance instance from journal bytes")]
-    ComplianceInstanceParseFailed,
-
-    // External call encoding
-    #[msg("External call expected_output must be non-empty: Solana cannot represent an explicit empty return")]
-    EmptyExpectedOutput,
 
     // Marker creation
     #[msg("Marker address is held by an unexpected owner")]
@@ -109,19 +112,58 @@ pub enum PAError {
     MarkerUnexpectedData,
 
     // Root retention
-    #[msg("Root marker already exists: the commitment tree produced a repeated root")]
-    RootMarkerAlreadyExists,
+    /// pa-evm's `PreExistingRoot`.
+    #[msg("The commitment tree root is already stored")]
+    PreExistingRoot,
+
+    // State layout
+    #[msg("PAState schema version is not the one this program binary reads; migrate the account first")]
+    UnsupportedStateSchema,
+
+    // Logic-ref denylist
+    #[msg("Zero logic ref not allowed")]
+    ZeroLogicRefNotAllowed,
+    #[msg("Logic ref is already on that denylist")]
+    LogicRefAlreadyDenied,
+    /// pa-evm's `ResourceWithDeniedLogicRef`.
+    #[msg("A resource's logic ref is on the denylist for its side")]
+    ResourceWithDeniedLogicRef,
+
+    // Initialization, as pa-evm's zero-value rejections
+    #[msg("Zero verifier router not allowed")]
+    ZeroRiscZeroVerifierRouterNotAllowed,
+    #[msg("Zero proof selector not allowed")]
+    ZeroRiscZeroVerifierSelectorNotAllowed,
+
+    // Ownership, as OpenZeppelin's Ownable
+    /// `OwnableUnauthorizedAccount`: the signer is not the owner.
+    #[msg("The signer is not the adapter's owner")]
+    OwnableUnauthorizedAccount,
+    /// `OwnableInvalidOwner`: the zero key cannot be made the owner.
+    #[msg("The zero key cannot be the owner")]
+    OwnableInvalidOwner,
+
+    // Upgrades
+    #[msg("Buffer is not a loader buffer holding a program")]
+    InvalidUpgradeBuffer,
+
+    // Simulation
+    /// pa-evm's `Simulated`: `simulate_execute` ends with it whenever the
+    /// transaction would execute, so nothing the simulation does lands.
+    #[msg("Simulated: the transaction executes")]
+    Simulated,
 }
 
 impl From<SolanaArmError> for PAError {
     fn from(e: SolanaArmError) -> Self {
         match e {
+            SolanaArmError::MissingAggregation => PAError::AggregationRequired,
+            SolanaArmError::AmbiguousTransaction => PAError::InvalidTransactionData,
             SolanaArmError::ExpectedDeltaProof => PAError::ExpectedDeltaProof,
             SolanaArmError::InvalidDeltaProof => PAError::InvalidDeltaProof,
-            SolanaArmError::DeltaPointNotOnCurve => PAError::DeltaPointNotOnCurve,
+            SolanaArmError::DeltaPointNotOnCurve => PAError::PointNotOnCurve,
             SolanaArmError::DeltaProofVerificationFailed => PAError::DeltaProofVerificationFailed,
             SolanaArmError::DeltaMismatch => PAError::DeltaMismatch,
-            SolanaArmError::ComplianceInstanceParseFailed => PAError::ComplianceInstanceParseFailed,
         }
     }
 }
