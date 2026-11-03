@@ -15,7 +15,7 @@ A deployment from scratch under new program IDs, for the clients generated from 
 
 The SPL token forwarder this adapter serves, `34kd782wMwzkdwGFS5jfGGdTAz8zbaxVczQHs3E8oKF4`, is recorded in anoma/anomapay-spl-token-forwarder's `docs/DEVNET_DEPLOYMENT.md`.
 
-- **Kind tree root 2026-11-02:** the adapter was given anoma/risc0-kind-trees' solana-devnet root `af631616f0064e9450346e61c667e08b7ba29bbe8b534c90ab137cf72384785e` (anoma/risc0-kind-trees#64 at `e90e7cd`; `dev.sh set-kind-tree-root`, slot 517915013, `3wBEvfSyUe1Zm7qDpJNhQjHffdwRzqaDKdcJdfWC9K89UFUv4n3PWBJuT2vaWrAkNTyAH6wNRB948vfqY5eGikm9`), the Merkle root of the tree whose active transfer logic is `c17a7ca5…` (anoma/anomapay-solana-resource 2.0.0-rc.12), the logic ref the forwarder `34kd…` accepts, with each member's label taken under that forwarder.
+- **Kind tree root 2026-11-02:** the adapter was given anoma/risc0-kind-trees' solana-devnet root `af631616f0064e9450346e61c667e08b7ba29bbe8b534c90ab137cf72384785e` (anoma/risc0-kind-trees#64 at `e90e7cd`, merged in anoma/risc0-kind-trees#65; `dev.sh set-kind-tree-root`, slot 517915013, `3wBEvfSyUe1Zm7qDpJNhQjHffdwRzqaDKdcJdfWC9K89UFUv4n3PWBJuT2vaWrAkNTyAH6wNRB948vfqY5eGikm9`), the Merkle root of the tree whose active transfer logic is `c17a7ca5…` (anoma/anomapay-solana-resource 2.0.0-rc.12), the logic ref the forwarder `34kd…` accepts, with each member's label taken under that forwarder.
 
 ## V2 deployment of 2026-10-01 (unused since 2026-10-27)
 
