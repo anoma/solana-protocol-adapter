@@ -7,8 +7,8 @@ license = "Apache-2.0"
 repository = "https://github.com/anoma/solana-protocol-adapter"
 publish = false
 
-# Its own workspace: surfpool-sdk pins Solana crates (solana-instruction ~3.4,
-# solana-clock ~3.1) that would lower the versions the programs build against
+# Its own workspace: surfpool-sdk pins Solana crates (solana-instruction ~3.5,
+# solana-clock ~3.2) that would lower the versions the programs build against
 # if it shared their lockfile.
 [workspace]
 
@@ -28,8 +28,8 @@ e2e = [
 # The Anchor traits of the client's generated types (their discriminators,
 # account encodings): the client's Anchor release.
 anchor-lang = "1.2.2"
-anoma-pa-solana-client = { version = "0.12.1", features = [
-  "rpc",
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "3d7741f", features = [
+  "estimate",
 ] }
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "c2a44b6a466b21176aa2e3ee82684e1882588b81", default-features = false, features = [
   "fixtures",
@@ -66,7 +66,7 @@ solana-transaction-status-client-types = "4"
 spl-associated-token-account-interface = "2"
 spl-token-2022-interface = "2"
 spl-token-interface = "2"
-surfpool-sdk = "=1.6.0"
+surfpool-sdk = "=1.7.0"
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "time"] }
 # The host of an e2e runtime's RPC endpoint, which must not be a public one.
 url = { version = "2", optional = true }

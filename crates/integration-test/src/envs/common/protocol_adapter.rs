@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anchor_lang::{AnchorDeserialize, Discriminator};
 use anoma_pa_solana_client::contract::ProtocolAdapterInstance;
+use anoma_pa_solana_client::estimate::Estimate;
 use anoma_pa_solana_client::forwarders::Forwarders;
 use anoma_pa_solana_client::generated::U256LeBytes;
 use anoma_pa_solana_client::generated::protocol_adapter::accounts::PAStateAccount;
@@ -236,7 +237,7 @@ impl ProtocolAdapter {
 
     /// `transaction` prepared to settle: the adapter's state and its calls'
     /// accounts from the registered forwarders; the payer pays.
-    async fn prepare(&self, transaction: Transaction) -> anyhow::Result<Submission> {
+    pub async fn prepare(&self, transaction: Transaction) -> anyhow::Result<Submission> {
         Ok(Submission::prepare(
             &self.rpc,
             &self.forwarders,
@@ -247,6 +248,13 @@ impl ProtocolAdapter {
             transaction.into_arm(),
         )
         .await?)
+    }
+
+    /// Estimates `submission`'s settlement on the runtime's state, as an
+    /// integrator does before the transaction is proven
+    /// (`Submission::estimate`).
+    pub async fn estimate(&self, submission: &Submission) -> anyhow::Result<Estimate> {
+        Ok(submission.estimate(&self.rpc).await?)
     }
 
     /// Why the adapter refused the settlement that failed with `error`, from
@@ -444,8 +452,7 @@ fn refusal_for(error: ProtocolAdapterError) -> Option<Refusal> {
         | ProtocolAdapterError::ZeroRiscZeroVerifierSelectorNotAllowed
         | ProtocolAdapterError::OwnableUnauthorizedAccount
         | ProtocolAdapterError::OwnableInvalidOwner
-        | ProtocolAdapterError::InvalidUpgradeBuffer
-        | ProtocolAdapterError::Simulated => None,
+        | ProtocolAdapterError::InvalidUpgradeBuffer => None,
     }
 }
 
