@@ -19,8 +19,7 @@ pub struct PreparedProof {
 }
 
 /// pa-evm's `_checkSelector`: the proof's selector, its first four bytes,
-/// must be the one this deployment pinned at initialization. It is checked
-/// whether or not the proof is verified.
+/// must be the one this deployment pinned at initialization.
 pub fn check_selector(proof: &[u8], expected_selector: [u8; 4]) -> Result<(), PAError> {
     let selector = proof.get(..4).ok_or(PAError::InvalidProof)?;
     if selector != expected_selector {

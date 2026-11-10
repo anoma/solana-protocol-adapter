@@ -726,17 +726,16 @@ struct SettlementAccounts<'a, 'info> {
 }
 
 /// Shared settlement logic for settle and settle_from_txdata, in pa-evm's
-/// `execute` order. For each action, pa-evm's
-/// `_processAction`: each resource, in the order of the action's
-/// `resource_instances`, is checked against the denylist for its kind; a
-/// consumed one's root is checked to be historical and its nullifier is
-/// recorded, a created one's commitment is added to the tree; then its
-/// forwarder calls run and its payload events are emitted; then the action's
-/// ActionExecuted. After the actions the delta proof is verified, then the
-/// aggregation proof's selector is checked and the RISC Zero proof verified;
-/// if any commitment was added the tree's root is computed
-/// and recorded with CommitmentTreeRootAdded, and TransactionExecuted closes
-/// the settlement.
+/// `execute` order. For each action, pa-evm's `_processAction`: each
+/// resource, in the order of the action's `resource_instances`, is checked
+/// against the denylist for its kind; a consumed one's root is checked to be
+/// historical and its nullifier is recorded, a created one's commitment is
+/// added to the tree; then its forwarder calls run and its payload events are
+/// emitted; then the action's ActionExecuted. After the actions the delta
+/// proof is verified, then the aggregation proof's selector is checked and
+/// the RISC Zero proof verified; if any commitment was added the tree's root
+/// is computed and recorded with CommitmentTreeRootAdded, and
+/// TransactionExecuted closes the settlement.
 fn execute_settlement(
     state: &mut PAStateAccount,
     tx: &Transaction,
