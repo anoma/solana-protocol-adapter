@@ -13,12 +13,11 @@ use solana_loader_v3_interface::instruction::UpgradeableLoaderInstruction;
 use surfpool_sdk::Pubkey;
 
 /// The adapter's instructions a live cluster is sent, by their IDL names: a
-/// settlement's, its upload's, its simulation's, and the reads. Every other
-/// instruction of the adapter is refused.
-const ADAPTER_INSTRUCTIONS: [(&str, &[u8]); 10] = [
+/// settlement's, its upload's, and the reads. Every other instruction of the
+/// adapter is refused.
+const ADAPTER_INSTRUCTIONS: [(&str, &[u8]); 9] = [
     ("settle", args::Settle::DISCRIMINATOR),
     ("settle_from_txdata", args::SettleFromTxdata::DISCRIMINATOR),
-    ("simulate_execute", args::SimulateExecute::DISCRIMINATOR),
     ("txdata_init", args::TxdataInit::DISCRIMINATOR),
     ("txdata_write", args::TxdataWrite::DISCRIMINATOR),
     ("txdata_extend", args::TxdataExtend::DISCRIMINATOR),
@@ -329,7 +328,6 @@ mod tests {
         let mut sent = vec![
             instance.settle_ix(&KEY, &[1], accounts()),
             instance.settle_from_txdata_ix(&KEY, 0, accounts()),
-            instance.simulate_execute_ix(&KEY, &[1], true, accounts()),
             instance.txdata_init_ix(&KEY, 0, 1, 2),
             instance.txdata_write_ix(&KEY, 0, 0, &[1]),
             instance.txdata_extend_ix(&KEY, 0, 3),
