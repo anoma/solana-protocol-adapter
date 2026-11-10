@@ -2,7 +2,7 @@
   "address": "2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx",
   "metadata": {
     "name": "protocol_adapter",
-    "version": "2.0.0-rc.12",
+    "version": "2.0.0-rc.13",
     "spec": "0.1.0",
     "description": "Solana Protocol Adapter for Anoma Resource Machine"
   },
@@ -222,8 +222,8 @@
       "docs": [
         "Pause settlement. Mirrors pa-evm's `pause()`: owner-only, refused",
         "while already paused (`EnforcedPause`), announced with `Paused`.",
-        "While paused, `settle`, `settle_from_txdata` and `simulate_execute`",
-        "refuse every transaction; nothing else is gated.",
+        "While paused, `settle` and `settle_from_txdata` refuse every",
+        "transaction; nothing else is gated.",
         "",
         "A permanent shutdown is a pause followed by `renounce_ownership`, as",
         "on pa-evm: with no owner, no one can unpause or upgrade.",
@@ -631,97 +631,6 @@
         {
           "name": "upload_id",
           "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "simulate_execute",
-      "docs": [
-        "pa-evm's `simulateExecute`: settles `transaction_data` as `settle`",
-        "does, without verifying its RISC Zero proof when",
-        "`skip_risc_zero_proof_verification` is set (the proof's selector is",
-        "still checked), and then fails with `Simulated`, so nothing it did",
-        "lands. A transaction that would not execute fails with the error",
-        "`settle` would."
-      ],
-      "discriminator": [
-        17,
-        186,
-        90,
-        212,
-        31,
-        13,
-        0,
-        71
-      ],
-      "accounts": [
-        {
-          "name": "pa_state",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  112,
-                  97,
-                  95,
-                  115,
-                  116,
-                  97,
-                  116,
-                  101
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "payer",
-          "writable": true,
-          "signer": true
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        },
-        {
-          "name": "new_root_marker",
-          "docs": [
-            "Cannot use a seeds constraint: the address depends on the resulting root,",
-            "which is only known after commitments are appended. Absent when the",
-            "settlement creates nothing and so produces no root."
-          ],
-          "writable": true,
-          "optional": true
-        },
-        {
-          "name": "verifier_router_program"
-        },
-        {
-          "name": "router"
-        },
-        {
-          "name": "verifier_entry"
-        },
-        {
-          "name": "verifier_program"
-        },
-        {
-          "name": "event_authority"
-        },
-        {
-          "name": "program"
-        }
-      ],
-      "args": [
-        {
-          "name": "transaction_data",
-          "type": "bytes"
-        },
-        {
-          "name": "skip_risc_zero_proof_verification",
-          "type": "bool"
         }
       ]
     },
@@ -1873,11 +1782,6 @@
       "code": 6046,
       "name": "InvalidUpgradeBuffer",
       "msg": "Buffer is not a loader buffer holding a program"
-    },
-    {
-      "code": 6047,
-      "name": "Simulated",
-      "msg": "Simulated: the transaction executes"
     }
   ],
   "types": [

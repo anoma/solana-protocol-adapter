@@ -13,8 +13,7 @@ use anoma_pa_solana_client::generated::protocol_adapter::events::{
 use anoma_pa_solana_client::generated::protocol_adapter::types;
 use anoma_pa_solana_client::settlement::SettlementPlan;
 use anoma_pa_solana_client::submission::{
-    Failure, SimulationOutcome, Submission, read_adapter_state, read_verifier_program,
-    settlement_failure,
+    Failure, Submission, read_adapter_state, read_verifier_program, settlement_failure,
 };
 use anoma_pa_solana_client::{
     TXDATA_EXPIRY_SLOTS_DEFAULT, cpi_event_discriminator, decode_cpi_event,
@@ -248,32 +247,6 @@ impl ProtocolAdapter {
             transaction.into_arm(),
         )
         .await?)
-    }
-
-    /// Simulates settling `transaction` (pa-evm's `simulateExecute`) in the
-    /// runtime's simulation, which changes nothing and checks no signature,
-    /// skipping the RISC Zero proof's verification when
-    /// `skip_risc_zero_proof_verification`. An unproven transaction (its
-    /// aggregation proof empty) carries the adapter's proof selector instead.
-    /// Returns the compute units the simulation used when the transaction
-    /// would execute, otherwise the adapter's error.
-    pub async fn simulate(
-        &self,
-        transaction: Transaction,
-        skip_risc_zero_proof_verification: bool,
-    ) -> anyhow::Result<Result<u64, ProtocolAdapterError>> {
-        let outcome = self
-            .prepare(transaction)
-            .await?
-            .simulate(&self.rpc, skip_risc_zero_proof_verification)
-            .await?;
-        Ok(match outcome {
-            SimulationOutcome::Executable { units_consumed } => {
-                Ok(units_consumed.context("the simulation reports no compute units")?)
-            }
-            SimulationOutcome::Failed(Failure::Adapter(error)) => Err(error),
-            other => anyhow::bail!("the simulation did not end in an adapter error: {other:?}"),
-        })
     }
 
     /// Why the adapter refused the settlement that failed with `error`, from

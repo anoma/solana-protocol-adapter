@@ -195,24 +195,38 @@ pub mod protocol_adapter {
         ctx: Context<'info, Settle<'info>>,
         transaction_data: Vec<u8>,
     ) -> Result<()> {
-        settle_inline(ctx, &transaction_data, false)?;
+        require!(!ctx.accounts.pa_state.paused, PAError::EnforcedPause);
+
+        let tx: Transaction = bincode::deserialize(&transaction_data)
+            .map_err(|_| error!(PAError::InvalidTransactionData))?;
+
+        let pa_state_info = ctx.accounts.pa_state.to_account_info();
+        let payer = ctx.accounts.payer.to_account_info();
+
+        let events = events::EventCpi {
+            authority: ctx.accounts.event_authority.to_account_info(),
+        };
+
+        execute_settlement(
+            &mut ctx.accounts.pa_state,
+            &tx,
+            SettlementAccounts {
+                pa_state: pa_state_info,
+                payer,
+                system_program: ctx.accounts.system_program.to_account_info(),
+                new_root_marker: ctx.accounts.new_root_marker.as_deref(),
+                remaining: ctx.remaining_accounts,
+                verifier: VerifierAccounts {
+                    router_program_id: ctx.accounts.verifier_router_program.key(),
+                    router: ctx.accounts.router.to_account_info(),
+                    verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
+                    verifier_program: ctx.accounts.verifier_program.to_account_info(),
+                },
+                events,
+            },
+        )?;
         msg!("Settlement complete");
         Ok(())
-    }
-
-    /// pa-evm's `simulateExecute`: settles `transaction_data` as `settle`
-    /// does, without verifying its RISC Zero proof when
-    /// `skip_risc_zero_proof_verification` is set (the proof's selector is
-    /// still checked), and then fails with `Simulated`, so nothing it did
-    /// lands. A transaction that would not execute fails with the error
-    /// `settle` would.
-    pub fn simulate_execute<'info>(
-        ctx: Context<'info, Settle<'info>>,
-        transaction_data: Vec<u8>,
-        skip_risc_zero_proof_verification: bool,
-    ) -> Result<()> {
-        settle_inline(ctx, &transaction_data, skip_risc_zero_proof_verification)?;
-        err!(PAError::Simulated)
     }
 
     /// Initialize a TxData account for chunked upload.
@@ -397,7 +411,6 @@ pub mod protocol_adapter {
                 },
                 events,
             },
-            false,
         )?;
 
         msg!("Settlement from TxData complete: upload_id={}", upload_id);
@@ -406,8 +419,8 @@ pub mod protocol_adapter {
 
     /// Pause settlement. Mirrors pa-evm's `pause()`: owner-only, refused
     /// while already paused (`EnforcedPause`), announced with `Paused`.
-    /// While paused, `settle`, `settle_from_txdata` and `simulate_execute`
-    /// refuse every transaction; nothing else is gated.
+    /// While paused, `settle` and `settle_from_txdata` refuse every
+    /// transaction; nothing else is gated.
     ///
     /// A permanent shutdown is a pause followed by `renounce_ownership`, as
     /// on pa-evm: with no owner, no one can unpause or upgrade.
@@ -692,46 +705,6 @@ fn resize_account<'info>(
     Ok(())
 }
 
-/// Settles `transaction_data`, carried in the instruction: `settle`, and
-/// `simulate_execute` before it fails.
-fn settle_inline<'info>(
-    ctx: Context<'info, Settle<'info>>,
-    transaction_data: &[u8],
-    skip_risc_zero_proof_verification: bool,
-) -> Result<()> {
-    require!(!ctx.accounts.pa_state.paused, PAError::EnforcedPause);
-
-    let tx: Transaction = bincode::deserialize(transaction_data)
-        .map_err(|_| error!(PAError::InvalidTransactionData))?;
-
-    let pa_state_info = ctx.accounts.pa_state.to_account_info();
-    let payer = ctx.accounts.payer.to_account_info();
-
-    let events = events::EventCpi {
-        authority: ctx.accounts.event_authority.to_account_info(),
-    };
-
-    execute_settlement(
-        &mut ctx.accounts.pa_state,
-        &tx,
-        SettlementAccounts {
-            pa_state: pa_state_info,
-            payer,
-            system_program: ctx.accounts.system_program.to_account_info(),
-            new_root_marker: ctx.accounts.new_root_marker.as_deref(),
-            remaining: ctx.remaining_accounts,
-            verifier: VerifierAccounts {
-                router_program_id: ctx.accounts.verifier_router_program.key(),
-                router: ctx.accounts.router.to_account_info(),
-                verifier_entry: ctx.accounts.verifier_entry.to_account_info(),
-                verifier_program: ctx.accounts.verifier_program.to_account_info(),
-            },
-            events,
-        },
-        skip_risc_zero_proof_verification,
-    )
-}
-
 /// The accounts a settlement acts on.
 ///
 /// `remaining` layout:
@@ -752,23 +725,22 @@ struct SettlementAccounts<'a, 'info> {
     events: events::EventCpi<'info>,
 }
 
-/// Shared settlement logic for settle, settle_from_txdata and
-/// simulate_execute, in pa-evm's `execute` order. For each action, pa-evm's
+/// Shared settlement logic for settle and settle_from_txdata, in pa-evm's
+/// `execute` order. For each action, pa-evm's
 /// `_processAction`: each resource, in the order of the action's
 /// `resource_instances`, is checked against the denylist for its kind; a
 /// consumed one's root is checked to be historical and its nullifier is
 /// recorded, a created one's commitment is added to the tree; then its
 /// forwarder calls run and its payload events are emitted; then the action's
 /// ActionExecuted. After the actions the delta proof is verified, then the
-/// aggregation proof's selector is checked and the RISC Zero proof verified
-/// (unless skipped); if any commitment was added the tree's root is computed
+/// aggregation proof's selector is checked and the RISC Zero proof verified;
+/// if any commitment was added the tree's root is computed
 /// and recorded with CommitmentTreeRootAdded, and TransactionExecuted closes
 /// the settlement.
 fn execute_settlement(
     state: &mut PAStateAccount,
     tx: &Transaction,
     accounts: SettlementAccounts<'_, '_>,
-    skip_risc_zero_proof_verification: bool,
 ) -> Result<()> {
     let pa_state_key = accounts.pa_state.key;
     let events = &accounts.events;
@@ -881,26 +853,24 @@ fn execute_settlement(
         .map_err(PAError::from)?;
 
     check_selector(&aggregation.proof, state.proof_selector)?;
-    if !skip_risc_zero_proof_verification {
-        let prepared = prepare_proof_for_verification(aggregation)?;
+    let prepared = prepare_proof_for_verification(aggregation)?;
 
-        msg!("Verifying aggregated proof via verifier_router");
-        let verifier = &accounts.verifier;
-        let cpi_accounts = verifier_router::cpi::accounts::Verify {
-            router: verifier.router.clone(),
-            verifier_entry: verifier.verifier_entry.clone(),
-            verifier_program: verifier.verifier_program.clone(),
-            system_program: accounts.system_program.clone(),
-        };
-        let cpi_ctx = CpiContext::new(verifier.router_program_id, cpi_accounts);
-        verifier_router::cpi::verify(
-            cpi_ctx,
-            prepared.seal,
-            prepared.image_id,
-            prepared.journal_digest,
-        )
-        .map_err(|_| error!(PAError::VerifierRouterFailed))?;
-    }
+    msg!("Verifying aggregated proof via verifier_router");
+    let verifier = &accounts.verifier;
+    let cpi_accounts = verifier_router::cpi::accounts::Verify {
+        router: verifier.router.clone(),
+        verifier_entry: verifier.verifier_entry.clone(),
+        verifier_program: verifier.verifier_program.clone(),
+        system_program: accounts.system_program.clone(),
+    };
+    let cpi_ctx = CpiContext::new(verifier.router_program_id, cpi_accounts);
+    verifier_router::cpi::verify(
+        cpi_ctx,
+        prepared.seal,
+        prepared.image_id,
+        prepared.journal_digest,
+    )
+    .map_err(|_| error!(PAError::VerifierRouterFailed))?;
 
     // A transaction that creates nothing leaves the tree, and so its latest
     // root, untouched: there is no new root to record, as pa-evm adds no root
