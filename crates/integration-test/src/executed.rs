@@ -26,6 +26,8 @@ pub struct Executed {
     /// Every instruction the transaction's programs invoked: the invoked
     /// program and the instruction data, in the order they ran.
     pub inner: Vec<(Pubkey, Vec<u8>)>,
+    /// The compute units the transaction used.
+    pub compute_units: u64,
 }
 
 impl Executed {
@@ -81,10 +83,13 @@ impl Executed {
             }
         }
         let logs: Option<Vec<String>> = meta.log_messages.into();
+        let compute_units: Option<u64> = meta.compute_units_consumed.into();
         Ok(Self {
             transaction,
             logs: logs.unwrap_or_default(),
             inner,
+            compute_units: compute_units
+                .with_context(|| format!("the runtime reports no compute units of {signature}"))?,
         })
     }
 
@@ -154,6 +159,7 @@ mod tests {
             transaction: VersionedTransaction::default(),
             logs: vec![],
             inner,
+            compute_units: 0,
         }
     }
 
