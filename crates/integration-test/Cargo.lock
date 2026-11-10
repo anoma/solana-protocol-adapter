@@ -1393,8 +1393,9 @@ dependencies = [
 
 [[package]]
 name = "anoma-pa-solana-client"
-version = "0.13.0"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=0e30e10#0e30e10dcbdd17b8d65f45fa82a2b71db0ce1a2b"
+version = "0.12.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e5c131fcb5a232b2f3e389ff5897590141394f203f5dee83df9baaae13a6177"
 dependencies = [
  "agave-feature-set",
  "anchor-lang",
@@ -1427,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "anoma-pa-solana-integration-test"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anchor-lang",
  "anoma-pa-solana-client",
@@ -15121,7 +15122,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

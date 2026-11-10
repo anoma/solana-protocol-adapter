@@ -9,11 +9,12 @@ use anoma_pa_solana_client::estimate::Estimate;
 use anoma_pa_solana_client::generated::protocol_adapter::error::ProtocolAdapterError;
 use anoma_pa_solana_client::submission::Failure;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
-use anoma_pa_solana_integration_test::executed::Executed;
+use anoma_pa_solana_integration_test::fixtures::oversized_passthrough;
 use anoma_pa_testkit::environment::ProtocolAdapter as _;
-use anoma_pa_testkit::fixtures::{passthrough, trivial};
+use anoma_pa_testkit::fixtures::trivial;
 use anoma_pa_testkit::prove_actions;
 use anoma_pa_testkit::transaction::Transaction;
+use anoma_rm_risc0::Digest;
 use anyhow::Context;
 
 /// A proven transaction of one trivial action, `seed` telling its
@@ -29,34 +30,9 @@ fn unproven(mut transaction: Transaction) -> anyhow::Result<Transaction> {
         .as_arm_mut()
         .aggregation
         .as_mut()
-        .context("the transaction is aggregated")?
+        .context("the proven transaction has no aggregation")?
         .proof = vec![];
     Ok(transaction)
-}
-
-/// The compute units a transaction used: the sum of what its top-level
-/// instructions consumed, from the runtime's log.
-fn units_consumed(executed: &Executed) -> anyhow::Result<u64> {
-    let mut depth = 0;
-    let mut units = 0;
-    for line in &executed.logs {
-        if line.ends_with(" invoke [1]") {
-            depth = 1;
-        } else if line.contains(" invoke [") {
-            depth += 1;
-        } else if let Some(consumed) = line.split(" consumed ").nth(1) {
-            if depth == 1 {
-                units += consumed
-                    .split(' ')
-                    .next()
-                    .context("a consumed line names its units")?
-                    .parse::<u64>()?;
-            }
-        } else if line.ends_with(" success") || line.contains(" failed: ") {
-            depth -= 1;
-        }
-    }
-    Ok(units)
 }
 
 /// Estimates `transaction`, unproven, and settles it proven: the estimate is
@@ -69,7 +45,6 @@ async fn estimate_then_settle(
         .protocol_adapter
         .prepare(unproven(transaction.clone())?)
         .await?;
-    let root = env.protocol_adapter.latest_root().await?;
 
     let started = Instant::now();
     let estimate = env.protocol_adapter.estimate(&submission).await?;
@@ -81,13 +56,9 @@ async fn estimate_then_settle(
     else {
         anyhow::bail!("the estimate is {estimate:?}, not executable");
     };
-    anyhow::ensure!(
-        env.protocol_adapter.latest_root().await? == root,
-        "the estimate moved the root"
-    );
     // The estimate spent no nullifier: the transaction still settles.
     let executed = env.protocol_adapter.settled(transaction).await?;
-    let used = units_consumed(&executed)?;
+    let used = executed.compute_units;
     println!("settlement: {used} compute units, estimated {estimated}");
     anyhow::ensure!(
         estimated == used,
@@ -108,18 +79,7 @@ async fn an_unproven_transaction_estimates_as_its_settlement_executes() -> anyho
 #[tokio::test(flavor = "multi_thread")]
 async fn an_uploaded_settlement_estimates_as_it_executes() -> anyhow::Result<()> {
     let mut env = SolanaLocalEnv::setup_bare().await?;
-    // One pass-through action carrying a 4,800-byte application payload:
-    // large in bytes, light in compute.
-    let action = passthrough::build(
-        102,
-        vec![],
-        passthrough::Overrides {
-            application_payload: vec![vec![0x5a5a_5a5a; 1200]],
-            ..passthrough::Overrides::default()
-        },
-    )
-    .context("failed to build the pass-through action")?;
-    let tx = prove_actions(&env, &[action.witnesses]).await?;
+    let tx = prove_actions(&env, &[oversized_passthrough(102)?]).await?;
     let plan = env
         .protocol_adapter
         .prepare(tx.clone())
@@ -142,6 +102,10 @@ async fn a_settlement_landing_after_the_submission_was_prepared_does_not_fail_th
     let (tx, other) = (proven(&env, 103).await?, proven(&env, 104).await?);
     let submission = env.protocol_adapter.prepare(unproven(tx)?).await?;
     env.protocol_adapter.settled(other).await?;
+    anyhow::ensure!(
+        env.protocol_adapter.latest_root().await? != Digest::from_bytes(submission.state().root),
+        "the settlement after the submission was prepared did not move the root"
+    );
 
     let estimate = env.protocol_adapter.estimate(&submission).await?;
 

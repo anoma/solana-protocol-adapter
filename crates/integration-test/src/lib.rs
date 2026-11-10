@@ -7,4 +7,5 @@
 pub mod commitment_tree;
 pub mod envs;
 pub mod executed;
+pub mod fixtures;
 pub mod test_forwarder;

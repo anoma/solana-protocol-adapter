@@ -5,8 +5,9 @@
 use anchor_lang::Discriminator;
 use anoma_pa_solana_client::generated::protocol_adapter::client::args;
 use anoma_pa_solana_integration_test::envs::local::Environment as SolanaLocalEnv;
+use anoma_pa_solana_integration_test::fixtures::oversized_passthrough;
 use anoma_pa_testkit::environment::Refusal;
-use anoma_pa_testkit::fixtures::{ordered, passthrough, trivial};
+use anoma_pa_testkit::fixtures::{ordered, trivial};
 use anoma_pa_testkit::witness::AppData;
 use anoma_pa_testkit::{execute_tx, prove_actions};
 use anyhow::Context;
@@ -160,18 +161,7 @@ async fn a_settlement_that_fits_one_transaction_settles_in_it() -> anyhow::Resul
 #[tokio::test(flavor = "multi_thread")]
 async fn a_settlement_too_large_for_one_transaction_settles_from_an_upload() -> anyhow::Result<()> {
     let mut env = SolanaLocalEnv::setup_bare().await?;
-    // One pass-through action carrying a 4,800-byte application payload:
-    // large in bytes, light in compute.
-    let action = passthrough::build(
-        94,
-        vec![],
-        passthrough::Overrides {
-            application_payload: vec![vec![0x5a5a_5a5a; 1200]],
-            ..passthrough::Overrides::default()
-        },
-    )
-    .context("failed to build the pass-through action")?;
-    let tx = prove_actions(&env, &[action.witnesses]).await?;
+    let tx = prove_actions(&env, &[oversized_passthrough(94)?]).await?;
     let input = anoma_pa_solana_client::settlement_input::settlement_input(tx.clone().into_arm())?;
     anyhow::ensure!(
         input.len() > solana_message::v1::MAX_TRANSACTION_SIZE,
