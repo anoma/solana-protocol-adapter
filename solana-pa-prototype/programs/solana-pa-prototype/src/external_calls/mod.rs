@@ -11,7 +11,7 @@ use crate::error::PAError;
 use crate::types::SolanaExternalCall;
 use anchor_lang::prelude::{AccountInfo, Pubkey};
 use anchor_lang::solana_program::instruction::AccountMeta;
-use arm_core::logic_instance::{AppData, ExpirableBlob};
+use arm_core::logic_instance::ExpirableBlob;
 use arm_core::utils::bytes_to_words;
 use arm_core::utils::words_to_bytes;
 
@@ -61,15 +61,6 @@ pub fn verify_output(expected: &[u8], actual: &[u8]) -> Result<(), PAError> {
         return Err(PAError::ForwarderCallOutputMismatch);
     }
     Ok(())
-}
-
-/// A resource's external calls, decoded in the order its app data lists them.
-pub fn decode_external_calls(app_data: &AppData) -> Result<Vec<SolanaExternalCall>, PAError> {
-    app_data
-        .external_payload
-        .iter()
-        .map(decode_external_call)
-        .collect()
 }
 
 /// Build the account metas for a forwarder CPI from its segment.

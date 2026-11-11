@@ -1,13 +1,11 @@
 use crate::error::PAError;
 use crate::external_calls::{
     build_account_metas, build_forwarder_instruction_data, decode_external_call,
-    decode_external_calls, decode_forwarder_output, encode_external_call,
-    FORWARD_CALL_DISCRIMINATOR,
+    decode_forwarder_output, encode_external_call, FORWARD_CALL_DISCRIMINATOR,
 };
 use crate::tests::utils::make_account_info;
 use crate::types::{OutputMode, SolanaExternalCall};
 use anchor_lang::prelude::Pubkey;
-use arm_core::logic_instance::{AppData, ExpirableBlob};
 
 fn call(program_id: u8, instruction_data: Vec<u8>) -> SolanaExternalCall {
     SolanaExternalCall {
@@ -17,44 +15,6 @@ fn call(program_id: u8, instruction_data: Vec<u8>) -> SolanaExternalCall {
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
     }
-}
-
-#[test]
-fn decode_external_calls_of_app_data_without_calls_is_empty() {
-    let calls = decode_external_calls(&AppData::default()).unwrap();
-    assert!(
-        calls.is_empty(),
-        "app data with no external payload has no calls"
-    );
-}
-
-/// A resource's calls run in the order its app data lists them, as pa-evm's
-/// `_executeForwarderCalls` iterates the external payload.
-#[test]
-fn decode_external_calls_keeps_the_listed_order() {
-    let (first, second) = (call(0xAA, vec![1]), call(0xBB, vec![2]));
-    let app_data = AppData {
-        external_payload: vec![encode_external_call(&first), encode_external_call(&second)],
-        ..AppData::default()
-    };
-    let decoded = decode_external_calls(&app_data).unwrap();
-    assert_eq!(decoded.len(), 2);
-    assert_eq!(decoded[0].program_id, first.program_id);
-    assert_eq!(decoded[0].instruction_data, first.instruction_data);
-    assert_eq!(decoded[1].program_id, second.program_id);
-    assert_eq!(decoded[1].instruction_data, second.instruction_data);
-}
-
-#[test]
-fn decode_external_calls_rejects_an_invalid_blob() {
-    let app_data = AppData {
-        external_payload: vec![ExpirableBlob {
-            blob: vec![0xDEADBEEF],
-            deletion_criterion: 0,
-        }],
-        ..AppData::default()
-    };
-    assert!(decode_external_calls(&app_data).is_err());
 }
 
 #[test]

@@ -345,6 +345,46 @@ async fn the_adapters_events_survive_a_truncated_log() -> anyhow::Result<()> {
     Ok(())
 }
 
+// As pa-evm's `_executeForwarderCall`, each call's ForwarderCallExecuted
+// follows that call, before the resource's next call runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn each_calls_event_follows_it_before_the_next_call() -> anyhow::Result<()> {
+    let mut s = setup().await?;
+    let call = s.register_call(vec![], vec![], vec![MODE_EMPTY], &[])?;
+    let blob = bytes_to_words(&call.encode());
+    let action = passthrough::build(
+        9,
+        vec![blob.clone(), blob],
+        passthrough::Overrides::default(),
+    )?;
+    let tx = prove_actions(&s.env, &[action.witnesses]).await?;
+    let executed = s.env.protocol_adapter.settled(tx).await?;
+    let program = s.env.protocol_adapter.program;
+    let mut order = Vec::new();
+    for (invoked, data) in &executed.inner {
+        if *invoked == s.forwarder {
+            order.push("call");
+        } else if *invoked == program
+            && data.starts_with(anchor_lang::event::EVENT_IX_TAG_LE)
+            && cpi_event_discriminator(data)? == ForwarderCallExecuted::DISCRIMINATOR
+        {
+            order.push("ForwarderCallExecuted");
+        }
+    }
+    let expected = [
+        "call",
+        "ForwarderCallExecuted",
+        "call",
+        "ForwarderCallExecuted",
+    ];
+    anyhow::ensure!(
+        order == expected,
+        "the settlement ran its calls and their events in the order {order:?}, not each call \
+         followed by its event {expected:?}"
+    );
+    Ok(())
+}
+
 // As pa-evm next's `_processAction`, the adapter settles an action's
 // resources in their list order, created, consumed, created: each resource's
 // forwarder calls, then its payload events. Then the action's ActionExecuted,

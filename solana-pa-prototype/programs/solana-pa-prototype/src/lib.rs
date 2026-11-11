@@ -837,9 +837,7 @@ fn execute_settlement(
             }
 
             #[cfg(not(test))]
-            for event in forwarder_segments.execute(&resource.logic_ref(), resource.app_data())? {
-                events.emit(&event)?;
-            }
+            forwarder_segments.execute(&resource.logic_ref(), resource.app_data(), events)?;
             emit_app_data_events(events, &resource.tag(), resource.app_data())
         })?;
 

@@ -77,15 +77,16 @@ impl<'a, 'info> ForwarderSegments<'a, 'info> {
 
     /// Solana analog to EVM's `_executeForwarderCalls`: run a resource's
     /// external calls, each through the next segment, whose first account
-    /// must be the forwarder the call names. Returns one event per call.
+    /// must be the forwarder the call names. As `_executeForwarderCall`, each
+    /// call is decoded when it runs and its event emitted before the next.
     pub fn execute(
         &mut self,
         logic_ref: &arm_core::Digest,
         app_data: &arm_core::logic_instance::AppData,
-    ) -> anchor_lang::Result<Vec<crate::ForwarderCallExecuted>> {
-        let calls = super::decode_external_calls(app_data)?;
-        let mut events = Vec::with_capacity(calls.len());
-        for call in calls {
+        events: &crate::events::EventCpi,
+    ) -> anchor_lang::Result<()> {
+        for blob in &app_data.external_payload {
+            let call = super::decode_external_call(blob)?;
             let seg_len = call.num_accounts as usize;
             if seg_len == 0 || seg_len > self.accounts.len() {
                 return Err(PAError::InvalidTransactionData.into());
@@ -94,9 +95,9 @@ impl<'a, 'info> ForwarderSegments<'a, 'info> {
             if segment[0].key != &Pubkey::new_from_array(call.program_id) {
                 return Err(PAError::UnregisteredForwarder.into());
             }
-            events.push(execute_forwarder_call(logic_ref, call, segment)?);
+            events.emit(&execute_forwarder_call(logic_ref, call, segment)?)?;
             self.accounts = rest;
         }
-        Ok(events)
+        Ok(())
     }
 }
