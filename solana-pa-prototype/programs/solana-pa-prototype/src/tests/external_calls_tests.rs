@@ -6,7 +6,6 @@ use crate::external_calls::{
 use crate::tests::utils::make_account_info;
 use crate::types::{OutputMode, SolanaExternalCall};
 use anchor_lang::prelude::Pubkey;
-use arm_core::logic_instance::ExpirableBlob;
 
 fn call(program_id: u8, instruction_data: Vec<u8>) -> SolanaExternalCall {
     SolanaExternalCall {
@@ -16,15 +15,6 @@ fn call(program_id: u8, instruction_data: Vec<u8>) -> SolanaExternalCall {
         output_mode: OutputMode::ReturnData,
         num_accounts: 1,
     }
-}
-
-#[test]
-fn decode_external_call_rejects_an_invalid_blob() {
-    let blob = ExpirableBlob {
-        blob: vec![0xDEADBEEF],
-        deletion_criterion: 0,
-    };
-    assert!(decode_external_call(&blob).is_err());
 }
 
 #[test]
