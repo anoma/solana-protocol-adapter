@@ -1,7 +1,7 @@
 [package]
 name = "anoma-pa-solana-integration-test"
 description = "Integration and e2e tests for the Anoma Solana protocol adapter: pa-testkit's environments on a surfpool runtime or, for e2e settlements, on a cluster itself."
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/anoma/solana-protocol-adapter"
@@ -31,7 +31,7 @@ anchor-lang = "1.2.2"
 anoma-pa-solana-client = { version = "0.12.3", features = [
   "estimate",
 ] }
-anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "c2a44b6a466b21176aa2e3ee82684e1882588b81", default-features = false, features = [
+anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "3d20016a956d8b75433d0ef2804768d7c07868d6", default-features = false, features = [
   "fixtures",
 ] }
 # anoma/risc0-kind-trees' next since #65, whose solana-devnet tree is the one
