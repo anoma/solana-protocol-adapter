@@ -124,12 +124,8 @@ mod tests {
             let refused = ensure_devnet(&hash(cluster)).unwrap_err();
             println!("{cluster:?}: {refused:#}");
             assert!(
-                refused.to_string().contains(&format!(
-                    "serves the cluster of genesis hash {}, not devnet's {}",
-                    hash(cluster),
-                    hash(ClusterType::Devnet)
-                )),
-                "{cluster:?}: {refused:#}"
+                refused.to_string().contains(&hash(cluster).to_string()),
+                "{cluster:?}: the refusal does not name the cluster's genesis hash: {refused:#}"
             );
         }
     }

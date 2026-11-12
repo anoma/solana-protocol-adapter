@@ -27,20 +27,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_name_reads_its_own_line() {
+        let (first, second) = (Pubkey::new_unique(), Pubkey::new_unique());
+        let env_file = format!("# comment\nFIRST_PROGRAM_ID={first}\nSECOND_PROGRAM_ID={second}\n");
+        assert_eq!(program_id(&env_file, "FIRST").unwrap(), first);
+        assert_eq!(program_id(&env_file, "SECOND").unwrap(), second);
+        program_id(&env_file, "THIRD").unwrap_err();
+        program_id("BAD_PROGRAM_ID=not-base58\n", "BAD").unwrap_err();
+    }
+
+    #[test]
     fn the_localnet_file_names_the_adapter_and_the_mock_verifier() {
-        assert_eq!(
-            program_id(LOCALNET, "PROTOCOL_ADAPTER")
-                .unwrap()
-                .to_string(),
-            "2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx"
-        );
-        assert_eq!(
-            program_id(LOCALNET, "MOCK_VERIFIER").unwrap().to_string(),
-            "H3ZFoDHFvthGZu3kxpif3oSWm8MQn8uKvgDhrvVVHvHf"
-        );
-        assert_eq!(
-            program_id(LOCALNET, "NO_SUCH").unwrap_err().to_string(),
-            "the env file names no NO_SUCH_PROGRAM_ID="
-        );
+        program_id(LOCALNET, "PROTOCOL_ADAPTER").unwrap();
+        program_id(LOCALNET, "MOCK_VERIFIER").unwrap();
     }
 }

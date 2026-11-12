@@ -14,7 +14,8 @@ use anoma_pa_solana_client::generated::protocol_adapter::events::{
 use anoma_pa_solana_client::generated::protocol_adapter::types;
 use anoma_pa_solana_client::settlement::SettlementPlan;
 use anoma_pa_solana_client::submission::{
-    Failure, Submission, read_adapter_state, read_verifier_program, settlement_failure,
+    Failure, Submission, SubmissionError, read_adapter_state, read_verifier_program,
+    settlement_failure,
 };
 use anoma_pa_solana_client::{
     TXDATA_EXPIRY_SLOTS_DEFAULT, cpi_event_discriminator, decode_cpi_event,
@@ -208,7 +209,7 @@ impl ProtocolAdapter {
                     Ok(Some(refusal)) => Ok(Err(refusal)),
                     Ok(None) => Err(error.context("protocol adapter settlement failed")),
                     Err(undecodable) => Err(error
-                        .context(format!("{undecodable:#}"))
+                        .context(undecodable)
                         .context("protocol adapter settlement failed")),
                 };
             }
@@ -261,7 +262,7 @@ impl ProtocolAdapter {
     /// the runtime's simulation of it (`refusal_in_logs`). `None` when the
     /// failure is not one of the protocol's refusals; an error when the
     /// simulation's log cannot say.
-    fn refusal(&self, error: &anyhow::Error) -> anyhow::Result<Option<Refusal>> {
+    fn refusal(&self, error: &anyhow::Error) -> Result<Option<Refusal>, SubmissionError> {
         let Some(ErrorKind::RpcError(RpcError::RpcResponseError {
             data:
                 RpcResponseErrorData::SendTransactionPreflightFailure(RpcSimulateTransactionResult {
@@ -390,7 +391,7 @@ fn refusal_in_logs(
     logs: &[String],
     program: &Pubkey,
     verifier: &Pubkey,
-) -> anyhow::Result<Option<Refusal>> {
+) -> Result<Option<Refusal>, SubmissionError> {
     Ok(match settlement_failure(logs, program, verifier)? {
         Some(Failure::ProofRefused { .. }) => Some(Refusal::InvalidAggregationProof),
         Some(Failure::Adapter(error)) => refusal_for(error),
