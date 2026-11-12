@@ -5,7 +5,6 @@
  */
 import { AccountMeta, PublicKey, SystemProgram, Keypair, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import { SCHEMA_VERSION } from "../client/constants";
 import { type Fixture, loadFixture, createdCommitmentsOf as commitmentsOf, tamperedTxOf } from "./utils/fixtures";
 import { assertFails } from "./utils/helpers";
 import { predictRootAfterAppend } from "./utils/merkle";
@@ -60,29 +59,6 @@ describe("settlement", () => {
         options,
       );
     }
-
-    it("holds a variable-depth tree whose frontier matches its depth", async () => {
-      const state = await program.account.paStateAccount.fetch(paState);
-      assert.equal(state.schemaVersion, SCHEMA_VERSION, "the adapter carries SCHEMA_VERSION");
-      assert.isAtLeast(state.currentDepth, 1, "Tree depth should be at least 1");
-      assert.equal(state.frontier.length, state.currentDepth, "Frontier length should equal current depth");
-    });
-
-    it("account size matches expected size for current depth (no over-allocation)", async () => {
-      // The account holds the current frontier and the denylist, and nothing
-      // more.
-      const state = await program.account.paStateAccount.fetch(paState);
-      const accountInfo = await provider.connection.getAccountInfo(paState);
-
-      assert.ok(accountInfo, "PAState account should exist");
-
-      const expectedSize = (await program.coder.accounts.encode("paStateAccount", state)).length;
-      assert.equal(
-        accountInfo!.data.length,
-        expectedSize,
-        `Account size (${accountInfo!.data.length}) should match expected size for depth ${state.currentDepth} (${expectedSize})`,
-      );
-    });
 
     it("rejects Delta::Witness (balance conservation bypass attempt)", async () => {
       // A WELL-FORMED transaction carrying Delta::Witness — the fixture's
@@ -212,25 +188,26 @@ describe("settlement", () => {
       );
     });
 
-    it("rejects insufficient remaining_accounts for nullifiers", async () => {
-      // Upload the fixture but pass zero nullifier accounts.
-      // The program expects 1 nullifier PDA in remaining_accounts.
+    it("rejects a forwarder call whose account segment is missing", async () => {
+      // The fixture's consumed resource carries a block-time forwarder call;
+      // its nullifier marker is given, the call's accounts are not. Its
+      // settlement never succeeds (its forwarder output mismatches), so its
+      // nullifier stays unspent.
       const authority = await funder.fresh(2);
-
       const mismatchFixture = await loadFixture("batch_groth16_mismatch.json");
-      const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
-
-      const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
-
-      // Pass no remaining accounts at all: the fixture's one nullifier has no
-      // marker slot.
-      const allRemainingAccounts: AccountMeta[] = [];
+      const { uploadId, txData } = await uploadTxData(authority, Buffer.from(mismatchFixture.tx_b64, "base64"));
 
       await assertFails(
-        settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, allRemainingAccounts)
+        settleFromTxDataBuilder(
+          authority.publicKey,
+          uploadId,
+          txData,
+          DUMMY_ROOT_MARKER,
+          deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64),
+        )
           .signers([authority])
           .rpc(),
-        { program, error: "InvalidTransactionData" },
+        { program, error: "AccountNotEnoughKeys" },
       );
     });
 

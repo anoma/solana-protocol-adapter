@@ -215,8 +215,11 @@ mod tests {
             .unwrap_err();
         println!("{error:#}");
         assert!(
-            format!("{error:#}").contains("bytes remain after the event body"),
-            "{error:#}"
+            matches!(
+                error.downcast_ref::<anoma_pa_solana_client::EventDecodeError>(),
+                Some(anoma_pa_solana_client::EventDecodeError::TrailingBytes)
+            ),
+            "the error is not the client's trailing-bytes decode error: {error:#}"
         );
     }
 }

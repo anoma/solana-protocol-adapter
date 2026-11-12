@@ -1,10 +1,12 @@
 //! Curve point validation and arithmetic tests belong in arm_solana.
 
 use crate::tests::utils::create_minimal_transaction;
-use arm_core::delta_proof::DeltaWitness;
+use arm_core::delta_proof::{DeltaProof, DeltaWitness};
 use arm_core::transaction::Delta;
-use arm_solana::delta::verify_delta_proof;
+use arm_solana::delta::{collect_roots, compute_delta_msg_hash, verify_delta_proof};
+use arm_solana::journal::require_aggregation;
 use arm_solana::SolanaArmError;
+use k256::ecdsa::SigningKey;
 
 #[test]
 fn test_verify_delta_proof_witness_returns_expected_delta_proof() {
@@ -19,20 +21,20 @@ fn test_verify_delta_proof_witness_returns_expected_delta_proof() {
 }
 
 #[test]
-fn test_verify_delta_proof_meaningless_proof_rejected() {
-    // create_minimal_transaction carries a wire-valid but cryptographically
-    // meaningless proof (r = s = 1) over a single action. The signature
-    // recovers to *some* public key, which cannot match the accumulated
-    // delta point, so verification fails at the key comparison. (With one
-    // action no point addition runs; curve-arithmetic rejection is covered
-    // by arm_solana's own test suite.)
-    let tx = create_minimal_transaction();
+fn a_delta_proof_signed_by_another_key_is_a_mismatch() {
+    // A valid signature over the transaction's delta message, by a key whose
+    // public key is not the transaction's delta.
+    let mut tx = create_minimal_transaction();
+    let instance = require_aggregation(&tx).unwrap();
+    let msg_hash = compute_delta_msg_hash(&collect_roots(instance));
+    let key = SigningKey::from_bytes(&[2u8; 32].into()).unwrap();
+    let (signature, recovery_id) = key.sign_prehash_recoverable(&msg_hash).unwrap();
+    let mut bytes = signature.to_bytes().to_vec();
+    bytes.push(recovery_id.to_byte());
+    tx.delta_proof = Delta::Proof(DeltaProof::from_bytes(&bytes).unwrap());
 
     match verify_delta_proof(&tx) {
         Err(SolanaArmError::DeltaMismatch) => {}
-        other => panic!(
-            "Meaningless delta proof should fail the delta comparison, got {:?}",
-            other
-        ),
+        other => panic!("a signature by another key must be a delta mismatch, got {other:?}"),
     }
 }

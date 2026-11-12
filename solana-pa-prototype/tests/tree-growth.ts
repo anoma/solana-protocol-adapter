@@ -4,7 +4,6 @@
  */
 import { SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import { RESULT_LT } from "../client/constants";
 import { loadFixture, createdCommitmentsOf as commitmentsOf } from "./utils/fixtures";
 import { assertFails, transactionIdOf } from "./utils/helpers";
 import { predictRootAfterAppend } from "./utils/merkle";
@@ -98,7 +97,9 @@ describe("protocol-adapter (Tree growth and multi-settlement)", () => {
       `forwarder should be ${blockTimeForwarderId}`,
     );
     const outputBytes = Buffer.from(fwdEvents[0].data.output);
-    assert.deepEqual(outputBytes, Buffer.from([RESULT_LT]), "output should be RESULT_LT");
+    // The fixture's timestamp is in the past, which the block-time forwarder
+    // answers with 0x00.
+    assert.deepEqual(outputBytes, Buffer.from([0x00]), "the forwarder's output for a past timestamp");
   });
 
   it("retains a root marker for the v2 settlement's resulting root", async () => {

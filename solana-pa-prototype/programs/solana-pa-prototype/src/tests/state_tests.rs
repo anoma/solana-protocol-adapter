@@ -1,4 +1,4 @@
-use crate::state::{PAStateAccount, EMPTY_KIND_TREE_ROOT, SCHEMA_VERSION};
+use crate::state::{PAStateAccount, TxDataAccount, EMPTY_KIND_TREE_ROOT, SCHEMA_VERSION};
 use crate::tests::utils::create_test_pa_state;
 use anchor_lang::prelude::*;
 use arm_core::merkle_path::PADDING_LEAF;
@@ -69,6 +69,31 @@ fn space_is_the_encoding_of_a_grown_state_with_denials() {
         serialized(&state).len(),
         PAStateAccount::space(state.depth(), state.denied_count()),
     );
+}
+
+/// An upload buffer is created at `space(len)` and holds a payload of `len`
+/// bytes, so `space` must be the encoding length of that account.
+#[test]
+fn tx_data_space_is_the_encoding_of_its_payload() {
+    for len in [0, 1, 1000] {
+        let account = TxDataAccount {
+            bump: 1,
+            authority: Pubkey::new_unique(),
+            refund: Pubkey::new_unique(),
+            written_len: 0,
+            expires_slot: 0,
+            payload: vec![0; len],
+        };
+        let mut bytes = Vec::new();
+        account
+            .try_serialize(&mut bytes)
+            .expect("TxDataAccount serializes");
+        assert_eq!(
+            bytes.len(),
+            TxDataAccount::space(len),
+            "payload of {len} bytes"
+        );
+    }
 }
 
 /// pa-evm's two denylists: a consumed resource is checked against the one

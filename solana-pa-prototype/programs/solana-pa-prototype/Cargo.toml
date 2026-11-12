@@ -58,6 +58,9 @@ sha2 = "0.11"
 # Host alt_bn128 G1 addition, checking pi_a negation against the curve group law
 solana-bn254 = "3.2.1"
 
+# Signing delta messages with a known key in the delta proof tests
+k256 = { version = "0.13", features = ["ecdsa"] }
+
 # Property-based testing (fuzzing parity with EVM PA)
 proptest = "1.4"
 

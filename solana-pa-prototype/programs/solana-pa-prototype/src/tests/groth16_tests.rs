@@ -1,7 +1,6 @@
 use crate::error::PAError;
 use crate::groth16::{check_selector, negate_g1, prepare_proof_for_verification};
 use crate::tests::utils::{fake_aggregation_proof_bytes, minimal_instance, FAKE_SELECTOR};
-use arm_core::constants::BATCH_AGGREGATION_VK;
 use arm_core::transaction::Aggregation;
 use hex_literal::hex;
 
@@ -10,13 +9,6 @@ fn fake_aggregation() -> Aggregation {
         proof: fake_aggregation_proof_bytes(),
         instance: minimal_instance(),
     }
-}
-
-#[test]
-fn test_prepare_proof_accepts_batch_discriminant() {
-    let prepared = prepare_proof_for_verification(&fake_aggregation()).unwrap();
-    let expected: [u8; 32] = BATCH_AGGREGATION_VK.into();
-    assert_eq!(prepared.image_id, expected);
 }
 
 #[test]

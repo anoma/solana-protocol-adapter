@@ -781,7 +781,7 @@ fn execute_settlement(
     let mut nullifier_markers = accounts
         .remaining
         .get(..nullifier_count)
-        .ok_or(PAError::InvalidTransactionData)?
+        .ok_or(ErrorCode::AccountNotEnoughKeys)?
         .iter();
     #[cfg(not(test))]
     let mut forwarder_segments =

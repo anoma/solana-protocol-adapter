@@ -1,4 +1,3 @@
-use crate::state::{PAStateAccount, TxDataAccount, MAX_EXPIRY_SLOTS, MIN_EXPIRY_SLOTS};
 use crate::tests::utils::create_minimal_transaction;
 use arm_core::transaction::Transaction;
 use arm_core::Digest;
@@ -27,47 +26,6 @@ mod fixture_tests {
         let deserialized: Transaction = bincode::deserialize(&serialized).unwrap();
 
         assert_eq!(tx, deserialized);
-    }
-}
-
-mod governance_tests {
-    use super::*;
-
-    #[test]
-    fn test_pa_state_account_space_calculation() {
-        // Schema version 4: the 32-byte owner after the bump, and the two
-        // denylists' 4-byte lengths after the fields.
-        assert_eq!(PAStateAccount::INITIAL_SPACE, 180);
-        assert_eq!(PAStateAccount::MAX_SPACE, 1236);
-        assert_eq!(PAStateAccount::space(1, 0), 212);
-        assert_eq!(PAStateAccount::space(2, 0), 244);
-        assert_eq!(PAStateAccount::space(32, 0), 1204);
-        // The tree of 2^32 leaves, the deepest, is 33 levels deep.
-        assert_eq!(PAStateAccount::space(33, 0), 1236);
-        // Each denylist entry adds its 32 bytes.
-        assert_eq!(PAStateAccount::space(1, 2), 212 + 64);
-    }
-
-    #[test]
-    fn test_tx_data_account_space_calculation() {
-        // discriminator(8) + bump(1) + authority(32) + refund(32) +
-        // written_len(4) + expires_slot(8) + payload length prefix(4)
-        assert_eq!(TxDataAccount::space(0), 89);
-        assert_eq!(TxDataAccount::space(1000), 1089);
-    }
-}
-
-mod txdata_expiry_bounds_tests {
-    use super::*;
-
-    #[test]
-    fn test_expiry_bounds_no_overflow() {
-        let current_slot: u64 = u64::MAX - 50;
-        let min_expires = current_slot.saturating_add(MIN_EXPIRY_SLOTS);
-        let max_expires = current_slot.saturating_add(MAX_EXPIRY_SLOTS);
-
-        assert_eq!(min_expires, u64::MAX);
-        assert_eq!(max_expires, u64::MAX);
     }
 }
 

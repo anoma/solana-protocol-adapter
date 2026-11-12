@@ -252,8 +252,11 @@ async fn a_refusal_with_a_truncated_log_is_reported_not_named() -> anyhow::Resul
         anyhow::bail!("the harness decoded a refusal from a truncated log");
     };
     anyhow::ensure!(
-        format!("{error:#}").contains("the runtime truncated the log"),
-        "the failure does not name the truncation: {error:#}"
+        matches!(
+            error.downcast_ref::<anoma_pa_solana_client::submission::SubmissionError>(),
+            Some(anoma_pa_solana_client::submission::SubmissionError::TruncatedLog)
+        ),
+        "the failure is not the client's truncated-log error: {error:#}"
     );
     Ok(())
 }

@@ -70,17 +70,17 @@ export const fixture = requireFixture("batch_groth16.json");
 
 // Verifiers by router selector. Fixtures carry their selector, so tests
 // derive the verifier program and its failures from the fixture instead of
-// hardcoding one. `rejection` rejects a well-formed proof that does not
-// verify; `malformedProof` rejects proof bytes that are not valid curve
-// points. Unknown selectors fail loudly rather than silently defaulting to
-// some verifier.
-type Verifier = { program: PublicKey; rejection: ExpectedFailure; malformedProof: ExpectedFailure };
+// hardcoding one. `rejection` rejects a proof that does not verify;
+// `malformedProof`, of a verifier that reads the seal as curve points,
+// rejects a seal whose points are not on the curve. Unknown selectors fail
+// loudly rather than silently defaulting to some verifier.
+type Verifier = { program: PublicKey; rejection: ExpectedFailure; malformedProof?: ExpectedFailure };
 
-function verifierOf(program: PublicKey, rejectionCode: number, malformedProofCode: number): Verifier {
+function verifierOf(program: PublicKey, rejectionCode: number, malformedProofCode?: number): Verifier {
   return {
     program,
     rejection: { program, code: rejectionCode },
-    malformedProof: { program, code: malformedProofCode },
+    malformedProof: malformedProofCode === undefined ? undefined : { program, code: malformedProofCode },
   };
 }
 
@@ -91,9 +91,9 @@ function verifierForSelector(selector: Buffer): Verifier {
     case "73c457ba":
       return verifierOf(GROTH16_VERIFIER_ID, 6000, 6003);
     // mock-verifier (programs/mock-verifier, localnet only): ClaimDigestMismatch
-    // for both (it checks no curve points; offset 6600 keeps it disjoint)
+    // (it reads no curve points; offset 6600 keeps it disjoint)
     case MOCK_SELECTOR.toString("hex"):
-      return verifierOf((anchor.workspace.MockVerifier as Program<MockVerifier>).programId, 6600, 6600);
+      return verifierOf((anchor.workspace.MockVerifier as Program<MockVerifier>).programId, 6600);
     default:
       throw new Error(`no verifier registered for selector 0x${hex}`);
   }
