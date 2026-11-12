@@ -188,25 +188,26 @@ describe("settlement", () => {
       );
     });
 
-    it("rejects insufficient remaining_accounts for nullifiers", async () => {
-      // Upload the fixture but pass zero nullifier accounts.
-      // The program expects 1 nullifier PDA in remaining_accounts.
+    it("rejects a forwarder call whose account segment is missing", async () => {
+      // The fixture's consumed resource carries a block-time forwarder call;
+      // its nullifier marker is given, the call's accounts are not. Its
+      // settlement never succeeds (its forwarder output mismatches), so its
+      // nullifier stays unspent.
       const authority = await funder.fresh(2);
-
       const mismatchFixture = await loadFixture("batch_groth16_mismatch.json");
-      const mismatchTx = Buffer.from(mismatchFixture.tx_b64, "base64");
-
-      const { uploadId, txData } = await uploadTxData(authority, mismatchTx);
-
-      // Pass no remaining accounts at all: the fixture's one nullifier has no
-      // marker slot.
-      const allRemainingAccounts: AccountMeta[] = [];
+      const { uploadId, txData } = await uploadTxData(authority, Buffer.from(mismatchFixture.tx_b64, "base64"));
 
       await assertFails(
-        settleFromTxDataBuilder(authority.publicKey, uploadId, txData, DUMMY_ROOT_MARKER, allRemainingAccounts)
+        settleFromTxDataBuilder(
+          authority.publicKey,
+          uploadId,
+          txData,
+          DUMMY_ROOT_MARKER,
+          deriveNullifierAccounts(mismatchFixture.consumed_nullifiers_b64),
+        )
           .signers([authority])
           .rpc(),
-        { program, error: "InvalidTransactionData" },
+        { program, error: "AccountNotEnoughKeys" },
       );
     });
 

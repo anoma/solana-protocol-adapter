@@ -1,5 +1,6 @@
 //! CPI execution for external calls. Excluded from test builds.
 
+use anchor_lang::error::ErrorCode;
 use anchor_lang::prelude::{AccountInfo, Pubkey};
 use anchor_lang::solana_program::instruction::{AccountMeta, Instruction};
 use anchor_lang::solana_program::program::{get_return_data, invoke};
@@ -68,10 +69,10 @@ impl<'a, 'info> ForwarderSegments<'a, 'info> {
     pub fn new(
         remaining_accounts: &'a [AccountInfo<'info>],
         nullifier_count: usize,
-    ) -> Result<Self, PAError> {
+    ) -> anchor_lang::Result<Self> {
         let accounts = remaining_accounts
             .get(nullifier_count..)
-            .ok_or(PAError::InvalidTransactionData)?;
+            .ok_or(ErrorCode::AccountNotEnoughKeys)?;
         Ok(Self { accounts })
     }
 
@@ -88,8 +89,11 @@ impl<'a, 'info> ForwarderSegments<'a, 'info> {
         for blob in &app_data.external_payload {
             let call = super::decode_external_call(blob)?;
             let seg_len = call.num_accounts as usize;
-            if seg_len == 0 || seg_len > self.accounts.len() {
+            if seg_len == 0 {
                 return Err(PAError::InvalidTransactionData.into());
+            }
+            if seg_len > self.accounts.len() {
+                return Err(ErrorCode::AccountNotEnoughKeys.into());
             }
             let (segment, rest) = self.accounts.split_at(seg_len);
             if segment[0].key != &Pubkey::new_from_array(call.program_id) {

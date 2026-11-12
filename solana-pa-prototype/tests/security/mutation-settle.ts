@@ -5,7 +5,8 @@
  * `settle`; the full-size ones go through a TxData upload.
  */
 import { AccountMeta, Keypair } from "@solana/web3.js";
-import { loadFixture } from "../utils/fixtures";
+import { assert } from "chai";
+import { loadFixture, parseSelectorFromFixture } from "../utils/fixtures";
 import { assertFails } from "../utils/helpers";
 import {
   DUMMY_ROOT_MARKER,
@@ -17,6 +18,16 @@ import {
   settleBuilder,
   useAdapterSuite,
 } from "../utils/adapterSuite";
+
+/** BN254's base field modulus. */
+const BN254_P = 21888242871839275222246405745257275088696311157297823662689037894645226208583n;
+
+/** Whether the big-endian (x, y) of `point` is on BN254's G1, y² = x³ + 3, with both coordinates field elements. */
+function isBn254G1Point(point: Buffer): boolean {
+  const x = BigInt(`0x${point.subarray(0, 32).toString("hex")}`);
+  const y = BigInt(`0x${point.subarray(32, 64).toString("hex")}`);
+  return x < BN254_P && y < BN254_P && (y * y - (x * x * x + 3n)) % BN254_P === 0n;
+}
 
 /** Truncate a buffer. Returns a new buffer. */
 function truncate(buf: Buffer, len: number): Buffer {
@@ -60,21 +71,41 @@ describe("Security: mutation-based settle tests", () => {
 
   // --- Proof mutations ---
 
-  // The primary fixture with its seal's pi_c[0] flipped and the selector
-  // intact (fixture-gen's corrupt_seal.json variant): the router routes it
-  // to the fixture's verifier, which rejects the malformed point.
-  // Every account the settlement needs is supplied, so the corrupted proof
-  // is the only defect: the forwarder call runs before verification, as in
-  // pa-evm, and the verifier rejects the seal.
-  it("rejects transaction with corrupted proof bytes", async () => {
+  // A Groth16 seal's pi_c that is not a point of BN254's G1 is a malformed
+  // proof; one that is a point, but not the proof's, fails verification. The
+  // fixture's pi_c is corrupted (fixture-gen's corrupt_seal.json); the
+  // generator (1, 2) is a point. Every account the settlement needs is
+  // supplied, so the seal is the only defect. A verifier that reads no curve
+  // points (the mock) rejects the corrupted seal as not verifying.
+  it("rejects a corrupted proof as malformed off the curve and as failing verification on it", async () => {
     const corrupt = await loadFixture("corrupt_seal.json");
-    return assertFails(
-      settleUploaded(
-        Buffer.from(corrupt.tx_b64, "base64"),
-        buildSettleRemainingAccounts(deriveNullifierAccounts(corrupt.consumed_nullifiers_b64)),
-      ),
-      VERIFIER.malformedProof,
-    );
+    const tx = Buffer.from(corrupt.tx_b64, "base64");
+    const accounts = buildSettleRemainingAccounts(deriveNullifierAccounts(corrupt.consumed_nullifiers_b64));
+    if (VERIFIER.malformedProof === undefined) {
+      await assertFails(settleUploaded(tx, accounts), VERIFIER.rejection);
+      return;
+    }
+    const malformedProof = VERIFIER.malformedProof;
+    // The seal follows the selector: pi_a (64 bytes), pi_b (128), pi_c (64),
+    // each coordinate a big-endian field element.
+    const selectorAt = tx.indexOf(parseSelectorFromFixture(corrupt.selector));
+    assert.equal(tx.lastIndexOf(parseSelectorFromFixture(corrupt.selector)), selectorAt, "one selector in the tx");
+    const piCAt = selectorAt + 4 + 64 + 128;
+
+    const generator = Buffer.alloc(64);
+    generator[31] = 1;
+    generator[63] = 2;
+    const cases = [
+      { name: "the fixture's pi_c", tx },
+      { name: "the generator as pi_c", tx: Buffer.concat([tx.subarray(0, piCAt), generator, tx.subarray(piCAt + 64)]) },
+    ];
+    const onCurve = cases.map(({ tx }) => isBn254G1Point(tx.subarray(piCAt, piCAt + 64)));
+    assert.deepEqual(onCurve, [false, true], "one case off the curve, one on it");
+
+    for (const [i, { name, tx }] of cases.entries()) {
+      console.log(`${name}: on the curve ${onCurve[i]}`);
+      await assertFails(settleUploaded(tx, accounts), onCurve[i] ? VERIFIER.rejection : malformedProof);
+    }
   });
 
   it("rejects all-zero payload of valid length", () =>
@@ -85,8 +116,9 @@ describe("Security: mutation-based settle tests", () => {
 
   // --- Remaining accounts mutations ---
 
+  // The transaction consumes a resource, whose nullifier marker is missing.
   it("rejects settlement with no remaining accounts", () =>
-    assertFails(settleUploaded(validTx, []), { program, error: "InvalidTransactionData" }));
+    assertFails(settleUploaded(validTx, []), { program, error: "AccountNotEnoughKeys" }));
 
   // Every account is the settlement's own except the consumed resource's
   // nullifier marker, which is at another address.
