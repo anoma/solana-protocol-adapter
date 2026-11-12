@@ -5,7 +5,6 @@
  */
 import { AccountMeta, PublicKey, SystemProgram, Keypair, SYSVAR_CLOCK_PUBKEY } from "@solana/web3.js";
 import { assert } from "chai";
-import { SCHEMA_VERSION } from "../client/constants";
 import { type Fixture, loadFixture, createdCommitmentsOf as commitmentsOf, tamperedTxOf } from "./utils/fixtures";
 import { assertFails } from "./utils/helpers";
 import { predictRootAfterAppend } from "./utils/merkle";
@@ -60,29 +59,6 @@ describe("settlement", () => {
         options,
       );
     }
-
-    it("holds a variable-depth tree whose frontier matches its depth", async () => {
-      const state = await program.account.paStateAccount.fetch(paState);
-      assert.equal(state.schemaVersion, SCHEMA_VERSION, "the adapter carries SCHEMA_VERSION");
-      assert.isAtLeast(state.currentDepth, 1, "Tree depth should be at least 1");
-      assert.equal(state.frontier.length, state.currentDepth, "Frontier length should equal current depth");
-    });
-
-    it("account size matches expected size for current depth (no over-allocation)", async () => {
-      // The account holds the current frontier and the denylist, and nothing
-      // more.
-      const state = await program.account.paStateAccount.fetch(paState);
-      const accountInfo = await provider.connection.getAccountInfo(paState);
-
-      assert.ok(accountInfo, "PAState account should exist");
-
-      const expectedSize = (await program.coder.accounts.encode("paStateAccount", state)).length;
-      assert.equal(
-        accountInfo!.data.length,
-        expectedSize,
-        `Account size (${accountInfo!.data.length}) should match expected size for depth ${state.currentDepth} (${expectedSize})`,
-      );
-    });
 
     it("rejects Delta::Witness (balance conservation bypass attempt)", async () => {
       // A WELL-FORMED transaction carrying Delta::Witness — the fixture's

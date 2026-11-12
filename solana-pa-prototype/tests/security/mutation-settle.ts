@@ -88,14 +88,13 @@ describe("Security: mutation-based settle tests", () => {
   it("rejects settlement with no remaining accounts", () =>
     assertFails(settleUploaded(validTx, []), { program, error: "InvalidTransactionData" }));
 
-  // The first remaining account is read as the consumed resource's nullifier
-  // marker, before any forwarder segment (UnregisteredForwarder is settle.ts's).
-  it("rejects settlement with random remaining accounts", () => {
-    const randomAccounts = Array.from({ length: 3 }, () => ({
-      pubkey: Keypair.generate().publicKey,
-      isWritable: true,
-      isSigner: false,
-    }));
-    return assertFails(settleUploaded(validTx, randomAccounts), { program, error: "NullifierPdaMismatch" });
+  // Every account is the settlement's own except the consumed resource's
+  // nullifier marker, which is at another address.
+  it("rejects a nullifier marker at another address", () => {
+    const [marker, ...rest] = buildSettleRemainingAccounts(nullifierAccounts);
+    return assertFails(settleUploaded(validTx, [{ ...marker, pubkey: Keypair.generate().publicKey }, ...rest]), {
+      program,
+      error: "NullifierPdaMismatch",
+    });
   });
 });

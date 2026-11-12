@@ -4,7 +4,6 @@
  */
 import * as anchor from "@anchor-lang/core";
 import { assert } from "chai";
-import { MIN_ALLOWED_EXPIRY, SEVEN_DAYS_SLOTS } from "../client/constants";
 import { assertFails } from "./utils/helpers";
 import { program, paState, setExpiryBounds, useAdapterSuite } from "./utils/adapterSuite";
 
@@ -32,12 +31,12 @@ describe("protocol-adapter (update_expiry_config) @localnet", () => {
     await assertFails(setExpiryBounds(5000, 100), { program, error: "InvalidExpiryConfig" });
   });
 
-  it("rejects min < MIN_ALLOWED_EXPIRY", async () => {
-    await assertFails(setExpiryBounds(MIN_ALLOWED_EXPIRY - 1, 1000), { program, error: "InvalidExpiryConfig" });
+  it("rejects a minimum below 10 slots", async () => {
+    await assertFails(setExpiryBounds(9, 1000), { program, error: "InvalidExpiryConfig" });
   });
 
-  it("rejects max > SEVEN_DAYS_SLOTS", async () => {
-    await assertFails(setExpiryBounds(50, SEVEN_DAYS_SLOTS + 1), { program, error: "InvalidExpiryConfig" });
+  it("rejects a maximum above seven days of 400 ms slots (1,512,000)", async () => {
+    await assertFails(setExpiryBounds(50, 1_512_001), { program, error: "InvalidExpiryConfig" });
   });
 
   it("rejects wrong authority", async () => {

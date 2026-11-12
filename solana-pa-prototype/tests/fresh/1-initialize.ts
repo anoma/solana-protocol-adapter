@@ -8,9 +8,7 @@
  */
 import { PublicKey } from "@solana/web3.js";
 import { assert } from "chai";
-import { EMPTY_KIND_TREE_ROOT, SCHEMA_VERSION } from "../../client/constants";
 import { initializeAdapter } from "../../client/instructions";
-import { deriveUpgradeAuthorityPda } from "../../client/pda";
 import { upgradeAuthority } from "../../client/upgrade";
 import { PAUSED_MOCK_SELECTOR, VERIFIER_ROUTER_ID, getVerifierEntryPda } from "../../client/verifier";
 import { EMPTY_TREE_ROOT_INITIAL } from "../utils/constants";
@@ -104,12 +102,12 @@ describe("protocol-adapter (initialize)", () => {
     assert.equal(state.owner.toBase58(), provider.wallet.publicKey.toBase58(), "the initial owner is stored");
     assert.equal(
       (await upgradeAuthority(provider.connection, program.programId))?.toBase58(),
-      deriveUpgradeAuthorityPda(program.programId).toBase58(),
+      PublicKey.findProgramAddressSync([Buffer.from("upgrade_authority")], program.programId)[0].toBase58(),
       "the program's upgrade authority is its PDA, so only `upgrade` upgrades it",
     );
     assert.deepEqual(
       Buffer.from(state.kindTreeRoot),
-      EMPTY_KIND_TREE_ROOT,
+      EMPTY_TREE_ROOT_INITIAL,
       "initialize must store the empty kind tree's root",
     );
     assert.isFalse(state.paused, "the adapter starts unpaused");
@@ -131,7 +129,7 @@ describe("protocol-adapter (initialize)", () => {
     assert.equal(events[0].data.previousOwner.toBase58(), PublicKey.default.toBase58(), "from no owner");
     assert.equal(events[0].data.newOwner.toBase58(), provider.wallet.publicKey.toBase58(), "to the initial owner");
     assert.deepEqual(Buffer.from(events[1].data.root), EMPTY_TREE_ROOT_INITIAL, "the empty tree's root");
-    assert.deepEqual(Buffer.from(events[2].data.kindTreeRoot), EMPTY_KIND_TREE_ROOT);
-    assert.equal(events[3].data.version.toNumber(), SCHEMA_VERSION, "the state's schema version");
+    assert.deepEqual(Buffer.from(events[2].data.kindTreeRoot), EMPTY_TREE_ROOT_INITIAL, "the empty kind tree's root");
+    assert.equal(events[3].data.version.toNumber(), 4, "the state's schema version, 4");
   });
 });
