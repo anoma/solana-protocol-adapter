@@ -12,24 +12,40 @@ import { derivePaStatePda } from "./pda";
 // Protocol adapter governance
 
 /**
+ * The router's verifier entry for the deployed build's selector, both read
+ * from the program (`risc_zero_verifier_router`, `risc_zero_verifier_selector`),
+ * as pa-evm's `RISC_ZERO_VERIFIER_ROUTER()` and `RISC_ZERO_VERIFIER_SELECTOR()`.
+ */
+export async function adapterVerifierEntry(program: Program<ProtocolAdapter>): Promise<PublicKey> {
+  const router = await program.methods.riscZeroVerifierRouter().view();
+  const selector = await program.methods.riscZeroVerifierSelector().view();
+  return getVerifierEntryPda(Buffer.from(selector), router)[0];
+}
+
+/**
  * The adapter's `initialize`, signed and paid by `payer`, the program's
  * upgrade authority, which it hands to the program's upgrade authority PDA:
- * it makes `initialOwner` the owner, pins the verifier, starts on the empty
- * kind tree, and refuses a verifier the router has paused, read from the
- * router's verifier entry for `proofSelector`.
+ * it makes `initialOwner` the owner, starts on the empty kind tree, and
+ * refuses a verifier the router has paused, read from the router's verifier
+ * entry for the build's selector.
  */
-export function initializeAdapter(
-  program: Program<ProtocolAdapter>,
-  payer: PublicKey,
-  initialOwner: PublicKey,
-  verifierRouter: PublicKey,
-  proofSelector: number[],
-) {
-  return program.methods.initialize(initialOwner, verifierRouter, proofSelector).accountsPartial({
+export async function initializeAdapter(program: Program<ProtocolAdapter>, payer: PublicKey, initialOwner: PublicKey) {
+  return program.methods.initialize(initialOwner).accountsPartial({
     paState: derivePaStatePda(program.programId)[0],
-    verifierEntry: getVerifierEntryPda(Buffer.from(proofSelector), verifierRouter)[0],
+    verifierEntry: await adapterVerifierEntry(program),
     payer,
     systemProgram: SystemProgram.programId,
+  });
+}
+
+/**
+ * `migrate_state`, signed by the owner: brings the state account from the
+ * previous schema version to this build's, once, right after the upgrade.
+ */
+export function migrateState(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  return program.methods.migrateState().accountsPartial({
+    authority,
+    paState: derivePaStatePda(program.programId)[0],
   });
 }
 

@@ -160,3 +160,65 @@ mod settle_order_tests {
         );
     }
 }
+
+/// pa-evm's `riscZeroVerifierPaused()`, which its initializer also checks:
+/// the router's verifier entry for the build's selector says whether the
+/// router has emergency-stopped that verifier, and only that entry is read.
+mod verifier_pause_tests {
+    use crate::tests::utils::{assert_anchor_err, make_account_info_with_data};
+    use crate::verifier_router::accounts::VerifierEntry;
+    use crate::{verifier_paused, RISC_ZERO_VERIFIER_ROUTER, RISC_ZERO_VERIFIER_SELECTOR};
+    use anchor_lang::prelude::*;
+
+    fn entry_key() -> Pubkey {
+        Pubkey::find_program_address(
+            &[b"verifier", &RISC_ZERO_VERIFIER_SELECTOR],
+            &RISC_ZERO_VERIFIER_ROUTER,
+        )
+        .0
+    }
+
+    fn entry_data(estopped: bool) -> Vec<u8> {
+        let mut data = Vec::new();
+        VerifierEntry {
+            selector: RISC_ZERO_VERIFIER_SELECTOR,
+            verifier: Pubkey::new_unique(),
+            estopped,
+        }
+        .try_serialize(&mut data)
+        .expect("VerifierEntry serializes");
+        data
+    }
+
+    #[test]
+    fn reads_the_estop_of_the_entry_for_the_builds_selector() {
+        let key = entry_key();
+        for estopped in [false, true] {
+            make_account_info_with_data!(entry, &key, owner: &RISC_ZERO_VERIFIER_ROUTER,
+                lamports: 1, data: entry_data(estopped), signer: false, writable: false, executable: false);
+            assert_eq!(
+                verifier_paused(&entry).expect("the build's entry is read"),
+                estopped,
+                "verifier_paused must report the entry's estop flag"
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_another_selectors_entry() {
+        let other =
+            Pubkey::find_program_address(&[b"verifier", &[0xff; 4]], &RISC_ZERO_VERIFIER_ROUTER).0;
+        make_account_info_with_data!(entry, &other, owner: &RISC_ZERO_VERIFIER_ROUTER,
+            lamports: 1, data: entry_data(true), signer: false, writable: false, executable: false);
+        assert_anchor_err!(verifier_paused(&entry), InvalidVerifierEntry);
+    }
+
+    #[test]
+    fn refuses_an_entry_another_program_owns() {
+        let impostor = Pubkey::new_unique();
+        let key = entry_key();
+        make_account_info_with_data!(entry, &key, owner: &impostor,
+            lamports: 1, data: entry_data(false), signer: false, writable: false, executable: false);
+        assert_anchor_err!(verifier_paused(&entry), InvalidVerifierEntry);
+    }
+}

@@ -87,8 +87,8 @@ function verifierOf(program: PublicKey, rejectionCode: number, malformedProofCod
 function verifierForSelector(selector: Buffer): Verifier {
   const hex = selector.toString("hex");
   switch (hex) {
-    // groth_16_verifier: VerificationError, PairingError
-    case "73c457ba":
+    // groth_16_verifier (risc0 3.1.0): VerificationError, PairingError
+    case "e71e6620":
       return verifierOf(GROTH16_VERIFIER_ID, 6000, 6003);
     // mock-verifier (programs/mock-verifier, localnet only): ClaimDigestMismatch
     // for both (it checks no curve points; offset 6600 keeps it disjoint)
@@ -130,12 +130,10 @@ export function deriveNullifierAccounts(nullifierB64s: string[]): AccountMeta[] 
 }
 
 /**
- * `initialize` signed by `payer`, making the provider wallet the owner, with
- * the verifier router and the fixture's selector every spec file deploys
- * with. Callers add `.signers()` when the payer is not the provider wallet.
+ * `initialize` signed by `payer`, making the provider wallet the owner.
+ * Callers add `.signers()` when the payer is not the provider wallet.
  */
-export const buildInitialize = (payer: PublicKey) =>
-  initializeAdapter(program, payer, provider.wallet.publicKey, VERIFIER_ROUTER_ID, Array.from(PROOF_SELECTOR));
+export const buildInitialize = (payer: PublicKey) => initializeAdapter(program, payer, provider.wallet.publicKey);
 
 export async function paStateExists(): Promise<boolean> {
   return (await provider.connection.getAccountInfo(paState)) !== null;
@@ -148,7 +146,7 @@ export async function paStateExists(): Promise<boolean> {
  */
 export async function ensureAdapterInitialized(): Promise<void> {
   if (!(await paStateExists())) {
-    await buildInitialize(provider.wallet.publicKey).rpc();
+    await (await buildInitialize(provider.wallet.publicKey)).rpc();
   }
 }
 
@@ -267,7 +265,7 @@ export async function upgradeThroughProgram(
 }
 
 /** The full CU budget and, unless `heapFrame` is false, the 256 KiB heap frame settlement needs. */
-function settleBudget(heapFrame: boolean) {
+export function settleBudget(heapFrame: boolean) {
   return [
     ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNIT_LIMIT }),
     ...(heapFrame ? [ComputeBudgetProgram.requestHeapFrame({ bytes: SETTLE_HEAP_FRAME_BYTES })] : []),

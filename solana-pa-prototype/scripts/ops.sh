@@ -38,6 +38,9 @@ Commands:
                          denylist for consumed or for created resources;
                          created alone deprecates, both deny. Cannot be
                          undone (owner wallet).
+  migrate-state          Bring PAState from the previous schema version to
+                         this build's, once, right after the upgrade (owner
+                         wallet).
   pause                  Pause settlement (owner-only; pa-evm's pause())
   unpause                Resume settlement (owner-only; pa-evm's unpause())
   status                 Show deployment status + wallet balance
@@ -137,12 +140,11 @@ Flags:
 Initialization parameters (required by deploy/init when the PA is a target):
   PA_OWNER             The adapter's initial owner (base58), who alone pauses,
                        upgrades and configures it, as pa-evm's initialOwner.
-  PA_VERIFIER_ROUTER   RISC0 verifier router program ID (base58).
-                       Devnet: ${VERIFIER_ROUTER}
-  PA_PROOF_SELECTOR    4-byte Groth16 verifier selector (hex).
-                       Devnet: ${GROTH16_SELECTOR}
 
-The PA starts on the empty kind tree; set-kind-tree-root installs another.
+The PA verifies through the RISC Zero verifier router and selector its build
+compiles in (RISC_ZERO_VERIFIER_ROUTER, RISC_ZERO_VERIFIER_SELECTOR in
+env/<cluster>.env), as pa-evm's implementation holds them as immutables. It
+starts on the empty kind tree; set-kind-tree-root installs another.
 USAGE
   exit 1
 }
@@ -527,13 +529,8 @@ program_id_args() {
 }
 
 require_init_params() {
-  if [[ -z "${PA_OWNER:-}" || -z "${PA_VERIFIER_ROUTER:-}" || -z "${PA_PROOF_SELECTOR:-}" ]]; then
-    echo "❌ Missing PA_OWNER, PA_VERIFIER_ROUTER and/or PA_PROOF_SELECTOR." >&2
-    echo "   initialize sets the owner and pins the verifier router and proof" >&2
-    echo "   selector for the lifetime of the deployment; there is no safe default." >&2
-    echo "   Devnet values:" >&2
-    echo "     PA_VERIFIER_ROUTER=${VERIFIER_ROUTER}" >&2
-    echo "     PA_PROOF_SELECTOR=${GROTH16_SELECTOR}" >&2
+  if [[ -z "${PA_OWNER:-}" ]]; then
+    echo "❌ Missing PA_OWNER: initialize sets the adapter's owner, and there is no safe default." >&2
     exit 1
   fi
 }
@@ -678,6 +675,11 @@ cmd_set_kind_tree_root() {
 cmd_deny_logic_refs() {
   prepare_pa_script
   run_ts scripts/deny-logic-refs.ts
+}
+
+cmd_migrate_state() {
+  prepare_pa_script
+  run_ts scripts/migrate-state.ts
 }
 
 cmd_pause() {
@@ -1099,6 +1101,7 @@ case "$COMMAND" in
     ensure_wallet
     ensure_lockfile_sync
     ensure_node_modules
+    use_test_mode_selector "$TEST_MODE"
     build_programs_dev
     workspace_program_args
     start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
@@ -1129,7 +1132,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|init|set-kind-tree-root|deny-logic-refs|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-tree-root|deny-logic-refs|migrate-state|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

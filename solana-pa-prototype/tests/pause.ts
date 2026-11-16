@@ -36,10 +36,7 @@ describe("protocol-adapter (pause) @localnet", () => {
 
   it("reports the deployment's verifier as not paused", async () => {
     assert.isFalse(
-      await program.methods
-        .riscZeroVerifierPaused()
-        .accountsPartial({ paState, verifierEntry: verifierEntryPda })
-        .view(),
+      await program.methods.riscZeroVerifierPaused().accountsPartial({ verifierEntry: verifierEntryPda }).view(),
     );
   });
 
@@ -47,7 +44,7 @@ describe("protocol-adapter (pause) @localnet", () => {
     assertFails(
       program.methods
         .riscZeroVerifierPaused()
-        .accountsPartial({ paState, verifierEntry: getVerifierEntryPda(PAUSED_MOCK_SELECTOR)[0] })
+        .accountsPartial({ verifierEntry: getVerifierEntryPda(PAUSED_MOCK_SELECTOR)[0] })
         .rpc(),
       { program, error: "InvalidVerifierEntry" },
     ));

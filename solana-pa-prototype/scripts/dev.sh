@@ -93,7 +93,7 @@ case "${1:-}" in
     run_in_project "./scripts/ops.sh $(printf '%q ' test "$@")"
     ;;
 
-  deploy|upgrade|init|set-kind-tree-root|deny-logic-refs|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs|idl-write|idl-check)
+  deploy|upgrade|init|set-kind-tree-root|deny-logic-refs|migrate-state|pause|unpause|status|balance|idl-publish|verify-build|harness-programs|refresh-devnet-programs|idl-write|idl-check)
     # Cluster operations — see ./scripts/ops.sh for flags and semantics.
     run_in_project "./scripts/ops.sh $(printf '%q ' "$@")"
     ;;
@@ -292,8 +292,7 @@ PYEOF
     echo "./scripts/ops.sh for all flags, wallet defaults, and required env):"
     echo "  deploy [${DEPLOY_TARGETS}|all]    First-time deploy (production build; --dev-teardown opts in)"
     echo "  upgrade [${DEPLOY_TARGETS}|all]   Rebuild + deploy over existing programs"
-    echo "  init                   Initialize PA state (idempotent; needs PA_OWNER,"
-    echo "                         PA_VERIFIER_ROUTER and PA_PROOF_SELECTOR)"
+    echo "  init                   Initialize PA state (idempotent; needs PA_OWNER)"
     echo "  set-kind-tree-root     Replace the PA's kind tree root (PA_KIND_TREE_ROOT)"
     echo "  deny-logic-refs        Add logic refs to the consumed or created denylist (PA_DENIED_LOGIC_REFS)"
     echo "  idl-publish            Publish the production IDL on chain"

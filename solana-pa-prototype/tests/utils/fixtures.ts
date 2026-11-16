@@ -3,11 +3,11 @@ import { existsSync, readFileSync } from "fs";
 import path from "path";
 
 // PA_TEST_MODE selects which fixture set the suite runs against:
-// tests/fixtures/ (real Groth16 proofs, selector 0x73c457ba) or
+// tests/fixtures/ (real Groth16 proofs, selector 0xe71e6620) or
 // tests/fixtures/mock/ (mock seals, selector 0xffffffff, accepted only by
-// the localnet mock verifier). The mode's only job is picking the
-// directory — the fixture's selector drives everything downstream: the PA
-// initialize argument, the verifier-entry PDA, and the verifier program.
+// the localnet mock verifier). The build compiles in its mode's selector
+// (scripts/validator-deploy.sh's use_test_mode_selector); the fixture's
+// selector picks the verifier-entry PDA and the verifier program.
 // A cluster run (ops.sh test) proves its own set for the deployment into
 // PA_FIXTURE_DIR, each fixture when a test first loads it, under the run's
 // salt (PA_FIXTURE_SALT) and the deployment's kind tree (PA_KIND_TREE).
@@ -15,15 +15,14 @@ const MODE = process.env.PA_TEST_MODE ?? "real";
 if (MODE !== "real" && MODE !== "mock") {
   throw new Error(`PA_TEST_MODE must be "real" or "mock", got "${MODE}"`);
 }
-const FIXTURE_DIR = path.resolve(
-  process.env.PA_FIXTURE_DIR || path.join("tests", "fixtures", MODE === "mock" ? "mock" : ""),
-);
+const MODE_DIR = MODE === "mock" ? "mock" : "";
+const FIXTURE_DIR = path.resolve(process.env.PA_FIXTURE_DIR || path.join("tests", "fixtures", MODE_DIR));
 
 export type Fixture = {
   format: string;
   aggregation_strategy: string;
   aggregation_proof_type: string;
-  selector: string; // "0x73c457ba" format
+  selector: string; // "0xe71e6620" format
   tx_b64: string;
   tx_tampered_b64?: string;
   consumed_nullifiers_b64: string[];
@@ -50,6 +49,15 @@ export async function loadFixture<T = Fixture>(filename: string): Promise<T> {
     await proving.get(filename);
   }
   return readJson<T>(file);
+}
+
+/**
+ * Load a fixture proven for the previous build tests/upgrade/ starts from
+ * (tests/fixtures/previous/, its mock/ in mock mode): that build accepts
+ * only proofs for the verifier selector it was initialized with.
+ */
+export function loadPreviousFixture<T = Fixture>(filename: string): T {
+  return readJson<T>(path.join("tests", "fixtures", "previous", MODE_DIR, filename));
 }
 
 // The proof of each fixture a cluster run has started: a second test that

@@ -190,7 +190,7 @@ describe("settlement", () => {
     it("rejects re-initialization of PAState", async () => {
       // The suite initialized PAState before the file's tests.
       // A second initialize call must fail because the account already exists.
-      await assertFails(buildInitialize(provider.wallet.publicKey).rpc(), {
+      await assertFails((await buildInitialize(provider.wallet.publicKey)).rpc(), {
         program: SystemProgram.programId,
         code: 0,
       });
