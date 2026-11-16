@@ -35,17 +35,18 @@ mod governance_tests {
 
     #[test]
     fn test_pa_state_account_space_calculation() {
-        // Schema version 4: the 32-byte owner after the bump, and the two
-        // denylists' 4-byte lengths after the fields.
-        assert_eq!(PAStateAccount::INITIAL_SPACE, 180);
-        assert_eq!(PAStateAccount::MAX_SPACE, 1236);
-        assert_eq!(PAStateAccount::space(1, 0), 212);
-        assert_eq!(PAStateAccount::space(2, 0), 244);
-        assert_eq!(PAStateAccount::space(32, 0), 1204);
+        // Schema version 5: the 32-byte owner after the bump, no verifier
+        // router or selector, and the two denylists' 4-byte lengths after
+        // the fields.
+        assert_eq!(PAStateAccount::INITIAL_SPACE, 144);
+        assert_eq!(PAStateAccount::MAX_SPACE, 1200);
+        assert_eq!(PAStateAccount::space(1, 0), 176);
+        assert_eq!(PAStateAccount::space(2, 0), 208);
+        assert_eq!(PAStateAccount::space(32, 0), 1168);
         // The tree of 2^32 leaves, the deepest, is 33 levels deep.
-        assert_eq!(PAStateAccount::space(33, 0), 1236);
+        assert_eq!(PAStateAccount::space(33, 0), 1200);
         // Each denylist entry adds its 32 bytes.
-        assert_eq!(PAStateAccount::space(1, 2), 212 + 64);
+        assert_eq!(PAStateAccount::space(1, 2), 176 + 64);
     }
 
     #[test]

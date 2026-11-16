@@ -543,7 +543,7 @@ fn test_forwarder_payload_blob(mode: u8) -> ExpirableBlob {
 /// fresh state, so the root carries the on-chain growth rule rather than a
 /// second implementation.
 fn pa_tree_root(leaves: &[Digest]) -> Result<Digest> {
-    let mut state = PAStateAccount::running(0, Pubkey::default(), Pubkey::default(), [0; 4]);
+    let mut state = PAStateAccount::running(0, Pubkey::default());
     for leaf in leaves {
         solana_pa::merkle::push(&mut state, *leaf).map_err(|e| anyhow!("replay push: {e:?}"))?;
     }

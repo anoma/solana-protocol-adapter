@@ -119,6 +119,8 @@ pub enum PAError {
     // State layout
     #[msg("PAState schema version is not the one this program binary reads; migrate the account first")]
     UnsupportedStateSchema,
+    #[msg("PAState is not a state account in the previous schema version")]
+    NotPreviousSchema,
 
     // Logic-ref denylist
     #[msg("Zero logic ref not allowed")]
@@ -128,12 +130,6 @@ pub enum PAError {
     /// pa-evm's `ResourceWithDeniedLogicRef`.
     #[msg("A resource's logic ref is on the denylist for its side")]
     ResourceWithDeniedLogicRef,
-
-    // Initialization, as pa-evm's zero-value rejections
-    #[msg("Zero verifier router not allowed")]
-    ZeroRiscZeroVerifierRouterNotAllowed,
-    #[msg("Zero proof selector not allowed")]
-    ZeroRiscZeroVerifierSelectorNotAllowed,
 
     // Ownership, as OpenZeppelin's Ownable
     /// `OwnableUnauthorizedAccount`: the signer is not the owner.

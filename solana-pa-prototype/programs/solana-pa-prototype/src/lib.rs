@@ -10,6 +10,28 @@ declare_id!(Pubkey::from_str_const(env!("PROTOCOL_ADAPTER_PROGRAM_ID")));
 // real-mode suite exercises it against the deployed router.
 declare_program!(verifier_router);
 
+/// The RISC Zero verifier router this build verifies through: pa-evm's
+/// immutable `RISC_ZERO_VERIFIER_ROUTER`, which each implementation takes at
+/// construction, so an upgrade can change it. From env/<cluster>.env, as the
+/// program's own address.
+pub const RISC_ZERO_VERIFIER_ROUTER: Pubkey =
+    Pubkey::from_str_const(env!("RISC_ZERO_VERIFIER_ROUTER"));
+
+/// The selector of the RISC Zero verifier this build accepts proofs for:
+/// pa-evm's immutable `RISC_ZERO_VERIFIER_SELECTOR`. From env/<cluster>.env.
+pub const RISC_ZERO_VERIFIER_SELECTOR: [u8; 4] =
+    groth16::selector_from_hex(env!("RISC_ZERO_VERIFIER_SELECTOR"));
+
+// pa-evm's constructor refuses a zero router or selector; a build does here.
+const _: () = assert!(
+    !groth16::is_zero(RISC_ZERO_VERIFIER_ROUTER.as_array()),
+    "ZeroRiscZeroVerifierRouterNotAllowed: RISC_ZERO_VERIFIER_ROUTER is the zero key"
+);
+const _: () = assert!(
+    !groth16::is_zero(&RISC_ZERO_VERIFIER_SELECTOR),
+    "ZeroRiscZeroVerifierSelectorNotAllowed: RISC_ZERO_VERIFIER_SELECTOR is zero"
+);
+
 #[cfg(all(
     feature = "custom-heap",
     target_os = "solana",
@@ -129,36 +151,19 @@ pub mod protocol_adapter {
     pub fn initialize<'info>(
         ctx: Context<'info, Initialize<'info>>,
         initial_owner: Pubkey,
-        verifier_router: Pubkey,
-        proof_selector: [u8; 4],
     ) -> Result<()> {
         require!(
             initial_owner != Pubkey::default(),
             PAError::OwnableInvalidOwner
         );
-        require!(
-            verifier_router != Pubkey::default(),
-            PAError::ZeroRiscZeroVerifierRouterNotAllowed
-        );
-        require!(
-            proof_selector != [0u8; 4],
-            PAError::ZeroRiscZeroVerifierSelectorNotAllowed
-        );
         // pa-evm's initializer's sanity check: the verifier is not paused already.
         require!(
-            !verifier_paused(
-                &ctx.accounts.verifier_entry,
-                &verifier_router,
-                proof_selector
-            )?,
+            !verifier_paused(&ctx.accounts.verifier_entry)?,
             PAError::RiscZeroVerifierPaused
         );
-        ctx.accounts.pa_state.set_inner(PAStateAccount::running(
-            ctx.bumps.pa_state,
-            initial_owner,
-            verifier_router,
-            proof_selector,
-        ));
+        ctx.accounts
+            .pa_state
+            .set_inner(PAStateAccount::running(ctx.bumps.pa_state, initial_owner));
         upgrade::hand_upgrade_authority_to_program(
             &crate::ID,
             ctx.bumps.upgrade_authority,
@@ -452,12 +457,19 @@ pub mod protocol_adapter {
     /// Whether the router has paused the verifier this deployment routes to.
     /// Mirrors pa-evm's `riscZeroVerifierPaused()`: read by simulation.
     pub fn risc_zero_verifier_paused(ctx: Context<VerifierPauseStatus>) -> Result<bool> {
-        let state = &ctx.accounts.pa_state;
-        verifier_paused(
-            &ctx.accounts.verifier_entry,
-            &state.verifier_router,
-            state.proof_selector,
-        )
+        verifier_paused(&ctx.accounts.verifier_entry)
+    }
+
+    /// The verifier router this build verifies through. Mirrors pa-evm's
+    /// `RISC_ZERO_VERIFIER_ROUTER()`: read by simulation.
+    pub fn risc_zero_verifier_router(_ctx: Context<Version>) -> Result<Pubkey> {
+        Ok(RISC_ZERO_VERIFIER_ROUTER)
+    }
+
+    /// The selector of the verifier this build accepts proofs for. Mirrors
+    /// pa-evm's `RISC_ZERO_VERIFIER_SELECTOR()`: read by simulation.
+    pub fn risc_zero_verifier_selector(_ctx: Context<Version>) -> Result<[u8; 4]> {
+        Ok(RISC_ZERO_VERIFIER_SELECTOR)
     }
 
     /// Replace the stored kind tree root: from then on a transaction settles
@@ -574,6 +586,46 @@ pub mod protocol_adapter {
                 loader: &ctx.accounts.bpf_loader_upgradeable.to_account_info(),
             },
         )
+    }
+
+    /// Bring a state account in the previous schema version, which also
+    /// stored the verifier router and the proof selector, to this one, which
+    /// takes both from the build (`RISC_ZERO_VERIFIER_ROUTER`,
+    /// `RISC_ZERO_VERIFIER_SELECTOR`), as pa-evm's implementation holds them
+    /// as immutables. Announces the new version with `Initialized`: the
+    /// counterpart of the call pa-evm's owner passes to `upgradeToAndCall`,
+    /// run once by the owner, after the in-place upgrade and before any other
+    /// instruction, which all refuse the previous version. It parses the
+    /// previous layout rather than reinterpreting its bytes; the account
+    /// shrinks, and keeps the rent it holds.
+    pub fn migrate_state(ctx: Context<MigrateState>) -> Result<()> {
+        let info = ctx.accounts.pa_state.to_account_info();
+        require_keys_eq!(*info.owner, crate::ID, PAError::NotPreviousSchema);
+        let state = {
+            let data = info.try_borrow_data()?;
+            let body = data
+                .strip_prefix(PAStateAccount::DISCRIMINATOR)
+                .ok_or(PAError::NotPreviousSchema)?;
+            require!(
+                body.first() == Some(&PREVIOUS_SCHEMA_VERSION),
+                PAError::NotPreviousSchema
+            );
+            PreviousPAState::deserialize(&mut &body[..])
+                .map_err(|_| PAError::NotPreviousSchema)?
+                .migrate()
+        };
+        require_keys_eq!(
+            ctx.accounts.authority.key(),
+            state.owner,
+            PAError::OwnableUnauthorizedAccount
+        );
+        info.resize(PAStateAccount::space(state.depth(), state.denied_count()))?;
+        state.try_serialize(&mut &mut info.try_borrow_mut_data()?[..])?;
+        // As OpenZeppelin's `reinitializer(n)`, once the body ran.
+        emit_cpi!(Initialized {
+            version: SCHEMA_VERSION.into(),
+        });
+        Ok(())
     }
 
     /// The release this build is. Mirrors pa-evm's `VERSION`: read from the
@@ -849,7 +901,7 @@ fn execute_settlement(
     arm_solana::delta::verify_delta_proof_with_instance(delta_proof, instance)
         .map_err(PAError::from)?;
 
-    check_selector(&aggregation.proof, state.proof_selector)?;
+    check_selector(&aggregation.proof, RISC_ZERO_VERIFIER_SELECTOR)?;
     let prepared = prepare_proof_for_verification(aggregation)?;
 
     msg!("Verifying aggregated proof via verifier_router");
@@ -939,7 +991,7 @@ pub struct Initialize<'info> {
     pub bpf_loader_upgradeable: UncheckedAccount<'info>,
 
     /// CHECK: The handler requires the router's verifier entry for the
-    /// initialized selector (`verifier_paused`).
+    /// build's selector (`verifier_paused`).
     pub verifier_entry: UncheckedAccount<'info>,
 }
 
@@ -959,6 +1011,20 @@ pub struct OwnerOnly<'info> {
 
     #[account(constraint = authority.key() == pa_state.owner @ PAError::OwnableUnauthorizedAccount)]
     pub authority: Signer<'info>,
+}
+
+#[event_cpi]
+#[derive(Accounts)]
+pub struct MigrateState<'info> {
+    /// The owner the previous layout stores; the handler checks it, since
+    /// the typed account cannot read the previous layout.
+    pub authority: Signer<'info>,
+
+    /// CHECK: The seeds pin the address; the handler requires this program
+    /// as owner and the previous schema's layout, which the typed account
+    /// cannot read.
+    #[account(mut, seeds = [PA_STATE_SEED], bump)]
+    pub pa_state: UncheckedAccount<'info>,
 }
 
 #[event_cpi]
@@ -1035,16 +1101,8 @@ pub struct Version {}
 
 #[derive(Accounts)]
 pub struct VerifierPauseStatus<'info> {
-    #[account(
-        seeds = [PA_STATE_SEED],
-        bump = pa_state.bump,
-        constraint = pa_state.schema_version == SCHEMA_VERSION
-            @ PAError::UnsupportedStateSchema,
-    )]
-    pub pa_state: Account<'info, PAStateAccount>,
-
     /// CHECK: The handler requires the router's verifier entry for the
-    /// deployment's selector (`verifier_paused`).
+    /// build's selector (`verifier_paused`).
     pub verifier_entry: UncheckedAccount<'info>,
 }
 
@@ -1071,8 +1129,8 @@ pub struct Settle<'info> {
     #[account(mut)]
     pub new_root_marker: Option<UncheckedAccount<'info>>,
 
-    /// CHECK: Validated against verifier_router stored in PAStateAccount.
-    #[account(constraint = verifier_router_program.key() == pa_state.verifier_router @ PAError::VerifierRouterFailed)]
+    /// CHECK: The build's verifier router (`RISC_ZERO_VERIFIER_ROUTER`).
+    #[account(address = RISC_ZERO_VERIFIER_ROUTER @ PAError::VerifierRouterFailed)]
     pub verifier_router_program: UncheckedAccount<'info>,
 
     /// CHECK: Router state PDA - validated by verifier_router during CPI.
@@ -1116,8 +1174,8 @@ pub struct SettleFromTxData<'info> {
     #[account(mut)]
     pub new_root_marker: Option<UncheckedAccount<'info>>,
 
-    /// CHECK: Validated against verifier_router stored in PAStateAccount.
-    #[account(constraint = verifier_router_program.key() == pa_state.verifier_router @ PAError::VerifierRouterFailed)]
+    /// CHECK: The build's verifier router (`RISC_ZERO_VERIFIER_ROUTER`).
+    #[account(address = RISC_ZERO_VERIFIER_ROUTER @ PAError::VerifierRouterFailed)]
     pub verifier_router_program: UncheckedAccount<'info>,
 
     /// CHECK: Router state PDA - validated by verifier_router during CPI.
@@ -1439,14 +1497,21 @@ pub struct ForwarderCallExecuted {
     pub output: Vec<u8>,
 }
 
-/// Whether the router has emergency-stopped the verifier it routes
-/// `selector` to: the `estopped` flag of the router's verifier entry
-/// `["verifier", selector]`, as pa-evm's `riscZeroVerifierPaused()` asks the
-/// router. Any other account is refused.
-fn verifier_paused(entry: &AccountInfo, router: &Pubkey, selector: [u8; 4]) -> Result<bool> {
-    let (expected, _) = Pubkey::find_program_address(&[b"verifier", &selector], router);
+/// Whether the router has emergency-stopped the verifier it routes this
+/// build's selector to: the `estopped` flag of the router's verifier entry
+/// `["verifier", RISC_ZERO_VERIFIER_SELECTOR]`, as pa-evm's
+/// `riscZeroVerifierPaused()` asks the router. Any other account is refused.
+fn verifier_paused(entry: &AccountInfo) -> Result<bool> {
+    let (expected, _) = Pubkey::find_program_address(
+        &[b"verifier", &RISC_ZERO_VERIFIER_SELECTOR],
+        &RISC_ZERO_VERIFIER_ROUTER,
+    );
     require_keys_eq!(*entry.key, expected, PAError::InvalidVerifierEntry);
-    require_keys_eq!(*entry.owner, *router, PAError::InvalidVerifierEntry);
+    require_keys_eq!(
+        *entry.owner,
+        RISC_ZERO_VERIFIER_ROUTER,
+        PAError::InvalidVerifierEntry
+    );
     let data = entry.try_borrow_data()?;
     let entry = verifier_router::accounts::VerifierEntry::try_deserialize(&mut &data[..])
         .map_err(|_| error!(PAError::InvalidVerifierEntry))?;

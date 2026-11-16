@@ -88,6 +88,50 @@ fn each_side_is_checked_against_its_own_denylist() {
     assert!(!state.is_logic_ref_denied(&created_only, true));
 }
 
+/// A schema-4 account is this layout with the verifier router and the proof
+/// selector after the owner: inserting them into an encoding of this layout
+/// yields an account the previous build wrote, and migrating it must restore
+/// every other field.
+#[test]
+fn migrate_reads_the_previous_layout_field_for_field() {
+    use crate::state::{PreviousPAState, PREVIOUS_SCHEMA_VERSION};
+    let mut state = PAStateAccount {
+        paused: true,
+        next_index: 7,
+        min_expiry_slots: 123,
+        max_expiry_slots: 4567,
+        kind_tree_root: [9; 32],
+        denied_consumed_logic_refs: vec![[5; 32]],
+        denied_created_logic_refs: vec![[6; 32], [7; 32]],
+        ..create_test_pa_state()
+    };
+    state.grow();
+    state.set_frontier(0, arm_core::Digest::from_bytes([3; 32]));
+
+    // discriminator, schema_version, bump, owner
+    let after_owner = 8 + 1 + 1 + 32;
+    let mut previous = serialized(&state);
+    previous.splice(
+        after_owner..after_owner,
+        [[1u8; 32].as_slice(), &[2u8; 4]].concat(),
+    );
+    previous[8] = PREVIOUS_SCHEMA_VERSION;
+    let migrated = PreviousPAState::deserialize(&mut &previous[8..])
+        .expect("the previous layout deserializes")
+        .migrate();
+
+    assert_eq!(
+        serialized(&migrated),
+        serialized(&state),
+        "migrating a schema-4 account must reproduce every field this layout keeps"
+    );
+    assert_eq!(
+        serialized(&migrated).len(),
+        PAStateAccount::space(migrated.depth(), migrated.denied_count()),
+        "migrate_state resizes the account to space() and serializes over every byte of it"
+    );
+}
+
 /// pa-evm's `_isKindTreeRootAccepted`: a transaction is proven against
 /// the stored kind tree or against the empty one, which merges no kinds, so
 /// what balances under it also balances under the stored tree.
