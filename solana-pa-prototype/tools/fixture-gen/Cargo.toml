@@ -8,17 +8,17 @@ publish = false
 anyhow = "1.0"
 # Merkle paths over the adapter's tree, as integrators derive them.
 anoma-pa-solana-client = { version = "0.12.1", default-features = false, features = ["arm"] }
-arm = { package = "anoma-rm-risc0", version = "=2.0.0-rc.8.2", default-features = false, features = ["aggregation", "prove"] }
+arm = { package = "anoma-rm-risc0", version = "=2.0.0-rc.9", default-features = false, features = ["aggregation", "prove"] }
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }
 # The Anchor release solana-pa-prototype/Cargo.toml pins.
 anchor-lang = "1.2.2"
-# Must match anoma-rm-risc0 2.0.0-rc.8.2, which encodes Transaction with bincode 1.3.
+# Must match anoma-rm-risc0 2.0.0-rc.9, which encodes Transaction with bincode 1.3.
 bincode = "1.3.3"
 hex = "0.4"
 # anoma-rm-risc0's Scalar/AffinePoint types; it pins the version (=0.13.3).
 k256 = "0.13"
-risc0-zkvm = "3.0.6"
+risc0-zkvm = "3.1.0"
 # The pass-through logic the fixtures' external calls ride on.
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "3d20016a956d8b75433d0ef2804768d7c07868d6", default-features = false, features = [
   "fixtures",
