@@ -3,7 +3,7 @@
   "format": "arm-risc0:Transaction(bincode)",
   "aggregation_strategy": "batch",
   "aggregation_proof_type": "groth16",
-  "selector": "0x73c457ba",
+  "selector": "0xe71e6620",
   "tx_b64": "AAEAAABBAAAAAAAAAN3r1JRGQMqmMEfjhsrFL4JpSoGs8vtmLA0cM8gH35z6MBrh266ThcMLijPRNJCXha4/jJnDaI0TcAd2KVFyZu8cAAA=",
   "tx_tampered_b64": "",
   "consumed_nullifiers_b64": [
