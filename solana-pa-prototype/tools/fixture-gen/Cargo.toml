@@ -7,7 +7,9 @@ publish = false
 [dependencies]
 anyhow = "1.0"
 # Merkle paths over the adapter's tree, as integrators derive them.
-anoma-pa-solana-client = { version = "0.12.1", default-features = false, features = ["arm"] }
+# The client of anoma/anoma-pa-solana-client#55, as the harness takes it, until
+# its release 0.13.0, which this pin then names.
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "dacb4a345c2e7c9d53dbf8fc9a3439df3e90279a", default-features = false, features = ["arm"] }
 arm = { package = "anoma-rm-risc0", version = "=2.0.0-rc.9", default-features = false, features = ["aggregation", "prove"] }
 base64 = "0.23"
 clap = { version = "4", features = ["derive"] }

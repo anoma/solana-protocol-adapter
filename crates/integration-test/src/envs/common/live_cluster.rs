@@ -15,7 +15,7 @@ use surfpool_sdk::Pubkey;
 /// The adapter's instructions a live cluster is sent, by their IDL names: a
 /// settlement's, its upload's, and the reads. Every other instruction of the
 /// adapter is refused.
-const ADAPTER_INSTRUCTIONS: [(&str, &[u8]); 9] = [
+const ADAPTER_INSTRUCTIONS: [(&str, &[u8]); 11] = [
     ("settle", args::Settle::DISCRIMINATOR),
     ("settle_from_txdata", args::SettleFromTxdata::DISCRIMINATOR),
     ("txdata_init", args::TxdataInit::DISCRIMINATOR),
@@ -31,6 +31,14 @@ const ADAPTER_INSTRUCTIONS: [(&str, &[u8]); 9] = [
         args::RiscZeroVerifierPaused::DISCRIMINATOR,
     ),
     ("version", args::Version::DISCRIMINATOR),
+    (
+        "risc_zero_verifier_router",
+        args::RiscZeroVerifierRouter::DISCRIMINATOR,
+    ),
+    (
+        "risc_zero_verifier_selector",
+        args::RiscZeroVerifierSelector::DISCRIMINATOR,
+    ),
 ];
 
 /// The adapter's IDL as the repository commits it, which names a refused
@@ -212,6 +220,11 @@ mod tests {
     const ADAPTER: Pubkey = Pubkey::new_from_array([1; 32]);
     const FORWARDER: Pubkey = Pubkey::new_from_array([3; 32]);
     const KEY: Pubkey = Pubkey::new_from_array([5; 32]);
+    const VERIFIER: anoma_pa_solana_client::AdapterVerifier =
+        anoma_pa_solana_client::AdapterVerifier {
+            router: KEY,
+            selector: [1; 4],
+        };
 
     fn refused(cluster: &LiveCluster, ix: Instruction, expected: &str) {
         let error = format!("{:#}", cluster.check(&[ix]).expect_err(expected));
@@ -281,10 +294,7 @@ mod tests {
         let rpc = RpcClient::new("http://127.0.0.1:1".to_string());
         let instance = ProtocolAdapterInstance::new(ADAPTER, &rpc);
         for (name, ix) in [
-            (
-                "initialize",
-                instance.initialize_ix(&KEY, &KEY, &KEY, [1; 4]),
-            ),
+            ("initialize", instance.initialize_ix(&KEY, &KEY, &VERIFIER)),
             ("pause", instance.pause_ix(&KEY)),
             ("unpause", instance.unpause_ix(&KEY)),
             (
@@ -302,6 +312,7 @@ mod tests {
                 instance.update_expiry_config_ix(&KEY, 1, 2),
             ),
             ("upgrade", instance.upgrade_ix(&KEY, &KEY, &KEY)),
+            ("migrate_state", instance.migrate_state_ix(&KEY)),
         ] {
             refused(&cluster, ix, &format!("protocol_adapter/{name}"));
         }
@@ -333,8 +344,10 @@ mod tests {
             instance.txdata_extend_ix(&KEY, 0, 3),
             instance.txdata_close_ix(&KEY, &KEY, 0),
             instance.txdata_close_expired_ix(&KEY, &KEY, &KEY, 0),
-            instance.risc_zero_verifier_paused_ix(&KEY, [1; 4]),
+            instance.risc_zero_verifier_paused_ix(&VERIFIER),
             instance.version_ix(),
+            instance.risc_zero_verifier_router_ix(),
+            instance.risc_zero_verifier_selector_ix(),
             solana_system_interface::instruction::transfer(&KEY, &KEY, 1),
         ];
         sent.extend(

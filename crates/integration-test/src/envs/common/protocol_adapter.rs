@@ -14,10 +14,11 @@ use anoma_pa_solana_client::generated::protocol_adapter::events::{
 use anoma_pa_solana_client::generated::protocol_adapter::types;
 use anoma_pa_solana_client::settlement::SettlementPlan;
 use anoma_pa_solana_client::submission::{
-    Failure, Submission, read_adapter_state, read_verifier_program, settlement_failure,
+    DeployedAdapter, Failure, Submission, read_adapter_state, read_adapter_verifier,
+    read_verifier_program, settlement_failure,
 };
 use anoma_pa_solana_client::{
-    TXDATA_EXPIRY_SLOTS_DEFAULT, cpi_event_discriminator, decode_cpi_event,
+    AdapterVerifier, TXDATA_EXPIRY_SLOTS_DEFAULT, cpi_event_discriminator, decode_cpi_event,
 };
 use anoma_pa_testkit::commitment_tree::FrontierCommitmentTree;
 use anoma_pa_testkit::environment::{
@@ -50,8 +51,9 @@ pub struct ProtocolAdapter {
     /// Pays for and signs every upload and settlement, and the owner's calls.
     payer: Arc<Keypair>,
     pub program: Pubkey,
-    /// The verifier program the router's entry for the adapter's selector
-    /// names.
+    /// The verifier the adapter's build verifies with.
+    pub verifier: AdapterVerifier,
+    /// The verifier program the router's entry for that verifier names.
     pub verifier_program: Pubkey,
     pub commitment_tree: FrontierCommitmentTree,
     /// The forwarders the settled transactions call, which supply each
@@ -75,12 +77,13 @@ impl ProtocolAdapter {
         live: bool,
     ) -> anyhow::Result<Self> {
         let state = read_adapter_state(&rpc, &program).await?;
-        let verifier_program =
-            read_verifier_program(&rpc, &state.verifier_router, state.proof_selector).await?;
+        let verifier = read_adapter_verifier(&rpc, program, &payer.pubkey()).await?;
+        let verifier_program = read_verifier_program(&rpc, &verifier).await?;
         let adapter = Self {
             rpc,
             payer,
             program,
+            verifier,
             verifier_program,
             commitment_tree: crate::commitment_tree::from_state(&state)?,
             forwarders: Forwarders::default(),
@@ -241,10 +244,13 @@ impl ProtocolAdapter {
         Ok(Submission::prepare(
             &self.rpc,
             &self.forwarders,
-            self.program,
+            DeployedAdapter {
+                address: self.program,
+                state: self.state().await?,
+                verifier: self.verifier,
+                verifier_program: self.verifier_program,
+            },
             self.payer.pubkey(),
-            self.state().await?,
-            self.verifier_program,
             transaction.into_arm(),
         )
         .await?)
@@ -446,10 +452,9 @@ fn refusal_for(error: ProtocolAdapterError) -> Option<Refusal> {
         | ProtocolAdapterError::MarkerUnexpectedData
         | ProtocolAdapterError::PreExistingRoot
         | ProtocolAdapterError::UnsupportedStateSchema
+        | ProtocolAdapterError::NotPreviousSchema
         | ProtocolAdapterError::ZeroLogicRefNotAllowed
         | ProtocolAdapterError::LogicRefAlreadyDenied
-        | ProtocolAdapterError::ZeroRiscZeroVerifierRouterNotAllowed
-        | ProtocolAdapterError::ZeroRiscZeroVerifierSelectorNotAllowed
         | ProtocolAdapterError::OwnableUnauthorizedAccount
         | ProtocolAdapterError::OwnableInvalidOwner
         | ProtocolAdapterError::InvalidUpgradeBuffer => None,
@@ -632,6 +637,10 @@ mod tests {
             rpc: Arc::new(RpcClient::new("http://127.0.0.1:1".to_string())),
             payer: Arc::new(Keypair::new()),
             program: ADAPTER,
+            verifier: AdapterVerifier {
+                router: ADAPTER,
+                selector: [1; 4],
+            },
             verifier_program: VERIFIER,
             commitment_tree: FrontierCommitmentTree::new(0, vec![]).unwrap(),
             forwarders: Forwarders::default(),

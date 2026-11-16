@@ -434,8 +434,7 @@ dependencies = [
 [[package]]
 name = "anoma-pa-solana-client"
 version = "0.12.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e5c131fcb5a232b2f3e389ff5897590141394f203f5dee83df9baaae13a6177"
+source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=dacb4a345c2e7c9d53dbf8fc9a3439df3e90279a#dacb4a345c2e7c9d53dbf8fc9a3439df3e90279a"
 dependencies = [
  "anoma-rm-risc0",
  "bincode",

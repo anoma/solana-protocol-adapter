@@ -5,7 +5,9 @@ use std::time::Duration;
 
 use anchor_lang::AccountSerialize;
 use anoma_pa_solana_client::contract::ProtocolAdapterInstance;
-use anoma_pa_solana_client::{PlannedTransaction, decode_pa_state, derive_pa_state_pda};
+use anoma_pa_solana_client::{
+    AdapterVerifier, PlannedTransaction, decode_pa_state, derive_pa_state_pda,
+};
 use anyhow::Context;
 use solana_commitment_config::CommitmentConfig;
 use solana_instruction::Instruction;
@@ -313,13 +315,12 @@ pub(in crate::envs) async fn take_ownership(
 }
 
 /// Initializes the adapter `pa`, deployed with `payer` as its upgrade
-/// authority: `payer` becomes its owner, with `router` and `selector`.
+/// authority: `payer` becomes its owner; `verifier` is the build's.
 pub(in crate::envs) async fn initialize(
     rpc: &RpcClient,
     payer: &Keypair,
     pa: Pubkey,
-    router: Pubkey,
-    selector: [u8; 4],
+    verifier: &AdapterVerifier,
 ) -> anyhow::Result<()> {
     send_signed(
         rpc,
@@ -328,8 +329,7 @@ pub(in crate::envs) async fn initialize(
         &[ProtocolAdapterInstance::new(pa, rpc).initialize_ix(
             &payer.pubkey(),
             &payer.pubkey(),
-            &router,
-            selector,
+            verifier,
         )],
     )
     .await
