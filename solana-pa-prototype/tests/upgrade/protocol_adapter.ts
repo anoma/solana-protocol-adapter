@@ -23,28 +23,21 @@ import {
   unpauseAdapter,
   upgradeAdapter,
 } from "../../client/instructions";
-import {
-  GROTH16_SELECTOR_V3_0,
-  GROTH16_VERIFIER_V3_0_ID,
-  MOCK_SELECTOR,
-  VERIFIER_ROUTER_ID,
-  getVerifierEntryPda,
-} from "../../client/verifier";
-import { createdCommitmentsOf, loadPreviousFixture } from "../utils/fixtures";
+import { VERIFIER_ROUTER_ID, getVerifierEntryPda } from "../../client/verifier";
+import { createdCommitmentsOf, loadPreviousFixture, parseSelectorFromFixture } from "../utils/fixtures";
 import { assertFails, randomRef, sendSettlementV1, uploadTxData } from "../utils/helpers";
 import { predictRootMarkerPda } from "../utils/merkle";
 import {
   PROOF_SELECTOR,
-  VERIFIER,
   cpiEventsOf,
   deriveNullifierAccounts,
   paState,
   program,
   provider,
-  routerPda,
-  settleBudget,
+  settleFromTxDataBuilder,
   upgradeThroughProgram,
   useAdapterSuite,
+  verifierForSelector,
 } from "../utils/adapterSuite";
 import { ADAPTER_SO } from "../utils/constants";
 
@@ -55,13 +48,12 @@ const previous: Program<any> = new Program(
 );
 
 /**
- * The verifier the previous build is initialized with: devnet's, the risc0
- * 3.0.0 verifier, for real proofs; the mock verifier for mock proofs.
+ * The fixture the previous build settles, and the verifier it is initialized
+ * with: the one the router routes the fixture's selector to.
  */
-const previousVerifier =
-  process.env.PA_TEST_MODE === "mock"
-    ? { selector: MOCK_SELECTOR, program: VERIFIER.program }
-    : { selector: GROTH16_SELECTOR_V3_0, program: GROTH16_VERIFIER_V3_0_ID };
+const previousFixture = loadPreviousFixture("batch_groth16_transfer_shape.json");
+const previousSelector = parseSelectorFromFixture(previousFixture.selector);
+const previousVerifierEntry = getVerifierEntryPda(previousSelector)[0];
 
 describe("protocol-adapter (upgraded in place from schema 4)", () => {
   const { funder, settleUnsettledFixture } = useAdapterSuite({ initialize: false });
@@ -72,10 +64,10 @@ describe("protocol-adapter (upgraded in place from schema 4)", () => {
 
   it("initializes the previous build with the verifier it stores", async () => {
     await previous.methods
-      .initialize(wallet, VERIFIER_ROUTER_ID, Array.from(previousVerifier.selector))
+      .initialize(wallet, VERIFIER_ROUTER_ID, Array.from(previousSelector))
       .accountsPartial({
         paState,
-        verifierEntry: getVerifierEntryPda(previousVerifier.selector)[0],
+        verifierEntry: previousVerifierEntry,
         payer: wallet,
         systemProgram: SystemProgram.programId,
       })
@@ -88,30 +80,28 @@ describe("protocol-adapter (upgraded in place from schema 4)", () => {
   // carries a grown tree, both denylists and non-default bounds into the
   // migration. The transaction makes no external call.
   it("builds history through the previous build", async () => {
-    const fixture = loadPreviousFixture("batch_groth16_transfer_shape.json");
     const authority = await funder.fresh(2);
     const { uploadId, txData } = await uploadTxData(
       previous as any,
       paState,
       authority,
-      Buffer.from(fixture.tx_b64, "base64"),
+      Buffer.from(previousFixture.tx_b64, "base64"),
     );
-    const settle = await previous.methods
-      .settleFromTxdata(uploadId)
-      .accountsPartial({
-        paState,
-        txData,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-        newRootMarker: await predictRootMarkerPda(previous as any, paState, createdCommitmentsOf(fixture)),
-        verifierRouterProgram: VERIFIER_ROUTER_ID,
-        router: routerPda,
-        verifierEntry: getVerifierEntryPda(previousVerifier.selector)[0],
-        verifierProgram: previousVerifier.program,
-      })
-      .remainingAccounts(deriveNullifierAccounts(fixture.consumed_nullifiers_b64))
-      .instruction();
-    await sendSettlementV1(provider, [...settleBudget(true), settle], [authority]);
+    // The v1 transaction's header carries the compute budget and heap frame.
+    const settle = await settleFromTxDataBuilder(
+      authority.publicKey,
+      uploadId,
+      txData,
+      await predictRootMarkerPda(previous as any, paState, createdCommitmentsOf(previousFixture)),
+      deriveNullifierAccounts(previousFixture.consumed_nullifiers_b64),
+      true,
+      {
+        program: previous,
+        verifierEntry: previousVerifierEntry,
+        verifierProgram: verifierForSelector(previousSelector).program,
+      },
+    ).instruction();
+    await sendSettlementV1(provider, [settle], [authority]);
     await previous.methods
       .txdataClose(uploadId)
       .accountsPartial({ txData, authority: authority.publicKey, refund: authority.publicKey })
@@ -127,7 +117,11 @@ describe("protocol-adapter (upgraded in place from schema 4)", () => {
       .rpc();
     await pauseAdapter(previous as any, wallet).rpc();
     stateBefore = await (previous.account as any).paStateAccount.fetch(paState);
-    assert.equal(stateBefore.nextIndex.toNumber(), createdCommitmentsOf(fixture).length, "the settlement appended");
+    assert.equal(
+      stateBefore.nextIndex.toNumber(),
+      createdCommitmentsOf(previousFixture).length,
+      "the settlement appended",
+    );
   });
 
   it("upgrades the program in place to this build through its own upgrade", () =>
@@ -171,7 +165,7 @@ describe("protocol-adapter (upgraded in place from schema 4)", () => {
     assert.equal(state.schemaVersion, SCHEMA_VERSION, "the state is in this build's layout");
     const { schemaVersion: _before, verifierRouter, proofSelector, ...carried } = stateBefore;
     assert.equal(verifierRouter.toBase58(), VERIFIER_ROUTER_ID.toBase58(), "the previous build stored the router");
-    assert.deepEqual(Buffer.from(proofSelector), previousVerifier.selector, "and its selector");
+    assert.deepEqual(Buffer.from(proofSelector), previousSelector, "and its selector");
     const { schemaVersion: _after, ...kept } = state;
     assert.equal(JSON.stringify(kept), JSON.stringify(carried), "every other field carries over");
   });

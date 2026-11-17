@@ -36,7 +36,7 @@ async function main() {
   console.log(`  PAState PDA: ${paState.toBase58()}`);
   console.log(`  Owner: ${owner.toBase58()}`);
 
-  await (await initializeAdapter(program, provider.wallet.publicKey, owner)).rpc();
+  await initializeAdapter(program, provider.wallet.publicKey, owner).rpc();
 
   console.log("✅ PA initialized");
 }

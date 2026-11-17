@@ -6,33 +6,20 @@
 import { Program } from "@anchor-lang/core";
 import { ComputeBudgetProgram, PublicKey, SystemProgram } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { getVerifierEntryPda } from "./verifier";
 import { derivePaStatePda } from "./pda";
 
 // Protocol adapter governance
-
-/**
- * The router's verifier entry for the deployed build's selector, both read
- * from the program (`risc_zero_verifier_router`, `risc_zero_verifier_selector`),
- * as pa-evm's `RISC_ZERO_VERIFIER_ROUTER()` and `RISC_ZERO_VERIFIER_SELECTOR()`.
- */
-export async function adapterVerifierEntry(program: Program<ProtocolAdapter>): Promise<PublicKey> {
-  const router = await program.methods.riscZeroVerifierRouter().view();
-  const selector = await program.methods.riscZeroVerifierSelector().view();
-  return getVerifierEntryPda(Buffer.from(selector), router)[0];
-}
 
 /**
  * The adapter's `initialize`, signed and paid by `payer`, the program's
  * upgrade authority, which it hands to the program's upgrade authority PDA:
  * it makes `initialOwner` the owner, starts on the empty kind tree, and
  * refuses a verifier the router has paused, read from the router's verifier
- * entry for the build's selector.
+ * entry for the build's selector, which the IDL's seeds resolve.
  */
-export async function initializeAdapter(program: Program<ProtocolAdapter>, payer: PublicKey, initialOwner: PublicKey) {
+export function initializeAdapter(program: Program<ProtocolAdapter>, payer: PublicKey, initialOwner: PublicKey) {
   return program.methods.initialize(initialOwner).accountsPartial({
     paState: derivePaStatePda(program.programId)[0],
-    verifierEntry: await adapterVerifierEntry(program),
     payer,
     systemProgram: SystemProgram.programId,
   });

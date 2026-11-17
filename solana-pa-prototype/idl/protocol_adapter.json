@@ -187,8 +187,71 @@
         {
           "name": "verifier_entry",
           "docs": [
-            "build's selector (`verifier_paused`)."
-          ]
+            "the seeds pin; `verifier_paused` reads it."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  114,
+                  105,
+                  102,
+                  105,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  231,
+                  30,
+                  102,
+                  32
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                158,
+                73,
+                72,
+                24,
+                21,
+                132,
+                96,
+                124,
+                239,
+                134,
+                64,
+                158,
+                61,
+                145,
+                164,
+                189,
+                178,
+                244,
+                111,
+                89,
+                142,
+                140,
+                48,
+                120,
+                20,
+                203,
+                184,
+                187,
+                83,
+                251,
+                108,
+                79
+              ]
+            }
+          }
         },
         {
           "name": "event_authority"
@@ -402,8 +465,71 @@
         {
           "name": "verifier_entry",
           "docs": [
-            "build's selector (`verifier_paused`)."
-          ]
+            "the seeds pin; `verifier_paused` reads it."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  114,
+                  105,
+                  102,
+                  105,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  231,
+                  30,
+                  102,
+                  32
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                158,
+                73,
+                72,
+                24,
+                21,
+                132,
+                96,
+                124,
+                239,
+                134,
+                64,
+                158,
+                61,
+                145,
+                164,
+                189,
+                178,
+                244,
+                111,
+                89,
+                142,
+                140,
+                48,
+                120,
+                20,
+                203,
+                184,
+                187,
+                83,
+                251,
+                108,
+                79
+              ]
+            }
+          }
         }
       ],
       "args": [],

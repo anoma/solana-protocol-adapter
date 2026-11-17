@@ -207,7 +207,7 @@ jobs:
 
       # The adapter compiles in the verifier selector its proof mode verifies
       # with (scripts/validator-deploy.sh's use_test_mode_selector), so each
-      # mode has its own build; the second recompiles only the adapter.
+      # mode has its own build; in the second, cargo rebuilds only the adapter.
       - name: Build programs (real proofs)
         working-directory: ./solana-pa-prototype
         run: PA_TEST_MODE=real ./scripts/anchor-test.sh build

@@ -606,13 +606,13 @@ pub mod protocol_adapter {
             let body = data
                 .strip_prefix(PAStateAccount::DISCRIMINATOR)
                 .ok_or(PAError::NotPreviousSchema)?;
+            let previous = PreviousPAState::deserialize(&mut &body[..])
+                .map_err(|_| PAError::NotPreviousSchema)?;
             require!(
-                body.first() == Some(&PREVIOUS_SCHEMA_VERSION),
+                previous.schema_version == PREVIOUS_SCHEMA_VERSION,
                 PAError::NotPreviousSchema
             );
-            PreviousPAState::deserialize(&mut &body[..])
-                .map_err(|_| PAError::NotPreviousSchema)?
-                .migrate()
+            previous.migrate()
         };
         require_keys_eq!(
             ctx.accounts.authority.key(),
@@ -990,8 +990,13 @@ pub struct Initialize<'info> {
     #[account(address = anchor_lang::solana_program::bpf_loader_upgradeable::ID)]
     pub bpf_loader_upgradeable: UncheckedAccount<'info>,
 
-    /// CHECK: The handler requires the router's verifier entry for the
-    /// build's selector (`verifier_paused`).
+    /// CHECK: The router's verifier entry for the build's selector, which
+    /// the seeds pin; `verifier_paused` reads it.
+    #[account(
+        seeds = [b"verifier", RISC_ZERO_VERIFIER_SELECTOR.as_ref()],
+        bump,
+        seeds::program = RISC_ZERO_VERIFIER_ROUTER,
+    )]
     pub verifier_entry: UncheckedAccount<'info>,
 }
 
@@ -1101,8 +1106,13 @@ pub struct Version {}
 
 #[derive(Accounts)]
 pub struct VerifierPauseStatus<'info> {
-    /// CHECK: The handler requires the router's verifier entry for the
-    /// build's selector (`verifier_paused`).
+    /// CHECK: The router's verifier entry for the build's selector, which
+    /// the seeds pin; `verifier_paused` reads it.
+    #[account(
+        seeds = [b"verifier", RISC_ZERO_VERIFIER_SELECTOR.as_ref()],
+        bump,
+        seeds::program = RISC_ZERO_VERIFIER_ROUTER,
+    )]
     pub verifier_entry: UncheckedAccount<'info>,
 }
 
@@ -1498,15 +1508,10 @@ pub struct ForwarderCallExecuted {
 }
 
 /// Whether the router has emergency-stopped the verifier it routes this
-/// build's selector to: the `estopped` flag of the router's verifier entry
-/// `["verifier", RISC_ZERO_VERIFIER_SELECTOR]`, as pa-evm's
-/// `riscZeroVerifierPaused()` asks the router. Any other account is refused.
+/// build's selector to: the `estopped` flag of `entry`, the router's verifier
+/// entry `["verifier", RISC_ZERO_VERIFIER_SELECTOR]` (the accounts' seeds pin
+/// it), as pa-evm's `riscZeroVerifierPaused()` asks the router.
 fn verifier_paused(entry: &AccountInfo) -> Result<bool> {
-    let (expected, _) = Pubkey::find_program_address(
-        &[b"verifier", &RISC_ZERO_VERIFIER_SELECTOR],
-        &RISC_ZERO_VERIFIER_ROUTER,
-    );
-    require_keys_eq!(*entry.key, expected, PAError::InvalidVerifierEntry);
     require_keys_eq!(
         *entry.owner,
         RISC_ZERO_VERIFIER_ROUTER,

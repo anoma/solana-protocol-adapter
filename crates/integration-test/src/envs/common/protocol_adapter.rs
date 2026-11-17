@@ -268,15 +268,7 @@ impl ProtocolAdapter {
     /// failure is not one of the protocol's refusals; an error when the
     /// simulation's log cannot say.
     fn refusal(&self, error: &anyhow::Error) -> anyhow::Result<Option<Refusal>> {
-        let Some(ErrorKind::RpcError(RpcError::RpcResponseError {
-            data:
-                RpcResponseErrorData::SendTransactionPreflightFailure(RpcSimulateTransactionResult {
-                    logs: Some(logs),
-                    ..
-                }),
-            ..
-        })) = error.downcast_ref::<ClientError>().map(ClientError::kind)
-        else {
+        let Some(logs) = preflight_logs(error) else {
             return Ok(None);
         };
         refusal_in_logs(logs, &self.program, &self.verifier_program)
@@ -371,6 +363,22 @@ impl CoreProtocolAdapter for ProtocolAdapter {
             .instance()
             .deny_logic_refs_ix(&self.payer.pubkey(), &entries);
         self.as_owner(ix, "deny the logic refs").await
+    }
+}
+
+/// The log of the runtime's simulation of the transaction that failed with
+/// `error`, when the runtime refused it in preflight.
+pub(in crate::envs) fn preflight_logs(error: &anyhow::Error) -> Option<&[String]> {
+    match error.downcast_ref::<ClientError>().map(ClientError::kind) {
+        Some(ErrorKind::RpcError(RpcError::RpcResponseError {
+            data:
+                RpcResponseErrorData::SendTransactionPreflightFailure(RpcSimulateTransactionResult {
+                    logs: Some(logs),
+                    ..
+                }),
+            ..
+        })) => Some(logs),
+        _ => None,
     }
 }
 

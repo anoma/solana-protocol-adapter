@@ -51,7 +51,7 @@ describe("protocol-adapter (initialize)", () => {
     // any earlier check. Anchor names the offending account in its log line,
     // which is what distinguishes "rejected for the right reason" from
     // "rejected before the constraint was ever evaluated".
-    await assertFails((await buildInitialize(stranger.publicKey)).signers([stranger]).rpc(), {
+    await assertFails(buildInitialize(stranger.publicKey).signers([stranger]).rpc(), {
       program,
       error: "Unauthorized",
       account: "program_data",
@@ -62,19 +62,25 @@ describe("protocol-adapter (initialize)", () => {
   });
 
   // Mirrors OwnableUpgradeable's initializer: OwnableInvalidOwner(address(0)).
-  it("rejects a zero owner", async () =>
-    assertFails((await init(PublicKey.default)).rpc(), { program, error: "OwnableInvalidOwner" }));
+  it("rejects a zero owner", () =>
+    assertFails(init(PublicKey.default).rpc(), { program, error: "OwnableInvalidOwner" }));
 
-  it("rejects an account other than the router's verifier entry for the build's selector", async () =>
-    assertFails((await init()).accountsPartial({ verifierEntry: getVerifierEntryPda(PAUSED_MOCK_SELECTOR)[0] }).rpc(), {
-      program,
-      error: "InvalidVerifierEntry",
-    }));
+  it("rejects an account other than the router's verifier entry for the build's selector", () =>
+    assertFails(
+      init()
+        .accountsPartial({ verifierEntry: getVerifierEntryPda(PAUSED_MOCK_SELECTOR)[0] })
+        .rpc(),
+      {
+        program,
+        error: "ConstraintSeeds",
+        account: "verifier_entry",
+      },
+    ));
 
   it("stores the owner and the empty kind tree, hands the upgrade authority to the program, and announces the owner, the initial root and the kind tree, as pa-evm's initializer does", async () => {
     assert.isFalse(await paStateExists(), "this test initializes the adapter, so it must start uninitialized");
 
-    const sig = await (await buildInitialize(provider.wallet.publicKey)).rpc();
+    const sig = await buildInitialize(provider.wallet.publicKey).rpc();
 
     const state = await program.account.paStateAccount.fetch(paState);
     assert.equal(state.owner.toBase58(), provider.wallet.publicKey.toBase58(), "the initial owner is stored");

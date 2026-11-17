@@ -35,6 +35,7 @@ import {
   getRouterPda,
   getVerifierEntryPda,
   GROTH16_VERIFIER_ID,
+  GROTH16_VERIFIER_V3_0_ID,
   MOCK_SELECTOR,
   VERIFIER_ROUTER_ID,
 } from "../../client/verifier";
@@ -84,12 +85,16 @@ function verifierOf(program: PublicKey, rejectionCode: number, malformedProofCod
   };
 }
 
-function verifierForSelector(selector: Buffer): Verifier {
+export function verifierForSelector(selector: Buffer): Verifier {
   const hex = selector.toString("hex");
   switch (hex) {
     // groth_16_verifier (risc0 3.1.0): VerificationError, PairingError
     case "e71e6620":
       return verifierOf(GROTH16_VERIFIER_ID, 6000, 6003);
+    // groth_16_verifier (risc0 3.0.0), which tests/upgrade/'s previous build
+    // is initialized with
+    case "73c457ba":
+      return verifierOf(GROTH16_VERIFIER_V3_0_ID, 6000, 6003);
     // mock-verifier (programs/mock-verifier, localnet only): ClaimDigestMismatch
     // for both (it checks no curve points; offset 6600 keeps it disjoint)
     case MOCK_SELECTOR.toString("hex"):
@@ -146,7 +151,7 @@ export async function paStateExists(): Promise<boolean> {
  */
 export async function ensureAdapterInitialized(): Promise<void> {
   if (!(await paStateExists())) {
-    await (await buildInitialize(provider.wallet.publicKey)).rpc();
+    await buildInitialize(provider.wallet.publicKey).rpc();
   }
 }
 
@@ -265,16 +270,20 @@ export async function upgradeThroughProgram(
 }
 
 /** The full CU budget and, unless `heapFrame` is false, the 256 KiB heap frame settlement needs. */
-export function settleBudget(heapFrame: boolean) {
+function settleBudget(heapFrame: boolean) {
   return [
     ComputeBudgetProgram.setComputeUnitLimit({ units: MAX_COMPUTE_UNIT_LIMIT }),
     ...(heapFrame ? [ComputeBudgetProgram.requestHeapFrame({ bytes: SETTLE_HEAP_FRAME_BYTES })] : []),
   ];
 }
 
+/** The adapter build a settlement goes through, and the verifier it routes to. */
+type SettleTarget = { program: Program<any>; verifierEntry: PublicKey; verifierProgram: PublicKey };
+
 /**
  * `settle_from_txdata` with the full CU budget and, unless `heapFrame` is
- * false, the 256 KiB heap frame settlement needs.
+ * false, the 256 KiB heap frame settlement needs, through `target`: the
+ * suite's build and verifier, unless a test settles through another build.
  */
 export function settleFromTxDataBuilder(
   authority: PublicKey,
@@ -283,8 +292,9 @@ export function settleFromTxDataBuilder(
   newRootMarker: PublicKey | null,
   remainingAccounts: AccountMeta[],
   heapFrame = true,
+  target: SettleTarget = { program, verifierEntry: verifierEntryPda, verifierProgram: VERIFIER.program },
 ) {
-  return program.methods
+  return target.program.methods
     .settleFromTxdata(uploadId)
     .accountsPartial({
       paState,
@@ -294,8 +304,8 @@ export function settleFromTxDataBuilder(
       newRootMarker,
       verifierRouterProgram: VERIFIER_ROUTER_ID,
       router: routerPda,
-      verifierEntry: verifierEntryPda,
-      verifierProgram: VERIFIER.program,
+      verifierEntry: target.verifierEntry,
+      verifierProgram: target.verifierProgram,
     })
     .remainingAccounts(remainingAccounts)
     .preInstructions(settleBudget(heapFrame));

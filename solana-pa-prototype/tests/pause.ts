@@ -46,7 +46,7 @@ describe("protocol-adapter (pause) @localnet", () => {
         .riscZeroVerifierPaused()
         .accountsPartial({ verifierEntry: getVerifierEntryPda(PAUSED_MOCK_SELECTOR)[0] })
         .rpc(),
-      { program, error: "InvalidVerifierEntry" },
+      { program, error: "ConstraintSeeds", account: "verifier_entry" },
     ));
 
   it("rejects unpause while not paused", async () => {

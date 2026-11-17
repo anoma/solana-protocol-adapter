@@ -205,15 +205,6 @@ mod verifier_pause_tests {
     }
 
     #[test]
-    fn refuses_another_selectors_entry() {
-        let other =
-            Pubkey::find_program_address(&[b"verifier", &[0xff; 4]], &RISC_ZERO_VERIFIER_ROUTER).0;
-        make_account_info_with_data!(entry, &other, owner: &RISC_ZERO_VERIFIER_ROUTER,
-            lamports: 1, data: entry_data(true), signer: false, writable: false, executable: false);
-        assert_anchor_err!(verifier_paused(&entry), InvalidVerifierEntry);
-    }
-
-    #[test]
     fn refuses_an_entry_another_program_owns() {
         let impostor = Pubkey::new_unique();
         let key = entry_key();

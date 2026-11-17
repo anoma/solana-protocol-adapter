@@ -772,16 +772,16 @@ deterministic_build() {
 # The programs the integration-test harness loads, as it ships them: the
 # deterministic builds at the local addresses (env/localnet.env), so a
 # consumer pinning the harness by tag runs exactly the program of that tag.
-# Each entry is <program>:<binary> or, for a build with another verifier
-# selector compiled in, <program>:<binary>:<selector>: the adapter for the
-# mock verifier the harness's local runtime registers, beside the one for
-# devnet's Groth16 verifier its e2e cases settle through.
+# Each entry is <program>, written as <program>.so, or, for a build with
+# another verifier selector compiled in, <program>:<binary>:<selector>: the
+# adapter for the mock verifier the harness's local runtime registers,
+# beside the one for devnet's Groth16 verifier its e2e cases settle through.
 HARNESS_PROGRAMS=(
-  "protocol_adapter:protocol_adapter.so"
+  "protocol_adapter"
   "protocol_adapter:protocol_adapter_mock.so:${MOCK_SELECTOR}"
-  "mock_verifier:mock_verifier.so"
-  "test_forwarder:test_forwarder.so"
-  "block_time_forwarder:block_time_forwarder.so"
+  "mock_verifier"
+  "test_forwarder"
+  "block_time_forwarder"
 )
 HARNESS_DIR="${PROJECT_DIR}/../crates/integration-test"
 HARNESS_PROGRAMS_DIR="${HARNESS_DIR}/programs"
@@ -793,11 +793,8 @@ cmd_harness_programs() {
   local entry name binary selector built committed failed=0
   for entry in "${HARNESS_PROGRAMS[@]}"; do
     IFS=: read -r name binary selector <<<"$entry"
-    if [[ -n "$selector" ]]; then
-      RISC_ZERO_VERIFIER_SELECTOR="$selector" deterministic_build "$name"
-    else
-      deterministic_build "$name"
-    fi
+    binary="${binary:-${name}.so}"
+    RISC_ZERO_VERIFIER_SELECTOR="${selector:-$RISC_ZERO_VERIFIER_SELECTOR}" deterministic_build "$name"
     built="target/deploy/${name}.so"
     committed="${HARNESS_PROGRAMS_DIR}/${binary}"
     if [[ "$CHECK" == "true" ]]; then

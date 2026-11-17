@@ -34,11 +34,16 @@ ANCHOR_WALLET_PATH="${ANCHOR_WALLET:-$HOME/.config/solana/id.json}"
 # programs' canonical IDL accounts. The copies are committed in
 # DEVNET_CLONE_DIR, so tests never touch the network; refresh_devnet_programs
 # replaces them.
-# The router is RISC_ZERO_VERIFIER_ROUTER (env/localnet.env); its entry for
-# RISC_ZERO_VERIFIER_SELECTOR names the risc0 3.1.0 verifier. The risc0 3.0.0
-# verifier and its entry stay for the previous adapter build, which
-# tests/upgrade/ settles a proof for before upgrading it.
-VERIFIER_ROUTER="BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"
+# The router is the one the adapter compiles in (RISC_ZERO_VERIFIER_ROUTER,
+# env/localnet.env); its entry for RISC_ZERO_VERIFIER_SELECTOR names the
+# risc0 3.1.0 verifier. The risc0 3.0.0 verifier and its entry stay for the
+# previous adapter build, which tests/upgrade/ settles a proof for before
+# upgrading it.
+VERIFIER_ROUTER="$(sed -n 's/^RISC_ZERO_VERIFIER_ROUTER=//p' "${PROJECT_DIR}/env/localnet.env")"
+if [[ -z "$VERIFIER_ROUTER" ]]; then
+  echo "❌ ${PROJECT_DIR}/env/localnet.env names no RISC_ZERO_VERIFIER_ROUTER." >&2
+  exit 1
+fi
 GROTH16_VERIFIER="5RrWAZFxm9biQ1PxD6azhevG2popHEC3gDJnZ4YoK1Ba"
 GROTH16_VERIFIER_V3_0="2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"
 ROUTER_PDA="9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"
@@ -224,17 +229,9 @@ load_program_ids() {
 # Compile in the selector of the verifier test mode $1 (real|mock) proves
 # for: real keeps env/localnet.env's RISC_ZERO_VERIFIER_SELECTOR, verified by
 # the devnet-cloned verifier; mock takes MOCK_SELECTOR, which the localnet
-# router routes to the mock verifier. The local validator loads devnet's
-# router, so the router must be env/localnet.env's. Requires
-# load_program_ids localnet.
+# router routes to the mock verifier. Requires load_program_ids localnet.
 use_test_mode_selector() {
-  local mode="$1"
-  validate_test_mode "$mode"
-  if [[ "$RISC_ZERO_VERIFIER_ROUTER" != "$VERIFIER_ROUTER" ]]; then
-    echo "❌ RISC_ZERO_VERIFIER_ROUTER is ${RISC_ZERO_VERIFIER_ROUTER}; the local validator loads the router ${VERIFIER_ROUTER}." >&2
-    exit 1
-  fi
-  if [[ "$mode" == "mock" ]]; then
+  if [[ "$1" == "mock" ]]; then
     export RISC_ZERO_VERIFIER_SELECTOR="$MOCK_SELECTOR"
   fi
 }
@@ -625,15 +622,15 @@ assert_release_idl_lacks_dev_only() {
 # dir (or vice versa) would silently run the suite against the wrong verifier.
 check_required_fixture() {
   local mode="$1"
-  local subdir="" expected_selector="$RISC_ZERO_VERIFIER_SELECTOR"
+  local subdir=""
   if [[ "$mode" == "mock" ]]; then
     subdir="mock/"
   fi
   local required_fixture="tests/fixtures/${subdir}batch_groth16.json"
   if [[ ! -f "$required_fixture" ]] ||
-    ! fixture_matches_program_id "$required_fixture" "$(get_program_id block_time_forwarder)" "$expected_selector"; then
+    ! fixture_matches_program_id "$required_fixture" "$(get_program_id block_time_forwarder)" "$RISC_ZERO_VERIFIER_SELECTOR"; then
     echo "Required fixture is missing, stale, or carries the wrong selector"
-    echo "for ${mode} mode (expected ${expected_selector}): ${required_fixture}"
+    echo "for ${mode} mode (expected ${RISC_ZERO_VERIFIER_SELECTOR}): ${required_fixture}"
     echo "Regenerate with: ./scripts/dev.sh regen-fixtures ${mode}"
     exit 1
   fi
