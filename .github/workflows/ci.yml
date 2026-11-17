@@ -205,18 +205,35 @@ jobs:
         working-directory: ./solana-pa-prototype
         run: yarn run lint
 
-      - name: Build programs
+      # The adapter compiles in the verifier selector its proof mode verifies
+      # with (scripts/validator-deploy.sh's use_test_mode_selector), so each
+      # mode has its own build; in the second, cargo rebuilds only the adapter.
+      - name: Build programs (real proofs)
         working-directory: ./solana-pa-prototype
-        run: ./scripts/anchor-test.sh build
+        run: PA_TEST_MODE=real ./scripts/anchor-test.sh build
 
       - name: Check the committed IDL
         working-directory: ./solana-pa-prototype
         run: ./scripts/ops.sh idl-check
 
-      - name: Upload program artifacts
+      - name: Upload program artifacts (real proofs)
         uses: actions/upload-artifact@v7
         with:
-          name: anchor-programs
+          name: anchor-programs-real
+          if-no-files-found: error
+          path: |
+            solana-pa-prototype/target/deploy
+            solana-pa-prototype/target/idl
+            solana-pa-prototype/target/types
+
+      - name: Build programs (mock proofs)
+        working-directory: ./solana-pa-prototype
+        run: PA_TEST_MODE=mock ./scripts/anchor-test.sh build
+
+      - name: Upload program artifacts (mock proofs)
+        uses: actions/upload-artifact@v7
+        with:
+          name: anchor-programs-mock
           if-no-files-found: error
           path: |
             solana-pa-prototype/target/deploy
@@ -264,7 +281,7 @@ jobs:
       - name: Download program artifacts
         uses: actions/download-artifact@v8
         with:
-          name: anchor-programs
+          name: anchor-programs-${{ matrix.mode }}
           path: solana-pa-prototype/target
 
       - name: Run tests

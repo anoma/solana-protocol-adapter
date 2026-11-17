@@ -165,5 +165,5 @@ pub fn fake_aggregation_proof_bytes() -> Vec<u8> {
 
 /// Variable-depth tree starting at depth 0 (capacity = 1 leaf).
 pub fn create_test_pa_state() -> PAStateAccount {
-    PAStateAccount::running(0, Pubkey::new_unique(), Pubkey::default(), FAKE_SELECTOR)
+    PAStateAccount::running(0, Pubkey::new_unique())
 }

@@ -28,7 +28,9 @@ e2e = [
 # The Anchor traits of the client's generated types (their discriminators,
 # account encodings): the client's Anchor release.
 anchor-lang = "1.2.2"
-anoma-pa-solana-client = { version = "0.12.3", features = [
+# The client of anoma/anoma-pa-solana-client#55 (the build's verifier), until
+# its release 0.13.0, which this pin then names.
+anoma-pa-solana-client = { git = "https://github.com/anoma/anoma-pa-solana-client", rev = "dacb4a345c2e7c9d53dbf8fc9a3439df3e90279a", features = [
   "estimate",
 ] }
 anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "3d20016a956d8b75433d0ef2804768d7c07868d6", default-features = false, features = [
@@ -39,7 +41,7 @@ anoma-pa-testkit = { git = "https://github.com/anoma/pa-testkit", rev = "3d20016
 anoma-risc0-kind-trees = { git = "https://github.com/anoma/risc0-kind-trees", rev = "9dda5d9169276d7fd4e5fe6b2fed0371882fa6e5", features = [
   "arm",
 ], optional = true }
-anoma-rm-risc0 = { version = "2.0.0-rc.8.2", default-features = false, features = ["transaction"] }
+anoma-rm-risc0 = { version = "2.0.0-rc.9", default-features = false, features = ["transaction"] }
 anyhow = "1.0"
 bincode = "1.3"
 bs58 = "0.5"

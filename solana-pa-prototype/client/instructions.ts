@@ -6,7 +6,6 @@
 import { Program } from "@anchor-lang/core";
 import { ComputeBudgetProgram, PublicKey, SystemProgram } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
-import { getVerifierEntryPda } from "./verifier";
 import { derivePaStatePda } from "./pda";
 
 // Protocol adapter governance
@@ -14,22 +13,26 @@ import { derivePaStatePda } from "./pda";
 /**
  * The adapter's `initialize`, signed and paid by `payer`, the program's
  * upgrade authority, which it hands to the program's upgrade authority PDA:
- * it makes `initialOwner` the owner, pins the verifier, starts on the empty
- * kind tree, and refuses a verifier the router has paused, read from the
- * router's verifier entry for `proofSelector`.
+ * it makes `initialOwner` the owner, starts on the empty kind tree, and
+ * refuses a verifier the router has paused, read from the router's verifier
+ * entry for the build's selector, which the IDL's seeds resolve.
  */
-export function initializeAdapter(
-  program: Program<ProtocolAdapter>,
-  payer: PublicKey,
-  initialOwner: PublicKey,
-  verifierRouter: PublicKey,
-  proofSelector: number[],
-) {
-  return program.methods.initialize(initialOwner, verifierRouter, proofSelector).accountsPartial({
+export function initializeAdapter(program: Program<ProtocolAdapter>, payer: PublicKey, initialOwner: PublicKey) {
+  return program.methods.initialize(initialOwner).accountsPartial({
     paState: derivePaStatePda(program.programId)[0],
-    verifierEntry: getVerifierEntryPda(Buffer.from(proofSelector), verifierRouter)[0],
     payer,
     systemProgram: SystemProgram.programId,
+  });
+}
+
+/**
+ * `migrate_state`, signed by the owner: brings the state account from the
+ * previous schema version to this build's, once, right after the upgrade.
+ */
+export function migrateState(program: Program<ProtocolAdapter>, authority: PublicKey) {
+  return program.methods.migrateState().accountsPartial({
+    authority,
+    paState: derivePaStatePda(program.programId)[0],
   });
 }
 

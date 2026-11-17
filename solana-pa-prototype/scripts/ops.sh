@@ -38,6 +38,9 @@ Commands:
                          denylist for consumed or for created resources;
                          created alone deprecates, both deny. Cannot be
                          undone (owner wallet).
+  migrate-state          Bring PAState from the previous schema version to
+                         this build's, once, right after the upgrade (owner
+                         wallet).
   pause                  Pause settlement (owner-only; pa-evm's pause())
   unpause                Resume settlement (owner-only; pa-evm's unpause())
   status                 Show deployment status + wallet balance
@@ -137,12 +140,11 @@ Flags:
 Initialization parameters (required by deploy/init when the PA is a target):
   PA_OWNER             The adapter's initial owner (base58), who alone pauses,
                        upgrades and configures it, as pa-evm's initialOwner.
-  PA_VERIFIER_ROUTER   RISC0 verifier router program ID (base58).
-                       Devnet: ${VERIFIER_ROUTER}
-  PA_PROOF_SELECTOR    4-byte Groth16 verifier selector (hex).
-                       Devnet: ${GROTH16_SELECTOR}
 
-The PA starts on the empty kind tree; set-kind-tree-root installs another.
+The PA verifies through the RISC Zero verifier router and selector its build
+compiles in (RISC_ZERO_VERIFIER_ROUTER, RISC_ZERO_VERIFIER_SELECTOR in
+env/<cluster>.env), as pa-evm's implementation holds them as immutables. It
+starts on the empty kind tree; set-kind-tree-root installs another.
 USAGE
   exit 1
 }
@@ -527,13 +529,8 @@ program_id_args() {
 }
 
 require_init_params() {
-  if [[ -z "${PA_OWNER:-}" || -z "${PA_VERIFIER_ROUTER:-}" || -z "${PA_PROOF_SELECTOR:-}" ]]; then
-    echo "❌ Missing PA_OWNER, PA_VERIFIER_ROUTER and/or PA_PROOF_SELECTOR." >&2
-    echo "   initialize sets the owner and pins the verifier router and proof" >&2
-    echo "   selector for the lifetime of the deployment; there is no safe default." >&2
-    echo "   Devnet values:" >&2
-    echo "     PA_VERIFIER_ROUTER=${VERIFIER_ROUTER}" >&2
-    echo "     PA_PROOF_SELECTOR=${GROTH16_SELECTOR}" >&2
+  if [[ -z "${PA_OWNER:-}" ]]; then
+    echo "❌ Missing PA_OWNER: initialize sets the adapter's owner, and there is no safe default." >&2
     exit 1
   fi
 }
@@ -680,6 +677,11 @@ cmd_deny_logic_refs() {
   run_ts scripts/deny-logic-refs.ts
 }
 
+cmd_migrate_state() {
+  prepare_pa_script
+  run_ts scripts/migrate-state.ts
+}
+
 cmd_pause() {
   prepare_pa_script
   run_ts scripts/pause-pa.ts pause
@@ -740,13 +742,17 @@ cmd_balance() {
 # table has the Solana version pinned there.
 SOLANA_VERIFY_VERSION="0.5.2"
 
-# Deterministic build of program <name> at the loaded program addresses, into
-# target/deploy/<name>.so. solana-verify builds in a container from the
-# repository alone, passing its trailing arguments to `cargo build`; the
-# program addresses go in as cargo [env] configuration, which a remote
-# verification repeats.
+# The configuration env/<cluster>.env holds besides the program addresses,
+# which the adapter compiles in: its RISC Zero verifier.
+BUILD_CONFIG_VARS=(RISC_ZERO_VERIFIER_ROUTER RISC_ZERO_VERIFIER_SELECTOR)
+
+# Deterministic build of program <name> at the loaded program addresses and
+# build configuration, into target/deploy/<name>.so. solana-verify builds in a
+# container from the repository alone, passing its trailing arguments to
+# `cargo build`; the addresses and BUILD_CONFIG_VARS go in as cargo [env]
+# configuration, which a remote verification repeats.
 deterministic_build() {
-  local library="$1" name address_config=()
+  local library="$1" name var env_config=()
   # A missing solana-verify fails the substitution ("command not found") and
   # the comparison both.
   if [[ "$(solana-verify --version)" != "solana-verify ${SOLANA_VERIFY_VERSION}" ]]; then
@@ -755,15 +761,28 @@ deterministic_build() {
     exit 1
   fi
   for name in "${PROGRAM_NAMES[@]}"; do
-    address_config+=(--config "env.$(program_id_var "$name")=\"$(get_program_id "$name")\"")
+    env_config+=(--config "env.$(program_id_var "$name")=\"$(get_program_id "$name")\"")
   done
-  checked_sbf_build solana-verify build --library-name "$library" --arch "$SBPF_ARCH" -- "${address_config[@]}"
+  for var in "${BUILD_CONFIG_VARS[@]}"; do
+    env_config+=(--config "env.${var}=\"${!var}\"")
+  done
+  checked_sbf_build solana-verify build --library-name "$library" --arch "$SBPF_ARCH" -- "${env_config[@]}"
 }
 
 # The programs the integration-test harness loads, as it ships them: the
 # deterministic builds at the local addresses (env/localnet.env), so a
 # consumer pinning the harness by tag runs exactly the program of that tag.
-HARNESS_PROGRAMS=(protocol_adapter mock_verifier test_forwarder block_time_forwarder)
+# Each entry is <program>, written as <program>.so, or, for a build with
+# another verifier selector compiled in, <program>:<binary>:<selector>: the
+# adapter for the mock verifier the harness's local runtime registers,
+# beside the one for devnet's Groth16 verifier its e2e cases settle through.
+HARNESS_PROGRAMS=(
+  "protocol_adapter"
+  "protocol_adapter:protocol_adapter_mock.so:${MOCK_SELECTOR}"
+  "mock_verifier"
+  "test_forwarder"
+  "block_time_forwarder"
+)
 HARNESS_DIR="${PROJECT_DIR}/../crates/integration-test"
 HARNESS_PROGRAMS_DIR="${HARNESS_DIR}/programs"
 
@@ -771,19 +790,21 @@ HARNESS_PROGRAMS_DIR="${HARNESS_DIR}/programs"
 # HARNESS_PROGRAMS_DIR; with --check, fail instead when a committed binary is
 # not, byte for byte, the fresh build.
 cmd_harness_programs() {
-  local name built committed failed=0
-  for name in "${HARNESS_PROGRAMS[@]}"; do
-    deterministic_build "$name"
+  local entry name binary selector built committed failed=0
+  for entry in "${HARNESS_PROGRAMS[@]}"; do
+    IFS=: read -r name binary selector <<<"$entry"
+    binary="${binary:-${name}.so}"
+    RISC_ZERO_VERIFIER_SELECTOR="${selector:-$RISC_ZERO_VERIFIER_SELECTOR}" deterministic_build "$name"
     built="target/deploy/${name}.so"
-    committed="${HARNESS_PROGRAMS_DIR}/${name}.so"
+    committed="${HARNESS_PROGRAMS_DIR}/${binary}"
     if [[ "$CHECK" == "true" ]]; then
       if [[ ! -f "$committed" ]]; then
         echo "❌ ${committed} is missing; write it with ./scripts/dev.sh harness-programs." >&2
         failed=1
       elif cmp -s "$built" "$committed"; then
-        echo "✅ ${name}: the committed binary is the deterministic build"
+        echo "✅ ${binary}: the committed binary is the deterministic build"
       else
-        echo "❌ ${name}: the committed binary is not the deterministic build; rewrite it with ./scripts/dev.sh harness-programs." >&2
+        echo "❌ ${binary}: the committed binary is not the deterministic build; rewrite it with ./scripts/dev.sh harness-programs." >&2
         failed=1
       fi
     else
@@ -1099,6 +1120,7 @@ case "$COMMAND" in
     ensure_wallet
     ensure_lockfile_sync
     ensure_node_modules
+    use_test_mode_selector "$TEST_MODE"
     build_programs_dev
     workspace_program_args
     start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
@@ -1129,7 +1151,7 @@ case "$COMMAND" in
     resolve_cluster
     cmd_test
     ;;
-  deploy|upgrade|init|set-kind-tree-root|deny-logic-refs|pause|unpause|status|balance|idl-publish)
+  deploy|upgrade|init|set-kind-tree-root|deny-logic-refs|migrate-state|pause|unpause|status|balance|idl-publish)
     require_cmd solana
     require_cmd solana-keygen
     resolve_cluster

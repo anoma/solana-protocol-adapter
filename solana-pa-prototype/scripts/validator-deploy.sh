@@ -34,18 +34,28 @@ ANCHOR_WALLET_PATH="${ANCHOR_WALLET:-$HOME/.config/solana/id.json}"
 # programs' canonical IDL accounts. The copies are committed in
 # DEVNET_CLONE_DIR, so tests never touch the network; refresh_devnet_programs
 # replaces them.
-VERIFIER_ROUTER="BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"
-GROTH16_VERIFIER="2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"
+# The router is the one the adapter compiles in (RISC_ZERO_VERIFIER_ROUTER,
+# env/localnet.env); its entry for RISC_ZERO_VERIFIER_SELECTOR names the
+# risc0 3.1.0 verifier. The risc0 3.0.0 verifier and its entry stay for the
+# previous adapter build, which tests/upgrade/ settles a proof for before
+# upgrading it.
+VERIFIER_ROUTER="$(sed -n 's/^RISC_ZERO_VERIFIER_ROUTER=//p' "${PROJECT_DIR}/env/localnet.env")"
+if [[ -z "$VERIFIER_ROUTER" ]]; then
+  echo "❌ ${PROJECT_DIR}/env/localnet.env names no RISC_ZERO_VERIFIER_ROUTER." >&2
+  exit 1
+fi
+GROTH16_VERIFIER="5RrWAZFxm9biQ1PxD6azhevG2popHEC3gDJnZ4YoK1Ba"
+GROTH16_VERIFIER_V3_0="2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD"
 ROUTER_PDA="9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S"
-VERIFIER_ENTRY_PDA="4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
+VERIFIER_ENTRY_PDA="EJEySCEHPgGS1AEz54e2b3SqSzcDJtMuZAbvnSiPJRoS"
+VERIFIER_ENTRY_PDA_V3_0="4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey"
 PROGRAM_METADATA="ProgM6JCCvbYkfKqJYHePx4xxSUSqJp7rh8Lyv7nk7S"
-DEVNET_CLONE_PROGRAMS=("$VERIFIER_ROUTER" "$GROTH16_VERIFIER" "$PROGRAM_METADATA")
-DEVNET_CLONE_ACCOUNTS=("$ROUTER_PDA" "$VERIFIER_ENTRY_PDA")
+DEVNET_CLONE_PROGRAMS=("$VERIFIER_ROUTER" "$GROTH16_VERIFIER" "$GROTH16_VERIFIER_V3_0" "$PROGRAM_METADATA")
+DEVNET_CLONE_ACCOUNTS=("$ROUTER_PDA" "$VERIFIER_ENTRY_PDA" "$VERIFIER_ENTRY_PDA_V3_0")
 DEVNET_CLONE_DIR="${PROJECT_DIR}/devnet-programs"
-# Selector registered for the groth16 verifier entry above
-GROTH16_SELECTOR="0x73c457ba"
 # Selector the synthetic genesis VerifierEntry registers the localnet
-# mock verifier under (risc0 fake-receipt convention)
+# mock verifier under (risc0 fake-receipt convention); a mock-proof build
+# compiles it in as RISC_ZERO_VERIFIER_SELECTOR (use_test_mode_selector).
 MOCK_SELECTOR="0xffffffff"
 
 VALIDATOR_PID=""
@@ -216,6 +226,16 @@ load_program_ids() {
   done
 }
 
+# Compile in the selector of the verifier test mode $1 (real|mock) proves
+# for: real keeps env/localnet.env's RISC_ZERO_VERIFIER_SELECTOR, verified by
+# the devnet-cloned verifier; mock takes MOCK_SELECTOR, which the localnet
+# router routes to the mock verifier. Requires load_program_ids localnet.
+use_test_mode_selector() {
+  if [[ "$1" == "mock" ]]; then
+    export RISC_ZERO_VERIFIER_SELECTOR="$MOCK_SELECTOR"
+  fi
+}
+
 # The address of <name>. Requires load_program_ids.
 get_program_id() {
   local var
@@ -300,8 +320,16 @@ fixture_matches_program_id() {
 # outside tests/utils/ (the support modules), tests/fresh/ and
 # tests/terminal/, sorted. A cluster run runs these.
 history_spec_files() {
-  find tests -name '*.ts' -not -path 'tests/utils/*' -not -path 'tests/fresh/*' -not -path 'tests/terminal/*' |
+  find tests -name '*.ts' -not -path 'tests/utils/*' -not -path 'tests/fresh/*' -not -path 'tests/terminal/*' \
+    -not -path 'tests/upgrade/*' |
     LC_ALL=C sort
+}
+
+# The upgrade-path spec files, sorted: tests/upgrade/<program>.ts starts on
+# that program's previous build (tests/fixtures/previous/<program>.so),
+# upgrades it in place and migrates its accounts, each on its own validator.
+upgrade_spec_files() {
+  find tests/upgrade -name '*.ts' | LC_ALL=C sort
 }
 
 # Every spec file in the order the local suite runs them against one
@@ -590,20 +618,19 @@ assert_release_idl_lacks_dev_only() {
 
 # Validate the required fixture for the given test mode ($1, real|mock):
 # it must exist, contain the current BTF program ID, and carry the selector
-# its mode demands — a mock fixture in the real dir (or vice versa) would
-# silently run the suite against the wrong verifier.
+# its mode compiles in (use_test_mode_selector) — a mock fixture in the real
+# dir (or vice versa) would silently run the suite against the wrong verifier.
 check_required_fixture() {
   local mode="$1"
-  local subdir="" expected_selector="$GROTH16_SELECTOR"
+  local subdir=""
   if [[ "$mode" == "mock" ]]; then
     subdir="mock/"
-    expected_selector="$MOCK_SELECTOR"
   fi
   local required_fixture="tests/fixtures/${subdir}batch_groth16.json"
   if [[ ! -f "$required_fixture" ]] ||
-    ! fixture_matches_program_id "$required_fixture" "$(get_program_id block_time_forwarder)" "$expected_selector"; then
+    ! fixture_matches_program_id "$required_fixture" "$(get_program_id block_time_forwarder)" "$RISC_ZERO_VERIFIER_SELECTOR"; then
     echo "Required fixture is missing, stale, or carries the wrong selector"
-    echo "for ${mode} mode (expected ${expected_selector}): ${required_fixture}"
+    echo "for ${mode} mode (expected ${RISC_ZERO_VERIFIER_SELECTOR}): ${required_fixture}"
     echo "Regenerate with: ./scripts/dev.sh regen-fixtures ${mode}"
     exit 1
   fi
@@ -634,11 +661,20 @@ refresh_devnet_programs() {
 # every workspace program at genesis from target/deploy at its address,
 # upgradeable, with the provider wallet as upgrade authority (what
 # `anchor deploy` would set). Requires load_program_ids.
+# $1, if given, names a program to load at its previous build instead, from
+# tests/fixtures/previous/<name>.so: a cluster that has not been upgraded yet.
 workspace_program_args() {
-  local name so
+  local previous="${1:-}" name so
   WORKSPACE_PROGRAM_ARGS=()
+  if [[ -n "$previous" && " ${PROGRAM_NAMES[*]} " != *" ${previous} "* ]]; then
+    echo "❌ ${previous} is not a workspace program (PROGRAM_TABLE)." >&2
+    exit 1
+  fi
   for name in "${PROGRAM_NAMES[@]}"; do
     so="target/deploy/${name}.so"
+    if [[ "$name" == "$previous" ]]; then
+      so="tests/fixtures/previous/${name}.so"
+    fi
     if [[ ! -f "$so" ]]; then
       echo "❌ ${so} is missing; build the programs first ('./scripts/anchor-test.sh build', or the default phase)." >&2
       exit 1

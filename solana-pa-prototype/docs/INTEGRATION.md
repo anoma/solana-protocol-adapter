@@ -26,7 +26,7 @@ Borsh appears elsewhere in the PA (account state, event bodies, instruction argu
 
 Working examples: the `tests/fixtures/batch_groth16*.json` fixtures other than `batch_groth16_mismatch.json` carry complete settlement-ready transactions as base64 in their `tx_b64` field. The other fixtures (including `batch_groth16_mismatch.json`) are deliberately failing variants (missing aggregation, garbage proof, a seal under another selector, wrong root, forwarder output mismatch and failures) — useful as negative examples, not as templates.
 
-A transaction must carry an aggregation (`aggregation` set, `actions` absent), and the 4-byte selector in `aggregation.proof`'s seal must equal the `proof_selector` this deployment pinned at initialization — see "Deployment parameters" below.
+A transaction must carry an aggregation (`aggregation` set, `actions` absent), and the 4-byte selector in `aggregation.proof`'s seal must equal the deployed build's verifier selector — see "Deployment parameters" below.
 
 ### External call encoding
 
@@ -99,10 +99,10 @@ Production binaries contain no instruction that deletes markers. (Development bu
 
 ## Deployment parameters
 
-`initialize` pins two values for the deployment's lifetime, readable from the PA state account:
+The deployed build carries two values, as pa-evm's implementation holds them as immutables, so an upgrade can change them. Each is read by simulating a view instruction:
 
-- `verifier_router: Pubkey` — the RISC0 verifier router the PA will call for proof verification. Settlement requires passing this exact program (plus its router PDA, verifier entry, and verifier program) in the settle accounts.
-- `proof_selector: [u8;4]` — the 4-byte selector every transaction's aggregation proof must carry.
+- `risc_zero_verifier_router` (pa-evm's `RISC_ZERO_VERIFIER_ROUTER()`) — the RISC0 verifier router the PA calls for proof verification. Settlement requires passing this exact program (plus its router PDA, verifier entry, and verifier program) in the settle accounts.
+- `risc_zero_verifier_selector` (pa-evm's `RISC_ZERO_VERIFIER_SELECTOR()`) — the 4-byte selector every transaction's aggregation proof must carry.
 
 Program IDs, the router addresses for the current devnet deployment, and key custody are in `docs/DEVNET_DEPLOYMENT.md`. Operator procedures (deploy, pause, retirement) are in `docs/OPERATIONS.md`; the fact integrators care about: a paused deployment rejects settlement (`EnforcedPause`) until its owner unpauses it, and `PAStateAccount.paused` reports it.
 

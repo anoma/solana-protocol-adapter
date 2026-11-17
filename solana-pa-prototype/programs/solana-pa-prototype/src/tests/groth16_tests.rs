@@ -1,5 +1,7 @@
 use crate::error::PAError;
-use crate::groth16::{check_selector, negate_g1, prepare_proof_for_verification};
+use crate::groth16::{
+    check_selector, is_zero, negate_g1, prepare_proof_for_verification, selector_from_hex,
+};
 use crate::tests::utils::{fake_aggregation_proof_bytes, minimal_instance, FAKE_SELECTOR};
 use arm_core::constants::BATCH_AGGREGATION_VK;
 use arm_core::transaction::Aggregation;
@@ -136,4 +138,39 @@ fn test_negate_g1_rejects_non_canonical_coordinates() {
         matches!(negate_g1(&x_is_modulus), Err(PAError::InvalidProof)),
         "a coordinate equal to the field modulus is not a canonical field element"
     );
+}
+
+/// env/<cluster>.env writes `RISC_ZERO_VERIFIER_SELECTOR` as `0x` and eight
+/// hex digits, in either case.
+#[test]
+fn selector_from_hex_reads_the_env_format() {
+    assert_eq!(selector_from_hex("0xe71e6620"), [0xe7, 0x1e, 0x66, 0x20]);
+    assert_eq!(selector_from_hex("0xDEADbeef"), [0xde, 0xad, 0xbe, 0xef]);
+    assert_eq!(selector_from_hex("0xffffffff"), [0xff; 4]);
+}
+
+#[test]
+#[should_panic(expected = "0x and eight hex digits")]
+fn selector_from_hex_refuses_a_value_without_the_prefix() {
+    selector_from_hex("e71e6620");
+}
+
+#[test]
+#[should_panic(expected = "0x and eight hex digits")]
+fn selector_from_hex_refuses_a_short_value() {
+    selector_from_hex("0xe71e662");
+}
+
+#[test]
+#[should_panic(expected = "0x and eight hex digits")]
+fn selector_from_hex_refuses_a_non_hex_digit() {
+    selector_from_hex("0xe71e662g");
+}
+
+#[test]
+fn is_zero_holds_only_for_all_zero_bytes() {
+    assert!(is_zero(&[0; 4]));
+    assert!(is_zero(&[]));
+    assert!(!is_zero(&[0, 0, 0, 1]));
+    assert!(!is_zero(&[1, 0, 0, 0]));
 }

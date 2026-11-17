@@ -5,9 +5,9 @@
 //! and the adapter, initialized against that verifier.
 
 use anchor_lang::AccountDeserialize;
-use anoma_pa_solana_client::derive_verifier_router_pdas;
 use anoma_pa_solana_client::generated::verifier_router::accounts::VerifierEntry;
 use anoma_pa_solana_client::submission::read_verifier_program;
+use anoma_pa_solana_client::{AdapterVerifier, derive_verifier_router_pdas};
 use anyhow::Context;
 use solana_keypair::Keypair;
 use solana_signer::Signer;
@@ -16,8 +16,13 @@ use surfpool_sdk::{Pubkey, Surfnet};
 use super::addresses::{LOCALNET, program_id};
 use super::runtime;
 
-/// The deterministic build of the adapter, at the local address
-/// (`dev.sh harness-programs`).
+/// The deterministic builds of the adapter, at the local address
+/// (`dev.sh harness-programs`): for the mock verifier's selector, and for
+/// devnet's Groth16 verifier's.
+#[cfg(feature = "local")]
+const PROTOCOL_ADAPTER_MOCK_SO: &[u8] =
+    include_bytes!("../../../programs/protocol_adapter_mock.so");
+#[cfg(feature = "e2e")]
 const PROTOCOL_ADAPTER_SO: &[u8] = include_bytes!("../../../programs/protocol_adapter.so");
 
 /// Devnet's verifier router, with its router state.
@@ -44,17 +49,17 @@ const MOCK_VERIFIER_ENTRY: &str = include_str!(
     "../../../../../solana-pa-prototype/tests/fixtures/verifier-entries/verifier-entry-DrnEGMFV4R3mFvf39jtp42rLXtezj2rh5dbFwFnyB632.json"
 );
 
-/// Devnet's Groth16 verifier, and the router's entry registering it under the
-/// selector of the seals risc0's Groth16 prover makes.
+/// Devnet's risc0 3.1.0 Groth16 verifier, and the router's entry registering
+/// it under the selector of the seals risc0's Groth16 prover makes.
 #[cfg(feature = "e2e")]
-const GROTH16_VERIFIER: &str = "2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD";
+const GROTH16_VERIFIER: &str = "5RrWAZFxm9biQ1PxD6azhevG2popHEC3gDJnZ4YoK1Ba";
 #[cfg(feature = "e2e")]
 const GROTH16_VERIFIER_SO: &[u8] = include_bytes!(
-    "../../../../../solana-pa-prototype/devnet-programs/2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD.so"
+    "../../../../../solana-pa-prototype/devnet-programs/5RrWAZFxm9biQ1PxD6azhevG2popHEC3gDJnZ4YoK1Ba.so"
 );
 #[cfg(feature = "e2e")]
 const GROTH16_VERIFIER_ENTRY: &str = include_str!(
-    "../../../../../solana-pa-prototype/devnet-programs/4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey.json"
+    "../../../../../solana-pa-prototype/devnet-programs/EJEySCEHPgGS1AEz54e2b3SqSzcDJtMuZAbvnSiPJRoS.json"
 );
 
 /// The verifier a deployment's adapter accepts the seals of.
@@ -76,6 +81,19 @@ pub(in crate::envs) async fn deploy(
     payer: &Keypair,
     verifier: Verifier,
 ) -> anyhow::Result<Pubkey> {
+    let (pa, verifier) = deploy_uninitialized(surfnet, payer, verifier).await?;
+    let rpc = runtime::client(surfnet.rpc_url().to_string());
+    runtime::initialize(&rpc, payer, pa, &verifier).await?;
+    Ok(pa)
+}
+
+/// `deploy` up to the adapter's `initialize`: returns the adapter's address
+/// and the verifier its build names.
+async fn deploy_uninitialized(
+    surfnet: &Surfnet,
+    payer: &Keypair,
+    verifier: Verifier,
+) -> anyhow::Result<(Pubkey, AdapterVerifier)> {
     let rpc = runtime::client(surfnet.rpc_url().to_string());
     let router: Pubkey = VERIFIER_ROUTER.parse().expect("a base58 address");
     runtime::deploy(surfnet, router, VERIFIER_ROUTER_SO, payer.pubkey())?;
@@ -88,18 +106,20 @@ pub(in crate::envs) async fn deploy(
     )?;
     let router_state = runtime::set_account_dump(surfnet, VERIFIER_ROUTER_STATE)?;
 
-    let (verifier_program, entry_dump, verifier_so) = match verifier {
+    let (verifier_program, entry_dump, verifier_so, adapter_so) = match verifier {
         #[cfg(feature = "local")]
         Verifier::Mock => (
             program_id(LOCALNET, "MOCK_VERIFIER")?,
             MOCK_VERIFIER_ENTRY,
             MOCK_VERIFIER_SO,
+            PROTOCOL_ADAPTER_MOCK_SO,
         ),
         #[cfg(feature = "e2e")]
         Verifier::Groth16 => (
             GROTH16_VERIFIER.parse().expect("a base58 address"),
             GROTH16_VERIFIER_ENTRY,
             GROTH16_VERIFIER_SO,
+            PROTOCOL_ADAPTER_SO,
         ),
     };
     let entry = runtime::set_account_dump(surfnet, entry_dump)?;
@@ -116,7 +136,8 @@ pub(in crate::envs) async fn deploy(
          accounts for selector {selector:02x?}"
     );
     runtime::deploy(surfnet, verifier_program, verifier_so, payer.pubkey())?;
-    let named = read_verifier_program(&rpc, &router, selector).await?;
+    let verifier = AdapterVerifier { router, selector };
+    let named = read_verifier_program(&rpc, &verifier).await?;
     anyhow::ensure!(
         named == verifier_program,
         "the verifier entry for selector {selector:02x?} names {named}, the deployed verifier \
@@ -124,7 +145,59 @@ pub(in crate::envs) async fn deploy(
     );
 
     let pa = program_id(LOCALNET, "PROTOCOL_ADAPTER")?;
-    runtime::deploy(surfnet, pa, PROTOCOL_ADAPTER_SO, payer.pubkey())?;
-    runtime::initialize(&rpc, payer, pa, router, selector).await?;
-    Ok(pa)
+    runtime::deploy(surfnet, pa, adapter_so, payer.pubkey())?;
+    Ok((pa, verifier))
+}
+
+#[cfg(all(test, feature = "local"))]
+mod tests {
+    use super::*;
+    use anchor_lang::AccountSerialize;
+    use anoma_pa_solana_client::generated::protocol_adapter::error::ProtocolAdapterError;
+    use anoma_pa_solana_client::submission::{Failure, settlement_failure};
+    use surfpool_sdk::cheatcodes::builders::SetAccount;
+
+    use super::super::protocol_adapter::preflight_logs;
+
+    /// pa-evm's `test_initialize_reverts_if_the_verifier_is_paused`: once the
+    /// router has emergency-stopped the verifier it routes the build's
+    /// selector to, `initialize` refuses with `RiscZeroVerifierPaused`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn initialize_refuses_a_verifier_the_router_has_paused() -> anyhow::Result<()> {
+        let payer = Keypair::new();
+        let surfnet = runtime::start(&payer, |builder| builder).await?;
+        let rpc = runtime::client(surfnet.rpc_url().to_string());
+        let (pa, verifier) = deploy_uninitialized(&surfnet, &payer, Verifier::Mock).await?;
+
+        let (_, entry) = derive_verifier_router_pdas(&verifier.router, verifier.selector);
+        let account = rpc.get_account(&entry).await?;
+        let mut estopped = VerifierEntry::try_deserialize(&mut &*account.data)?;
+        estopped.estopped = true;
+        let mut data = Vec::new();
+        estopped.try_serialize(&mut data)?;
+        surfnet.cheatcodes().execute(
+            SetAccount::new(entry)
+                .lamports(account.lamports)
+                .data(data)
+                .owner(account.owner),
+        )?;
+
+        let error = runtime::initialize(&rpc, &payer, pa, &verifier)
+            .await
+            .expect_err("initialize must refuse the paused verifier");
+        let logs = preflight_logs(&error)
+            .unwrap_or_else(|| panic!("initialize failed without a simulation log: {error:#}"));
+        println!("initialize's log:\n{}", logs.join("\n"));
+        let failure = settlement_failure(logs, &pa, &Pubkey::default())?;
+        assert!(
+            matches!(
+                failure,
+                Some(Failure::Adapter(
+                    ProtocolAdapterError::RiscZeroVerifierPaused
+                ))
+            ),
+            "initialize failed with {failure:?}, not RiscZeroVerifierPaused"
+        );
+        Ok(())
+    }
 }

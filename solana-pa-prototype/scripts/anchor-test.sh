@@ -4,16 +4,19 @@
 # files that only work on a fresh deployment (tests/fresh/), then every
 # other file, which builds on whatever state it finds, then the files that
 # change the deployment for good (tests/terminal/, in their numbered order).
+# Then each upgrade-path file (tests/upgrade/<program>.ts) on a validator of
+# its own, which starts on that program's previous build.
 #
 #   anchor-test.sh [all|build|test] [spec file...]
 #
-# Phase selection, so CI can build once and fan the test phase out per mode:
+# Phase selection, so CI can build once per mode and test that build:
 #   all   (default) build, then the spec files
 #   build           build the programs, nothing else
 #   test            the spec files against existing artifacts
-# Spec files default to every tests/**/*.ts outside tests/utils/ (the
-# support modules the specs import) in that order; given ones run in the
-# order given.
+# PA_TEST_MODE (real|mock) picks the fixtures and the verifier selector the
+# build compiles in. Spec files default to every tests/**/*.ts outside
+# tests/utils/ (the support modules the specs import) in that order, the
+# upgrade-path ones after the rest; given ones run in the order given.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,12 +41,19 @@ if [[ "$PHASE" == "build" && ${#SPEC_FILES[@]} -gt 0 ]]; then
   exit 1
 fi
 if [[ ${#SPEC_FILES[@]} -eq 0 ]]; then
-  mapfile -t SPEC_FILES < <(suite_spec_files)
+  mapfile -t SPEC_FILES < <(suite_spec_files; upgrade_spec_files)
 fi
+SUITE_SPECS=()
+UPGRADE_SPECS=()
 for spec in "${SPEC_FILES[@]}"; do
   if [[ ! -f "$spec" ]]; then
     echo "❌ spec file not found: ${spec} (paths are relative to ${PROJECT_DIR})" >&2
     exit 1
+  fi
+  if [[ "$spec" == tests/upgrade/* ]]; then
+    UPGRADE_SPECS+=("$spec")
+  else
+    SUITE_SPECS+=("$spec")
   fi
 done
 
@@ -59,6 +69,7 @@ ensure_wallet
 
 ensure_node_modules
 load_program_ids localnet
+use_test_mode_selector "$PA_TEST_MODE"
 if [[ "$PHASE" == "test" ]]; then
   echo "==> (1/2) Using prebuilt artifacts"
 else
@@ -82,20 +93,39 @@ yarn run tsc --noEmit -p ./tsconfig.json
 
 trap 'stop_validator' EXIT
 
-echo "==> (2/2) Running ${#SPEC_FILES[@]} spec file(s) on one validator"
-workspace_program_args
-start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
-for i in "${!SPEC_FILES[@]}"; do
-  spec="${SPEC_FILES[$i]}"
-  echo "==> [$((i + 1))/${#SPEC_FILES[@]}] ${spec}"
+# Run one spec file against the running validator.
+run_spec() {
+  local spec="$1"
   if ! ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
     ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
     yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 "$spec"; then
     echo "❌ ${spec} failed (validator log: ${VALIDATOR_LOG})" >&2
     exit 1
   fi
+}
+
+# Start a validator with the workspace programs (with $1, if given, at its
+# previous build).
+start_suite_validator() {
+  workspace_program_args "$@"
+  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
+}
+
+echo "==> (2/2) Running ${#SUITE_SPECS[@]} spec file(s) on one validator, then ${#UPGRADE_SPECS[@]} upgrade-path file(s) on validators of their own"
+if [[ ${#SUITE_SPECS[@]} -gt 0 ]]; then
+  start_suite_validator
+  for i in "${!SUITE_SPECS[@]}"; do
+    echo "==> [$((i + 1))/${#SUITE_SPECS[@]}] ${SUITE_SPECS[$i]}"
+    run_spec "${SUITE_SPECS[$i]}"
+  done
+  stop_validator
+fi
+for spec in "${UPGRADE_SPECS[@]}"; do
+  echo "==> [upgrade path] ${spec}, starting on $(basename "$spec" .ts)'s previous build"
+  start_suite_validator "$(basename "$spec" .ts)"
+  run_spec "$spec"
+  stop_validator
 done
-stop_validator
 
 if [[ "$PHASE" != "test" ]]; then
   # Anchor's SBF toolchain can leave incompatible host debug artifacts in

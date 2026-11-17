@@ -189,14 +189,16 @@ async fn every_read_answers_what_the_adapter_was_set_up_with() -> anyhow::Result
          estopped"
     );
 
-    let read_router = instance.risc_zero_verifier_router().await?;
+    let read_router = instance.risc_zero_verifier_router(&payer.pubkey()).await?;
     println!("risc_zero_verifier_router: {read_router}");
     anyhow::ensure!(
         read_router == router,
-        "risc_zero_verifier_router() is {read_router}, the adapter was initialized with {router}"
+        "risc_zero_verifier_router() is {read_router}, the router the harness deployed is {router}"
     );
 
-    let selector = instance.risc_zero_verifier_selector().await?;
+    let selector = instance
+        .risc_zero_verifier_selector(&payer.pubkey())
+        .await?;
     println!("risc_zero_verifier_selector: {selector:02x?}");
     anyhow::ensure!(
         selector == MOCK_SELECTOR,
@@ -351,7 +353,8 @@ fn missing<T: std::fmt::Debug>(
 
 // An adapter deployed but never initialized has no state account: every read
 // of its state says so, naming the account, rather than decoding nothing; its
-// marker reads answer false.
+// marker reads answer false. (Its verifier is the build's, read by
+// simulation, not from its state.)
 #[tokio::test(flavor = "multi_thread")]
 async fn an_adapter_never_initialized_has_no_state_to_read() -> anyhow::Result<()> {
     let env = SolanaLocalEnv::setup_bare().await?;
@@ -367,21 +370,6 @@ async fn an_adapter_never_initialized_has_no_state_to_read() -> anyhow::Result<(
     let state = derive_pa_state_pda(&program).0;
 
     missing(state, "paused", instance.paused().await)?;
-    missing(
-        state,
-        "risc_zero_verifier_paused",
-        instance.risc_zero_verifier_paused(&payer).await,
-    )?;
-    missing(
-        state,
-        "risc_zero_verifier_router",
-        instance.risc_zero_verifier_router().await,
-    )?;
-    missing(
-        state,
-        "risc_zero_verifier_selector",
-        instance.risc_zero_verifier_selector().await,
-    )?;
     missing(state, "commitment_count", instance.commitment_count().await)?;
     missing(
         state,

@@ -18,8 +18,43 @@ pub struct PreparedProof {
     pub journal_digest: [u8; 32],
 }
 
+/// A selector written `0x` and eight hex digits, as env/<cluster>.env gives
+/// `RISC_ZERO_VERIFIER_SELECTOR`; anything else fails the build.
+pub const fn selector_from_hex(hex: &str) -> [u8; 4] {
+    let digits = hex.as_bytes();
+    assert!(
+        digits.len() == 10 && digits[0] == b'0' && digits[1] == b'x',
+        "RISC_ZERO_VERIFIER_SELECTOR must be 0x and eight hex digits"
+    );
+    let mut selector = [0u8; 4];
+    let mut i = 0;
+    while i < 8 {
+        let nibble = match digits[2 + i] {
+            d @ b'0'..=b'9' => d - b'0',
+            d @ b'a'..=b'f' => d - b'a' + 10,
+            d @ b'A'..=b'F' => d - b'A' + 10,
+            _ => panic!("RISC_ZERO_VERIFIER_SELECTOR must be 0x and eight hex digits"),
+        };
+        selector[i / 2] = (selector[i / 2] << 4) | nibble;
+        i += 1;
+    }
+    selector
+}
+
+/// Whether every byte is zero.
+pub const fn is_zero(bytes: &[u8]) -> bool {
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != 0 {
+            return false;
+        }
+        i += 1;
+    }
+    true
+}
+
 /// pa-evm's `_checkSelector`: the proof's selector, its first four bytes,
-/// must be the one this deployment pinned at initialization.
+/// must be the one this build verifies with (`RISC_ZERO_VERIFIER_SELECTOR`).
 pub fn check_selector(proof: &[u8], expected_selector: [u8; 4]) -> Result<(), PAError> {
     let selector = proof.get(..4).ok_or(PAError::InvalidProof)?;
     if selector != expected_selector {

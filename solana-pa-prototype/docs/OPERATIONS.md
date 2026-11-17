@@ -20,16 +20,9 @@ The owner can replace the program binary, which means it could deploy code that 
 Prerequisites:
 
 1. A funded wallet for the target cluster (per-cluster defaults and the `--wallet` flag: `scripts/ops.sh` usage). `deploy` checks the balance against its own size-based estimate before building and refuses with the amount needed.
-2. The three initialization parameters, exported as environment variables. `initialize` makes `PA_OWNER` the owner and pins the router and selector for the lifetime of the deployment — there is no safe default, and no way to change the router or selector later:
-
-   ```sh
-   export PA_OWNER=<the owner's pubkey>
-   export PA_VERIFIER_ROUTER=<verifier router program ID>
-   export PA_PROOF_SELECTOR=<4-byte hex selector>
-   ```
-
-   Running `deploy pa` without them set prints the current devnet values, which are defined once in `scripts/validator-deploy.sh` and recorded in the cluster's deployment record.
-3. Each program's address in `env/<cluster>.env`, and, for a program not yet deployed to the cluster, its keypair's path in the uncommitted `env/<cluster>.keys.env` (`env/README.md`). A deploy refuses a keypair whose address is not the one `env/<cluster>.env` gives the program; a new address is a new line in `env/<cluster>.env`, committed with the deployment record.
+2. The owner, exported as `PA_OWNER` (`export PA_OWNER=<the owner's pubkey>`). `initialize` makes it the owner; there is no safe default.
+3. The RISC Zero verifier router and the selector of the verifier the adapter accepts proofs for, `RISC_ZERO_VERIFIER_ROUTER` and `RISC_ZERO_VERIFIER_SELECTOR` in `env/<cluster>.env`. The build compiles both in, as pa-evm's implementation takes them at construction: an upgrade to a build with another selector moves the deployment to that verifier. The router must route the selector to a verifier it has not paused, or `initialize` refuses it.
+4. Each program's address in `env/<cluster>.env`, and, for a program not yet deployed to the cluster, its keypair's path in the uncommitted `env/<cluster>.keys.env` (`env/README.md`). A deploy refuses a keypair whose address is not the one `env/<cluster>.env` gives the program; a new address is a new line in `env/<cluster>.env`, committed with the deployment record.
 
 Procedure:
 
@@ -70,6 +63,15 @@ To ship new code to an existing deployment: `./scripts/dev.sh upgrade --cluster 
 - The refusal surfaces as one of two errors depending on the account's bytes. When the old account still deserializes under the new binary's layout — a version-byte mismatch only — the error is `UnsupportedStateSchema`. When it does not (a re-serialization shorter than an earlier one leaves stale bytes past its end, where a newer layout reads its appended fields), Anchor's `AccountDidNotDeserialize` surfaces first, because account deserialization runs before constraints. Either way the instruction is refused before it runs.
 
 A release that changes the layout ships its migration with it, the counterpart of the call pa-evm's owner passes to `upgradeToAndCall`: an instruction run once, right after upgrading the program in place and before any other instruction, signed by whoever held the ownership in the previous build. It declares the state account unchecked (the typed layout cannot read it), requires this program as owner and the previous version at byte 8, parses the previous layout (never reinterpreting its bytes: a shorter re-serialization leaves stale bytes past its end), reallocates the account, and writes the new layout with the new version; the signer pays the rent difference. Only the version byte has a fixed offset (byte 8); a new layout may add, remove or reorder the other fields, which is why the migration parses the previous layout. The release that brings the migration also brings a test that starts from the previous build and runs the upgrade path: `tests/upgrade/<program>.ts`, on a validator of its own that loads the build in `tests/fixtures/previous/`.
+
+This build's migration is `migrate_state`, from schema version 4, which stored the verifier router and the proof selector, to 5, which takes both from the build. The owner signs it; the account shrinks by their 36 bytes and keeps its rent. It announces the new schema version with `Initialized`, as OpenZeppelin's `reinitializer(n)` does. Run it right after the upgrade:
+
+```sh
+./scripts/dev.sh upgrade pa --cluster <c>          # owner wallet
+./scripts/dev.sh migrate-state --cluster <c>      # owner wallet
+```
+
+The upgrade moves the deployment from the verifier the previous build stored to the build's `RISC_ZERO_VERIFIER_SELECTOR`, so the router must route that selector before the upgrade, and transactions proven for the previous selector no longer settle after it.
 
 When a release must ship together with new builds of the deployment's forwarders, keep settlement paused (`pause`) from the first upgrade to the last. Pause from a checkout of the release the deployment runs: a release that changes the layout has scripts that read the state account in the layout its migration writes.
 
@@ -140,7 +142,7 @@ A pause is as permanent as the ownership's custody: the owner can unpause. To ma
 
 ### The second kill switch: the verifier
 
-Settlement also depends on RISC0's verifier router (the program pinned at `initialize`). The router keeps its own per-verifier emergency stop, checked inside the router during the verification call — the PA does not check it and cannot: a failed cross-program invocation aborts the whole transaction, so the PA never sees the error to translate it. As in pa-evm V2, the adapter reports the two separately: `PAStateAccount.paused` is its own pause, and the `risc_zero_verifier_paused` view (read by simulation, as pa-evm's `riscZeroVerifierPaused()`) reads the router's verifier entry for the deployment's selector. `initialize` refuses a verifier the router has already paused (`RiscZeroVerifierPaused`), as pa-evm's initializer does.
+Settlement also depends on RISC0's verifier router (the build's `RISC_ZERO_VERIFIER_ROUTER`). The router keeps its own per-verifier emergency stop, checked inside the router during the verification call — the PA does not check it and cannot: a failed cross-program invocation aborts the whole transaction, so the PA never sees the error to translate it. As in pa-evm V2, the adapter reports the two separately: `PAStateAccount.paused` is its own pause, and the `risc_zero_verifier_paused` view (read by simulation, as pa-evm's `riscZeroVerifierPaused()`) reads the router's verifier entry for the deployment's selector. `initialize` refuses a verifier the router has already paused (`RiscZeroVerifierPaused`), as pa-evm's initializer does.
 
 Diagnosis is by transaction logs: a router-side stop shows the router program's own `SelectorDeactivated` error in the failed transaction's logs, clearly distinct from a proof failure. Whether anyone outside this project can trip that switch depends on who owns the router deployment — the current owner is in the cluster's deployment record.
 

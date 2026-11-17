@@ -8,7 +8,11 @@ use arm_core::Digest;
 /// The layout number of `PAStateAccount` this binary reads and writes.
 /// Bumped on every change to the account layout; unrelated to release names.
 #[constant]
-pub const SCHEMA_VERSION: u8 = 4;
+pub const SCHEMA_VERSION: u8 = 5;
+
+/// The schema version `migrate_state` migrates from.
+#[constant]
+pub const PREVIOUS_SCHEMA_VERSION: u8 = 4;
 
 /// The root of the empty kind tree, under which every resource kind is
 /// derived via hash-to-curve: the kind tree every deployment starts on, as
@@ -28,11 +32,11 @@ pub struct PAStateAccount {
     /// every layout: a later binary that changes the layout reads this byte
     /// through an unchecked account to decide whether it may migrate. Every
     /// instruction that reads this account — all but `initialize`, which
-    /// creates it, and the development-only `dev_set_schema_version` —
-    /// refuses an account whose version is not `SCHEMA_VERSION`. A layout
-    /// change bumps the constant and may add, remove or reorder the other
-    /// fields: the release that makes it ships a migration that parses the
-    /// previous layout explicitly.
+    /// creates it, `migrate_state`, which requires the previous version, and
+    /// the development-only `dev_set_schema_version` — refuses an account
+    /// whose version is not `SCHEMA_VERSION`. A layout change bumps the
+    /// constant and may add, remove or reorder the other fields:
+    /// `migrate_state` parses the previous layout explicitly.
     pub schema_version: u8,
     pub bump: u8,
     /// The adapter's owner, as OpenZeppelin's `OwnableUpgradeable` stores
@@ -41,12 +45,6 @@ pub struct PAStateAccount {
     /// (`transfer_ownership`, `renounce_ownership`). The all-zero key once
     /// renounced, which no one can sign for.
     pub owner: Pubkey,
-    /// Verifier router program ID, set at initialization.
-    /// Mirrors pa-evm's immutable `RISC_ZERO_VERIFIER_ROUTER`.
-    pub verifier_router: Pubkey,
-    /// Expected proof selector (4 bytes), set at initialization.
-    /// Validated before sending proofs to the verifier router.
-    pub proof_selector: [u8; 4],
     /// The stored kind tree root: the empty kind tree's at initialization,
     /// replaced by `set_kind_tree_root`. The aggregation circuit binds
     /// each transaction to one kind tree, by the Merkle root of its entries;
@@ -157,18 +155,11 @@ impl PAStateAccount {
 
     /// A running adapter owned by `owner`, with an empty commitment tree on
     /// the empty kind tree: the state `initialize` writes.
-    pub fn running(
-        bump: u8,
-        owner: Pubkey,
-        verifier_router: Pubkey,
-        proof_selector: [u8; 4],
-    ) -> Self {
+    pub fn running(bump: u8, owner: Pubkey) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             bump,
             owner,
-            verifier_router,
-            proof_selector,
             kind_tree_root: EMPTY_KIND_TREE_ROOT,
             paused: false,
             root: EMPTY_TREE_ROOT_INITIAL.into(),
@@ -179,6 +170,51 @@ impl PAStateAccount {
             max_expiry_slots: MAX_EXPIRY_SLOTS,
             denied_consumed_logic_refs: Vec::new(),
             denied_created_logic_refs: Vec::new(),
+        }
+    }
+}
+
+/// The state account in schema version 4 (`PREVIOUS_SCHEMA_VERSION`), which
+/// `migrate_state` reads: this layout with the verifier router and the proof
+/// selector after the owner, which this layout leaves to the build
+/// (`RISC_ZERO_VERIFIER_ROUTER`, `RISC_ZERO_VERIFIER_SELECTOR`).
+/// Deserialized from the account's bytes after the discriminator.
+#[derive(AnchorDeserialize)]
+pub struct PreviousPAState {
+    pub schema_version: u8,
+    pub bump: u8,
+    pub owner: Pubkey,
+    pub verifier_router: Pubkey,
+    pub proof_selector: [u8; 4],
+    pub kind_tree_root: [u8; 32],
+    pub paused: bool,
+    pub root: [u8; 32],
+    pub next_index: u64,
+    pub current_depth: u8,
+    pub frontier: Vec<[u8; 32]>,
+    pub min_expiry_slots: u64,
+    pub max_expiry_slots: u64,
+    pub denied_consumed_logic_refs: Vec<[u8; 32]>,
+    pub denied_created_logic_refs: Vec<[u8; 32]>,
+}
+
+impl PreviousPAState {
+    /// This layout with every field the previous one shares with it.
+    pub fn migrate(self) -> PAStateAccount {
+        PAStateAccount {
+            schema_version: SCHEMA_VERSION,
+            bump: self.bump,
+            owner: self.owner,
+            kind_tree_root: self.kind_tree_root,
+            paused: self.paused,
+            root: self.root,
+            next_index: self.next_index,
+            current_depth: self.current_depth,
+            frontier: self.frontier,
+            min_expiry_slots: self.min_expiry_slots,
+            max_expiry_slots: self.max_expiry_slots,
+            denied_consumed_logic_refs: self.denied_consumed_logic_refs,
+            denied_created_logic_refs: self.denied_created_logic_refs,
         }
     }
 }

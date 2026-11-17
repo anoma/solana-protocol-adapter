@@ -27,8 +27,6 @@ fn state_holding(tree: &CommitmentTreeState) -> PAStateAccount {
         schema_version: SCHEMA_VERSION,
         bump: 255,
         owner: Pubkey::new_from_array([1; 32]),
-        verifier_router: Pubkey::new_from_array([2; 32]),
-        proof_selector: [0xff; 4],
         kind_tree_root: [0; 32],
         paused: false,
         root: tree.root,

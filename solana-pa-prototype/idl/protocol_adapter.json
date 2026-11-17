@@ -2,7 +2,7 @@
   "address": "2gH5DnTwDLLFk3oYxnbrceSFdTMtvaxQz29x5W8Etmpx",
   "metadata": {
     "name": "protocol_adapter",
-    "version": "2.0.0-rc.13",
+    "version": "2.0.0-rc.14",
     "spec": "0.1.0",
     "description": "Solana Protocol Adapter for Anoma Resource Machine"
   },
@@ -187,8 +187,71 @@
         {
           "name": "verifier_entry",
           "docs": [
-            "initialized selector (`verifier_paused`)."
-          ]
+            "the seeds pin; `verifier_paused` reads it."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  118,
+                  101,
+                  114,
+                  105,
+                  102,
+                  105,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  231,
+                  30,
+                  102,
+                  32
+                ]
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                158,
+                73,
+                72,
+                24,
+                21,
+                132,
+                96,
+                124,
+                239,
+                134,
+                64,
+                158,
+                61,
+                145,
+                164,
+                189,
+                178,
+                244,
+                111,
+                89,
+                142,
+                140,
+                48,
+                120,
+                20,
+                203,
+                184,
+                187,
+                83,
+                251,
+                108,
+                79
+              ]
+            }
+          }
         },
         {
           "name": "event_authority"
@@ -201,21 +264,75 @@
         {
           "name": "initial_owner",
           "type": "pubkey"
-        },
-        {
-          "name": "verifier_router",
-          "type": "pubkey"
-        },
-        {
-          "name": "proof_selector",
-          "type": {
-            "array": [
-              "u8",
-              4
-            ]
-          }
         }
       ]
+    },
+    {
+      "name": "migrate_state",
+      "docs": [
+        "Bring a state account in the previous schema version, which also",
+        "stored the verifier router and the proof selector, to this one, which",
+        "takes both from the build (`RISC_ZERO_VERIFIER_ROUTER`,",
+        "`RISC_ZERO_VERIFIER_SELECTOR`), as pa-evm's implementation holds them",
+        "as immutables. Announces the new version with `Initialized`: the",
+        "counterpart of the call pa-evm's owner passes to `upgradeToAndCall`,",
+        "run once by the owner, after the in-place upgrade and before any other",
+        "instruction, which all refuse the previous version. It parses the",
+        "previous layout rather than reinterpreting its bytes; the account",
+        "shrinks, and keeps the rent it holds."
+      ],
+      "discriminator": [
+        34,
+        189,
+        226,
+        222,
+        218,
+        156,
+        19,
+        213
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "docs": [
+            "The owner the previous layout stores; the handler checks it, since",
+            "the typed account cannot read the previous layout."
+          ],
+          "signer": true
+        },
+        {
+          "name": "pa_state",
+          "docs": [
+            "as owner and the previous schema's layout, which the typed account",
+            "cannot read."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  97,
+                  95,
+                  115,
+                  116,
+                  97,
+                  116,
+                  101
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": []
     },
     {
       "name": "pause",
@@ -346,34 +463,122 @@
       ],
       "accounts": [
         {
-          "name": "pa_state",
+          "name": "verifier_entry",
+          "docs": [
+            "the seeds pin; `verifier_paused` reads it."
+          ],
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  112,
-                  97,
-                  95,
-                  115,
-                  116,
-                  97,
-                  116,
-                  101
+                  118,
+                  101,
+                  114,
+                  105,
+                  102,
+                  105,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "const",
+                "value": [
+                  231,
+                  30,
+                  102,
+                  32
                 ]
               }
-            ]
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                158,
+                73,
+                72,
+                24,
+                21,
+                132,
+                96,
+                124,
+                239,
+                134,
+                64,
+                158,
+                61,
+                145,
+                164,
+                189,
+                178,
+                244,
+                111,
+                89,
+                142,
+                140,
+                48,
+                120,
+                20,
+                203,
+                184,
+                187,
+                83,
+                251,
+                108,
+                79
+              ]
+            }
           }
-        },
-        {
-          "name": "verifier_entry",
-          "docs": [
-            "deployment's selector (`verifier_paused`)."
-          ]
         }
       ],
       "args": [],
       "returns": "bool"
+    },
+    {
+      "name": "risc_zero_verifier_router",
+      "docs": [
+        "The verifier router this build verifies through. Mirrors pa-evm's",
+        "`RISC_ZERO_VERIFIER_ROUTER()`: read by simulation."
+      ],
+      "discriminator": [
+        74,
+        152,
+        107,
+        89,
+        56,
+        229,
+        185,
+        32
+      ],
+      "accounts": [],
+      "args": [],
+      "returns": "pubkey"
+    },
+    {
+      "name": "risc_zero_verifier_selector",
+      "docs": [
+        "The selector of the verifier this build accepts proofs for. Mirrors",
+        "pa-evm's `RISC_ZERO_VERIFIER_SELECTOR()`: read by simulation."
+      ],
+      "discriminator": [
+        193,
+        98,
+        147,
+        131,
+        104,
+        27,
+        120,
+        21
+      ],
+      "accounts": [],
+      "args": [],
+      "returns": {
+        "array": [
+          "u8",
+          4
+        ]
+      }
     },
     {
       "name": "set_kind_tree_root",
@@ -497,7 +702,8 @@
           "optional": true
         },
         {
-          "name": "verifier_router_program"
+          "name": "verifier_router_program",
+          "address": "BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"
         },
         {
           "name": "router"
@@ -609,7 +815,8 @@
           "optional": true
         },
         {
-          "name": "verifier_router_program"
+          "name": "verifier_router_program",
+          "address": "BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg"
         },
         {
           "name": "router"
@@ -1745,41 +1952,36 @@
     },
     {
       "code": 6039,
+      "name": "NotPreviousSchema",
+      "msg": "PAState is not a state account in the previous schema version"
+    },
+    {
+      "code": 6040,
       "name": "ZeroLogicRefNotAllowed",
       "msg": "Zero logic ref not allowed"
     },
     {
-      "code": 6040,
+      "code": 6041,
       "name": "LogicRefAlreadyDenied",
       "msg": "Logic ref is already on that denylist"
     },
     {
-      "code": 6041,
+      "code": 6042,
       "name": "ResourceWithDeniedLogicRef",
       "msg": "A resource's logic ref is on the denylist for its side"
     },
     {
-      "code": 6042,
-      "name": "ZeroRiscZeroVerifierRouterNotAllowed",
-      "msg": "Zero verifier router not allowed"
-    },
-    {
       "code": 6043,
-      "name": "ZeroRiscZeroVerifierSelectorNotAllowed",
-      "msg": "Zero proof selector not allowed"
-    },
-    {
-      "code": 6044,
       "name": "OwnableUnauthorizedAccount",
       "msg": "The signer is not the adapter's owner"
     },
     {
-      "code": 6045,
+      "code": 6044,
       "name": "OwnableInvalidOwner",
       "msg": "The zero key cannot be the owner"
     },
     {
-      "code": 6046,
+      "code": 6045,
       "name": "InvalidUpgradeBuffer",
       "msg": "Buffer is not a loader buffer holding a program"
     }
@@ -2122,11 +2324,11 @@
               "every layout: a later binary that changes the layout reads this byte",
               "through an unchecked account to decide whether it may migrate. Every",
               "instruction that reads this account — all but `initialize`, which",
-              "creates it, and the development-only `dev_set_schema_version` —",
-              "refuses an account whose version is not `SCHEMA_VERSION`. A layout",
-              "change bumps the constant and may add, remove or reorder the other",
-              "fields: the release that makes it ships a migration that parses the",
-              "previous layout explicitly."
+              "creates it, `migrate_state`, which requires the previous version, and",
+              "the development-only `dev_set_schema_version` — refuses an account",
+              "whose version is not `SCHEMA_VERSION`. A layout change bumps the",
+              "constant and may add, remove or reorder the other fields:",
+              "`migrate_state` parses the previous layout explicitly."
             ],
             "type": "u8"
           },
@@ -2144,27 +2346,6 @@
               "renounced, which no one can sign for."
             ],
             "type": "pubkey"
-          },
-          {
-            "name": "verifier_router",
-            "docs": [
-              "Verifier router program ID, set at initialization.",
-              "Mirrors pa-evm's immutable `RISC_ZERO_VERIFIER_ROUTER`."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "proof_selector",
-            "docs": [
-              "Expected proof selector (4 bytes), set at initialization.",
-              "Validated before sending proofs to the verifier router."
-            ],
-            "type": {
-              "array": [
-                "u8",
-                4
-              ]
-            }
           },
           {
             "name": "kind_tree_root",
@@ -2490,6 +2671,14 @@
       "value": "[112, 97, 95, 115, 116, 97, 116, 101]"
     },
     {
+      "name": "PREVIOUS_SCHEMA_VERSION",
+      "docs": [
+        "The schema version `migrate_state` migrates from."
+      ],
+      "type": "u8",
+      "value": "4"
+    },
+    {
       "name": "ROOT_SEED",
       "docs": [
         "Seeds prefix for root marker PDA derivation."
@@ -2504,7 +2693,7 @@
         "Bumped on every change to the account layout; unrelated to release names."
       ],
       "type": "u8",
-      "value": "4"
+      "value": "5"
     },
     {
       "name": "SEVEN_DAYS_SLOTS",

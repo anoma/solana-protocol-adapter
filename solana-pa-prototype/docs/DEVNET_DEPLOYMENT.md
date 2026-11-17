@@ -56,14 +56,20 @@ The SPL token forwarder this adapter serves, `BsfuXpxw8oCmZXnYijyQkUYNcCnuskFZbY
 - **Operator wallet:** `5S8LtbDPtQE7GtWWMBFY78gmiYp2LqS5BsoFDxKjoHr9` (`scripts/devnet-wallet.json`); this adapter has no owner.
 - **Indexing:** anoma-envio's Solana project indexed this program from slot 495845894 until it moved to the 2026-10-01 deployment.
 
-## Verifier infrastructure (pinned at initialize)
+## Verifier infrastructure
+
+The adapter build compiles in the router and the selector (`env/devnet.env`).
 
 | Component | Address |
 |---|---|
 | RISC0 Verifier Router | `BetEAE4npinksQBxvqUN1KkCVjYFJywWao45MSWtp5yg` |
-| Groth16 Verifier | `2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD` |
 | Router PDA | `9ZJmYSYaYq38GfwQMsEw5gkzfr94Vbzw6Nv53yQuCv2S` |
-| Verifier Entry PDA (selector `0x73c457ba`) | `4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey` |
+| Groth16 Verifier, risc0 3.1.0 | `5RrWAZFxm9biQ1PxD6azhevG2popHEC3gDJnZ4YoK1Ba` |
+| Verifier Entry PDA (selector `0xe71e6620`, risc0 3.1.0) | `EJEySCEHPgGS1AEz54e2b3SqSzcDJtMuZAbvnSiPJRoS` |
+| Groth16 Verifier, risc0 3.0.0 | `2Yfa83Lzbn71ie3J1KQRiNQz1qHnvVm8gkBCpXZQ7ajD` |
+| Verifier Entry PDA (selector `0x73c457ba`, risc0 3.0.0) | `4ktbrXwBXZMoND5qb3J6abS1m8KqwUtCjjDBebJ4vqey` |
+
+The risc0 3.1.0 verifier was deployed 2026-11-16 from anoma/risc0-solana `ccdeaab` (branch `anthony/devnet-groth16-v3.1.0`: the verifier of anoma/risc0-solana#1 at this address), executable hash `7b65f1d2284bad3f09dcc6d68067bd31568197c71f8c9314002ee7250fbafe32` (the `anchor build` output's sha256), slot 522980052, signature `avAxSLbHGuVAzgomMJ4ymEgn8vwfcoe3hwMA2XqBn65RsSrc3re4L1KExnpqZC6GsbGUVte2RVpxJLfLAV6Cfwf`. The router owner then gave its upgrade authority to the router PDA, as the 3.0.0 verifier's, and registered it under `0xe71e6620` (signature `4C4bqg1uuCdUNzNic6DLHfm9HMsmRHT2fgNbWAvfcykLvNmGFNgTAsuRXp6NPZxYQh91a7dbEpHP83PS7ARZqv91`).
 
 The local test validator loads a committed copy of the devnet verifier stack and the Program Metadata program (`devnet-programs/`; `DEVNET_CLONE_PROGRAMS` and `DEVNET_CLONE_ACCOUNTS` in `scripts/validator-deploy.sh` list it). The router's on-chain owner is `FZjHgvuQsgKYRBnYWDAvFKP9L9MJpEnh4vgDcKFSWtGh` (this project's January deployment wallet).
 
