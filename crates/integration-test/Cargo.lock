@@ -1393,8 +1393,9 @@ dependencies = [
 
 [[package]]
 name = "anoma-pa-solana-client"
-version = "0.12.3"
-source = "git+https://github.com/anoma/anoma-pa-solana-client?rev=dacb4a345c2e7c9d53dbf8fc9a3439df3e90279a#dacb4a345c2e7c9d53dbf8fc9a3439df3e90279a"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce8241de52afd6e3d494ed7b872c13781b25709f2e7a0f8857fad27f8657a552"
 dependencies = [
  "agave-feature-set",
  "anchor-lang",
@@ -1427,7 +1428,7 @@ dependencies = [
 
 [[package]]
 name = "anoma-pa-solana-integration-test"
-version = "0.10.1"
+version = "0.11.0"
 dependencies = [
  "anchor-lang",
  "anoma-pa-solana-client",
@@ -1486,8 +1487,8 @@ dependencies = [
 
 [[package]]
 name = "anoma-risc0-kind-trees"
-version = "1.0.0-rc.8"
-source = "git+https://github.com/anoma/risc0-kind-trees?rev=9dda5d9169276d7fd4e5fe6b2fed0371882fa6e5#9dda5d9169276d7fd4e5fe6b2fed0371882fa6e5"
+version = "1.0.0-rc.10"
+source = "git+https://github.com/anoma/risc0-kind-trees?rev=b4370675d669875bb577725f08d220e94d92fec0#b4370675d669875bb577725f08d220e94d92fec0"
 dependencies = [
  "alloy",
  "alloy-chains",
@@ -1592,7 +1593,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.3",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -7734,7 +7735,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a56d757972c98b346a9b766e3f02746cde6dd1cd1d1d563472929fdd74bec4d"
 dependencies = [
  "anyhow",
- "itertools 0.12.1",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -7787,7 +7788,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.3",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -7826,7 +7827,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
  "windows-sys 0.61.2",
 ]
@@ -14549,7 +14550,7 @@ version = "1.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "97fee6b57c6a41524a810daee9286c02d7752c4253064d0b05472833a438f675"
 dependencies = [
- "cfg-if 0.1.10",
+ "cfg-if 1.0.5",
  "static_assertions",
 ]
 
@@ -15154,7 +15155,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
