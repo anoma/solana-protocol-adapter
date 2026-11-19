@@ -987,7 +987,7 @@ cmd_test() {
     PA_FIXTURE_DIR="$fixture_dir" \
     PA_FIXTURE_SALT="$salt" \
     PA_KIND_TREE="$PA_KIND_TREE" \
-      yarn run ts-mocha --type-check -p ./tsconfig.json -t 0 --grep @localnet --invert "$spec"
+      yarn run ts-mocha --type-check --exit -p ./tsconfig.json -t 0 --grep @localnet --invert "$spec"
   done
 
   echo ""

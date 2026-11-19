@@ -4,7 +4,7 @@ import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { initializeAdapter } from "../client/instructions";
 import { derivePaStatePda } from "../client/pda";
-import { requirePubkey } from "./cli-utils";
+import { requirePubkey, runScript } from "./cli-utils";
 
 async function main() {
   const provider = confirmedProvider();
@@ -41,7 +41,4 @@ async function main() {
   console.log("✅ PA initialized");
 }
 
-main().catch((err) => {
-  console.error("❌ PA initialization failed:", err.message || err);
-  process.exit(1);
-});
+runScript("PA initialization failed", main);
