@@ -3,7 +3,7 @@ import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { setKindTreeRoot } from "../client/instructions";
-import { requireHexBytes } from "./cli-utils";
+import { requireHexBytes, runScript } from "./cli-utils";
 
 async function main() {
   const provider = confirmedProvider();
@@ -23,7 +23,4 @@ async function main() {
   console.log(`✅ Kind tree root: ${Buffer.from(kindTreeRoot).toString("hex")}`);
 }
 
-main().catch((err) => {
-  console.error("❌ Setting the kind tree root failed:", err.message || err);
-  process.exit(1);
-});
+runScript("Setting the kind tree root failed", main);

@@ -3,7 +3,7 @@ import { confirmedProvider } from "../client/provider";
 import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { DeniedLogicRef, denyLogicRefs } from "../client/instructions";
-import { parseHexBytes, requireEnv } from "./cli-utils";
+import { parseHexBytes, requireEnv, runScript } from "./cli-utils";
 
 /**
  * PA_DENIED_LOGIC_REFS, comma-separated `<hex logic ref>:<consumed|created>`
@@ -41,7 +41,4 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error("❌ Denying the logic refs failed:", err.message || err);
-  process.exit(1);
-});
+runScript("Denying the logic refs failed", main);

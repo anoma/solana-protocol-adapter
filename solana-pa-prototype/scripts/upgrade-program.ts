@@ -22,7 +22,7 @@ import { upgradeAdapter } from "../client/instructions";
 import { deriveUpgradeAuthorityPda } from "../client/pda";
 import { bufferExecutableHash, deployedExecutableHash, upgradeAuthority } from "../client/upgrade";
 import { cpiEventsOfSignature } from "../client/events";
-import { fail, parsePubkey } from "./cli-utils";
+import { fail, parsePubkey, runScript } from "./cli-utils";
 
 async function main() {
   const [command, name, bufferArg] = process.argv.slice(2);
@@ -66,7 +66,4 @@ async function main() {
   console.log(`✅ ${name} upgraded to ${expected.toString("hex")}. Signature: ${signature}`);
 }
 
-main().catch((err) => {
-  console.error(`❌ upgrade-program failed:`, err);
-  process.exit(1);
-});
+runScript("upgrade-program failed", main);

@@ -98,7 +98,7 @@ run_spec() {
   local spec="$1"
   if ! ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
     ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
-    yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 "$spec"; then
+    yarn run ts-mocha --type-check --exit -p ./tsconfig.json -t 1000000 "$spec"; then
     echo "❌ ${spec} failed (validator log: ${VALIDATOR_LOG})" >&2
     exit 1
   fi

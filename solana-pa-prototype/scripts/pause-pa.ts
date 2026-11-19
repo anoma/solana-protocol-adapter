@@ -13,6 +13,7 @@ import { Program } from "@anchor-lang/core";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { pauseAdapter, unpauseAdapter } from "../client/instructions";
 import { derivePaStatePda } from "../client/pda";
+import { runScript } from "./cli-utils";
 
 async function main() {
   const action = process.argv[2];
@@ -47,7 +48,4 @@ async function main() {
   console.log(`✅ PA ${pause ? "paused" : "running"}. Signature: ${signature}`);
 }
 
-main().catch((err) => {
-  console.error(`❌ ${process.argv[2]} failed:`, err);
-  process.exit(1);
-});
+runScript(`${process.argv[2]} failed`, main);

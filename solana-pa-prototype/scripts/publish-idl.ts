@@ -1,6 +1,6 @@
 /** `publish-idl.ts <idl json>`: `ops.sh idl-publish`'s writer (client/programMetadata.ts). */
 import { publishIdl } from "../client/programMetadata";
-import { fail, requireEnv } from "./cli-utils";
+import { fail, requireEnv, runScript } from "./cli-utils";
 
 async function main() {
   const [idlPath] = process.argv.slice(2);
@@ -13,7 +13,4 @@ async function main() {
   console.log(`✅ ${idlPath} written as the upgrade authority; the cluster serves it.`);
 }
 
-main().catch((err) => {
-  console.error("❌ publish-idl failed:", err);
-  process.exit(1);
-});
+runScript("publish-idl failed", main);

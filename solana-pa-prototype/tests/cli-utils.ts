@@ -1,6 +1,7 @@
 // The operator scripts' argument parsing (scripts/cli-utils.ts): every value
 // an operator passes to a governance command reaches the program through
 // these, so a value they misread would be sent to a live cluster.
+import { spawnSync } from "child_process";
 import { Keypair } from "@solana/web3.js";
 import { assert } from "chai";
 import { parsePubkey, requireEnv, requireHexBytes, requirePubkey } from "../scripts/cli-utils";
@@ -63,5 +64,28 @@ describe("operator script arguments (scripts/cli-utils.ts)", () => {
     const key = Keypair.generate().publicKey;
     assert.ok(parsePubkey("ARG", key.toBase58()).equals(key));
     assert.throws(() => parsePubkey("ARG", "not-a-key"), `ARG is not a valid pubkey: "not-a-key"`);
+  });
+});
+
+describe("operator script exit (scripts/cli-utils.ts runScript)", () => {
+  // The child does no I/O, so it ends within ts-node's compile time; the bound
+  // only turns a hung child into a failure instead of a hung suite.
+  const run = (outcome: string) =>
+    spawnSync(process.execPath, ["-r", "ts-node/register", "tests/utils/run-script-child.ts", outcome], {
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+
+  it("exits 0 once main resolves, though a handle is still open", () => {
+    const child = run("resolve");
+    assert.equal(child.status, 0, `child did not exit 0 (signal ${child.signal}); stderr:\n${child.stderr}`);
+    assert.equal(child.stdout, "done\n");
+  });
+
+  it("exits 1 with the failure and the error once main rejects, though a handle is still open", () => {
+    const child = run("reject");
+    assert.equal(child.status, 1, `child did not exit 1 (signal ${child.signal}); stderr:\n${child.stderr}`);
+    assert.include(child.stderr, "❌ the child failed:");
+    assert.include(child.stderr, "boom");
   });
 });

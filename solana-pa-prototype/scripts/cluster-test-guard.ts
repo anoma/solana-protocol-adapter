@@ -16,7 +16,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { ProtocolAdapter } from "../target/types/protocol_adapter";
 import { derivePaStatePda, deriveUpgradeAuthorityPda } from "../client/pda";
 import { upgradeAuthority } from "../client/upgrade";
-import { fail, parsePubkey } from "./cli-utils";
+import { fail, parsePubkey, runScript } from "./cli-utils";
 
 /** A key with an owner's role, and the role, for the refusal message. */
 export type OwnerRole = { role: string; key: PublicKey };
@@ -72,8 +72,5 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch((err) => {
-    console.error(`❌ ${(err as Error).message}`);
-    process.exit(1);
-  });
+  runScript("The cluster test guard refused", main);
 }
