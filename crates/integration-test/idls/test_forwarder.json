@@ -1,0 +1,75 @@
+{
+  "address": "QfyNAtiNrw1YJAm9FzShw6oVZ4BDHojKrpje2mNNctD",
+  "metadata": {
+    "name": "test_forwarder",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Test forwarder program for integration test error paths"
+  },
+  "instructions": [
+    {
+      "name": "forward_call",
+      "docs": [
+        "Matches the PA's `forward_call` discriminator."
+      ],
+      "discriminator": [
+        159,
+        170,
+        224,
+        10,
+        253,
+        105,
+        108,
+        222
+      ],
+      "accounts": [],
+      "args": [
+        {
+          "name": "_logic_ref",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "input",
+          "type": "bytes"
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "IntentionalFailure",
+      "msg": "Intentional failure for testing"
+    },
+    {
+      "code": 6001,
+      "name": "RelayMissingTarget",
+      "msg": "Relay needs the target program as its first account"
+    },
+    {
+      "code": 6002,
+      "name": "RelayPayloadTooShort",
+      "msg": "Relay payload must start with a 32-byte logic ref"
+    },
+    {
+      "code": 6003,
+      "name": "LogLineCountMissing",
+      "msg": "Log mode needs the number of lines to log"
+    },
+    {
+      "code": 6004,
+      "name": "WriteTargetMissing",
+      "msg": "Write mode needs the account to write as its first account"
+    },
+    {
+      "code": 6005,
+      "name": "WriteTargetTooSmall",
+      "msg": "Write mode's account is smaller than the bytes to write"
+    }
+  ]
+}

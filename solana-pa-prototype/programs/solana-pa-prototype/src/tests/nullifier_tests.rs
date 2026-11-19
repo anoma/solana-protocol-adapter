@@ -54,7 +54,7 @@ fn test_duplicate_nullifier_detected() {
         &system_program,
         1,
     );
-    assert_anchor_err!(result, DuplicateNullifier);
+    assert_anchor_err!(result, PreExistingNullifier);
 }
 
 /// A foreign-owned account at the marker address must fail closed, never be

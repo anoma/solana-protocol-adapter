@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+# Local integration flow. Every spec file runs against one validator, so
+# the deployment builds up as much history as the suite makes: first the
+# files that only work on a fresh deployment (tests/fresh/), then every
+# other file, which builds on whatever state it finds, then the files that
+# change the deployment for good (tests/terminal/, in their numbered order).
+# Then each upgrade-path file (tests/upgrade/<program>.ts) on a validator of
+# its own, which starts on that program's previous build.
+#
+#   anchor-test.sh [all|build|test] [spec file...]
+#
+# Phase selection, so CI can build once per mode and test that build:
+#   all   (default) build, then the spec files
+#   build           build the programs, nothing else
+#   test            the spec files against existing artifacts
+# PA_TEST_MODE (real|mock) picks the fixtures and the verifier selector the
+# build compiles in. Spec files default to every tests/**/*.ts outside
+# tests/utils/ (the support modules the specs import) in that order, the
+# upgrade-path ones after the rest; given ones run in the order given.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -9,15 +27,35 @@ source "${SCRIPT_DIR}/validator-deploy.sh"
 
 cd "$PROJECT_DIR"
 
-# Phase selection, so CI can build once and fan the test phase out per mode:
-#   all   (default) sync IDs, build, then validator + deploy + suite
-#   build           sync IDs and build the programs, nothing else
-#   test            validator + deploy + suite against existing artifacts
 PHASE="${1:-all}"
 if [[ "$PHASE" != "all" && "$PHASE" != "build" && "$PHASE" != "test" ]]; then
   echo "❌ phase must be 'all', 'build', or 'test', got '${PHASE}'" >&2
   exit 1
 fi
+if [[ $# -gt 0 ]]; then
+  shift
+fi
+SPEC_FILES=("$@")
+if [[ "$PHASE" == "build" && ${#SPEC_FILES[@]} -gt 0 ]]; then
+  echo "❌ phase 'build' runs no tests; drop the spec file arguments" >&2
+  exit 1
+fi
+if [[ ${#SPEC_FILES[@]} -eq 0 ]]; then
+  mapfile -t SPEC_FILES < <(suite_spec_files; upgrade_spec_files)
+fi
+SUITE_SPECS=()
+UPGRADE_SPECS=()
+for spec in "${SPEC_FILES[@]}"; do
+  if [[ ! -f "$spec" ]]; then
+    echo "❌ spec file not found: ${spec} (paths are relative to ${PROJECT_DIR})" >&2
+    exit 1
+  fi
+  if [[ "$spec" == tests/upgrade/* ]]; then
+    UPGRADE_SPECS+=("$spec")
+  else
+    SUITE_SPECS+=("$spec")
+  fi
+done
 
 # real: fixtures with Groth16 proofs, verified by the devnet-cloned verifier.
 # mock: fixtures with mock seals, verified by the localnet mock verifier.
@@ -29,21 +67,14 @@ echo "==> Test mode: ${PA_TEST_MODE} (phase: ${PHASE})"
 require_commands
 ensure_wallet
 
-if [[ "$PHASE" != "test" ]]; then
-  echo "==> (1/3) Syncing program IDs and building"
-  sync_program_ids
-  build_programs_dev
+ensure_node_modules
+load_program_ids localnet
+use_test_mode_selector "$PA_TEST_MODE"
+if [[ "$PHASE" == "test" ]]; then
+  echo "==> (1/2) Using prebuilt artifacts"
 else
-  echo "==> (1/3) Syncing program IDs (using prebuilt artifacts)"
-  sync_program_ids
-  for keypair in "${PROGRAM_KEYPAIRS[@]}"; do
-    binary="target/deploy/$(basename "$keypair" -keypair.json).so"
-    if [[ ! -f "$binary" ]]; then
-      echo "❌ phase 'test' needs prebuilt artifacts, but ${binary} is missing." >&2
-      echo "   Run './scripts/anchor-test.sh build' first (or use the default phase)." >&2
-      exit 1
-    fi
-  done
+  echo "==> (1/2) Building"
+  build_programs_dev
 fi
 
 if [[ "$PHASE" == "build" ]]; then
@@ -53,33 +84,58 @@ fi
 
 check_required_fixture "$PA_TEST_MODE"
 
+# Type-check every script and test against the generated program types. The
+# suite's --type-check covers only the files it loads, and the operator
+# scripts are run by nothing else, so a script that no longer compiles would
+# only surface when an operator runs it on a live cluster.
+echo "==> Type-checking scripts and tests"
+yarn run tsc --noEmit -p ./tsconfig.json
+
 trap 'stop_validator' EXIT
 
-echo "==> (2/3) Starting validator"
+# Run one spec file against the running validator.
+run_spec() {
+  local spec="$1"
+  if ! ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
+    ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
+    yarn run ts-mocha --type-check --exit -p ./tsconfig.json -t 1000000 "$spec"; then
+    echo "❌ ${spec} failed (validator log: ${VALIDATOR_LOG})" >&2
+    exit 1
+  fi
+}
 
-# Kill any stale validator from a previous interrupted run
-if pkill -f solana-test-validator 2>/dev/null; then
-  sleep 1
+# Start a validator with the workspace programs (with $1, if given, at its
+# previous build).
+start_suite_validator() {
+  workspace_program_args "$@"
+  start_validator "${WORKSPACE_PROGRAM_ARGS[@]}"
+}
+
+echo "==> (2/2) Running ${#SUITE_SPECS[@]} spec file(s) on one validator, then ${#UPGRADE_SPECS[@]} upgrade-path file(s) on validators of their own"
+if [[ ${#SUITE_SPECS[@]} -gt 0 ]]; then
+  start_suite_validator
+  for i in "${!SUITE_SPECS[@]}"; do
+    echo "==> [$((i + 1))/${#SUITE_SPECS[@]}] ${SUITE_SPECS[$i]}"
+    run_spec "${SUITE_SPECS[$i]}"
+  done
+  stop_validator
 fi
-
-start_validator
-
-echo "==> (3/3) Deploying and running tests"
-deploy_programs
-
-ANCHOR_PROVIDER_URL="$CLUSTER_URL" \
-ANCHOR_WALLET="$ANCHOR_WALLET_PATH" \
-  yarn run ts-mocha --type-check -p ./tsconfig.json -t 1000000 'tests/**/*.ts'
+for spec in "${UPGRADE_SPECS[@]}"; do
+  echo "==> [upgrade path] ${spec}, starting on $(basename "$spec" .ts)'s previous build"
+  start_suite_validator "$(basename "$spec" .ts)"
+  run_spec "$spec"
+  stop_validator
+done
 
 if [[ "$PHASE" != "test" ]]; then
   # Anchor's SBF toolchain can leave incompatible host debug artifacts in
   # target/. Clean host packages so subsequent nix cargo commands always
-  # rebuild with nix rustc. (The 'test' phase compiles nothing, and on CI
-  # its runner has no cargo.)
-  cargo clean \
-    --package block-time-forwarder \
-    --package protocol-adapter \
-    >/dev/null 2>&1 || true
+  # rebuild with nix rustc. (The 'test' phase compiles nothing.)
+  clean_args=()
+  for name in "${PROGRAM_NAMES[@]}"; do
+    clean_args+=(--package "${PROGRAM_PACKAGE[$name]}")
+  done
+  cargo clean "${clean_args[@]}"
 fi
 
 echo "==> All tests passed"

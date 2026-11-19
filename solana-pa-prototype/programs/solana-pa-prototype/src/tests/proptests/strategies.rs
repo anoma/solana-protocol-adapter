@@ -1,5 +1,6 @@
 use crate::types::{OutputMode, SolanaExternalCall};
-use arm_core::compliance::ComplianceInstance;
+use arm_core::aggregation_instance::{ActionAggregated, AggregationResourceInstance};
+use arm_core::logic_instance::AppData;
 use arm_core::Digest;
 use proptest::prelude::*;
 
@@ -11,34 +12,51 @@ pub fn arb_byte_vec(max_len: usize) -> impl Strategy<Value = Vec<u8>> {
     prop::collection::vec(any::<u8>(), 0..=max_len)
 }
 
-pub fn arb_compliance_instance() -> impl Strategy<Value = ComplianceInstance> {
+pub fn arb_consumed_resource() -> impl Strategy<Value = AggregationResourceInstance> {
+    (arb_digest(), arb_digest(), arb_digest()).prop_map(|(nullifier, logic_ref, root)| {
+        AggregationResourceInstance::Consumed {
+            nullifier,
+            logic_ref,
+            commitment_tree_root: root,
+            app_data: AppData::default(),
+        }
+    })
+}
+
+pub fn arb_created_resource() -> impl Strategy<Value = AggregationResourceInstance> {
+    (arb_digest(), arb_digest()).prop_map(|(commitment, logic_ref)| {
+        AggregationResourceInstance::Created {
+            commitment,
+            logic_ref,
+            app_data: AppData::default(),
+        }
+    })
+}
+
+/// An action whose consumed and created resources come in any order.
+pub fn arb_action() -> impl Strategy<Value = ActionAggregated> {
     (
-        arb_digest(),
-        arb_digest(),
-        arb_digest(),
-        arb_digest(),
-        arb_digest(),
+        prop::collection::vec(
+            prop_oneof![arb_consumed_resource(), arb_created_resource()],
+            0..8,
+        ),
         prop::array::uniform8(any::<u32>()),
         prop::array::uniform8(any::<u32>()),
+        arb_digest(),
     )
-        .prop_map(
-            |(nf, clr, ctr, cm, created_lr, dx, dy)| ComplianceInstance {
-                consumed_nullifier: nf,
-                consumed_logic_ref: clr,
-                consumed_commitment_tree_root: ctr,
-                created_commitment: cm,
-                created_logic_ref: created_lr,
-                delta_x: dx,
-                delta_y: dy,
-            },
-        )
+        .prop_map(|(resource_instances, dx, dy, root)| ActionAggregated {
+            resource_instances,
+            delta_x: dx,
+            delta_y: dy,
+            action_tree_root: root,
+        })
 }
 
 pub fn arb_solana_external_call(max_data_len: usize) -> impl Strategy<Value = SolanaExternalCall> {
     (
         prop::array::uniform32(any::<u8>()),
         arb_byte_vec(max_data_len),
-        prop::collection::vec(any::<u8>(), 1..=max_data_len),
+        arb_byte_vec(max_data_len),
         1..=10u8,
     )
         .prop_map(|(pid, input, output, num_accounts)| SolanaExternalCall {

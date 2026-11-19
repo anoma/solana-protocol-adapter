@@ -1,5 +1,5 @@
 use super::strategies::arb_digest;
-use crate::merkle::{append_to_tree, hash_two, required_depth_for_leaves, INITIAL_TREE_DEPTH};
+use crate::merkle::{current_root, hash_two, push, required_depth_for_leaves};
 use crate::tests::utils::create_test_pa_state;
 use proptest::prelude::*;
 
@@ -29,11 +29,11 @@ proptest! {
         prop_assume!(leaf1 != leaf2);
         let mut state1 = create_test_pa_state();
         let mut state2 = create_test_pa_state();
-        append_to_tree(&mut state1, leaf1).unwrap();
-        append_to_tree(&mut state2, leaf2).unwrap();
+        push(&mut state1, leaf1).unwrap();
+        push(&mut state2, leaf2).unwrap();
         prop_assert_ne!(
-            state1.root_digest(),
-            state2.root_digest(),
+            current_root(&state1),
+            current_root(&state2),
             "distinct leaves should produce distinct roots"
         );
     }
@@ -43,7 +43,7 @@ proptest! {
         let mut state = create_test_pa_state();
         for (i, leaf) in leaves.iter().enumerate() {
             prop_assert_eq!(state.next_index, i as u64, "next_index should match append count");
-            append_to_tree(&mut state, *leaf).unwrap();
+            push(&mut state, *leaf).unwrap();
         }
         prop_assert_eq!(state.next_index, leaves.len() as u64, "final next_index should equal leaf count");
     }
@@ -63,14 +63,14 @@ proptest! {
             "depth {} (capacity {}) should hold {} leaves", depth, capacity, final_next_index);
     }
 
-    /// Verify the depth matches what `append_to_tree` actually produces.
+    /// Verify the depth matches what `push` actually produces.
     #[test]
     fn prop_required_depth_matches_append(
         leaves in prop::collection::vec(arb_digest(), 1..32),
     ) {
         let mut state = create_test_pa_state();
         for leaf in &leaves {
-            append_to_tree(&mut state, *leaf).unwrap();
+            push(&mut state, *leaf).unwrap();
         }
         let expected_depth = required_depth_for_leaves(leaves.len() as u64);
         prop_assert_eq!(
@@ -78,14 +78,5 @@ proptest! {
             "required_depth_for_leaves({}) = {} but tree depth is {}",
             leaves.len(), expected_depth, state.depth()
         );
-    }
-
-    #[test]
-    fn prop_required_depth_at_least_initial(
-        final_next_index in 0u64..100,
-    ) {
-        let depth = required_depth_for_leaves(final_next_index);
-        prop_assert!(depth >= INITIAL_TREE_DEPTH,
-            "depth {} should be at least INITIAL_TREE_DEPTH ({})", depth, INITIAL_TREE_DEPTH);
     }
 }
